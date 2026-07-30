@@ -69,7 +69,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Reviewer Requirements",
                 "### 1. Spec compliance (do this first)",
-                "- Walk the RefinedSpec acceptance criteria in order, one at a time. For each criterion report met, not-met, or not-verifiable-from-diff with file+line or concrete task evidence in `criteria_verdicts`.",
+                "- Walk the RefinedSpec acceptance criteria in order, one at a time. For each criterion report met, not-met, or not-verifiable with file+line or concrete task evidence in `criteria_verdicts`. Use zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion.",
                 "- A not-met criterion is a blocking finding with `category: spec-compliance`. If a criterion contradicts the pre-change contract observable on main, report `category: spec-defect` so it escalates to the operator instead of enforcing it against the implementation.",
                 "- Ground every finding or no-finding claim in file paths, task evidence, command output, or missing tests.",
                 "### 2. Code quality (only after section 1)",
@@ -184,7 +184,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Reviewer Requirements",
                 "### 1. Spec compliance (do this first)",
-                "- Walk RefinedSpec acceptance criteria in order. Record each as met, not-met, or not-verifiable-from-diff with file+line evidence in `criteria_verdicts`; not-met uses `category: spec-compliance`, while a criterion contradicting main uses `category: spec-defect`.",
+                "- Walk RefinedSpec acceptance criteria in order. Record each as met, not-met, or not-verifiable with file+line evidence in `criteria_verdicts`; use zero-based `criterion_index` values (0..N-1), exactly one per criterion. Not-met uses `category: spec-compliance`; a criterion contradicting main uses `category: spec-defect`.",
                 "### 2. Code quality (only after section 1)",
                 "- Review findings first by severity with evidence. Cover every in-scope file before the first verdict; state gaps. Later SHALLOW findings on unchanged code are coverage defects; deeper concurrency/durability/fault analysis is desired. Never withhold an identified finding.",
                 "- Use git diff main...HEAD for scope. Branch-behind-main alone is NOT a blocker; block only on concrete conflict, semantic overlap, or a non-applying diff.",

@@ -297,12 +297,12 @@ public sealed class TaskBriefTests
     var normalBrief = kernel.BuildTaskBrief(normalGoal.Id, normalReviewer.Id).Content;
 
     Assert.Contains("High-risk review enumeration contract", highRiskBrief, StringComparison.Ordinal);
-    Assert.Contains("list all of them in one ranked pass", highRiskBrief, StringComparison.Ordinal);
+    Assert.Contains("list all acceptance-blocking findings in one ranked pass", highRiskBrief, StringComparison.Ordinal);
     Assert.Contains("do not stop at the first blocker", highRiskBrief, StringComparison.Ordinal);
     Assert.Contains("put exactly the complete ranked open blocking set in `blockers`", highRiskBrief, StringComparison.Ordinal);
     Assert.Contains("High-risk review enumeration contract", complexBrief, StringComparison.Ordinal);
     Assert.DoesNotContain("High-risk review enumeration contract", normalBrief, StringComparison.Ordinal);
-    Assert.DoesNotContain("list all of them in one ranked pass", normalBrief, StringComparison.Ordinal);
+    Assert.DoesNotContain("list all acceptance-blocking findings in one ranked pass", normalBrief, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_reviewer_staleness_policy")]

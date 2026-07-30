@@ -67,6 +67,20 @@ public sealed class AgentOutputDirectivesTests
         Assert.True(
             compact.IndexOf("### 1. Spec compliance", StringComparison.Ordinal) <
             compact.IndexOf("### 2. Code quality", StringComparison.Ordinal));
+        Assert.Contains(
+            "not-verifiable with file+line or concrete task evidence",
+            complex,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "zero-based `criterion_index` values (0..N-1), with exactly one entry for every criterion",
+            complex,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "zero-based `criterion_index` values (0..N-1), exactly one per criterion",
+            compact,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("not-verifiable-from-diff", complex, StringComparison.Ordinal);
+        Assert.DoesNotContain("not-verifiable-from-diff", compact, StringComparison.Ordinal);
         Assert.True(
             complex.Length <= SdlcRolePromptRequirements.ReviewerComplexRequirementsMaxChars,
             $"Complex Reviewer requirements grew from {preChangeComplexChars} to {complex.Length} chars.");
