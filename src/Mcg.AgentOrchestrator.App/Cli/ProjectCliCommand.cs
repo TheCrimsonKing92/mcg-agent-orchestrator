@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -302,12 +303,19 @@ internal static class ProjectCliCommand
     {
         var normalizedSource = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceRoot));
         var normalizedDestination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationRoot));
-        var rewritten = value.Replace(normalizedSource, normalizedDestination, PathComparison);
+        var rewritten = ReplacePathRoot(value, normalizedSource, normalizedDestination);
         var alternateSource = normalizedSource.Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var alternateDestination = normalizedDestination.Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         return alternateSource.Equals(normalizedSource, StringComparison.Ordinal)
             ? rewritten
-            : rewritten.Replace(alternateSource, alternateDestination, PathComparison);
+            : ReplacePathRoot(rewritten, alternateSource, alternateDestination);
+    }
+
+    private static string ReplacePathRoot(string value, string sourceRoot, string destinationRoot)
+    {
+        var pattern = Regex.Escape(sourceRoot) + "(?=$|[\\\\/\"' \\t\\r\\n])";
+        var options = OperatingSystem.IsWindows() ? RegexOptions.IgnoreCase : RegexOptions.None;
+        return Regex.Replace(value, pattern, _ => destinationRoot, options);
     }
 
     private static void EnsureReadableIfPresent(string path)

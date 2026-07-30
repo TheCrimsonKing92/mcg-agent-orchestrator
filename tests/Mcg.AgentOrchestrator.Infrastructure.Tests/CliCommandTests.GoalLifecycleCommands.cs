@@ -533,6 +533,14 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.NotEmpty(profilesA.Profiles);
         Xunit.Assert.Contains(projectRootA, profilesA.GetRequired("project-local").CommandTemplate, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.DoesNotContain(defaultRoot, profilesA.GetRequired("project-local").CommandTemplate, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains(
+            defaultRoot + "-tools",
+            profilesA.GetRequired("machine-global-sibling").CommandTemplate,
+            StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.DoesNotContain(
+            projectRootA + "-tools",
+            profilesA.GetRequired("machine-global-sibling").CommandTemplate,
+            StringComparison.OrdinalIgnoreCase);
 
         var restoredA = await new SqliteOrchestratorStateRepository(workspaceA.SqliteStatePath).LoadAsync();
         var backlogA = await new BacklogStore(workspaceA.BacklogStorePath).ListAsync(includeAll: true);
@@ -541,6 +549,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Equal(sourceConfigBefore, SnapshotConfigurationBytes(sourceWorkspace));
 
         var projectBConfigBefore = SnapshotConfigurationBytes(workspaceB);
+        var projectBWorkspaceBefore = SnapshotWorkspaceBytes(workspaceB);
         AgentCatalogStore.Save(
             workspaceA.AgentCatalogPath,
             new AgentCatalog(agentsA.Agents.Append(TestAgent("client-a-only", AgentRole.Developer)).ToList()));
@@ -556,12 +565,33 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Equal(sourceConfigBefore, SnapshotConfigurationBytes(sourceWorkspace));
         Xunit.Assert.Equal(projectBConfigBefore, SnapshotConfigurationBytes(workspaceB));
 
+        var refinementKernel = new AgentOrchestratorKernel();
+        var refinementGoal = refinementKernel.CreateGoal("Resolve the project-owned spec refiner");
+        var refinementService = new GoalRefinementService(
+            new InMemoryModelProviderRegistry([]),
+            modelFunctionsA,
+            new FakeCollaborationItemStore(),
+            new SpecRefinerPrecedentStore(Path.Combine(CreateTempDirectory(), "precedents.json")));
+        var refinement = await refinementService.RefineAsync(refinementKernel, refinementGoal.Id);
+        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, refinement.Outcome);
+        Xunit.Assert.NotNull(refinementKernel.GetGoal(refinementGoal.Id).RefinedSpec);
+
+        var missingBindingKernel = new AgentOrchestratorKernel();
+        var missingBindingGoal = missingBindingKernel.CreateGoal("Prove the resolver rejects an empty catalog");
+        var missingBindingService = new GoalRefinementService(
+            new InMemoryModelProviderRegistry([]),
+            ModelFunctionCatalog.Empty,
+            new FakeCollaborationItemStore(),
+            new SpecRefinerPrecedentStore(Path.Combine(CreateTempDirectory(), "precedents.json")));
+        await Xunit.Assert.ThrowsAsync<InvalidOperationException>(
+            () => missingBindingService.RefineAsync(missingBindingKernel, missingBindingGoal.Id));
+
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalogStore.Load(workspaceA.AgentCatalogPath).Agents;
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileStore.Load(workspaceA.WorkerProfilePath);
         Goal? currentGoal = null;
-        var simpleGoalOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+        _ = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["simple-goal", "Inspect docs/project.md and summarize"],
             kernel,
             workspaceA,
@@ -569,7 +599,6 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             providers,
             ref profiles,
             ref currentGoal));
-        Xunit.Assert.DoesNotContain("No model-function binding found", simpleGoalOutput, StringComparison.Ordinal);
         var goal = Xunit.Assert.Single(kernel.Goals);
         var task = Xunit.Assert.Single(goal.Tasks);
 
@@ -586,6 +615,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             ref currentGoal));
         Xunit.Assert.NotNull(task.LastDispatch);
         Xunit.Assert.Null(task.LastProcess);
+        Xunit.Assert.Equal(projectBWorkspaceBefore, SnapshotWorkspaceBytes(workspaceB));
     }
 
     [Xunit.Fact(DisplayName = "Cli_project_create_is_idempotent_and_rejects_repointing")]
@@ -730,7 +760,10 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             workspace.WorkerProfilePath,
             WorkerProfileCatalog.Default().Upsert(new WorkerProfile(
                 "project-local",
-                $"\"{Path.Combine(root, "tools", "worker.exe")}\" --workspace \"{Path.Combine(root, ".orchestrator", "prompts")}\"")));
+                $"\"{Path.Combine(root, "tools", "worker.exe")}\" --workspace \"{Path.Combine(root, ".orchestrator", "prompts")}\""))
+                .Upsert(new WorkerProfile(
+                    "machine-global-sibling",
+                    $"\"{Path.Combine(root + "-tools", "worker.exe")}\" --version")));
         return workspace;
     }
 
