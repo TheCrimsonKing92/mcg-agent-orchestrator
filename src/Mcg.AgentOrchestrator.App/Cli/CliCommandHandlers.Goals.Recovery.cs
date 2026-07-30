@@ -158,6 +158,21 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         actions++;
     }
 
+    goal = context.Kernel.GetGoal(goal.Id);
+    var acceptanceInvalidation = AcceptanceAttemptRetryInvalidation.Apply(
+        context.Kernel,
+        goal,
+        new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(context.Workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
+            context.Workspace.ExecutionDirectory),
+        $"recover invalidated acceptance verification before redispatch; {note}");
+    if (acceptanceInvalidation.Changed)
+    {
+        Console.WriteLine(
+            $"recover: invalidated current acceptance attempt={acceptanceInvalidation.AttemptInvalidated.ToString().ToLowerInvariant()} and reopened goal={acceptanceInvalidation.GoalReopened.ToString().ToLowerInvariant()} before redispatch.");
+        actions++;
+    }
+
     if (actions == 0)
     {
         Console.WriteLine("recover: nothing to recover (no pending input, stuck tasks, or lifecycle/task desync).");

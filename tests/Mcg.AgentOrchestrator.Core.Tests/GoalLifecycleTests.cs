@@ -405,8 +405,8 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
 }
 
-    [Xunit.Fact(DisplayName = "RetryTask_on_a_Verifying_goal_invalidates_acceptance_and_redispatches")]
-    public void RetryTaskOnVerifyingGoalInvalidatesAcceptanceAndRedispatches()
+    [Xunit.Fact(DisplayName = "RetryTask_on_a_Verifying_goal_requires_attempt_invalidation_before_redispatch")]
+    public void RetryTaskOnVerifyingGoalRequiresAttemptInvalidationBeforeRedispatch()
 {
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Retry during acceptance", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
@@ -419,12 +419,20 @@ public sealed class GoalLifecycleTests
 
     kernel.RetryTask(goal.Id, task.Id, "acceptance result requires a Developer correction");
 
-    Assert.Equal(GoalStatus.Active, goal.Status);
+    Assert.Equal(GoalStatus.Verifying, goal.Status);
     Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    Assert.Equal(GoalLifecycleState.Verifying, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
+
+    var reopened = kernel.ReopenVerifyingGoalAfterAcceptanceAttemptInvalidated(
+        goal.Id,
+        "Acceptance attempt was invalidated before redispatch.");
+
+    Assert.True(reopened);
+    Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Equal(GoalLifecycleState.WorkspaceReady, GoalLifecycle.ResolveState(goal, new GoalLifecycleFacts(WorkspaceExists: true)));
     Assert.Contains(goal.Timeline, evt =>
         evt.Kind == ProgressKind.GoalPolicyDecision &&
-        evt.Message.Contains("invalidated acceptance verification", StringComparison.Ordinal));
+        evt.Message.Contains("invalidated before redispatch", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "RetryTask_on_an_AcceptanceFailed_goal_clears_gate_failure_and_redispatches")]

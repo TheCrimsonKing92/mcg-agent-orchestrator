@@ -157,6 +157,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunAcceptance runAcceptance)
     {
         var current = TryReadLatest(candidate.Goal.Id.Value);
+        if (current is not null && IsLiveInvalidatedAttempt(current))
+        {
+            return ConductorParallelAcceptanceAttemptDecision.Running(current);
+        }
+
         if (current is not null && IsReconciled(current))
         {
             current = null;
@@ -221,6 +226,47 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             });
         }
     }
+
+    internal bool InvalidateCurrent(string goalId, string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadLatest(goalId);
+            if (current is null || IsReconciled(current))
+            {
+                return false;
+            }
+
+            return MarkStaleUnderLock(current, reason.Trim());
+        }
+    }
+
+    internal bool TryGetLiveInvalidatedAttempt(
+        string goalId,
+        out ConductorParallelAcceptanceAttempt attempt)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
+
+        var current = TryReadLatest(goalId);
+        if (current is not null && IsLiveInvalidatedAttempt(current))
+        {
+            attempt = current;
+            return true;
+        }
+
+        attempt = null!;
+        return false;
+    }
+
+    private bool IsLiveInvalidatedAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
+        attempt.ReconciledAt.HasValue &&
+        !File.Exists(attempt.ExitCodePath) &&
+        _isProcessAlive(attempt.OwnerProcessId) &&
+        !IsHeartbeatStale(attempt);
 
     internal IReadOnlyList<string> TakePendingLeaseReceipts(ConductorParallelAcceptanceAttempt attempt)
     {
@@ -766,15 +812,37 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         return null;
     }
 
-    private void MarkStale(ConductorParallelAcceptanceAttempt attempt)
+    private bool MarkStale(
+        ConductorParallelAcceptanceAttempt attempt,
+        string detail = "candidate branch/main SHA moved before reconciliation")
     {
-        Persist(attempt with
+        lock (MetadataWriteGate)
+        {
+            return MarkStaleUnderLock(attempt, detail);
+        }
+    }
+
+    private bool MarkStaleUnderLock(
+        ConductorParallelAcceptanceAttempt attempt,
+        string detail)
+    {
+        var current = TryReadAttemptFile(attempt.MetadataPath);
+        if (current is null ||
+            !string.Equals(current.AttemptId, attempt.AttemptId, StringComparison.Ordinal) ||
+            IsReconciled(current))
+        {
+            return false;
+        }
+
+        WriteAttemptFile(current with
         {
             Outcome = ConductorParallelAcceptanceAttemptOutcome.StaleCandidate,
             CompletedAt = _utcNow(),
             ReconciledAt = _utcNow(),
-            Detail = "candidate branch/main SHA moved before reconciliation"
+            LastHeartbeatAt = _utcNow(),
+            Detail = detail
         });
+        return true;
     }
 
     private bool TryBuildDurablePassedCompletion(

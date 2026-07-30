@@ -198,7 +198,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             InvalidateDownstreamTasks(goal, task, retryAt);
         }
-        ReopenAcceptanceGoalWithRetry(goal, task, $"Retry invalidated acceptance verification because task {task.Id.Value[..8]} is dispatchable.");
+        ReopenAcceptanceFailedGoalWithRetry(goal, task, $"Retry cleared failed acceptance gate because task {task.Id.Value[..8]} is dispatchable.");
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Retry reopened goal because task {task.Id.Value[..8]} is dispatchable.");
         RefreshGoalStatus(goal);
         return task;
@@ -208,6 +208,26 @@ public sealed partial class AgentOrchestratorKernel
     {
         var goal = GetGoal(goalId);
         return ReopenTerminalGoalWithNonTerminalTasks(goal, reason);
+    }
+
+    public bool ReopenVerifyingGoalAfterAcceptanceAttemptInvalidated(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        var reopenReason = reason?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(reopenReason))
+        {
+            throw new ArgumentException("Acceptance invalidation reason cannot be empty.", nameof(reason));
+        }
+
+        if (goal.Status != GoalStatus.Verifying ||
+            goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
+        {
+            return false;
+        }
+
+        goal.SetStatus(GoalStatus.Active);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reopenReason);
+        return true;
     }
 
     public bool NormalizePrematureCompletedGoalToVerified(GoalId goalId, string reason)
@@ -733,9 +753,9 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
-    private void ReopenAcceptanceGoalWithRetry(Goal goal, TaskSpec retriedTask, string reason)
+    private void ReopenAcceptanceFailedGoalWithRetry(Goal goal, TaskSpec retriedTask, string reason)
     {
-        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.AcceptanceFailed) ||
+        if (goal.Status != GoalStatus.AcceptanceFailed ||
             retriedTask.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled)
         {
             return;

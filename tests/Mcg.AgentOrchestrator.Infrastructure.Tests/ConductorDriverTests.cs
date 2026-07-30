@@ -516,6 +516,41 @@ public sealed class ConductorDriverTests
         Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_cancellation_probe_stops_reopened_Active_goal")]
+    public async Task ConductorDriverAcceptanceCancellationProbeStopsReopenedActiveGoal()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                DefaultAgents(),
+                "Cancel stale acceptance before retry dispatch");
+            var task = goal.Tasks.Single();
+
+            await repository.SaveAsync(kernel);
+            Assert.True(ConductorDriver.IsAcceptanceAttemptCancelled(workspace, goal.Id));
+
+            PassVerification(kernel, goal, task);
+            await repository.SaveAsync(kernel);
+            Assert.False(ConductorDriver.IsAcceptanceAttemptCancelled(workspace, goal.Id));
+
+            kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance attempt launched.");
+            await repository.SaveAsync(kernel);
+            Assert.False(ConductorDriver.IsAcceptanceAttemptCancelled(workspace, goal.Id));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_slot_path_skips_already_merged_branch_before_lease")]
     public void ConductorDriverAcceptanceSlotPathSkipsAlreadyMergedBranchBeforeLease()
     {

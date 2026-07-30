@@ -1369,7 +1369,7 @@ internal sealed class ConductorDriver
             TryResolveAcceptanceBranchHead(candidate.Goal),
             _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
 
-    private static bool IsAcceptanceAttemptCancelled(OrchestratorWorkspace workspace, GoalId goalId)
+    internal static bool IsAcceptanceAttemptCancelled(OrchestratorWorkspace workspace, GoalId goalId)
     {
         try
         {
@@ -1380,7 +1380,7 @@ internal sealed class ConductorDriver
                 .Goals
                 .FirstOrDefault(goal => goal.Id == goalId);
             return latest is null ||
-                latest.Status is GoalStatus.Parked or GoalStatus.AcceptanceFailed or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed;
+                latest.Status is GoalStatus.Active or GoalStatus.Parked or GoalStatus.AcceptanceFailed or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed;
         }
         catch
         {

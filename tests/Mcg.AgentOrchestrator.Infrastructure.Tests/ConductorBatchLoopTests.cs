@@ -1074,6 +1074,78 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_invalidated_attempt_blocks_replacement_until_exit_or_stale_heartbeat")]
+    public void ParallelAcceptanceInvalidatedAttemptBlocksReplacementUntilExitOrStaleHeartbeat()
+    {
+        var (_, goal) = SimpleGoal("Retry acceptance without overlapping the old gate");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-invalidated-acceptance-attempts");
+        var now = DateTimeOffset.Parse("2026-07-30T05:00:00Z");
+        var launchAttempts = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            utcNow: () => now,
+            isProcessAlive: _ => true,
+            launchOwnedProcess: _ =>
+            {
+                launchAttempts++;
+                return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7200 + launchAttempts);
+            },
+            recentHeartbeatGrace: TimeSpan.FromSeconds(30));
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["src/Retry.cs"],
+            "branch-a",
+            "main-a");
+
+        try
+        {
+            var first = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+            Assert.True(coordinator.InvalidateCurrent(goal.Id.Value, "retry invalidated first attempt"));
+
+            var firstHeld = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Running, firstHeld.Kind);
+            Assert.Equal(first.Attempt.AttemptId, firstHeld.Attempt.AttemptId);
+            Assert.Equal(1, launchAttempts);
+
+            File.WriteAllText(first.Attempt.ExitCodePath, "1");
+            now = now.AddSeconds(1);
+            var second = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, second.Kind);
+            Assert.Equal(2, launchAttempts);
+
+            Assert.True(coordinator.InvalidateCurrent(goal.Id.Value, "retry invalidated second attempt"));
+            var secondHeld = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Running, secondHeld.Kind);
+            Assert.Equal(second.Attempt.AttemptId, secondHeld.Attempt.AttemptId);
+
+            now = now.AddMinutes(1);
+            var third = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, third.Kind);
+            Assert.Equal(3, launchAttempts);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_rebased_attempt_updates_candidate_key_before_reconciliation")]
     public void ParallelAcceptanceRebasedAttemptUpdatesCandidateKeyBeforeReconciliation()
     {
@@ -4863,6 +4935,129 @@ public sealed class ConductorBatchLoopTests
             catch
             {
             }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_retry_intent_invalidates_running_acceptance_before_redispatch")]
+    public async Task BatchLoopRetryIntentInvalidatesRunningAcceptanceBeforeRedispatch()
+    {
+        var root = CreateTempDirectory("mcg-loop-verifying-retry");
+        var launches = new ConcurrentDictionary<string, ConductorParallelAcceptanceOwnedProcessLaunch>();
+        try
+        {
+            var acceptanceProcessAlive = true;
+            var (kernel, goal) = SimpleGoal("Retry a goal while acceptance is running");
+            var task = goal.Tasks.Single();
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord("focused test", root, 0, "passed", "", DateTimeOffset.UtcNow));
+            kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance attempt launched.");
+
+            var attemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"),
+                isProcessAlive: _ => acceptanceProcessAlive,
+                launchOwnedProcess: launch =>
+                {
+                    launches[launch.Attempt.AttemptId] = launch;
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7100 + launches.Count);
+                });
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["src/Retry.cs"],
+                "branch-sha",
+                "main-sha");
+            var started = attemptCoordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "verifying-retry-intent",
+                "verifying-retry-key",
+                OperatorIntentVerbs.Retry,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new RetryOperatorIntentPayload("Acceptance evidence requires a correction.", null),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "cli",
+                "local-process",
+                DateTimeOffset.UtcNow);
+            await store.EnqueueAsync(intent);
+            var dispatchStarts = 0;
+            var ticks = new List<BatchTickSummary>();
+
+            var summary = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(
+                    getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                    dispatchAndStart: _ =>
+                    {
+                        dispatchStarts++;
+                        return DispatchStartOutcome.Started();
+                    },
+                    parallelAcceptanceAttemptCoordinator: attemptCoordinator),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 3,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ => false,
+                onTick: tick =>
+                {
+                    ticks.Add(tick);
+                    if (ticks.Count == 2)
+                    {
+                        acceptanceProcessAlive = false;
+                    }
+                },
+                persistGoalTick: (_, _) => { });
+
+            var stale = ReadAttempt(started.Attempt.MetadataPath);
+            Assert.Equal(1, summary.Advanced);
+            Assert.Equal(2, summary.Held);
+            Assert.Equal(1, dispatchStarts);
+            Assert.Equal(GoalStatus.Active, goal.Status);
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, stale.Outcome);
+            Assert.NotNull(stale.ReconciledAt);
+            Assert.Contains("invalidated the current acceptance attempt", stale.Detail, StringComparison.Ordinal);
+            Assert.Equal(3, ticks.Count);
+            Assert.Contains(ticks[0].ProgressLines!, line =>
+                line.Contains("ACCEPTANCE_INVALIDATED", StringComparison.Ordinal) &&
+                line.Contains("attempt_staled=true", StringComparison.Ordinal) &&
+                line.Contains("goal_reopened=true", StringComparison.Ordinal));
+            Assert.DoesNotContain(ticks[0].ProgressLines!, line =>
+                line.Contains("result=executed", StringComparison.Ordinal));
+            Assert.Contains(ticks[1].ProgressLines!, line =>
+                line.Contains("result=held", StringComparison.Ordinal) &&
+                line.Contains("reason=invalidated_acceptance_attempt", StringComparison.Ordinal));
+            Assert.DoesNotContain(ticks[1].ProgressLines!, line =>
+                line.Contains("result=executed", StringComparison.Ordinal));
+            Assert.Contains(ticks[2].ProgressLines!, line =>
+                line.Contains("result=executed", StringComparison.Ordinal));
+
+            attemptCoordinator.RunAttemptForTests(
+                started.Attempt,
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+            var afterLateCompletion = ReadAttempt(started.Attempt.MetadataPath);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.StaleCandidate, afterLateCompletion.Outcome);
+            Assert.NotNull(afterLateCompletion.ReconciledAt);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
         }
     }
 
