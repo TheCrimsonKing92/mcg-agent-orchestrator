@@ -28,6 +28,7 @@ internal static class BacklogIntakePlanner
     internal const string UnknownScopeMarkerLine = "Scope confidence: unknown";
     internal const string ScopeIncludesHeadingLine = "Includes:";
     internal const string ScopeExclusionsHeadingLine = "Exclusions:";
+    internal const string BoilerplateScopeRiskLabel = "scope-boilerplate-regression";
 
     public static BacklogIntakePlan Build(string backlogStorePath, string? headingFilter = null, int maxItems = 5)
     {
@@ -41,6 +42,8 @@ internal static class BacklogIntakePlanner
             throw new FileNotFoundException($"SQLite backlog store was not found: {backlogStorePath}", backlogStorePath);
         }
 
+        var repositoryRoot = ResolveRepositoryRoot(backlogStorePath);
+        var scopeContext = new GoalFileScopeDerivationContext(repositoryRoot);
         var items = new BacklogStore(backlogStorePath).ListAsync().GetAwaiter().GetResult()
             .Where(item => !item.Title.StartsWith("Decision record", StringComparison.OrdinalIgnoreCase))
             .Where(item => MatchesFilter(item, headingFilter))
@@ -49,7 +52,7 @@ internal static class BacklogIntakePlanner
                 item.Id,
                 item.Title,
                 item.Body,
-                ResolveRepositoryRoot(backlogStorePath)))
+                scopeContext))
             .ToList();
 
         return new BacklogIntakePlan("backlog store", items);
@@ -67,18 +70,16 @@ internal static class BacklogIntakePlanner
             item.Body.Contains(headingFilter, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static BacklogIntakeItem BuildItem(string id, string heading, string body, string repositoryRoot)
+    private static BacklogIntakeItem BuildItem(
+        string id,
+        string heading,
+        string body,
+        GoalFileScopeDerivationContext scopeContext)
     {
         var text = $"{heading}\n{body}";
-        var scope = GoalFileScopeInference.DeriveForIntake(body, repositoryRoot);
-        if (GoalFileScopeInference.IsKnownBoilerplateScopeSet(scope.Includes))
-        {
-            throw new InvalidOperationException(
-                "Newly refined target scope matched the known intake boilerplate set.");
-        }
-
+        var scope = GoalFileScopeInference.DeriveForIntake(body, scopeContext);
         var roles = InferRoles(text);
-        var risks = InferRisks(text);
+        var risks = ApplyScopeLintRisks(body, scope.Includes, InferRisks(text));
         var verification = InferVerification(text);
         var dependencies = InferDependencies(text);
         var objective = BuildObjective(heading, body, scope, verification);
@@ -97,6 +98,21 @@ internal static class BacklogIntakePlanner
             "Close or update the backlog item (`backlog-close`) and record goal-boundary evidence with `dogfood-log add <goal-prefix>`; durable entries live in `.orchestrator/dogfood-log.db`.",
             scope.Confidence,
             scope.Exclusions);
+    }
+
+    internal static IReadOnlyList<string> ApplyScopeLintRisks(
+        string body,
+        IReadOnlyList<string> targetFiles,
+        IReadOnlyList<string> inferredRisks)
+    {
+        var risks = inferredRisks.ToList();
+        if (GoalFileScopeInference.IsUnattributedKnownBoilerplateScopeSet(body, targetFiles))
+        {
+            risks.Remove("routine");
+            risks.Add(BoilerplateScopeRiskLabel);
+        }
+
+        return risks;
     }
 
     private static List<AgentRole> InferRoles(string text)

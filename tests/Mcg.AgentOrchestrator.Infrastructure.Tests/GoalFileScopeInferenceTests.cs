@@ -114,6 +114,74 @@ public sealed class GoalFileScopeInferenceTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalFileScopeInference_reuses_excluded_directory_index_and_rejects_ambiguous_names")]
+    public void ReusesExcludedDirectoryIndexAndRejectsAmbiguousNames()
+    {
+        var root = CreateRepository();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src", "FeatureA", "Rendering"));
+            Directory.CreateDirectory(Path.Combine(root, "tests", "FeatureB", "Rendering"));
+            Directory.CreateDirectory(Path.Combine(
+                root,
+                ".orchestrator-worktrees",
+                "copy",
+                "src",
+                "Mcg.AgentOrchestrator.Infrastructure",
+                "OperatorComms"));
+            var context = new GoalFileScopeDerivationContext(root);
+
+            var first = GoalFileScopeInference.DeriveForIntake("Touch only OperatorComms.", context);
+            var second = GoalFileScopeInference.DeriveForIntake("Touch only Rendering.", context);
+
+            Xunit.Assert.Equal(RepositoryScopeConfidence.Precise, first.Confidence);
+            Xunit.Assert.Equal(
+                ["src/Mcg.AgentOrchestrator.Infrastructure/OperatorComms"],
+                first.Includes);
+            Xunit.Assert.Equal(RepositoryScopeConfidence.Unknown, second.Confidence);
+            Xunit.Assert.Empty(second.Includes);
+            Xunit.Assert.Contains(
+                second.Warnings,
+                warning => warning.Contains("ambiguous", StringComparison.OrdinalIgnoreCase));
+            Xunit.Assert.Equal(1, context.DirectoryEnumerationCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalFileScopeInference_boilerplate_lint_requires_an_unattributed_exact_set")]
+    public void BoilerplateLintRequiresAnUnattributedExactSet()
+    {
+        string[] boilerplate =
+        [
+            "src/Mcg.AgentOrchestrator.App/Cli",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalWorktreeTests.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workers",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTests.cs",
+            "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces",
+            "scripts/Invoke-IsolatedDotnet.ps1"
+        ];
+
+        var unattributedRisks = BacklogIntakePlanner.ApplyScopeLintRisks(
+            "Improve Steward composition behavior.",
+            boilerplate,
+            ["routine"]);
+        var attributedRisks = BacklogIntakePlanner.ApplyScopeLintRisks(
+            "Update scripts/Invoke-IsolatedDotnet.ps1.",
+            boilerplate,
+            ["routine"]);
+        var nonExactRisks = BacklogIntakePlanner.ApplyScopeLintRisks(
+            "Improve Steward composition behavior.",
+            boilerplate[..^1],
+            ["routine"]);
+
+        Xunit.Assert.Equal([BacklogIntakePlanner.BoilerplateScopeRiskLabel], unattributedRisks);
+        Xunit.Assert.Equal(["routine"], attributedRisks);
+        Xunit.Assert.Equal(["routine"], nonExactRisks);
+    }
+
     [Xunit.Fact(DisplayName = "GoalFileScopeInference_planner_task_scope_overrides_unknown_intake_fallback")]
     public void PlannerTaskScopeOverridesUnknownIntakeFallback()
     {

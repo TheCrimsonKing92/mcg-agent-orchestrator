@@ -22,12 +22,14 @@ internal static class SourceSurvey
         ".orchestrator",
         ".orchestrator-demo",
         ".orchestrator-prototype",
+        ".orchestrator-worktrees",
         ".scratch",
         "artifacts",
         "bin",
         "TestResults",
         "obj",
-        "node_modules"
+        "node_modules",
+        "playwright-report"
     ];
 
     private static readonly HashSet<string> ExcludedDirectoryNameSet = new(
@@ -80,23 +82,39 @@ internal static class SourceSurvey
 
     private static IEnumerable<string> EnumerateSourceFiles(string root)
     {
+        foreach (var directory in EnumerateSourceDirectoryPaths(root))
+        {
+            foreach (var file in EnumerateFiles(directory).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                yield return Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
+            }
+        }
+    }
+
+    internal static IReadOnlyList<string> EnumerateSourceDirectories(string root)
+    {
+        var fullRoot = Path.GetFullPath(root);
+        return EnumerateSourceDirectoryPaths(fullRoot)
+            .Skip(1)
+            .Select(directory => Path.GetRelativePath(fullRoot, directory).Replace(Path.DirectorySeparatorChar, '/'))
+            .ToArray();
+    }
+
+    private static IEnumerable<string> EnumerateSourceDirectoryPaths(string root)
+    {
         var directories = new Stack<string>();
         directories.Push(root);
 
         while (directories.Count > 0)
         {
             var directory = directories.Pop();
+            yield return directory;
             foreach (var child in EnumerateDirectories(directory).OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase))
             {
                 if (!ExcludedDirectoryNameSet.Contains(Path.GetFileName(child)))
                 {
                     directories.Push(child);
                 }
-            }
-
-            foreach (var file in EnumerateFiles(directory).OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
-            {
-                yield return Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
             }
         }
     }
@@ -143,6 +161,6 @@ internal static class SourceSurvey
     {
         return "rg --files -g \"!**/artifacts/**\" -g \"!**/bin/**\" -g \"!**/TestResults/**\" -g \"!**/obj/**\" -g \"!**/.scratch/**\" " +
             "-g \"!**/.orchestrator/**\" -g \"!**/.orchestrator-demo/**\" -g \"!**/.orchestrator-prototype/**\" " +
-            "-g \"!**/node_modules/**\"";
+            "-g \"!**/.orchestrator-worktrees/**\" -g \"!**/node_modules/**\" -g \"!**/playwright-report/**\"";
     }
 }

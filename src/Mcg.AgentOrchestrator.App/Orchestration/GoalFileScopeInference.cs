@@ -47,6 +47,31 @@ internal sealed record GoalFileScopeDerivation(
     }
 }
 
+internal sealed class GoalFileScopeDerivationContext
+{
+    private readonly Lazy<IReadOnlyList<string>> _repositoryDirectories;
+    private int _directoryEnumerationCount;
+
+    public GoalFileScopeDerivationContext(string repositoryRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
+        RepositoryRoot = Path.GetFullPath(repositoryRoot);
+        _repositoryDirectories = new Lazy<IReadOnlyList<string>>(
+            () =>
+            {
+                Interlocked.Increment(ref _directoryEnumerationCount);
+                return SourceSurvey.EnumerateSourceDirectories(RepositoryRoot);
+            },
+            LazyThreadSafetyMode.ExecutionAndPublication);
+    }
+
+    public string RepositoryRoot { get; }
+
+    internal IReadOnlyList<string> RepositoryDirectories => _repositoryDirectories.Value;
+
+    internal int DirectoryEnumerationCount => Volatile.Read(ref _directoryEnumerationCount);
+}
+
 internal static class GoalFileScopeInference
 {
     private static readonly Regex FileScopeRegex = new(
@@ -77,8 +102,14 @@ internal static class GoalFileScopeInference
 
     public static GoalFileScopeDerivation DeriveForIntake(string body, string repositoryRoot)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        var root = Path.GetFullPath(repositoryRoot);
+        return DeriveForIntake(body, new GoalFileScopeDerivationContext(repositoryRoot));
+    }
+
+    internal static GoalFileScopeDerivation DeriveForIntake(
+        string body,
+        GoalFileScopeDerivationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
         var text = NormalizeNewlines(body);
         var warnings = new List<string>();
         if (ContainsTraversal(text))
@@ -90,11 +121,11 @@ internal static class GoalFileScopeInference
                 ["scope text contains traversal or an out-of-repository path"]);
         }
 
-        var exclusions = ResolveConstraints(ExclusionConstraintRegex, text, root, warnings);
+        var exclusions = ResolveConstraints(ExclusionConstraintRegex, text, context, warnings);
         var inclusionMatches = InclusionConstraintRegex.Matches(text);
         var includes = inclusionMatches.Count > 0
-            ? ResolveConstraints(InclusionConstraintRegex, text, root, warnings)
-            : ResolveNamedPaths(text, root, warnings);
+            ? ResolveConstraints(InclusionConstraintRegex, text, context, warnings)
+            : ResolveNamedPaths(text, context.RepositoryRoot, warnings);
 
         includes = Collapse(includes
             .Where(include => !exclusions.Any(exclusion => IsExcluded(include, exclusion))));
@@ -110,6 +141,20 @@ internal static class GoalFileScopeInference
         paths.Count == KnownBoilerplateScopes.Length &&
         paths.ToHashSet(StringComparer.OrdinalIgnoreCase)
             .SetEquals(KnownBoilerplateScopes);
+
+    internal static bool IsUnattributedKnownBoilerplateScopeSet(
+        string body,
+        IReadOnlyList<string> paths)
+    {
+        if (!IsKnownBoilerplateScopeSet(paths))
+        {
+            return false;
+        }
+
+        var normalizedBody = NormalizeNewlines(body).Replace('\\', '/');
+        return KnownBoilerplateScopes.All(path =>
+            !normalizedBody.Contains(path, StringComparison.OrdinalIgnoreCase));
+    }
 
     public static IReadOnlyList<DeclaredFileScope> FromText(string text)
     {
@@ -318,7 +363,7 @@ internal static class GoalFileScopeInference
     private static List<string> ResolveConstraints(
         Regex regex,
         string text,
-        string repositoryRoot,
+        GoalFileScopeDerivationContext context,
         ICollection<string> warnings)
     {
         var resolved = new List<string>();
@@ -326,13 +371,13 @@ internal static class GoalFileScopeInference
         {
             foreach (var target in TargetSeparatorRegex.Split(match.Groups["targets"].Value))
             {
-                if (TryResolveTarget(target, repositoryRoot, explicitConstraint: true, out var path))
+                if (TryResolveTarget(target, context, explicitConstraint: true, out var path, out var warning))
                 {
                     resolved.Add(path);
                 }
                 else if (!string.IsNullOrWhiteSpace(target))
                 {
-                    warnings.Add($"scope target could not be resolved: {target.Trim()}");
+                    warnings.Add(warning ?? $"scope target could not be resolved: {target.Trim()}");
                 }
             }
         }
@@ -372,10 +417,12 @@ internal static class GoalFileScopeInference
 
     private static bool TryResolveTarget(
         string target,
-        string repositoryRoot,
+        GoalFileScopeDerivationContext context,
         bool explicitConstraint,
-        out string path)
+        out string path,
+        out string? warning)
     {
+        warning = null;
         var cleaned = target.Trim().Trim('`', '"', '\'', '(', ')', '[', ']');
         cleaned = Regex.Replace(cleaned, @"^(?:the\s+)", string.Empty, RegexOptions.IgnoreCase);
         if (FileScopeRegex.Match(cleaned) is { Success: true } pathMatch)
@@ -387,7 +434,7 @@ internal static class GoalFileScopeInference
                 return false;
             }
 
-            var fullPath = Path.Combine(repositoryRoot, path.Replace('/', Path.DirectorySeparatorChar));
+            var fullPath = Path.Combine(context.RepositoryRoot, path.Replace('/', Path.DirectorySeparatorChar));
             return explicitConstraint || File.Exists(fullPath) || Directory.Exists(fullPath) || ContainsGlob(path);
         }
 
@@ -399,32 +446,20 @@ internal static class GoalFileScopeInference
             return false;
         }
 
-        try
+        var candidates = context.RepositoryDirectories
+            .Where(directory => DirectorySuffixMatches(directory, segments))
+            .OrderBy(candidate => candidate.Count(ch => ch == '/'))
+            .ThenBy(candidate => candidate, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (candidates.Length == 1)
         {
-            var candidates = Directory.EnumerateDirectories(repositoryRoot, "*", SearchOption.AllDirectories)
-                .Where(directory => !IsGeneratedDirectory(directory))
-                .Select(directory => new
-                {
-                    FullPath = directory,
-                    RelativePath = NormalizePath(Path.GetRelativePath(repositoryRoot, directory))
-                })
-                .Where(candidate => DirectorySuffixMatches(candidate.RelativePath, segments))
-                .OrderBy(candidate => candidate.RelativePath.Count(ch => ch == '/'))
-                .ThenBy(candidate => candidate.RelativePath, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            if (candidates.Length > 0)
-            {
-                path = candidates[0].RelativePath;
-                return true;
-            }
+            path = candidates[0];
+            return true;
         }
-        catch (IOException)
+
+        if (candidates.Length > 1)
         {
-            // A concurrent repository read can make enumeration incomplete. Treat it as unknown.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Treat inaccessible repository paths as unresolved rather than asserting precision.
+            warning = $"scope target is ambiguous: {target.Trim()} matches {candidates.Length} repository directories";
         }
 
         path = string.Empty;
@@ -452,10 +487,6 @@ internal static class GoalFileScopeInference
 
         return true;
     }
-
-    private static bool IsGeneratedDirectory(string path) =>
-        path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .Any(segment => segment is "bin" or "obj" or ".scratch" or ".orchestrator-prototype");
 
     private static bool IsDeclaredNew(string text, int matchIndex)
     {
