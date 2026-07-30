@@ -306,6 +306,35 @@ internal static class TestCoverageInvariant
             return string.Empty;
         }
 
-        return normalized;
+        // Captured MTP discovery output can render theory arguments with an ASCII '-'
+        // while the TRX preserves the original Unicode dash in an otherwise identical identity.
+        // Canonicalize the common typographic dash variants so discovery and execution
+        // receipts remain comparable.
+        var requiresDashNormalization = false;
+        foreach (var character in normalized)
+        {
+            if (character is '\u2010' or '\u2011' or '\u2012' or '\u2013' or '\u2014' or '\u2015')
+            {
+                requiresDashNormalization = true;
+                break;
+            }
+        }
+
+        if (!requiresDashNormalization)
+        {
+            return normalized;
+        }
+
+        return string.Create(normalized.Length, normalized, static (destination, source) =>
+        {
+            for (var index = 0; index < source.Length; index++)
+            {
+                destination[index] = source[index] switch
+                {
+                    '\u2010' or '\u2011' or '\u2012' or '\u2013' or '\u2014' or '\u2015' => '-',
+                    _ => source[index]
+                };
+            }
+        });
     }
 }

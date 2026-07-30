@@ -118,6 +118,32 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_matches_console_downgraded_dash_to_trx_unicode_dash")]
+    public void TestCoverageInvariantMatchesConsoleDowngradedDashToTrxUnicodeDash()
+    {
+        foreach (var unicodeDash in "\u2010\u2011\u2012\u2013\u2014\u2015")
+        {
+            const string discoveredIdentity =
+                "ExampleTests.Theory(expectedEvidence: failed - no TRX produced)";
+            var recordedIdentity =
+                $"ExampleTests.Theory(expectedEvidence: failed {unicodeDash} no TRX produced)";
+            var trx = WriteTrx(("1", recordedIdentity, "Passed"));
+            try
+            {
+                var result = TestCoverageInvariant.Evaluate(
+                    new HashSet<string>([discoveredIdentity], StringComparer.OrdinalIgnoreCase),
+                    [new TestPartitionCoverage("lane", true, [trx])]);
+
+                Xunit.Assert.True(result.Passed, result.Summary);
+                Xunit.Assert.Empty(result.MissingTests);
+            }
+            finally
+            {
+                File.Delete(trx);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_fails_closed_for_zero_test_or_skipped_partition")]
     public void TestCoverageInvariantFailsClosedForZeroTestOrSkippedPartition()
     {
