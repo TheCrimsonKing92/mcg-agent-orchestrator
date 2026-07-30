@@ -39,6 +39,13 @@ public sealed class DashboardHostTests
         var backlogItem = await new BacklogStore(workspace.BacklogStorePath)
             .AddAsync("Hosted self collision change src/Hosted/Self.cs");
         kernel.SetGoalSourceBacklogItemId(goal.Id, backlogItem.Id);
+        var differentlyLinkedGoal = kernel.CreateGoal(
+            "Hosted unrelated collision change src/Hosted/Self.cs",
+            [new TaskSpec(TaskId.New(), "Implement other hosted change.", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(differentlyLinkedGoal.Id, "different-backlog-item");
+        var unlinkedGoal = kernel.CreateGoal(
+            "Hosted unlinked collision change src/Hosted/Self.cs",
+            [new TaskSpec(TaskId.New(), "Implement unlinked hosted change.", AgentRole.Developer)]);
         await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
         var task = goal.Tasks.Single();
         var port = GetAvailablePort();
@@ -100,9 +107,16 @@ public sealed class DashboardHostTests
                 var advisory = advisoryDocument.RootElement;
                 var report = Assert.Single(advisory.GetProperty("Reports").EnumerateArray());
                 Assert.Equal(backlogItem.Id, report.GetProperty("IntakeItemId").GetString());
-                Assert.Equal(0, report.GetProperty("ComparedGoalCount").GetInt32());
-                Assert.Empty(report.GetProperty("ConflictingGoalIds").EnumerateArray());
-                Assert.Empty(report.GetProperty("Collisions").EnumerateArray());
+                Assert.Equal(backlogItem.Title, report.GetProperty("Heading").GetString());
+                Assert.Equal(2, report.GetProperty("ComparedGoalCount").GetInt32());
+                var conflictingGoalIds = report.GetProperty("ConflictingGoalIds")
+                    .EnumerateArray()
+                    .Select(id => id.GetString())
+                    .ToArray();
+                Assert.DoesNotContain(goal.Id.Value, conflictingGoalIds);
+                Assert.Contains(differentlyLinkedGoal.Id.Value, conflictingGoalIds);
+                Assert.Contains(unlinkedGoal.Id.Value, conflictingGoalIds);
+                Assert.NotEmpty(report.GetProperty("Collisions").EnumerateArray());
             }
 
             using (var goalSummaryDocument = JsonDocument.Parse(goalWorkSummary))

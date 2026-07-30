@@ -96,6 +96,26 @@ public sealed class GoalScopeCollisionAdvisorTests
         Xunit.Assert.Equal(FileScopeProvenance.Explicit, Xunit.Assert.Single(scopes).Provenance);
     }
 
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_bounds_active_goal_text_and_reports_truncation")]
+    public void BoundsActiveGoalTextAndReportsTruncation()
+    {
+        var goal = CreateGoal("Change src/Feature/File.cs. " + new string('x', 70_000));
+
+        var directlyInferred = GoalFileScopeInference.FromGoal(goal, 32, out var directlyTruncated);
+        var report = GoalScopeCollisionAdvisor.Build(
+            ["Change src/Feature/File.cs."],
+            [goal]);
+
+        Xunit.Assert.True(directlyTruncated);
+        Xunit.Assert.Contains(directlyInferred, scope => scope.Path == "src/Feature/File.cs");
+        Xunit.Assert.Contains(
+            report.EvidenceGaps,
+            gap =>
+                gap.GoalId == goal.Id.Value &&
+                gap.Gap == ScopeEvidenceGap.TextTruncated &&
+                gap.Message.Contains(goal.Id.Value[..8], StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_missing_proposed_scope_is_insufficient")]
     public void MissingProposedScopeIsInsufficient()
     {

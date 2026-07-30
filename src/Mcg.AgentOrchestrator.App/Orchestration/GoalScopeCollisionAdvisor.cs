@@ -69,7 +69,8 @@ internal static class GoalScopeCollisionAdvisor
 
     public static GoalScopeCollisionReport Build(
         IReadOnlyList<string> proposedText,
-        IReadOnlyCollection<Goal> goals)
+        IReadOnlyCollection<Goal> goals,
+        string? excludedSourceBacklogItemId = null)
     {
         var gaps = new List<ScopeEvidenceGapNote>();
         var proposedScopes = GoalFileScopeInference.FromTextParts(
@@ -87,7 +88,13 @@ internal static class GoalScopeCollisionAdvisor
         AddProposedEvidenceGap(proposedScopes, gaps);
 
         var eligibleGoals = goals
-            .Where(goal => !goal.IsTerminal)
+            .Where(goal =>
+                !goal.IsTerminal &&
+                (string.IsNullOrWhiteSpace(excludedSourceBacklogItemId) ||
+                 !string.Equals(
+                     goal.SourceBacklogItemId,
+                     excludedSourceBacklogItemId,
+                     StringComparison.Ordinal)))
             .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
             .ToArray();
         if (eligibleGoals.Length > MaximumCandidateGoals)

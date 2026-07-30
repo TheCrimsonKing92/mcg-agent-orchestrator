@@ -86,16 +86,8 @@ private static void PrintScopeCollisionAdvisory(
     string? intakeItemId = null,
     string? heading = null)
 {
-    var comparedGoals = string.IsNullOrWhiteSpace(intakeItemId)
-        ? context.Kernel.Goals
-        : context.Kernel.Goals
-            .Where(goal => !string.Equals(
-                goal.SourceBacklogItemId,
-                intakeItemId,
-                StringComparison.Ordinal))
-            .ToArray();
     ConsoleViews.PrintGoalScopeCollisionReport(
-        GoalScopeCollisionAdvisor.Build([rawObjective], comparedGoals),
+        GoalScopeCollisionAdvisor.Build([rawObjective], context.Kernel.Goals, intakeItemId),
         intakeItemId,
         heading);
 }

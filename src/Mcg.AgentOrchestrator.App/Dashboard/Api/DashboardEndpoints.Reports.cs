@@ -146,12 +146,8 @@ internal static partial class DashboardEndpoints
                 Item: item,
                 Report: GoalScopeCollisionAdvisor.Build(
                     [item.SuggestedObjective],
-                    current.Goals
-                        .Where(goal => !string.Equals(
-                            goal.SourceBacklogItemId,
-                            item.Id,
-                            StringComparison.Ordinal))
-                        .ToArray())))
+                    current.Goals,
+                    item.Id)))
             .ToArray();
         return Json(DashboardResponseMapper.ToGoalScopeCollisionAdvisoryDto(reports));
     }

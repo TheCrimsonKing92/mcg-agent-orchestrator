@@ -120,6 +120,7 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
         context.CurrentGoal = createSimpleGoals
             ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers, context.EventWriter)
             : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers, context.EventWriter);
+        context.Kernel.SetGoalSourceBacklogItemId(context.CurrentGoal.Id, node.Intake.Id);
         Console.WriteLine(createSimpleGoals
             ? $"Created simple goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}."
             : $"Created five-role goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}.");
