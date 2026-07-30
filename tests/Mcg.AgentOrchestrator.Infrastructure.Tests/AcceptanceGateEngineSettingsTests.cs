@@ -3,6 +3,68 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class AcceptanceGateEngineSettingsTests
 {
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_checked_in_manifest_splits_heavy_lanes_without_narrowing_coverage")]
+    public void AcceptanceGateEngineCheckedInManifestSplitsHeavyLanesWithoutNarrowingCoverage()
+    {
+        var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
+
+        Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
+        Xunit.Assert.Equal(18, settings.InfrastructureTestLanes.Count);
+        AssertLanePairPreservesCoverage(
+            settings,
+            "Goal lifecycle commands",
+            "Goal worktree cleanup",
+            [
+                "CliCommandTestsGoalLifecycleCommands",
+                "CliCommandTestsPersistentRunnerCommands",
+                "CliCommandTestsSubscriptionDispatchCommands",
+                "CliCommandTestsTerminalSweepCommands",
+                "GoalGitFactIndexTests",
+                "GoalsPruneTests",
+                "GoalWorktreeTestsAcceptanceLanding",
+                "GoalWorktreeTestsCreationResolution",
+                "GoalWorktreeTestsOrphanEphemeralSweep",
+                "GoalWorktreeTestsRebaseMerge",
+                "GoalWorktreeTestsRemoveCleanup",
+                "GoalWorktreeTestsSqliteTooling",
+                "LandingExecutorTests"
+            ]);
+        AssertLanePairPreservesCoverage(
+            settings,
+            "Worker profiles",
+            "Worker dispatch fixtures",
+            [
+                "AdvanceLoopTests",
+                "ConductLoopLockTests",
+                "ConductorLoopHandoffTests",
+                "FirewallSetupCommandTests",
+                "GoalBacklogLinkTests",
+                "GoalLifecycleEventWriterTests",
+                "RealWorkerProcessGuardTests",
+                "SqliteOrchestratorStateRepositoryTests",
+                "WorkerDispatchTestsDispatchPreparation",
+                "WorkerDispatchTestsModelSelectionEnvMutation",
+                "WorkerDispatchTestsSandboxLowIntegrity",
+                "WorkerDispatchTestsSubscriptionPreflight",
+                "WorkerDispatchTestsWorkerResultClassification",
+                "WorkerProcessJobsTests",
+                "WorkerProfileTests",
+                "WorkspaceConsolidatorTests"
+            ]);
+        AssertLanePairPreservesCoverage(
+            settings,
+            "Goal acceptance verifier",
+            "Goal acceptance build slots",
+            [
+                "AcceptanceGateEngineSettingsTests",
+                "GoalAcceptanceVerifierTests",
+                "GoalAcceptanceVerifierDotnetBuildSlotTests",
+                "RealProcessShardAlphaSmokeTests",
+                "RealProcessShardBetaSmokeTests",
+                "WorkerDispatchJobAccountingTests"
+            ]);
+    }
+
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_candidate_lane_and_timeout_change_apply_without_engine_recompile")]
     public async Task AcceptanceGateEngineCandidateLaneAndTimeoutChangeApplyWithoutEngineRecompile()
     {
@@ -504,4 +566,26 @@ public sealed class AcceptanceGateEngineSettingsTests
             Path.Combine(resultsDirectory, arguments[trxFileIndex + 1]),
             $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{displayName}\"><TestMethod className=\"{testClass}\" name=\"{method}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{displayName}\" outcome=\"Passed\" /></Results></TestRun>");
     }
+
+    private static void AssertLanePairPreservesCoverage(
+        AcceptanceGateEngineSettings settings,
+        string firstLaneName,
+        string secondLaneName,
+        IReadOnlyList<string> expectedClasses)
+    {
+        var first = settings.InfrastructureTestLanes.Single(lane => lane.Name == firstLaneName);
+        var second = settings.InfrastructureTestLanes.Single(lane => lane.Name == secondLaneName);
+        var firstClasses = FilterClasses(first.Filter);
+        var secondClasses = FilterClasses(second.Filter);
+
+        Xunit.Assert.Empty(firstClasses.Intersect(secondClasses, StringComparer.Ordinal));
+        Xunit.Assert.Equal(
+            expectedClasses.Order(StringComparer.Ordinal),
+            firstClasses.Concat(secondClasses).Order(StringComparer.Ordinal));
+    }
+
+    private static string[] FilterClasses(string filter) =>
+        filter.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(operand => operand["FullyQualifiedName~".Length..])
+            .ToArray();
 }
