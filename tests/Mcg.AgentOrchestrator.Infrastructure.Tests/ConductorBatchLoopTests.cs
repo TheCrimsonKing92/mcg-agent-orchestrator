@@ -2165,13 +2165,18 @@ public sealed class ConductorBatchLoopTests
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         using var releaseFirst = new ManualResetEventSlim(false);
         using var firstHasLease = new ManualResetEventSlim(false);
+        using var secondReachedPreSlot = new ManualResetEventSlim(false);
         var preSlotRuns = 0;
         var coordinator = ThreadedAcceptanceAttemptCoordinator(
             attemptRoot,
             out var waitForAttempts,
             (_, _) =>
             {
-                Interlocked.Increment(ref preSlotRuns);
+                if (Interlocked.Increment(ref preSlotRuns) == 2)
+                {
+                    secondReachedPreSlot.Set();
+                }
+
                 return null;
             });
         var candidateA = ConductorParallelAcceptanceCandidate.Create(goalA, 0, ["src/HoldA.cs"], "branch-a", "main");
@@ -2189,7 +2194,7 @@ public sealed class ConductorBatchLoopTests
                     Assert.NotNull(stableSlotLease);
                     firstLeaseEnvironment = stableSlotLease.Environment;
                     firstHasLease.Set();
-                    Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(5)));
+                    releaseFirst.Wait();
                     return PassingRun(attemptCandidate, ConductorAutonomyPolicy.Conservative);
                 });
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, first.Kind);
@@ -2207,6 +2212,7 @@ public sealed class ConductorBatchLoopTests
                     secondRan = true;
                     return PassingRun(attemptCandidate, attemptPolicy);
                 });
+            Assert.True(secondReachedPreSlot.Wait(TimeSpan.FromSeconds(5)));
             var blocked = WaitForAttemptOutcome(coordinator, candidateB, ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot);
 
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, second.Kind);
