@@ -11,6 +11,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed class ConductorDriver
 {
     private const int MaxCriterionRetryEvidenceLines = 30;
+    private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
 
     // Reviewer evidence-on-demand is bounded per review round to break request loops while still
     // letting a reviewer legitimately request focused receipts for more than one changed area
@@ -34,7 +35,8 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, string> _createWorkspace;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
-    private readonly Action _buildServerShutdown;
+    private readonly Func<TimeSpan, string> _buildServerShutdown;
+    private readonly TimeSpan _buildServerShutdownTimeout;
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, FocusedEvidenceRunResult> _runFocusedEvidence;
@@ -67,6 +69,7 @@ internal sealed class ConductorDriver
     private readonly string? _executionDirectory;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
     private readonly bool _parallelAcceptanceEnabled;
+    private bool _buildServerShutdownRanThisTick;
 
     internal Action<string>? PhaseTimingSink { get; set; }
     internal Action<ConductorLandingReceipt>? SuccessfulLandingSink { get; set; }
@@ -245,29 +248,8 @@ internal sealed class ConductorDriver
             return outcome;
         };
 
-        _buildServerShutdown = () =>
-        {
-            try
-            {
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = "dotnet",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WorkingDirectory = dir
-                };
-                startInfo.ArgumentList.Add("build-server");
-                startInfo.ArgumentList.Add("shutdown");
-                using var process = Process.Start(startInfo);
-                if (process is null) return;
-                process.StandardOutput.ReadToEnd();
-                process.StandardError.ReadToEnd();
-                process.WaitForExit(30_000);
-            }
-            catch { }
-        };
+        _buildServerShutdownTimeout = DefaultBuildServerShutdownTimeout;
+        _buildServerShutdown = timeout => RunBuildServerShutdown(dir, timeout);
 
         _runAcceptanceVerification = (goal, stableSlotIndex, stableSlotLease, cancellationToken) =>
         {
@@ -594,7 +576,8 @@ internal sealed class ConductorDriver
         Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec>? retryTaskWithRoundKind = null,
         Func<Goal, string?>? tryBuildAwaitingClarificationEscalationReason = null,
         Func<Goal, int>? getAcceptanceSlotCount = null,
-        Func<int>? getWorkerAdmissionCapacity = null)
+        Func<int>? getWorkerAdmissionCapacity = null,
+        TimeSpan? buildServerShutdownTimeout = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -603,7 +586,10 @@ internal sealed class ConductorDriver
         _startRecordedDispatches = startRecordedDispatches is null
             ? _dispatchAndStart
             : (goal, _) => startRecordedDispatches(goal);
-        _buildServerShutdown = buildServerShutdown ?? (() => { });
+        _buildServerShutdownTimeout = buildServerShutdownTimeout ?? DefaultBuildServerShutdownTimeout;
+        _buildServerShutdown = timeout => RunBoundedBuildServerShutdown(
+            buildServerShutdown ?? (() => { }),
+            timeout);
         _runAcceptanceVerification = runAcceptanceVerificationWithLease
             ?? (runAcceptanceVerificationWithSlot is not null
                 ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
@@ -666,6 +652,8 @@ internal sealed class ConductorDriver
     internal bool ParallelAcceptanceEnabled => _parallelAcceptanceEnabled;
 
     internal int GetAcceptanceSlotCount(Goal goal) => _getAcceptanceSlotCount(goal);
+
+    internal void BeginTick() => _buildServerShutdownRanThisTick = false;
 
     internal static DispatchStartOutcome ClassifySubscriptionStartForConductor(SubscriptionStartResult result)
     {
@@ -1552,7 +1540,14 @@ internal sealed class ConductorDriver
             }
 
             var firstFailure = outcome;
-            _buildServerShutdown();
+            var remediationClock = Stopwatch.StartNew();
+            var remediationResult = RunDispatchRemediation();
+            remediationClock.Stop();
+            EmitGoalPhaseTiming(
+                "dispatch-remediation",
+                goal,
+                remediationClock.Elapsed,
+                $"result={remediationResult}");
             var retryStart = fromState == GoalLifecycleState.WorkspaceReady
                 ? _startRecordedDispatches
                 : start;
@@ -1628,6 +1623,100 @@ internal sealed class ConductorDriver
         {
             PhaseTimingSink?.Invoke(
                 $"phase={phase} goal={goal.Id.Value[..8]} task={task.Id.Value[..8]} role={task.RequiredRole} elapsed_ms={(long)elapsed.TotalMilliseconds} {detail}");
+        }
+    }
+
+    private void EmitGoalPhaseTiming(string phase, Goal goal, TimeSpan elapsed, string detail)
+    {
+        var elapsedMilliseconds = Math.Max(1L, (long)Math.Ceiling(elapsed.TotalMilliseconds));
+        PhaseTimingSink?.Invoke(
+            $"phase={phase} goal={goal.Id.Value[..8]} elapsed_ms={elapsedMilliseconds} {detail}");
+    }
+
+    private string RunDispatchRemediation()
+    {
+        if (_buildServerShutdownRanThisTick)
+        {
+            return "skipped-tick-latch";
+        }
+
+        _buildServerShutdownRanThisTick = true;
+        return _buildServerShutdown(_buildServerShutdownTimeout);
+    }
+
+    private static string RunBoundedBuildServerShutdown(Action shutdown, TimeSpan timeout)
+    {
+        try
+        {
+            var shutdownTask = Task.Run(shutdown);
+            if (shutdownTask.Wait(timeout))
+            {
+                return "ran";
+            }
+
+            _ = shutdownTask.ContinueWith(
+                static task => _ = task.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return "timeout";
+        }
+        catch
+        {
+            return "error";
+        }
+    }
+
+    private static string RunBuildServerShutdown(string workingDirectory, TimeSpan timeout)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "dotnet",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = workingDirectory
+            };
+            startInfo.ArgumentList.Add("build-server");
+            startInfo.ArgumentList.Add("shutdown");
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return "error";
+            }
+
+            process.OutputDataReceived += static (_, _) => { };
+            process.ErrorDataReceived += static (_, _) => { };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            var timeoutMilliseconds = (int)Math.Clamp(
+                Math.Ceiling(timeout.TotalMilliseconds),
+                1,
+                int.MaxValue);
+            if (process.WaitForExit(timeoutMilliseconds))
+            {
+                return "ran";
+            }
+
+            try
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(1_000);
+            }
+            catch
+            {
+                // The process may have exited between the timed wait and tree kill.
+            }
+
+            return "timeout";
+        }
+        catch
+        {
+            return "error";
         }
     }
 
@@ -2154,7 +2243,22 @@ internal sealed class ConductorDriver
         GoalLifecycleState state,
         string reason)
     {
-        _writeEscalation(goal, state, reason);
+        var escalationClock = Stopwatch.StartNew();
+        var result = "error";
+        try
+        {
+            _writeEscalation(goal, state, reason);
+            result = "completed";
+        }
+        finally
+        {
+            escalationClock.Stop();
+            EmitGoalPhaseTiming(
+                "escalation-write",
+                goal,
+                escalationClock.Elapsed,
+                $"sink=json result={result}");
+        }
         return MakeResult(goal.Id.Value, goalPrefix, policy,
             new ConductorAdvanceOutcome.Escalated(state, reason));
     }

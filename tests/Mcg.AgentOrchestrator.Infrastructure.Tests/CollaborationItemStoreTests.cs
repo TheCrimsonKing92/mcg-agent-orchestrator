@@ -518,6 +518,38 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.False(second);
     }
 
+    [Xunit.Fact(DisplayName = "LandingEscalation_collaboration_timeout_preserves_json_record")]
+    public void LandingEscalationCollaborationTimeoutPreservesJsonRecord()
+    {
+        using var raiseStarted = new ManualResetEventSlim();
+        var pendingRaise = new TaskCompletionSource<CollaborationItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var fakeStore = new FakeCollaborationItemStore
+        {
+            RaiseStarted = raiseStarted,
+            PendingRaise = pendingRaise.Task
+        };
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Escalation timeout keeps durable fallback");
+
+        var record = Task.Run(() => OperatorInbox.RecordLandingEscalation(
+            workspace,
+            goal,
+            "merge conflict",
+            "integration",
+            channel: null,
+            collaborationStore: fakeStore,
+            collaborationRaiseTimeout: TimeSpan.FromMilliseconds(25)));
+
+        Xunit.Assert.True(raiseStarted.Wait(TimeSpan.FromSeconds(1)));
+        Xunit.Assert.True(record.Wait(TimeSpan.FromSeconds(1)));
+        var jsonPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
+        Xunit.Assert.True(File.Exists(jsonPath));
+        Xunit.Assert.Contains(goal.Id.Value, File.ReadAllText(jsonPath), StringComparison.Ordinal);
+    }
+
     private static string DbPath() =>
         Path.Combine(CreateTempDirectory(), "collab.db");
 }
@@ -533,6 +565,8 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     private readonly Dictionary<string, NotificationDelivery> _notificationDeliveries = new(StringComparer.Ordinal);
 
     public IReadOnlyList<CollaborationItem> Items => _items;
+    public ManualResetEventSlim? RaiseStarted { get; init; }
+    public Task<CollaborationItem>? PendingRaise { get; init; }
 
     public Task<CollaborationItem> RaiseAsync(
         CollaborationItemType type,
@@ -542,6 +576,12 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
         string? correlationKey = null,
         CancellationToken cancellationToken = default)
     {
+        RaiseStarted?.Set();
+        if (PendingRaise is not null)
+        {
+            return PendingRaise;
+        }
+
         var item = new CollaborationItem(
             Guid.NewGuid().ToString("n"),
             type, goalId, CollaborationItemStatus.Raised,

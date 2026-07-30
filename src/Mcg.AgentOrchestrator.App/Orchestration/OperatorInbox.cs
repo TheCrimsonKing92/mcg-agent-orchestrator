@@ -93,6 +93,7 @@ internal static class OperatorInbox
     private const string HoldFailureFileName = "ownership-hold-failures.json";
     private const int MaxLandingEscalationLockAttempts = 100;
     private static readonly TimeSpan LandingEscalationLockBackoff = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan DefaultCollaborationRaiseTimeout = TimeSpan.FromSeconds(5);
     internal const int MaxHoldWriteRetries = 5;
     private static readonly TimeSpan InitialHoldWriteBackoff = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaxHoldWriteBackoff = TimeSpan.FromSeconds(2);
@@ -474,7 +475,8 @@ internal static class OperatorInbox
         string reason,
         string integrationBranch,
         IOperatorChannel? channel = null,
-        ICollaborationItemStore? collaborationStore = null)
+        ICollaborationItemStore? collaborationStore = null,
+        TimeSpan? collaborationRaiseTimeout = null)
     {
         using (AcquireLandingEscalationLock(workspace))
         {
@@ -517,7 +519,10 @@ internal static class OperatorInbox
                 goal.Id.Value,
                 $"Landing parked on {integrationBranch}",
                 reason,
-                itemId).GetAwaiter().GetResult();
+                itemId)
+                .WaitAsync(collaborationRaiseTimeout ?? DefaultCollaborationRaiseTimeout)
+                .GetAwaiter()
+                .GetResult();
         }
         catch
         {
