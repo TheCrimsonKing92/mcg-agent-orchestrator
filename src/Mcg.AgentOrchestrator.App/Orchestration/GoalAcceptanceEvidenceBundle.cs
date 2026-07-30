@@ -289,6 +289,7 @@ internal static class GoalAcceptanceEvidenceBundleBuilder
         return aggregateName is null
             ? null
             : acceptanceChecks.FirstOrDefault(result =>
+                !result.Advisory &&
                 result.Name.Equals(aggregateName, StringComparison.OrdinalIgnoreCase));
     }
 

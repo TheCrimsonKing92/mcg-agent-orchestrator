@@ -54,4 +54,21 @@ public sealed class GoalAcceptanceEvidenceBundleTests
 
         Xunit.Assert.Equal("missing", state);
     }
+
+    [Xunit.Fact(DisplayName = "Acceptance_policy_does_not_treat_advisory_check_as_full_aggregate")]
+    public void AcceptancePolicyDoesNotTreatAdvisoryCheckAsFullAggregate()
+    {
+        var policyCheck = new VerificationPolicyCheck(
+            "full dotnet tests: infrastructure",
+            "dotnet-test",
+            Required: true,
+            "dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal",
+            "Broad verification required.");
+
+        var state = GoalAcceptanceEvidenceBundleBuilder.ResolvePolicyCheckState(
+            policyCheck,
+            [new AcceptanceCheckResult("infrastructure tests", true, 0, null, Advisory: true)]);
+
+        Xunit.Assert.Equal("missing", state);
+    }
 }
