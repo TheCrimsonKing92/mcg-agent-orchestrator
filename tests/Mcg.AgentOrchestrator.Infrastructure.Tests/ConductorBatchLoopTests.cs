@@ -119,6 +119,23 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(expected, ConductorBatchLoop.ResolveSelfRelaunchEnabled(configuredValue));
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_loop_start_reports_verified_journal_mode")]
+    public void BatchLoopLoopStartReportsVerifiedJournalMode()
+    {
+        var (kernel, _) = SimpleGoal();
+        var output = CaptureConsole(() =>
+            new ConductorBatchLoop().Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 0,
+                journalMode: "wal"));
+
+        Assert.Contains("LOOP_START policy=Conservative", output, StringComparison.Ordinal);
+        Assert.Contains("journalMode=wal", output, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_default_self_relaunch_activation_does_not_schedule_or_execute")]
     public void BatchLoopDefaultSelfRelaunchActivationDoesNotScheduleOrExecute()
     {
@@ -8388,31 +8405,24 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains(goal.Id.Value[..8], ex.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "PersistGoalTick_busy_retries_and_succeeds_before_budget")]
-    public void PersistGoalTickBusyRetriesAndSucceedsBeforeBudget()
+    [Xunit.Fact(DisplayName = "PersistGoalTick_busy_is_not_retried_after_repository_budget")]
+    public void PersistGoalTickBusyIsNotRetriedAfterRepositoryBudget()
     {
         var (kernel, _) = SimpleGoal("busy persistence clears");
         var driver = MakeDriver();
-        var ticks = new List<BatchTickSummary>();
         var attempts = 0;
 
-        var summary = new ConductorBatchLoop().Run(
+        Assert.Throws<InvalidOperationException>(() => new ConductorBatchLoop().Run(
             kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
             maxIterations: 1,
-            onTick: ticks.Add,
             persistGoalTick: (_, _) =>
             {
                 attempts++;
-                if (attempts < 3)
-                    throw SqliteBusy();
+                throw SqliteBusy();
             },
-            busyWriteDelay: _ => { });
+            busyWriteDelay: _ => { }));
 
-        Assert.Equal(1, summary.Ticks);
-        Assert.True(attempts >= 3, $"Expected at least 3 persistence attempts, got {attempts}");
-        var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
-        Assert.Equal(2, lines.Count(line => line.Contains("TICK_WRITE_BUSY", StringComparison.Ordinal)));
-        Assert.DoesNotContain(lines, line => line.Contains("TICK_WRITE_DEGRADED", StringComparison.Ordinal));
+        Assert.Equal(1, attempts);
     }
 
     [Xunit.Fact(DisplayName = "PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition")]

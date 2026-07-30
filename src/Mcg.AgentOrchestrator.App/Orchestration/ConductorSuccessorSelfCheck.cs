@@ -32,13 +32,14 @@ internal static class ConductorSuccessorSelfCheck
             }
 
             var schemaVersion = SqliteOrchestratorStateRepository.ValidateReadOnlySchema(args[2]);
+            var journalMode = SqliteOrchestratorStateRepository.VerifyJournalMode(args[2]);
             var agents = AgentCatalogStore.Load(args[4]).Agents;
             var profiles = WorkerProfileStore.Load(args[5]).Profiles;
             var modelFunctions = ModelFunctionCatalogStore.Load(args[6]).Bindings;
             var startupContract = GoalAcceptanceVerifier.ValidateStartupContract(repositoryRoot);
             var version = Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
             Console.WriteLine(
-                $"LOOP_START selfCheck=true version={version} gitHead={builtHead} schemaVersion={schemaVersion} " +
+                $"LOOP_START selfCheck=true version={version} gitHead={builtHead} schemaVersion={schemaVersion} journalMode={journalMode} " +
                 $"manifestChecks={startupContract.ManifestCheckCount} lanes={startupContract.InfrastructureLaneNames.Count} " +
                 $"agents={agents.Count} profiles={profiles.Count} modelFunctions={modelFunctions.Count} " +
                 $"runDir={Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory)}");

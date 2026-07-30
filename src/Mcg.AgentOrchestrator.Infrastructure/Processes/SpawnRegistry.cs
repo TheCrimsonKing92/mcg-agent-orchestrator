@@ -23,13 +23,11 @@ internal sealed class SpawnRegistry
     public SpawnRegistry(string dbPath)
     {
         _dbPath = dbPath;
-        EnsureSchema();
     }
-
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
     public void Register(string ownerId, SpawnProcessIdentity identity)
     {
+        EnsureSchema();
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -49,26 +47,37 @@ internal sealed class SpawnRegistry
 
     public IReadOnlyList<SpawnRegistryEntry> ListActive()
     {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT id, owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
-            FROM spawn_registry
-            WHERE released_at IS NULL
-            ORDER BY registered_at ASC
-            """;
-        var result = new List<SpawnRegistryEntry>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            result.Add(ReadEntry(reader));
-        }
+        if (!File.Exists(_dbPath))
+            return [];
 
-        return result;
+        try
+        {
+            using var conn = OpenReadConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT id, owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
+                FROM spawn_registry
+                WHERE released_at IS NULL
+                ORDER BY registered_at ASC
+                """;
+            var result = new List<SpawnRegistryEntry>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(ReadEntry(reader));
+            }
+
+            return result;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
+        {
+            return [];
+        }
     }
 
     public void MarkReleased(int processId, string diagnostic)
     {
+        EnsureSchema();
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -86,6 +95,7 @@ internal sealed class SpawnRegistry
 
     public void RecordDiagnostic(long id, string diagnostic)
     {
+        EnsureSchema();
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = """
@@ -98,26 +108,15 @@ internal sealed class SpawnRegistry
         cmd.ExecuteNonQuery();
     }
 
-    private SqliteConnection OpenConnection()
-    {
-        var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
-        return conn;
-    }
+    private SqliteConnection OpenConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.ReadWrite);
+
+    private SqliteConnection OpenReadConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.QueryOnlyRead);
 
     private void EnsureSchema()
     {
-        var directory = Path.GetDirectoryName(_dbPath);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        using var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
-        RunNonQuery(conn, "PRAGMA journal_mode=WAL");
+        using var conn = OpenConnection();
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS spawn_registry (
                 id                 INTEGER PRIMARY KEY AUTOINCREMENT,

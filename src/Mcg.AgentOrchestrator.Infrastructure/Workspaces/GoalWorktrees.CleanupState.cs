@@ -265,7 +265,7 @@ public static partial class GoalWorktrees
                 return false;
             }
 
-            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
+            using var conn = OpenCleanupBackoffReadConnection(path, cleanupStateRoot);
             using var command = conn.CreateCommand();
             command.CommandText = "SELECT skip_until_utc, reason FROM worktree_cleanup_backoff WHERE path = $path";
             command.Parameters.AddWithValue("$path", NormalizePath(path));
@@ -357,37 +357,27 @@ public static partial class GoalWorktrees
         return OpenCleanupStateConnection(statePath);
     }
 
+    private static SqliteConnection OpenCleanupBackoffReadConnection(string path, string? cleanupStateRoot = null)
+    {
+        var statePath = CleanupBackoffStorePath(path, cleanupStateRoot);
+        return OpenCleanupStateReadConnection(statePath);
+    }
+
     private static SqliteConnection OpenCleanupStateConnection(string statePath)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
-        var conn = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = statePath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Pooling = false
-        }.ToString());
-        conn.Open();
+        var conn = StateDbConnectionFactory.Open(
+            statePath,
+            StateDbConnectionProfile.ReadWrite);
         using var command = conn.CreateCommand();
         command.CommandText = CleanupBackoffTableSql + Environment.NewLine + CleanupDebtJournalTableSql;
         command.ExecuteNonQuery();
         return conn;
     }
 
-    private static SqliteConnection OpenCleanupStateReadConnection(string statePath)
-    {
-        var conn = new SqliteConnection(new SqliteConnectionStringBuilder
-        {
-            DataSource = statePath,
-            Mode = SqliteOpenMode.ReadOnly,
-            Pooling = false,
-            DefaultTimeout = 1
-        }.ToString());
-        conn.Open();
-        using var command = conn.CreateCommand();
-        command.CommandText = "PRAGMA busy_timeout = 1000;";
-        command.ExecuteNonQuery();
-        return conn;
-    }
+    private static SqliteConnection OpenCleanupStateReadConnection(string statePath) =>
+        StateDbConnectionFactory.Open(
+            statePath,
+            StateDbConnectionProfile.FastFailRead);
 
     private static void JournalCleanupBackoffSkip(
         string path,

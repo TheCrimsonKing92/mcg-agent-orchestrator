@@ -29,9 +29,10 @@ public sealed class BacklogIntakeRecordStore
     public static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromMinutes(30);
 
     private readonly string _dbPath;
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
-    private const int MaxBusyRetries = 6;
+    // The connection factory already waits for the full state-store budget. Retrying here would
+    // multiply that wait for the same write.
+    private const int MaxBusyRetries = 1;
 
     public BacklogIntakeRecordStore(string dbPath)
     {
@@ -39,7 +40,6 @@ public sealed class BacklogIntakeRecordStore
             throw new ArgumentException("Value cannot be empty.", nameof(dbPath));
 
         _dbPath = dbPath;
-        EnsureSchema();
     }
 
     public BacklogIntakeReservation Reserve(
@@ -51,6 +51,7 @@ public sealed class BacklogIntakeRecordStore
         if (string.IsNullOrWhiteSpace(sourceBacklogItemId))
             throw new ArgumentException("Value cannot be empty.", nameof(sourceBacklogItemId));
 
+        EnsureSchema();
         var now = DateTimeOffset.UtcNow;
         var stdoutPath = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDOUT_LOG_PATH");
         var stderrPath = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_STDERR_LOG_PATH");
@@ -115,6 +116,7 @@ public sealed class BacklogIntakeRecordStore
         if (string.IsNullOrWhiteSpace(goalId))
             throw new ArgumentException("Value cannot be empty.", nameof(goalId));
 
+        EnsureSchema();
         var now = DateTimeOffset.UtcNow.ToString("O");
         WithBusyRetry(() =>
         {
@@ -140,16 +142,22 @@ public sealed class BacklogIntakeRecordStore
         if (string.IsNullOrWhiteSpace(sourceBacklogItemId))
             return null;
 
-        using var conn = OpenConnection();
-        return LoadRecord(conn, sourceBacklogItemId);
+        if (!File.Exists(_dbPath))
+            return null;
+
+        try
+        {
+            using var conn = OpenReadConnection();
+            return LoadRecord(conn, sourceBacklogItemId);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
+        {
+            return null;
+        }
     }
 
     private void EnsureSchema()
     {
-        var directory = Path.GetDirectoryName(_dbPath);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-
         WithBusyRetry(() =>
         {
             using var conn = OpenConnection();
@@ -171,13 +179,11 @@ public sealed class BacklogIntakeRecordStore
         });
     }
 
-    private SqliteConnection OpenConnection()
-    {
-        var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
-        return conn;
-    }
+    private SqliteConnection OpenConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.ReadWrite);
+
+    private SqliteConnection OpenReadConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.QueryOnlyRead);
 
     private SqliteConnection BeginWrite()
     {
