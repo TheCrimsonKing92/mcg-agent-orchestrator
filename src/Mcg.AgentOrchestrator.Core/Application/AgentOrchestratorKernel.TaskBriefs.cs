@@ -113,6 +113,10 @@ public sealed partial class AgentOrchestratorKernel
             complexity);
 
         var usesFileAccessContext = !string.IsNullOrWhiteSpace(workingDirectory) && !string.IsNullOrWhiteSpace(contextDirectory);
+        var hasDurableResearch = usesFileAccessContext &&
+            task.RequiredRole == AgentRole.Planner &&
+            File.Exists(Path.Combine(contextDirectory!, "research-notes.md")) &&
+            new FileInfo(Path.Combine(contextDirectory!, "research-notes.md")).Length > 0;
         var headerLines = new List<string>
         {
             "# Agent Task Brief",
@@ -166,7 +170,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty,
             "## Instructions"
         };
-        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole));
+        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch));
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
         if (!string.IsNullOrWhiteSpace(responseBudgetGuidance))
         {
@@ -202,7 +206,8 @@ public sealed partial class AgentOrchestratorKernel
         roleLines.AddRange(SdlcRolePromptRequirements.Build(
             task.RequiredRole,
             complexity,
-            SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal)));
+            SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal),
+            hasDurableResearch));
         roleLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(roleLines));
 
@@ -464,7 +469,11 @@ public sealed partial class AgentOrchestratorKernel
         return complexity == TaskComplexity.Complex ? 20 : 8;
     }
 
-    private static IReadOnlyList<string> BuildTaskBriefInstructions(TaskComplexity complexity, string? modelFitTarget, AgentRole role)
+    private static IReadOnlyList<string> BuildTaskBriefInstructions(
+        TaskComplexity complexity,
+        string? modelFitTarget,
+        AgentRole role,
+        bool hasDurableResearch)
     {
         var modelFitInstruction = BuildModelFitInstruction(modelFitTarget);
         if (complexity == TaskComplexity.Simple)
@@ -477,7 +486,7 @@ public sealed partial class AgentOrchestratorKernel
             };
             simpleLines.Insert(
                 2,
-                role == AgentRole.Planner
+                role == AgentRole.Planner && hasDurableResearch
                     ? "Use the complete Durable Research Notes supplied below; synthesize from them and do not run another broad repository source survey."
                     : "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.");
             simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
@@ -495,7 +504,7 @@ public sealed partial class AgentOrchestratorKernel
         };
         complexLines.InsertRange(
             4,
-            role == AgentRole.Planner
+            role == AgentRole.Planner && hasDurableResearch
                 ?
                 [
                     "Use the complete Durable Research Notes supplied below; synthesize from them and do not run another broad repository source survey."

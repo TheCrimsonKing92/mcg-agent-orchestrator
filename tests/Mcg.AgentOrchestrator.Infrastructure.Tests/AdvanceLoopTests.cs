@@ -756,13 +756,13 @@ public sealed class AdvanceLoopTests
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var kernel = new AgentOrchestratorKernel();
-    var planner = new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner);
     var researcher = new TaskSpec(TaskId.New(), "Research the work", AgentRole.Researcher);
+    var planner = new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner);
     var firstDeveloper = new TaskSpec(TaskId.New(), "Implement the first part", AgentRole.Developer);
     var secondDeveloper = new TaskSpec(TaskId.New(), "Implement the second part", AgentRole.Developer);
     var tester = new TaskSpec(TaskId.New(), "Test the work", AgentRole.Tester);
     var reviewer = new TaskSpec(TaskId.New(), "Review the work", AgentRole.Reviewer);
-    var goal = CreateRefinedGoal(kernel, "Dispatch in SDLC stage order", [planner, researcher, firstDeveloper, secondDeveloper, tester, reviewer]);
+    var goal = CreateRefinedGoal(kernel, "Dispatch in SDLC stage order", [researcher, planner, firstDeveloper, secondDeveloper, tester, reviewer]);
     AgentDefinition[] agents =
     [
         CreateSubscriptionAgent(AgentRole.Planner),
@@ -789,15 +789,35 @@ public sealed class AdvanceLoopTests
             profiles);
 
         Assert.Equal(1, first.Dispatches.Count);
-        Assert.Equal(planner.Id, first.Dispatches[0].Task.Id);
+        Assert.Equal(researcher.Id, first.Dispatches[0].Task.Id);
         Assert.Equal(1, first.Processes.Tasks.Count);
-        Assert.Equal(planner.Id, first.Processes.Tasks[0].Id);
-        Assert.True(planner.LastProcess is { IsRunning: true });
-        Assert.True(researcher.LastDispatch is null);
+        Assert.Equal(researcher.Id, first.Processes.Tasks[0].Id);
+        Assert.True(researcher.LastProcess is { IsRunning: true });
+        Assert.True(planner.LastDispatch is null);
         Assert.True(firstDeveloper.LastDispatch is null);
 
-        new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, planner.Id);
-        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Completed, "Planner complete.");
+        new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, researcher.Id);
+        var researchPath = Path.Combine(root, "research.out.log");
+        File.WriteAllText(researchPath, WorkerDispatchTestSupport.ResearcherContractFixture());
+        var researchResult = ResearcherOutputContract.Resolve(File.ReadAllText(researchPath));
+        Assert.True(researchResult.Succeeded, researchResult.Diagnostic);
+        Assert.True(
+            ResearcherOutputContract.TryPersistDurableReceipt(
+                researchPath,
+                researchResult.Research!,
+                out var researchDiagnostic),
+            researchDiagnostic);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            researcher.Id,
+            new TaskVerificationRecord(
+                "research",
+                root,
+                0,
+                "Researcher complete.",
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: researchPath));
 
         var second = GoalManagementCommandService.StartSubscriptionReadyTasks(
             kernel,
@@ -807,14 +827,34 @@ public sealed class AdvanceLoopTests
             profiles);
 
         Assert.Equal(1, second.Dispatches.Count);
-        Assert.Equal(researcher.Id, second.Dispatches[0].Task.Id);
+        Assert.Equal(planner.Id, second.Dispatches[0].Task.Id);
         Assert.Equal(1, second.Processes.Tasks.Count);
-        Assert.Equal(researcher.Id, second.Processes.Tasks[0].Id);
-        Assert.True(researcher.LastProcess is { IsRunning: true });
+        Assert.Equal(planner.Id, second.Processes.Tasks[0].Id);
+        Assert.True(planner.LastProcess is { IsRunning: true });
         Assert.True(firstDeveloper.LastDispatch is null);
 
-        new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, researcher.Id);
-        kernel.ReportTaskProgress(goal.Id, researcher.Id, WorkTaskStatus.Completed, "Researcher complete.");
+        new BackgroundDispatchRunner().CancelLatestProcess(kernel, goal.Id, planner.Id);
+        var planPath = Path.Combine(root, "planner.out.log");
+        var plan = WorkerDispatchTestSupport.PlannerContractPlanFixture();
+        File.WriteAllText(planPath, plan);
+        Assert.True(
+            PlannerOutputContract.TryPersistDurableReceipt(
+                planPath,
+                planPath,
+                plan,
+                out var planDiagnostic),
+            planDiagnostic);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            planner.Id,
+            new TaskVerificationRecord(
+                "plan",
+                root,
+                0,
+                "Planner complete.",
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: planPath));
 
         var third = GoalManagementCommandService.StartSubscriptionReadyTasks(
             kernel,

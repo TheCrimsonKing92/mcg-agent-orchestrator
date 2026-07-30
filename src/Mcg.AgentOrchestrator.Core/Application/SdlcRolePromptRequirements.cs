@@ -22,7 +22,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Planner =>
             [
                 "## Planner Requirements",
-                "- Synthesize the plan from the complete Durable Research Notes supplied by the orchestrator; do not repeat a broad repository source survey.",
+                "- Inspect the supplied goal evidence and current repository context before synthesizing the plan.",
                 "- Produce a concrete implementation plan with likely files or modules to inspect and the smallest viable change boundary.",
                 "- Map every acceptance criterion by number and include target files, ownership/lifecycle, external and edge contracts, risks, integration seams, and focused verification.",
                 "- Challenge ambiguous requirements; name assumptions, sequencing risks, and explicit stop conditions.",
@@ -103,16 +103,29 @@ internal static class SdlcRolePromptRequirements
         TaskComplexity complexity,
         bool includeHighRiskReviewerEnumerationContract)
     {
-        var requirements = Build(role, complexity);
+        return Build(role, complexity, includeHighRiskReviewerEnumerationContract, hasDurableResearch: false);
+    }
+
+    public static IReadOnlyList<string> Build(
+        AgentRole role,
+        TaskComplexity complexity,
+        bool includeHighRiskReviewerEnumerationContract,
+        bool hasDurableResearch)
+    {
+        var requirements = Build(role, complexity).ToList();
+        if (role == AgentRole.Planner && hasDurableResearch)
+        {
+            requirements[1] = "- Synthesize the plan from the complete Durable Research Notes supplied by the orchestrator; do not repeat a broad repository source survey.";
+        }
+
         if (!includeHighRiskReviewerEnumerationContract || role != AgentRole.Reviewer)
         {
             return requirements;
         }
 
-        var lines = requirements.ToList();
-        lines.Add("- High-risk review enumeration contract: if any open blocking findings are remediable, use `needs-work` and list all acceptance-blocking findings in one ranked pass (P1/P2); do not stop at the first blocker because the Developer receives exactly one findings list per cycle.");
-        lines.Add("- Keep the WORKER_RESULT blockers field format unchanged: put exactly the complete ranked open blocking set in `blockers`; when none remain, use `verdict: pass` and `blockers: none`. Keep advisories only in `findings`.");
-        return lines;
+        requirements.Add("- High-risk review enumeration contract: if any open blocking findings are remediable, use `needs-work` and list all acceptance-blocking findings in one ranked pass (P1/P2); do not stop at the first blocker because the Developer receives exactly one findings list per cycle.");
+        requirements.Add("- Keep the WORKER_RESULT blockers field format unchanged: put exactly the complete ranked open blocking set in `blockers`; when none remain, use `verdict: pass` and `blockers: none`. Keep advisories only in `findings`.");
+        return requirements;
     }
 
     public static string BuildPlainText(AgentRole role)
@@ -154,7 +167,7 @@ internal static class SdlcRolePromptRequirements
             AgentRole.Planner =>
             [
                 "## Planner Requirements",
-                "- Synthesize from the supplied Durable Research Notes; do not repeat a broad repository source survey.",
+                "- Inspect the supplied goal evidence and current repository context before synthesizing the plan.",
                 "- Produce a concrete plan with likely files or modules, smallest viable change boundary, assumptions, and stop conditions.",
                 "- Map every acceptance criterion by number and include ownership/lifecycle, edge contracts, risks, seams, and focused verification.",
                 "- Define falsifiable proof for downstream roles; do not return a generic checklist.",

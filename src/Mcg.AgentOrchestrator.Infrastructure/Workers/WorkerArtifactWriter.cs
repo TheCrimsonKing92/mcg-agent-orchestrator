@@ -49,6 +49,7 @@ internal sealed class WorkerArtifactWriter
         var durablePlannerPlans = ResolveDurablePlannerPlans(goal.Tasks, task.Id);
         var durableResearch = ResolveLatestDurableResearch(goal.Tasks, task.Id);
         var durablePlan = durablePlannerPlans.Values.LastOrDefault(resolution => resolution.Succeeded);
+        var plannerUsesDurableResearch = task.RequiredRole == AgentRole.Planner && durableResearch.Succeeded;
         WriteOptionalArtifact(
             Path.Combine(contextDirectory, "research-notes.md"),
             durableResearch.Succeeded ? durableResearch.Research : null);
@@ -62,11 +63,11 @@ internal sealed class WorkerArtifactWriter
             Path.Combine(contextDirectory, "prior-task-evidence.md"),
             BuildPriorTaskEvidence(goal.Tasks, task.Id, durablePlannerPlans));
         WriteText(Path.Combine(contextDirectory, "deterministic-verification.md"), BuildDeterministicVerification(goal, task, workingDirectory));
-        WriteText(Path.Combine(contextDirectory, "workflow-brokers.md"), BuildWorkflowBrokers(goal, task, workingDirectory));
-        WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory));
+        WriteText(Path.Combine(contextDirectory, "workflow-brokers.md"), BuildWorkflowBrokers(goal, task, workingDirectory, plannerUsesDurableResearch));
+        WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory, plannerUsesDurableResearch));
         WriteText(Path.Combine(contextDirectory, "selected-skills.md"), _skillSelector.BuildSelectedSkills(goal, task, workingDirectory));
         var sourceSurveyPath = Path.Combine(contextDirectory, "source-survey.md");
-        if (task.RequiredRole == AgentRole.Planner && durableResearch.Succeeded)
+        if (plannerUsesDurableResearch)
         {
             File.Delete(sourceSurveyPath);
         }
@@ -80,12 +81,12 @@ internal sealed class WorkerArtifactWriter
             WriteText(Path.Combine(contextDirectory, "subscription-preflight.md"), BuildPreflight(preflightFindings));
         }
 
-        WriteText(Path.Combine(contextDirectory, "digest.md"), BuildDigest(goal, task, workingDirectory, preflightFindings));
+        WriteText(Path.Combine(contextDirectory, "digest.md"), BuildDigest(goal, task, workingDirectory, preflightFindings, plannerUsesDurableResearch));
 
         var guidanceFiles = CopyGuidanceFiles(workingDirectory, contextDirectory);
         WriteText(
             Path.Combine(contextDirectory, "manifest.md"),
-            BuildManifest(goal, task, workingDirectory, guidanceFiles, preflightFindings, contextDirectory));
+            BuildManifest(goal, task, workingDirectory, guidanceFiles, preflightFindings, contextDirectory, plannerUsesDurableResearch));
         WriteText(Path.Combine(contextDirectory, "context-package.json"), BuildContextPackage(goal, task, contextDirectory));
         WriteArtifactRegistry(contextDirectory, goal, task, workingDirectory, guidanceFiles, preflightFindings);
         SnapshotCurrentPackage(contextDirectory, task.Id);
@@ -124,7 +125,8 @@ internal sealed class WorkerArtifactWriter
         Goal goal,
         TaskSpec task,
         string workingDirectory,
-        IReadOnlyList<string>? preflightFindings)
+        IReadOnlyList<string>? preflightFindings,
+        bool plannerUsesDurableResearch)
     {
         var priorTasks = goal.Tasks
             .TakeWhile(t => t.Id != task.Id)
@@ -152,7 +154,7 @@ internal sealed class WorkerArtifactWriter
 
         lines.Add(string.Empty);
         lines.Add("## Role Artifact Priorities");
-        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole));
+        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole, plannerUsesDurableResearch));
 
         if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
         {
@@ -200,7 +202,10 @@ internal sealed class WorkerArtifactWriter
         lines.Add("- objective.md: full goal objective.");
         lines.Add("- deterministic-verification.md: deterministic checklist of manifest presence, verification records, worker result contracts, and generated-path risk.");
         lines.Add("- selected-skills.md: deterministic local skill selection with paths, reasons, and usage notes.");
-        lines.Add("- source-survey.md: compact repository source inventory and task-term matches.");
+        if (!plannerUsesDurableResearch)
+        {
+            lines.Add("- source-survey.md: compact repository source inventory and task-term matches.");
+        }
         lines.Add("- diff-summary.md: compact git status and changed-file summary for current workspace state.");
         if (preflightFindings is { Count: > 0 })
         {
@@ -456,7 +461,11 @@ internal sealed class WorkerArtifactWriter
         return string.Join(Environment.NewLine, lines);
     }
 
-    private string BuildWorkflowBrokers(Goal goal, TaskSpec task, string workingDirectory)
+    private string BuildWorkflowBrokers(
+        Goal goal,
+        TaskSpec task,
+        string workingDirectory,
+        bool plannerUsesDurableResearch)
     {
         var changedFiles = _gitContext.ReadChangedFilesForTestImpact(workingDirectory);
         var testImpactPlan = RepositoryTestImpactPlanner.Plan(changedFiles);
@@ -489,10 +498,6 @@ internal sealed class WorkerArtifactWriter
             "  Use for: required verification policy, generated-path risk, worker-result contract checks, and manifest presence.",
             $"  Current policy: {verificationPolicy.Summary}",
             "  Failure handling: required policy failures block acceptance until fixed or explicitly explained.",
-            "- source-survey",
-            "  Artifact: source-survey.md",
-            "  Use for: bounded source discovery, likely tests, public symbols, call-site hints, and ownership hints.",
-            "  Failure handling: if source-survey.md is missing or stale, run a narrow `rg --files` scoped to the task path before editing.",
             "- diff-summary",
             "  Artifact: diff-summary.md",
             "  Use for: existing workspace changes, changed files, diff stat, and generated-output noise checks.",
@@ -512,11 +517,26 @@ internal sealed class WorkerArtifactWriter
             "- Include broker failures in WORKER_RESULT blockers.",
             "- Include broker commands and required checks in WORKER_RESULT commands/tests."
         };
+        if (!plannerUsesDurableResearch)
+        {
+            lines.InsertRange(
+                lines.IndexOf("- diff-summary"),
+                [
+                    "- source-survey",
+                    "  Artifact: source-survey.md",
+                    "  Use for: bounded source discovery, likely tests, public symbols, call-site hints, and ownership hints.",
+                    "  Failure handling: if source-survey.md is missing or stale, run a narrow `rg --files` scoped to the task path before editing."
+                ]);
+        }
 
         return string.Join(Environment.NewLine, lines);
     }
 
-    private string BuildContextBudget(Goal goal, TaskSpec task, string workingDirectory)
+    private string BuildContextBudget(
+        Goal goal,
+        TaskSpec task,
+        string workingDirectory,
+        bool plannerUsesDurableResearch)
     {
         var selected = _skillSelector.SelectSkillRequirements(goal, task, workingDirectory);
         var completedPriorTasks = goal.Tasks.TakeWhile(candidate => candidate.Id != task.Id)
@@ -544,7 +564,9 @@ internal sealed class WorkerArtifactWriter
             string.Empty,
             "## Decisions",
             "- embed: digest.md, current-task.md, and role artifact priorities because they are compact mandatory orientation.",
-            "- summarize: prior-task-summaries.md, source-survey.md, diff-summary.md, selected-skills.md, workflow-brokers.md, and deterministic-verification.md before opening full content.",
+            plannerUsesDurableResearch
+                ? "- summarize: prior-task-summaries.md, diff-summary.md, selected-skills.md, workflow-brokers.md, and deterministic-verification.md before opening full content."
+                : "- summarize: prior-task-summaries.md, source-survey.md, diff-summary.md, selected-skills.md, workflow-brokers.md, and deterministic-verification.md before opening full content.",
             "- retrieve by handle: prior-task-evidence.md and copied guidance files only when their summaries, hashes, or task needs require them.",
             "- omit from prompt prose: full logs, full diffs, generated artifacts, and unrelated guidance; use artifact-registry.json handles instead.",
             string.Empty,
@@ -853,7 +875,8 @@ internal sealed class WorkerArtifactWriter
         string workingDirectory,
         IReadOnlyList<string> guidanceFiles,
         IReadOnlyList<string>? preflightFindings,
-        string? contextDirectory = null)
+        string? contextDirectory = null,
+        bool plannerUsesDurableResearch = false)
     {
         var lines = new List<string>
         {
@@ -870,7 +893,9 @@ internal sealed class WorkerArtifactWriter
             "- objective.md: full goal objective and goal status.",
             "- current-task.md: current task description, role, working directory, verification plan, and retry evidence when present.",
             "- deterministic-verification.md: deterministic checklist of manifest presence, verification records, worker result contracts, and generated-path risk.",
-            "- workflow-brokers.md: deterministic broker actions for build/test selection, source survey, diff summary, acceptance evidence, and backlog/log evidence.",
+            plannerUsesDurableResearch
+                ? "- workflow-brokers.md: deterministic broker actions for build/test selection, diff summary, acceptance evidence, and backlog/log evidence."
+                : "- workflow-brokers.md: deterministic broker actions for build/test selection, source survey, diff summary, acceptance evidence, and backlog/log evidence.",
             "- context-budget.md: deterministic prompt budget policy, retrieval handles, and embed/summarize/retrieve/omit decisions.",
             "- selected-skills.md: deterministic skill selection with skill paths, availability, reasons, and usage notes.",
             "- diff-summary.md: compact git status, changed files, and diff stat for the workspace.",
@@ -909,7 +934,7 @@ internal sealed class WorkerArtifactWriter
 
         lines.Add(string.Empty);
         lines.Add("## Role Artifact Priorities");
-        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole));
+        lines.AddRange(BuildRoleArtifactPriorities(task.RequiredRole, plannerUsesDurableResearch));
         lines.Add(string.Empty);
         lines.Add("## Missing Artifact Fallback");
         lines.Add("If an artifact listed here is missing or has a failed hash in artifact-registry.json, read digest.md first, then current-task.md, prior-task-summaries.md, and diff-summary.md. Treat missing prior-task-evidence.md as a verification gap and report it in WORKER_RESULT blockers instead of guessing.");
@@ -1115,8 +1140,22 @@ internal sealed class WorkerArtifactWriter
         };
     }
 
-    private static IReadOnlyList<string> BuildRoleArtifactPriorities(AgentRole role)
+    private static IReadOnlyList<string> BuildRoleArtifactPriorities(
+        AgentRole role,
+        bool plannerUsesDurableResearch = false)
     {
+        if (role == AgentRole.Planner && !plannerUsesDurableResearch)
+        {
+            return
+            [
+                "- 1. artifact-registry.json: confirm available artifacts, hashes, and freshness before opening content.",
+                "- 2. source-survey.md: inspect the bounded current-source inventory before broader repository reads.",
+                "- 3. context-budget.md: use retrieval handles before asking for other large evidence in prompts.",
+                "- 4. objective.md: preserve the goal, scope, and acceptance path.",
+                "- 5. digest.md: identify current role focus, blockers, and prior outcomes."
+            ];
+        }
+
         return role switch
         {
             AgentRole.Planner =>

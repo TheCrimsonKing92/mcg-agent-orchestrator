@@ -875,8 +875,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.True(accepted.Succeeded, accepted.Diagnostic);
     }
 
-    [Xunit.Fact(DisplayName = "Ready_batch_reroutes_missing_research_artifact_once_then_holds_Planner")]
-    public void ReadyBatchReroutesMissingResearchArtifactOnceThenHoldsPlanner()
+    [Xunit.Fact(DisplayName = "Ready_batch_reroutes_missing_research_artifact_once_then_fails_with_recovery")]
+    public void ReadyBatchReroutesMissingResearchArtifactOnceThenFailsWithRecovery()
     {
         var root = CreateSeededDispatchRepository();
         var kernel = new AgentOrchestratorKernel();
@@ -950,9 +950,118 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             commandExists: _ => true);
 
         Assert.Empty(second.Dispatches);
-        Assert.Equal(WorkTaskStatus.Completed, researcher.Status);
+        Assert.Equal(WorkTaskStatus.Failed, researcher.Status);
         Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
         Assert.Equal(2, researcher.VerificationHistory.Count);
+        Assert.Equal(GoalStatus.Failed, goal.Status);
+        Assert.Contains(
+            goal.Timeline,
+            item => item.Kind == ProgressKind.TaskFailed &&
+                item.TaskId == researcher.Id &&
+                item.Message.Contains("unmet durable artifact dependency after one reroute", StringComparison.Ordinal) &&
+                item.Message.Contains("Operator recovery:", StringComparison.Ordinal) &&
+                item.Message.Contains("manual downstream verification cannot override", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "Ready_batch_reroutes_missing_planner_artifact_once_then_fails_with_recovery")]
+    public void ReadyBatchReroutesMissingPlannerArtifactOnceThenFailsWithRecovery()
+    {
+        var root = CreateSeededDispatchRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var researchSpec = new TaskSpec(TaskId.New(), "Research current source.", AgentRole.Researcher);
+        var plannerSpec = new TaskSpec(TaskId.New(), "Synthesize the plan.", AgentRole.Planner);
+        var developerSpec = new TaskSpec(TaskId.New(), "Implement the plan.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Fail loudly when the Planner artifact remains missing.", [researchSpec, plannerSpec, developerSpec]);
+        var agents = new[]
+        {
+            TestSubscriptionAgent("researcher", "Researcher", AgentRole.Researcher),
+            SubscriptionPlannerAgent("planner", "Planner"),
+            SubscriptionDeveloperAgent()
+        };
+        kernel.ActivateGoal(goal.Id, agents);
+        var researcher = kernel.GetTask(goal.Id, researchSpec.Id);
+        var planner = kernel.GetTask(goal.Id, plannerSpec.Id);
+        var developer = kernel.GetTask(goal.Id, developerSpec.Id);
+
+        var researchPath = Path.Combine(root, "research.out.log");
+        File.WriteAllText(researchPath, ResearcherContractFixture());
+        var researchResult = ResearcherOutputContract.Resolve(File.ReadAllText(researchPath));
+        Assert.True(researchResult.Succeeded, researchResult.Diagnostic);
+        Assert.True(
+            ResearcherOutputContract.TryPersistDurableReceipt(
+                researchPath,
+                researchResult.Research!,
+                out var researchDiagnostic),
+            researchDiagnostic);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            researcher.Id,
+            new TaskVerificationRecord(
+                "research",
+                root,
+                0,
+                "research complete",
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: researchPath));
+        kernel.RecordTaskVerification(
+            goal.Id,
+            planner.Id,
+            new TaskVerificationRecord(
+                "planner",
+                root,
+                0,
+                "summary without durable plan receipt",
+                string.Empty,
+                DateTimeOffset.UtcNow));
+
+        var first = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel,
+            goal,
+            agents,
+            DispatchTestProfiles(),
+            Path.Combine(root, "prompts"),
+            root,
+            DateTimeOffset.UtcNow,
+            commandExists: _ => true);
+
+        Assert.Empty(first.Dispatches);
+        Assert.Equal(WorkTaskStatus.Assigned, planner.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Contains(
+            first.Blocked,
+            item => item.Reason == WorkerProfileDispatcher.MissingPlannerArtifactErrorCode);
+
+        kernel.RecordTaskVerification(
+            goal.Id,
+            planner.Id,
+            new TaskVerificationRecord(
+                "planner retry",
+                root,
+                0,
+                "second summary without durable plan receipt",
+                string.Empty,
+                DateTimeOffset.UtcNow.AddMinutes(1)));
+        var second = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
+            kernel,
+            goal,
+            agents,
+            DispatchTestProfiles(),
+            Path.Combine(root, "prompts"),
+            root,
+            DateTimeOffset.UtcNow.AddMinutes(2),
+            commandExists: _ => true);
+
+        Assert.Empty(second.Dispatches);
+        Assert.Equal(WorkTaskStatus.Failed, planner.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+        Assert.Equal(GoalStatus.Failed, goal.Status);
+        Assert.Contains(
+            goal.Timeline,
+            item => item.Kind == ProgressKind.TaskFailed &&
+                item.TaskId == planner.Id &&
+                item.Message.Contains(WorkerProfileDispatcher.MissingPlannerArtifactErrorCode, StringComparison.Ordinal) &&
+                item.Message.Contains("Operator recovery:", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "Research_first_pipeline_blocks_Planner_then_injects_full_artifacts_without_survey_or_retry_trimming")]
@@ -1031,6 +1140,18 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Contains("CURRENT-SOURCE-RESEARCH-9182", plannerPrompt, StringComparison.Ordinal);
         Assert.DoesNotContain("Prefer the dashboard source survey", plannerPrompt, StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(contextDirectory, "source-survey.md")));
+        Assert.DoesNotContain(
+            "source-survey",
+            File.ReadAllText(Path.Combine(contextDirectory, "workflow-brokers.md")),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "source-survey.md",
+            File.ReadAllText(Path.Combine(contextDirectory, "context-budget.md")),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "source-survey.md",
+            File.ReadAllText(Path.Combine(contextDirectory, "digest.md")),
+            StringComparison.OrdinalIgnoreCase);
 
         var largePlan = PlannerContractPlanFixture().Replace(
             "Stop when any required section is absent",
@@ -1094,6 +1215,24 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Equal(persistedPlan, File.ReadAllText(Path.Combine(reviewerContext, "planner-plan.md")));
         Assert.Contains("PLAN-TAIL-BYTE-IDENTITY-4417", testerBrief, StringComparison.Ordinal);
         Assert.Contains("PLAN-TAIL-BYTE-IDENTITY-4417", reviewerBrief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Legacy_Planner_brief_without_durable_research_keeps_source_discovery_guidance")]
+    public void LegacyPlannerBriefWithoutDurableResearchKeepsSourceDiscoveryGuidance()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan a legacy graph.", AgentRole.Planner);
+        var researcher = new TaskSpec(TaskId.New(), "Research after planning.", AgentRole.Researcher);
+        var goal = kernel.CreateGoal("Preserve persisted Planner-first behavior.", [planner, researcher]);
+
+        var brief = kernel.BuildTaskBrief(goal.Id, planner.Id);
+
+        Assert.DoesNotContain("Durable Research Notes supplied below", brief.Content, StringComparison.Ordinal);
+        Assert.Contains("dashboard source survey", brief.Content, StringComparison.Ordinal);
+        Assert.Contains(
+            "Inspect the supplied goal evidence and current repository context",
+            brief.Content,
+            StringComparison.Ordinal);
     }
 
 }

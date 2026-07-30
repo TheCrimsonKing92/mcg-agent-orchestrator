@@ -1054,7 +1054,7 @@ public static class WorkerProfileDispatcher
                 commandExists: commandExists);
             if (!preflight.Allowed)
             {
-                TryRouteMissingResearchDependency(kernel, goal, selection.Task, preflight);
+                TryResolveMissingArtifactDependency(kernel, goal, selection.Task, preflight);
                 blocked.Add(BuildReadyBlockedDiagnostic(goal, selection.Task, preflight));
                 continue;
             }
@@ -1095,39 +1095,79 @@ public static class WorkerProfileDispatcher
         return new WorkerProfileReadyBatchResult(results, blocked);
     }
 
-    private static bool TryRouteMissingResearchDependency(
+    private static bool TryResolveMissingArtifactDependency(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec blockedTask,
         WorkerSubscriptionPreflightResult preflight)
     {
-        if (blockedTask.RequiredRole != AgentRole.Planner ||
-            !string.Equals(preflight.ErrorCode, MissingResearchArtifactErrorCode, StringComparison.Ordinal))
+        var dependency = ResolveMissingArtifactDependency(goal, blockedTask, preflight.ErrorCode);
+        if (dependency is null)
         {
             return false;
         }
 
-        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == blockedTask.Id);
-        if (plannerIndex <= 0)
+        var (upstreamTask, artifactRole, errorCode) = dependency.Value;
+        if (upstreamTask.Status is WorkTaskStatus.Running or WorkTaskStatus.Assigned)
         {
             return false;
         }
 
-        var researcher = goal.Tasks
-            .Take(plannerIndex)
-            .LastOrDefault(candidate => candidate.RequiredRole == AgentRole.Researcher);
-        if (researcher is null ||
-            researcher.Status is WorkTaskStatus.Running or WorkTaskStatus.Assigned ||
-            researcher.VerificationHistory.Count > 1)
+        var rerouteMarker = $"{errorCode}: dependency reroute for downstream {blockedTask.Id.Value}";
+        var alreadyRerouted = goal.Timeline.Any(item =>
+            item.Kind == ProgressKind.TaskRetried &&
+            item.TaskId == upstreamTask.Id &&
+            item.Message.Contains(rerouteMarker, StringComparison.Ordinal));
+        if (!alreadyRerouted)
         {
-            return false;
+            kernel.RetryTask(
+                goal.Id,
+                upstreamTask.Id,
+                $"{rerouteMarker}; {blockedTask.RequiredRole} is held until {artifactRole} task {upstreamTask.Id.Value} produces a complete durable artifact.");
+            return true;
         }
 
-        kernel.RetryTask(
+        kernel.ReportTaskProgress(
             goal.Id,
-            researcher.Id,
-            $"{MissingResearchArtifactErrorCode}: Planner {blockedTask.Id.Value} is held until Researcher {researcher.Id.Value} produces a complete durable artifact.");
+            upstreamTask.Id,
+            WorkTaskStatus.Failed,
+            $"{errorCode}: unmet durable artifact dependency after one reroute; {blockedTask.RequiredRole} task {blockedTask.Id.Value} requires a complete {artifactRole} artifact from task {upstreamTask.Id.Value}. Operator recovery: repair the {artifactRole} output contract, then retry task {upstreamTask.Id.Value}; manual downstream verification cannot override this gate.");
         return true;
+    }
+
+    private static (TaskSpec Task, string ArtifactRole, string ErrorCode)? ResolveMissingArtifactDependency(
+        Goal goal,
+        TaskSpec blockedTask,
+        string? errorCode)
+    {
+        var blockedIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == blockedTask.Id);
+        if (blockedIndex <= 0)
+        {
+            return null;
+        }
+
+        if (blockedTask.RequiredRole == AgentRole.Planner &&
+            string.Equals(errorCode, MissingResearchArtifactErrorCode, StringComparison.Ordinal))
+        {
+            var researcher = goal.Tasks
+                .Take(blockedIndex)
+                .LastOrDefault(candidate => candidate.RequiredRole == AgentRole.Researcher);
+            return researcher is null
+                ? null
+                : (researcher, AgentRole.Researcher.ToString(), MissingResearchArtifactErrorCode);
+        }
+
+        if (string.Equals(errorCode, MissingPlannerArtifactErrorCode, StringComparison.Ordinal))
+        {
+            var planner = goal.Tasks
+                .Take(blockedIndex)
+                .LastOrDefault(candidate => candidate.RequiredRole == AgentRole.Planner);
+            return planner is null
+                ? null
+                : (planner, AgentRole.Planner.ToString(), MissingPlannerArtifactErrorCode);
+        }
+
+        return null;
     }
 
     public static ReadyBlockedDiagnostic BuildReadyBlockedDiagnostic(
