@@ -351,7 +351,13 @@ internal static partial class ConsoleViews
             var route = primaryAgentIds.TryGetValue(agent.Role, out var primaryId) && primaryId == agent.Id
                 ? "primary"
                 : "alternate";
-            Console.WriteLine($"  {agent.Role}: {agent.Name} id={agent.Id.Value} route={route} execution={agent.ExecutionPolicy} api={agent.Model.ProviderName}/{agent.Model.ModelName} reasoning={agent.Model.ReasoningEffort ?? "default"} subscription={subscription} status={agent.Status}");
+            var providerRouting = agent.IsProviderRoutingConstrained switch
+            {
+                true => "constrained",
+                false => "automatic",
+                null => "unspecified"
+            };
+            Console.WriteLine($"  {agent.Role}: {agent.Name} id={agent.Id.Value} route={route} provider-routing={providerRouting} execution={agent.ExecutionPolicy} api={agent.Model.ProviderName}/{agent.Model.ModelName} reasoning={agent.Model.ReasoningEffort ?? "default"} subscription={subscription} status={agent.Status}");
         }
     }
 }

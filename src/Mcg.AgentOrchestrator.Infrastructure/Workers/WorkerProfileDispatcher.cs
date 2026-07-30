@@ -1077,9 +1077,20 @@ public static class WorkerProfileDispatcher
         Goal goal,
         TaskSpec task,
         WorkerProfileCatalog profiles,
-        bool allowCheapLane = true)
+        bool allowCheapLane = true,
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<string, bool>? commandExists = null)
     {
-        return ResolveSubscriptionProfileName(agent, ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles, allowCheapLane: allowCheapLane));
+        return ResolveSubscriptionProfileName(
+            agent,
+            ResolveEffectiveSubscriptionModelSelection(
+                agent,
+                goal,
+                task,
+                profiles: profiles,
+                sandboxOptions: sandboxOptions,
+                commandExists: commandExists,
+                allowCheapLane: allowCheapLane));
     }
 
     private static string ResolveSubscriptionProfileName(AgentDefinition agent, SubscriptionModelSelection selection)
@@ -1141,9 +1152,18 @@ public static class WorkerProfileDispatcher
         Goal goal,
         TaskSpec task,
         WorkerProfileCatalog profiles,
-        bool allowCheapLane = true)
+        bool allowCheapLane = true,
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<string, bool>? commandExists = null)
     {
-        var selection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, profiles: profiles, allowCheapLane: allowCheapLane);
+        var selection = ResolveEffectiveSubscriptionModelSelection(
+            agent,
+            goal,
+            task,
+            profiles: profiles,
+            sandboxOptions: sandboxOptions,
+            commandExists: commandExists,
+            allowCheapLane: allowCheapLane);
         return BuildSubscriptionTemplateVariables(agent, ApplyReasoningEffortPolicy(agent, goal, task, selection));
     }
 
@@ -1347,6 +1367,14 @@ public static class WorkerProfileDispatcher
     {
         if (!IsLightReadOnlyRole(task.RequiredRole))
         {
+            if (agent.IsProviderRoutingConstrained == true)
+            {
+                return fullSelection with
+                {
+                    Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
+                };
+            }
+
             if (allowCheapLane &&
                 TrySelectCheapLane(agent, goal, task, fullSelection, profiles, out var cheapSelection))
             {
@@ -1361,14 +1389,6 @@ public static class WorkerProfileDispatcher
             return fullSelection with { Reason = "full-profile: role has custom subscription worker profile" };
         }
 
-        if (agent.IsProviderRoutingConstrained == true)
-        {
-            return fullSelection with
-            {
-                Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
-            };
-        }
-
         if (task.RequiredRole == AgentRole.Reviewer && HasHighRiskOrComplexIntakeRiskLabel(goal))
         {
             return fullSelection with { Reason = "full-profile: Reviewer high-risk/complex intake labels require exhaustive review" };
@@ -1377,6 +1397,14 @@ public static class WorkerProfileDispatcher
         if (TryFindRoleGuardrailFailure(task, out var guardrailFailure))
         {
             return fullSelection with { Reason = $"fallback-full-profile: {guardrailFailure}" };
+        }
+
+        if (agent.IsProviderRoutingConstrained == true)
+        {
+            return fullSelection with
+            {
+                Reason = $"provider-constrained: {task.RequiredRole} remains on {agent.Model.ProviderName}"
+            };
         }
 
         if (profiles is not null &&
