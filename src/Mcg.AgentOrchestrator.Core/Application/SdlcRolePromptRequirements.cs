@@ -102,8 +102,8 @@ internal static class SdlcRolePromptRequirements
         }
 
         var lines = requirements.ToList();
-        lines.Add("- High-risk review enumeration contract: if any open blocking findings are remediable, use `needs-work` and list all of them in one ranked pass (P1/P2); do not stop at the first blocker because the Developer receives exactly one findings list per cycle.");
-        lines.Add("- In WORKER_RESULT, put exactly the complete ranked open blocking set in `blockers`; when none remain, use `verdict: pass` and `blockers: none`. Keep advisories only in `findings`.");
+        lines.Add("- High-risk review enumeration contract: if any open blocking findings are remediable, use `needs-work` and list all acceptance-blocking findings in one ranked pass (P1/P2); do not stop at the first blocker because the Developer receives exactly one findings list per cycle.");
+        lines.Add("- Keep the WORKER_RESULT blockers field format unchanged: put exactly the complete ranked open blocking set in `blockers`; when none remain, use `verdict: pass` and `blockers: none`. Keep advisories only in `findings`.");
         return lines;
     }
 
