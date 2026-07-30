@@ -3416,6 +3416,14 @@ public sealed class ConductorBatchLoopTests
             startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = root;
             startInfo.Environment[OrchestratorProjectRegistry.RegistryHomeEnvironmentVariable] = Path.Combine(root, "project-registry");
             startInfo.Environment["MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME"] = "batch98";
+            foreach (var key in startInfo.Environment.Keys
+                         .Where(key => key.StartsWith("MCG_ORCHESTRATOR_HANDOFF_", StringComparison.Ordinal))
+                         .ToArray())
+            {
+                // The acceptance worker may itself be a conductor successor. This child is the
+                // incumbent under test and must not inherit that outer authority-transfer request.
+                startInfo.Environment.Remove(key);
+            }
 
             parent = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start parent conductor process.");
             var stdoutTask = parent.StandardOutput.ReadToEndAsync();
@@ -3428,7 +3436,7 @@ public sealed class ConductorBatchLoopTests
 
             var stdout = stdoutTask.GetAwaiter().GetResult();
             var stderr = stderrTask.GetAwaiter().GetResult();
-            Assert.Equal(0, parent.ExitCode);
+            Assert.True(parent.ExitCode == 0, $"Parent conductor exited {parent.ExitCode}. stdout={stdout} stderr={stderr}");
             successorPid = ParseHandoffProcessId(stdout);
 
             Assert.True(IsProcessRunning(successorPid.Value), $"Successor pid {successorPid.Value} did not survive parent job close. stdout={stdout} stderr={stderr}");
