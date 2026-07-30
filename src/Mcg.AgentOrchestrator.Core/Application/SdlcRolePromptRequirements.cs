@@ -60,6 +60,8 @@ internal static class SdlcRolePromptRequirements
                 "- Tie each pass/fail conclusion to concrete evidence: command output, changed file behavior, manual smoke steps, or exact reproduction data.",
                 "- Try to falsify the implementation with at least one negative or edge case when practical, and state what failure would have looked like.",
                 "- If a command cannot run, include the exact failure text and the environment condition.",
+                "- When reporting actionable failures, emit each one in the structured `findings` JSON with a stable_id, state, severity, category, file/region location, and description; emit `touched_anchors`. Carry distinct prior structured findings until resolved so retry caps cannot drop them.",
+                "- Reuse a carried finding's stable_id only at its original structural anchor. If the defect moved, resolve the old finding and open a new stable_id; if a new stable_id describes the same open anchor, reuse the canonical stable_id instead.",
                 "- A verification command that is killed, times out, or produces no results file is an environment/plumbing outcome, NOT a test failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and never restate a prior round's conclusion as this round's evidence.",
                 "- Keep each verification command bounded in wall time: build once as its own step, then run tests with a narrow filter and no rebuild; do not bundle a build and a broad or full-suite test run into a single command.",
                 "- Do not ask for shell restoration unless an attempted command actually failed because of execution access.",
@@ -176,6 +178,8 @@ internal static class SdlcRolePromptRequirements
                 "- Derive focused checks from the requested behavior and report concrete evidence.",
                 "- Run or attempt exact commands; include exit code and concise output summary.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
+                "- Put actionable failures in structured `findings` JSON with stable IDs and locations; carry distinct prior findings until resolved.",
+                "- Reuse carried stable IDs only at their original structural anchors; resolve-and-reopen moved defects, and reuse the canonical stable ID for the same open anchor.",
                 "- A killed/timed-out/no-results verification is an environment outcome, not a failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and do not reuse a prior round's conclusion as evidence.",
                 "- Keep each command bounded: build once, then run narrow no-rebuild test filters; never bundle a build and a broad test run in one command.",
                 "- You may build and run tests but must not modify source files."

@@ -960,6 +960,37 @@ public sealed class BackgroundDispatchRunner
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
         var task = kernel.GetTask(goalId, taskId);
+        if (task.RequiredRole == AgentRole.Planner && exitCode == 0)
+        {
+            var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
+            var plannerContract = PlannerOutputContract.Resolve(
+                capturedPlannerOutput,
+                decisionStandardError,
+                processRecord.WorkingDirectory);
+            if (!plannerContract.Succeeded || plannerContract.Plan is null)
+            {
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    plannerContract.Diagnostic);
+            }
+            else
+            {
+                var durableSource = plannerContract.IngestedPath ?? processRecord.StandardOutputPath;
+                if (!PlannerOutputContract.TryPersistDurableReceipt(
+                        processRecord.StandardOutputPath,
+                        durableSource,
+                        plannerContract.Plan,
+                        out var appendDiagnostic))
+                {
+                    exitCode = 1;
+                    standardErrorDiagnostic = AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        $"Planner output contract could not persist the accepted plan: {appendDiagnostic}. Retry Planner for contract repair.");
+                }
+            }
+        }
+
         var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, decisionStandardOutput, decisionStandardError);
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, decisionStandardOutput, decisionStandardError);
         var hasCommittedChanges = false;
@@ -1129,6 +1160,9 @@ public sealed class BackgroundDispatchRunner
 
         var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput)
             ?? AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardError);
+        // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
+        // recorded below, but out of the worker decision stream and bounded verification
+        // snapshot. Kernel classification reparses the snapshot for directives and blockers.
         var standardOutput = outputSnapshot.BoundedText;
         var standardError = AppendDiagnostic(
             errorSnapshot.BoundedText,

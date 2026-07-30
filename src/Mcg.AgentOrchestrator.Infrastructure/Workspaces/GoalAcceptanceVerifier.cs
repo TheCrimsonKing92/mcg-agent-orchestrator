@@ -27,7 +27,8 @@ public sealed record AcceptanceCheckResult(
     string? FailureClassification = null,
     string? TestResultAttemptId = null,
     int TestResultRunOrdinal = 0,
-    bool TestResultIsExplicitCrossAttemptReuse = false);
+    bool TestResultIsExplicitCrossAttemptReuse = false,
+    IReadOnlyList<string>? FailingTestIdentities = null);
 
 public static class AcceptanceFailureClassifications
 {
@@ -550,7 +551,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     {
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
         using var engineScope = PushEngineSettings(engineSettings);
-        using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "evidence");
+        using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "pre-review");
         using var runEnvironmentScope = PushManagedRunEnvironmentScope();
 
         if (!TryBuildFocusedEvidenceChecks(request, out var focusedChecks, out var rejection))
@@ -715,7 +716,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var queue = new ConcurrentQueue<IndexedShard>(
             shardChecks
                 .Select((check, index) => new IndexedShard(index, check))
-                .OrderByDescending(shard => ShardPriority(shard.Check))
+                .OrderByDescending(shard => shard.Check.EstimatedSerialSeconds)
                 .ThenBy(shard => shard.Index));
         var outcomes = new ShardRunOutcome?[shardChecks.Count];
         var workerCount = allShardsUseMtp
@@ -818,13 +819,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
     }
-
-    private static int ShardPriority(AcceptanceManifestCheck check) =>
-        check.Name.Contains("Remainder", StringComparison.OrdinalIgnoreCase) ||
-        check.Name.Contains("Chaos gate", StringComparison.OrdinalIgnoreCase) ? 300 :
-        check.Name.Contains("Goal worktree", StringComparison.OrdinalIgnoreCase) ? 200 :
-        check.Name.Contains("Worker dispatch", StringComparison.OrdinalIgnoreCase) ? 190 :
-        0;
 
     private static void EmitShardTimingProgress(
         GoalId? goalId,
@@ -1007,9 +1001,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             var project = InfrastructureTestsProject;
             var expression = item;
+            var hasExplicitProject = false;
             var separator = item.IndexOf(':', StringComparison.Ordinal);
             if (separator >= 0)
             {
+                hasExplicitProject = true;
                 var alias = item[..separator].Trim();
                 expression = item[(separator + 1)..].Trim();
                 if (!TryResolveFocusedEvidenceProject(alias, out project))
@@ -1019,7 +1015,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 }
             }
 
-            if (!TryNormalizeFocusedEvidenceFilter(expression, out var filter, out var targetCount, out rejection))
+            if (!TryNormalizeFocusedEvidenceFilter(
+                    expression,
+                    allowMappedProject: hasExplicitProject,
+                    out var filter,
+                    out var targetCount,
+                    out rejection))
             {
                 return false;
             }
@@ -1033,14 +1034,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             built.Add(new AcceptanceManifestCheck
             {
-                Name = $"reviewer focused evidence: {ProjectLabel(project)} {filter}",
+                Name = filter is null
+                    ? $"reviewer mapped project evidence: {ProjectLabel(project)}"
+                    : $"reviewer focused evidence: {ProjectLabel(project)} {filter}",
                 Type = "dotnet-test",
                 // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
                 // without this the check defaults to the VSTest runner and fails on .NET 10 with
                 // "VSTest target is no longer supported", making every reviewer evidence run fail.
                 Runner = "mtp",
                 Project = project,
-                Arguments = ["--verbosity", "minimal", "--filter", filter],
+                Arguments = filter is null
+                    ? ["--verbosity", "minimal"]
+                    : ["--verbosity", "minimal", "--filter", filter],
                 TimeoutMinutes = 10
             });
         }
@@ -1065,11 +1070,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static bool TryNormalizeFocusedEvidenceFilter(
         string expression,
-        out string filter,
+        bool allowMappedProject,
+        out string? filter,
         out int targetCount,
         out string rejection)
     {
-        filter = string.Empty;
+        filter = null;
         targetCount = 0;
         rejection = string.Empty;
         var trimmed = expression.Trim();
@@ -1079,12 +1085,26 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
+        if (trimmed.Equals("mapped-project", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!allowMappedProject)
+            {
+                rejection = "mapped-project evidence requires an explicit supported project alias";
+                return false;
+            }
+
+            // This is the bounded representation of a deterministic planner check that has no
+            // narrower class filter. It runs one known test project, never the solution-level
+            // acceptance manifest, and counts as one broker target.
+            targetCount = 1;
+            return true;
+        }
+
         if (trimmed.Equals("all", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Equals("full", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Contains("full-suite", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Contains(".sln", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Contains('*', StringComparison.Ordinal) ||
-            trimmed.Contains('!', StringComparison.Ordinal))
+            trimmed.Contains('*', StringComparison.Ordinal))
         {
             rejection = "unbounded evidence request rejected; use focused FullyQualifiedName~TestClass filters only";
             return false;
@@ -1100,6 +1120,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             filter = Regex.Replace(trimmed, @"\s+", "");
+            try
+            {
+                _ = TranslateMtpFilter(filter).ToArray();
+            }
+            catch (InvalidOperationException)
+            {
+                rejection = "focused evidence filter contains an unsupported token";
+                filter = null;
+                targetCount = 0;
+                return false;
+            }
+
             return true;
         }
 
@@ -1478,7 +1510,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             FilePath = check.FilePath,
             TimeoutMinutes = check.TimeoutMinutes,
             Advisory = check.Advisory,
-            Runner = check.Runner
+            Runner = check.Runner,
+            EstimatedSerialSeconds = lane.EstimatedSerialSeconds
         };
 
     private static bool IsBroadInfrastructureTestCheck(AcceptanceManifestCheck check) =>
@@ -2565,6 +2598,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         elapsed.Stop();
         var passed = !result.TimedOut && result.ExitCode == 0;
         EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+        IReadOnlyList<string> failingTestIdentities = passed
+            ? []
+            : ExtractTrxFailureIdentities(telemetry.Paths);
         var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry.Paths);
         return (new AcceptanceCheckResult(
             result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
@@ -2576,7 +2612,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             environment.LeaseId,
             (long)elapsed.Elapsed.TotalMilliseconds,
             ResultSummary: BuildGenericCommandResultSummary(result),
-            TestResultPaths: durableTestResultPaths), false);
+            TestResultPaths: durableTestResultPaths,
+            FailingTestIdentities: failingTestIdentities), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -2956,6 +2993,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            IReadOnlyList<string> failingTestIdentities = passed
+                ? []
+                : ExtractTrxFailureIdentities(telemetry?.Paths);
             var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry?.Paths);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
@@ -2970,7 +3010,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 lockRemediationApplied,
                 BuildManagedDotnetResultSummary(result, lockRemediationApplied),
-                TestResultPaths: durableTestResultPaths), lockRemediationApplied);
+                TestResultPaths: durableTestResultPaths,
+                FailingTestIdentities: failingTestIdentities), lockRemediationApplied);
         }
         catch (Exception ex) when (IsBuildArtifactIoException(ex) &&
             ex is not DotnetBuildSlotsBusyException and not BuildLockBlockedException)
@@ -3015,6 +3056,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var passed = !result.TimedOut && (result.ExitCode == 0 || reportedAllPassed);
             var telemetry = ResolveDotnetTestTelemetry(arguments, check, environment);
             EmitMissingTrxReceiptIfNeeded(passed, telemetry);
+            IReadOnlyList<string> failingTestIdentities = passed
+                ? []
+                : ExtractTrxFailureIdentities(telemetry?.Paths);
             var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry?.Paths);
             return (new AcceptanceCheckResult(
                 result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
@@ -3029,7 +3073,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 (long)elapsed.Elapsed.TotalMilliseconds,
                 true,
                 BuildManagedDotnetResultSummary(result, transientCompilerLockRetried: true),
-                TestResultPaths: durableTestResultPaths), true);
+                TestResultPaths: durableTestResultPaths,
+                FailingTestIdentities: failingTestIdentities), true);
         }
         finally
         {
@@ -4821,10 +4866,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             string.IsNullOrWhiteSpace(repositoryRoot) ? worktreePath : repositoryRoot);
 
         var owner = goalId?.Value ?? "operator";
+        var attemptRoot = OwnerResultsAttemptRoot(ownerKind);
         var directory = Path.Combine(
             repositoryRoot,
             ".orchestrator",
-            "acceptance-gate-attempts",
+            attemptRoot,
             owner);
         Directory.CreateDirectory(directory);
         var prefix = Path.Combine(
@@ -4832,6 +4878,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             $"{owner[..Math.Min(8, owner.Length)]}-{ownerKind}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}");
         return PushAcceptanceAttemptResultsPrefix(prefix);
     }
+
+    internal static string OwnerResultsAttemptRoot(string ownerKind) =>
+        ownerKind.Equals("pre-review", StringComparison.Ordinal)
+            ? "pre-review-evidence-attempts"
+            : "acceptance-gate-attempts";
 
     internal static string ResolveOwnerResultsRepositoryRoot(string worktreePath)
     {
@@ -5359,6 +5410,61 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ?.Value;
                 return $"[FAIL] {testName}: {FirstNonEmptyLine(message) ?? "failure message unavailable"}";
             })
+            .ToArray();
+    }
+
+    internal static IReadOnlyList<string> ExtractTrxFailureIdentities(string trxPath)
+    {
+        var document = XDocument.Load(trxPath, LoadOptions.None);
+        var definitionsByTestId = document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal) &&
+                !string.IsNullOrWhiteSpace(element.Attribute("id")?.Value))
+            .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        return document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal) &&
+                string.Equals(
+                    element.Attribute("outcome")?.Value,
+                    "Failed",
+                    StringComparison.OrdinalIgnoreCase))
+            .Select(result =>
+            {
+                definitionsByTestId.TryGetValue(
+                    result.Attribute("testId")?.Value ?? string.Empty,
+                    out var definition);
+                return ResolveTrxTestName(result, definition);
+            })
+            .Where(identity => !string.IsNullOrWhiteSpace(identity))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string> ExtractTrxFailureIdentities(IEnumerable<string>? trxPaths)
+    {
+        if (trxPaths is null)
+        {
+            return [];
+        }
+
+        var identities = new List<string>();
+        foreach (var trxPath in trxPaths.Where(File.Exists))
+        {
+            try
+            {
+                identities.AddRange(ExtractTrxFailureIdentities(trxPath));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                // An unreadable receipt is evidence-inconclusive. Never infer a code failure from its output tail.
+            }
+        }
+
+        return identities
+            .Distinct(StringComparer.Ordinal)
             .ToArray();
     }
 
@@ -6119,6 +6225,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public int? TimeoutMinutes { get; init; }
         public bool Advisory { get; init; }
         public string? Runner { get; init; } = "vstest";
+        public double EstimatedSerialSeconds { get; init; }
     }
 
     private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);

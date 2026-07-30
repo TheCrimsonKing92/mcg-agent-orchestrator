@@ -272,6 +272,36 @@ public sealed partial class AgentOrchestratorKernel
         bool enforceFailureEvidenceRule)
     {
         var goal = GetGoal(goalId);
+        if (verification.ReviewFindingContractViolation is { } violation)
+        {
+            var startedAt = task.LastProcess?.StartedAt ??
+                task.LastDispatch?.DispatchedAt ??
+                verification.CompletedAt;
+            var reviewerWallMilliseconds = Math.Max(
+                0,
+                (long)(verification.CompletedAt - startedAt).TotalMilliseconds);
+            Append(
+                goal,
+                task.Id,
+                ProgressKind.ReviewFindingContractViolationRecorded,
+                $"Review finding contract violation recorded: code={violation.Code}; " +
+                $"prior_stable_id={violation.PriorStableId ?? "none"}; " +
+                $"submitted_stable_id={violation.SubmittedStableId ?? "none"}; " +
+                $"prior_location={violation.PriorLocation?.ToString() ?? "none"}; " +
+                $"submitted_location={violation.SubmittedLocation?.ToString() ?? "none"}; " +
+                $"reviewer_wall_ms={reviewerWallMilliseconds}.");
+
+            if (task.RequiredRole == AgentRole.Tester)
+            {
+                ReportTaskProgress(
+                    goalId,
+                    task.Id,
+                    WorkTaskStatus.Failed,
+                    $"Tester WORKER_RESULT structured findings invalid: {violation.Message}");
+                return true;
+            }
+        }
+
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
             goal.RefinedSpec is { AcceptanceCriteria.Count: > 0 } refinedSpec)
@@ -313,9 +343,12 @@ public sealed partial class AgentOrchestratorKernel
             verification.MergedReviewFindings is null &&
             !TryBuildMergedReviewFindingState(
                 goal,
+                AgentRole.Reviewer,
                 verification,
                 out mergedFindings,
-                out var findingDiagnostic))
+                out var findingDiagnostic,
+                out _,
+                out _))
         {
             ReportTaskProgress(
                 goalId,
@@ -443,16 +476,46 @@ public sealed partial class AgentOrchestratorKernel
         };
     }
 
-    private static TaskVerificationRecord PrepareReviewFindingRecord(
+    private TaskVerificationRecord PrepareReviewFindingRecord(
         Goal goal,
         TaskSpec task,
         TaskVerificationRecord verification)
     {
         if (!verification.WorkerResultPresent ||
-            task.RequiredRole != AgentRole.Reviewer ||
-            !TryBuildMergedReviewFindingState(goal, verification, out var mergedFindings, out _))
+            task.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester))
         {
             return verification;
+        }
+
+        if (task.RequiredRole == AgentRole.Tester &&
+            !WorkerResultBlockers.TryFindReviewFindingRound(verification, out _, out _))
+        {
+            // Structured Tester findings are opt-in so existing Tester workers remain compatible.
+            // When present they use the same stable-identity ledger as Reviewer findings.
+            return verification;
+        }
+
+        if (!TryBuildMergedReviewFindingState(
+                goal,
+                task.RequiredRole,
+                verification,
+                out var mergedFindings,
+                out _,
+                out var violation,
+                out var canonicalizations))
+        {
+            return verification with { ReviewFindingContractViolation = violation };
+        }
+
+        foreach (var canonicalization in canonicalizations)
+        {
+            Append(
+                goal,
+                task.Id,
+                ProgressKind.TaskNote,
+                $"Canonicalized {task.RequiredRole} finding identity at exact anchor {canonicalization.Anchor}: " +
+                $"submitted_stable_id={canonicalization.SubmittedStableId}; " +
+                $"canonical_stable_id={canonicalization.PriorStableId}.");
         }
 
         return verification with { MergedReviewFindings = mergedFindings };
@@ -460,14 +523,19 @@ public sealed partial class AgentOrchestratorKernel
 
     private static bool TryBuildMergedReviewFindingState(
         Goal goal,
+        AgentRole role,
         TaskVerificationRecord currentVerification,
         out IReadOnlyList<ReviewFinding> state,
-        out string diagnostic)
+        out string diagnostic,
+        out ReviewFindingContractViolation? violation,
+        out IReadOnlyList<ReviewFindingIdentityCanonicalization> canonicalizations)
     {
         state = [];
         diagnostic = string.Empty;
+        violation = null;
+        canonicalizations = [];
         var historicalVerifications = goal.Tasks
-            .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
+            .Where(candidate => candidate.RequiredRole == role)
             .SelectMany(candidate => candidate.VerificationHistory)
             .Where(candidate => !ReferenceEquals(candidate, currentVerification));
         foreach (var verification in historicalVerifications
@@ -488,7 +556,9 @@ public sealed partial class AgentOrchestratorKernel
 
             try
             {
-                state = ReviewFindingConvergence.ApplyRound(state, round);
+                state = isCurrentRound
+                    ? ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations)
+                    : ReviewFindingConvergence.ApplyRound(state, round);
             }
             catch (ReviewFindingConvergenceException ex)
             {
@@ -498,6 +568,7 @@ public sealed partial class AgentOrchestratorKernel
                 if (isCurrentRound)
                 {
                     diagnostic = $"{ex.Code}: {ex.Message}";
+                    violation = ex.Violation;
                     return false;
                 }
             }

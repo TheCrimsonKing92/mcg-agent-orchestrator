@@ -271,6 +271,23 @@ public static class RepositoryTestImpactPlanner
                 continue;
             }
 
+            if (subsystem.Equals("orchestration", StringComparison.OrdinalIgnoreCase))
+            {
+                var orchestrationFilters = summary.Files
+                    .Where(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.App/Orchestration/"))
+                    .Select(file => Path.GetFileNameWithoutExtension(file.Path))
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .Select(name => $"FullyQualifiedName~{name}Tests")
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (orchestrationFilters.Length == 0)
+                    return null;
+
+                filters.Add(JoinFilterUnion(orchestrationFilters));
+                names.Add("orchestration");
+                continue;
+            }
+
             return null;
         }
 
@@ -297,6 +314,9 @@ public static class RepositoryTestImpactPlanner
 
         if (StartsWith(path, "src/Mcg.AgentOrchestrator.App/Dashboard/"))
             return "dashboard";
+
+        if (StartsWith(path, "src/Mcg.AgentOrchestrator.App/Orchestration/"))
+            return "orchestration";
 
         return null;
     }

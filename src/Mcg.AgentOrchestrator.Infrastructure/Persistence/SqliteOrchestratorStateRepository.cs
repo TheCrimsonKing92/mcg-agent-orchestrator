@@ -1308,7 +1308,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             CriterionRetryFeedback = PickStoreOwnedList(baseline.CriterionRetryFeedback, stored.CriterionRetryFeedback, current.CriterionRetryFeedback),
             EmptyOutputRetryCount = PickStoreOwned(baseline.EmptyOutputRetryCount, stored.EmptyOutputRetryCount, current.EmptyOutputRetryCount),
             LatestRetryAt = PickStoreOwned(baseline.LatestRetryAt, stored.LatestRetryAt, current.LatestRetryAt),
-            PendingRetryRoundKind = PickStoreOwned(baseline.PendingRetryRoundKind, stored.PendingRetryRoundKind, current.PendingRetryRoundKind)
+            PendingRetryRoundKind = PickStoreOwned(baseline.PendingRetryRoundKind, stored.PendingRetryRoundKind, current.PendingRetryRoundKind),
+            // Pre-review receipts are produced by the conductor tick. Preserve the tick's
+            // current-HEAD evidence when an unrelated store mutation advances concurrently.
+            PreReviewEvidenceReceipt = PickTickOwned(baseline.PreReviewEvidenceReceipt, stored.PreReviewEvidenceReceipt, current.PreReviewEvidenceReceipt)
         };
     }
 

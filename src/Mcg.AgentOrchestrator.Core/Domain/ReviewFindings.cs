@@ -156,6 +156,19 @@ public sealed record ReviewFindingRound(
     IReadOnlyList<ReviewFinding> Findings,
     IReadOnlyList<ReviewFindingLocation> TouchedAnchors);
 
+public sealed record ReviewFindingContractViolation(
+    string Code,
+    string Message,
+    string? PriorStableId = null,
+    string? SubmittedStableId = null,
+    ReviewFindingLocation? PriorLocation = null,
+    ReviewFindingLocation? SubmittedLocation = null);
+
+public sealed record ReviewFindingIdentityCanonicalization(
+    string PriorStableId,
+    string SubmittedStableId,
+    ReviewFindingLocation Anchor);
+
 public sealed class ReviewFindingConvergenceException : InvalidOperationException
 {
     public ReviewFindingConvergenceException(
@@ -163,11 +176,27 @@ public sealed class ReviewFindingConvergenceException : InvalidOperationExceptio
         int previousOpenCount,
         int nextOpenCount,
         string message)
+        : this(
+            code,
+            previousOpenCount,
+            nextOpenCount,
+            message,
+            new ReviewFindingContractViolation(code, message))
+    {
+    }
+
+    public ReviewFindingConvergenceException(
+        string code,
+        int previousOpenCount,
+        int nextOpenCount,
+        string message,
+        ReviewFindingContractViolation violation)
         : base(message)
     {
         Code = code;
         PreviousOpenCount = previousOpenCount;
         NextOpenCount = nextOpenCount;
+        Violation = violation ?? throw new ArgumentNullException(nameof(violation));
     }
 
     public string Code { get; }
@@ -175,6 +204,8 @@ public sealed class ReviewFindingConvergenceException : InvalidOperationExceptio
     public int PreviousOpenCount { get; }
 
     public int NextOpenCount { get; }
+
+    public ReviewFindingContractViolation Violation { get; }
 }
 
 public static class ReviewFindings
@@ -286,13 +317,19 @@ public static class ReviewFindings
 public static class ReviewFindingConvergence
 {
     public const string IdentityMovedViolationCode = "ERR_REVIEW_FINDING_IDENTITY_MOVED";
-    public const string MonotonicityViolationCode = "ERR_REVIEW_FINDING_OPEN_SET_INCREASED";
     public const string UntouchedReopenViolationCode = "ERR_REVIEW_FINDING_UNTOUCHED_REOPEN";
     public const string RecycledAnchorIdentityViolationCode = "ERR_REVIEW_FINDING_ANCHOR_IDENTITY_RECYCLED";
+    public const string NeedsWorkWithoutOpenFindingsViolationCode = "ERR_REVIEW_NEEDS_WORK_WITHOUT_OPEN_FINDINGS";
 
     public static IReadOnlyList<ReviewFinding> ApplyRound(
         IReadOnlyList<ReviewFinding> previous,
-        ReviewFindingRound nextRound)
+        ReviewFindingRound nextRound) =>
+        ApplyRound(previous, nextRound, out _);
+
+    public static IReadOnlyList<ReviewFinding> ApplyRound(
+        IReadOnlyList<ReviewFinding> previous,
+        ReviewFindingRound nextRound,
+        out IReadOnlyList<ReviewFindingIdentityCanonicalization> canonicalizations)
     {
         ArgumentNullException.ThrowIfNull(previous);
         ArgumentNullException.ThrowIfNull(nextRound);
@@ -300,7 +337,8 @@ public static class ReviewFindingConvergence
         ValidateUniqueStableIds(previous, "previous");
         ValidateUniqueStableIds(nextRound.Findings, "next");
 
-        var nextById = nextRound.Findings.ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
+        var submittedFindings = CanonicalizeLoneNewIdentity(previous, nextRound.Findings, out canonicalizations);
+        var nextById = submittedFindings.ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
         var merged = new List<ReviewFinding>(Math.Max(previous.Count, nextRound.Findings.Count));
         foreach (var prior in previous)
         {
@@ -316,8 +354,15 @@ public static class ReviewFindingConvergence
                 throw new ReviewFindingConvergenceException(
                     IdentityMovedViolationCode,
                     CountOpen(previous),
-                    CountOpen(nextRound.Findings),
-                    $"Finding '{prior.StableId}' is still open but was reported at a different structural anchor; report it at its original anchor, or resolve it and open a new stable_id for the new anchor.");
+                    CountOpen(submittedFindings),
+                    $"Finding '{prior.StableId}' is still open but was reported at a different structural anchor; report it at its original anchor, or resolve it and open a new stable_id for the new anchor.",
+                    new ReviewFindingContractViolation(
+                        IdentityMovedViolationCode,
+                        $"Finding '{prior.StableId}' is still open but was reported at a different structural anchor; report it at its original anchor, or resolve it and open a new stable_id for the new anchor.",
+                        prior.StableId,
+                        prior.StableId,
+                        prior.Location,
+                        submitted.Location));
             }
 
             if (prior.State == ReviewFindingState.Resolved &&
@@ -328,8 +373,15 @@ public static class ReviewFindingConvergence
                     throw new ReviewFindingConvergenceException(
                         UntouchedReopenViolationCode,
                         CountOpen(previous),
-                        CountOpen(nextRound.Findings),
-                        $"Resolved finding '{prior.StableId}' was re-opened without its structural anchor being touched.");
+                        CountOpen(submittedFindings),
+                        $"Resolved finding '{prior.StableId}' was re-opened without its structural anchor being touched.",
+                        new ReviewFindingContractViolation(
+                            UntouchedReopenViolationCode,
+                            $"Resolved finding '{prior.StableId}' was re-opened without its structural anchor being touched.",
+                            prior.StableId,
+                            prior.StableId,
+                            prior.Location,
+                            submitted.Location));
                 }
             }
 
@@ -348,8 +400,15 @@ public static class ReviewFindingConvergence
                 throw new ReviewFindingConvergenceException(
                     RecycledAnchorIdentityViolationCode,
                     CountOpen(previous),
-                    CountOpen(nextRound.Findings),
-                    $"Structural anchor '{newFinding.Location}' already belongs to open stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.");
+                    CountOpen(submittedFindings),
+                    $"Structural anchor '{newFinding.Location}' already belongs to open stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.",
+                    new ReviewFindingContractViolation(
+                        RecycledAnchorIdentityViolationCode,
+                        $"Structural anchor '{newFinding.Location}' already belongs to open stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.",
+                        priorAtAnchor.StableId,
+                        newFinding.StableId,
+                        priorAtAnchor.Location,
+                        newFinding.Location));
             }
 
             merged.Add(newFinding);
@@ -368,6 +427,50 @@ public static class ReviewFindingConvergence
         // without its anchor being touched, and an OPEN finding's exact anchor cannot be re-keyed.
         return merged
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<ReviewFinding> CanonicalizeLoneNewIdentity(
+        IReadOnlyList<ReviewFinding> previous,
+        IReadOnlyList<ReviewFinding> submitted,
+        out IReadOnlyList<ReviewFindingIdentityCanonicalization> canonicalizations)
+    {
+        canonicalizations = [];
+        var previousIds = previous
+            .Select(finding => finding.StableId)
+            .ToHashSet(StringComparer.Ordinal);
+        var submittedIds = submitted
+            .Select(finding => finding.StableId)
+            .ToHashSet(StringComparer.Ordinal);
+        var omittedOpen = previous
+            .Where(finding =>
+                finding.State == ReviewFindingState.Open &&
+                !submittedIds.Contains(finding.StableId))
+            .ToArray();
+        var newlyNamed = submitted
+            .Where(finding => !previousIds.Contains(finding.StableId))
+            .ToArray();
+        if (omittedOpen.Length != 1 ||
+            newlyNamed.Length != 1 ||
+            !ExactAnchor(omittedOpen[0].Location, newlyNamed[0].Location))
+        {
+            return submitted;
+        }
+
+        var prior = omittedOpen[0];
+        var replacement = newlyNamed[0];
+        canonicalizations =
+        [
+            new ReviewFindingIdentityCanonicalization(
+                prior.StableId,
+                replacement.StableId,
+                prior.Location)
+        ];
+        return submitted
+            .Select(finding =>
+                ReferenceEquals(finding, replacement)
+                    ? finding with { StableId = prior.StableId, Location = prior.Location }
+                    : finding)
             .ToArray();
     }
 

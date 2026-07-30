@@ -345,12 +345,17 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
         .Where(IsSubscriptionStartCandidate)
         .ToList();
     var intents = assigned
-        .Select(task => new ParallelExecutionIntent(
-            task.Id.Value,
-            goal.Id.Value,
-            InferParallelFileScopes(goal, task),
-            ProviderKey: ResolveParallelProviderKey(task, agents),
-            DependsOn: BuildIncompleteEarlierStageDependencies(goal, task)))
+        .Select(task =>
+        {
+            var scope = GoalFileScopeInference.ForScheduling(goal, task);
+            return new ParallelExecutionIntent(
+                task.Id.Value,
+                goal.Id.Value,
+                scope.Includes,
+                ProviderKey: ResolveParallelProviderKey(task, agents),
+                DependsOn: BuildIncompleteEarlierStageDependencies(goal, task),
+                ScopeConfidence: scope.Confidence);
+        })
         .ToList();
     var providerQuotas = intents
         .Where(intent => !string.IsNullOrWhiteSpace(intent.ProviderKey))
@@ -586,18 +591,6 @@ private static int? SdlcStageOrder(AgentRole role)
         AgentRole.Reviewer => 4,
         _ => null
     };
-}
-
-private static string[] InferParallelFileScopes(Goal goal, TaskSpec task)
-{
-    var text = $"{goal.Objective}\n{task.Description}\n{task.VerificationPlan}";
-    var matches = System.Text.RegularExpressions.Regex
-        .Matches(text, @"(?<![\w.-])(?:src|tests|scripts|docs|config|\.agents)[\\/][A-Za-z0-9_.\\/\-]+")
-        .Select(match => match.Value.Replace('\\', '/').TrimEnd('.', ',', ';', ':', ')', ']'))
-        .Where(value => !string.IsNullOrWhiteSpace(value))
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToArray();
-    return matches;
 }
 
 private static string? ResolveParallelProviderKey(TaskSpec task, IReadOnlyList<AgentDefinition>? agents)

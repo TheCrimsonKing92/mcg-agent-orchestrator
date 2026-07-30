@@ -34,8 +34,8 @@ internal sealed class WorkerArtifactWriter
         var contextDirectory = Path.Combine(scratchRoot, goal.Id.Value);
         Directory.CreateDirectory(contextDirectory);
 
-        // Self-ignore the scratch tree so it never dirties the worktree, even in
-        // repositories/worktrees whose root .gitignore lacks an orchestrator rule.
+        // Self-ignore the scratch tree so it never dirties repositories whose root
+        // .gitignore lacks the tracked orchestrator rule.
         // A ".gitignore" containing "*" ignores every file in the directory
         // (including itself), so "git status" stays clean before acceptance.
         var scratchIgnore = Path.Combine(scratchRoot, ".gitignore");
@@ -46,8 +46,13 @@ internal sealed class WorkerArtifactWriter
 
         WriteText(Path.Combine(contextDirectory, "objective.md"), BuildObjective(goal));
         WriteText(Path.Combine(contextDirectory, "current-task.md"), BuildCurrentTask(task, workingDirectory));
-        WriteText(Path.Combine(contextDirectory, "prior-task-summaries.md"), BuildPriorTaskSummaries(goal.Tasks, task.Id));
-        WriteText(Path.Combine(contextDirectory, "prior-task-evidence.md"), BuildPriorTaskEvidence(goal.Tasks, task.Id));
+        var durablePlannerPlans = ResolveDurablePlannerPlans(goal.Tasks, task.Id);
+        WriteText(
+            Path.Combine(contextDirectory, "prior-task-summaries.md"),
+            BuildPriorTaskSummaries(goal.Tasks, task.Id, durablePlannerPlans));
+        WriteText(
+            Path.Combine(contextDirectory, "prior-task-evidence.md"),
+            BuildPriorTaskEvidence(goal.Tasks, task.Id, durablePlannerPlans));
         WriteText(Path.Combine(contextDirectory, "deterministic-verification.md"), BuildDeterministicVerification(goal, task, workingDirectory));
         WriteText(Path.Combine(contextDirectory, "workflow-brokers.md"), BuildWorkflowBrokers(goal, task, workingDirectory));
         WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory));
@@ -532,7 +537,10 @@ internal sealed class WorkerArtifactWriter
         return string.Join(Environment.NewLine, lines);
     }
 
-    private string BuildPriorTaskSummaries(IReadOnlyList<TaskSpec> goalTasks, TaskId taskId)
+    private string BuildPriorTaskSummaries(
+        IReadOnlyList<TaskSpec> goalTasks,
+        TaskId taskId,
+        IReadOnlyDictionary<TaskId, DurablePlannerPlanResolution> durablePlannerPlans)
     {
         var priorCompletedTasks = goalTasks
             .TakeWhile(t => t.Id != taskId)
@@ -557,12 +565,22 @@ internal sealed class WorkerArtifactWriter
             lines.Add($"Verification result: {SummarizeVerificationResult(verification)}");
             lines.Add($"Risks: {SummarizeRisks(verification)}");
             lines.Add($"Model fit: {SummarizeModelFit(verification)}");
+            if (priorTask.RequiredRole == AgentRole.Planner)
+            {
+                var resolution = durablePlannerPlans[priorTask.Id];
+                lines.Add(resolution.Succeeded
+                    ? "Durable plan: complete Planner plan is in prior-task-evidence.md and is required implementation input."
+                    : $"Durable plan: UNAVAILABLE ({resolution.Diagnostic}); retry Planner before implementation.");
+            }
         }
 
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string BuildPriorTaskEvidence(IReadOnlyList<TaskSpec> goalTasks, TaskId taskId)
+    private static string BuildPriorTaskEvidence(
+        IReadOnlyList<TaskSpec> goalTasks,
+        TaskId taskId,
+        IReadOnlyDictionary<TaskId, DurablePlannerPlanResolution> durablePlannerPlans)
     {
         var priorCompletedTasks = goalTasks
             .TakeWhile(t => t.Id != taskId)
@@ -590,8 +608,29 @@ internal sealed class WorkerArtifactWriter
             }
 
             lines.Add(string.Empty);
-            lines.Add("### Stdout");
-            lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, PriorVerificationMaxChars));
+            if (priorTask.RequiredRole == AgentRole.Planner)
+            {
+                var resolution = durablePlannerPlans[priorTask.Id];
+                if (resolution.Succeeded)
+                {
+                    lines.Add("### Durable Planner Plan");
+                    lines.Add(resolution.Plan);
+                    lines.Add(string.Empty);
+                    lines.Add("### Planner WORKER_RESULT Receipt");
+                    lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, SummaryFieldMaxChars * 4));
+                }
+                else
+                {
+                    lines.Add("### Durable Planner Plan Retrieval Failure");
+                    lines.Add($"{resolution.Diagnostic}. Retry Planner before implementation; truncated stdout is not a plan substitute.");
+                }
+            }
+            else
+            {
+                lines.Add("### Stdout");
+                lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, PriorVerificationMaxChars));
+            }
+
             if (!string.IsNullOrWhiteSpace(verification.StandardError))
             {
                 lines.Add(string.Empty);
@@ -602,6 +641,96 @@ internal sealed class WorkerArtifactWriter
 
         return string.Join(Environment.NewLine, lines);
     }
+
+    private static IReadOnlyDictionary<TaskId, DurablePlannerPlanResolution> ResolveDurablePlannerPlans(
+        IReadOnlyList<TaskSpec> goalTasks,
+        TaskId taskId)
+    {
+        var resolutions = new Dictionary<TaskId, DurablePlannerPlanResolution>();
+        foreach (var priorTask in goalTasks
+            .TakeWhile(candidate => candidate.Id != taskId)
+            .Where(candidate =>
+                candidate.RequiredRole == AgentRole.Planner &&
+                candidate.Status == WorkTaskStatus.Completed &&
+                candidate.LastVerification is not null))
+        {
+            var succeeded = TryResolveDurablePlannerPlan(
+                priorTask.LastVerification!,
+                out var plan,
+                out var diagnostic);
+            resolutions.Add(
+                priorTask.Id,
+                new DurablePlannerPlanResolution(succeeded, plan, diagnostic));
+        }
+
+        return resolutions;
+    }
+
+    private static bool TryResolveDurablePlannerPlan(
+        TaskVerificationRecord verification,
+        out string plan,
+        out string diagnostic)
+    {
+        plan = string.Empty;
+        diagnostic = string.Empty;
+        if (!string.IsNullOrWhiteSpace(verification.StandardOutputPath) &&
+            File.Exists(verification.StandardOutputPath))
+        {
+            var capturedOutput = PlannerOutputContract.ReadCapturedOutputTail(verification.StandardOutputPath);
+            if (TryExtractAndRevalidateDurablePlannerPlan(
+                    capturedOutput,
+                    verification.WorkingDirectory,
+                    out plan,
+                    out diagnostic))
+            {
+                return true;
+            }
+        }
+
+        if (TryExtractAndRevalidateDurablePlannerPlan(
+                verification.StandardOutput,
+                verification.WorkingDirectory,
+                out plan,
+                out var verificationDiagnostic))
+        {
+            return true;
+        }
+
+        diagnostic = string.IsNullOrWhiteSpace(diagnostic)
+            ? verificationDiagnostic
+            : $"{diagnostic}; verification snapshot: {verificationDiagnostic}";
+        return false;
+    }
+
+    private static bool TryExtractAndRevalidateDurablePlannerPlan(
+        string text,
+        string workingDirectory,
+        out string plan,
+        out string diagnostic)
+    {
+        if (!PlannerOutputContract.TryExtractDurablePlan(text, out var extractedPlan, out diagnostic))
+        {
+            plan = string.Empty;
+            return false;
+        }
+
+        if (PlannerOutputContract.TryValidatePlan(
+                extractedPlan,
+                workingDirectory,
+                out plan,
+                out diagnostic))
+        {
+            return true;
+        }
+
+        diagnostic = $"durable Planner plan failed retrieval revalidation: {diagnostic}";
+        return false;
+    }
+
+    private sealed record DurablePlannerPlanResolution(
+        bool Succeeded,
+        string Plan,
+        string Diagnostic);
 
     private static List<string> CopyGuidanceFiles(string workingDirectory, string contextDirectory)
     {

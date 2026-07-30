@@ -6,6 +6,107 @@ using System.Text.Json;
 [Xunit.Collection(TestCollections.ChaosGateGit)]
 public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatchTestSupport
 {
+    [Xunit.Fact(DisplayName = "BuildConvergenceBrief_preserves_every_typed_tester_finding")]
+    public void BuildConvergenceBriefPreservesEveryTypedTesterFinding()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Repair.", AgentRole.Developer);
+        var tester = new TaskSpec(TaskId.New(), "Verify.", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Preserve tester findings", [developer, tester]);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                "test",
+                "C:\\repo",
+                1,
+                "typed tester findings",
+                "",
+                DateTimeOffset.UtcNow,
+                MergedReviewFindings:
+                [
+                    new ReviewFinding(
+                        "tester-alpha",
+                        ReviewFindingState.Open,
+                        new ReviewFindingLocation("tests/A.cs", "CaseA"),
+                        "First Tester failure."),
+                    new ReviewFinding(
+                        "tester-beta",
+                        ReviewFindingState.Open,
+                        new ReviewFindingLocation("tests/B.cs", "CaseB"),
+                        "Second Tester failure.")
+                ]));
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal,
+            developer,
+            tester,
+            "fallback blocker text",
+            "reported typed failures",
+            AgentRole.Developer,
+            1,
+            "C:\\logs\\tester.out",
+            ["tests/A.cs", "tests/B.cs"]);
+
+        Assert.Contains("stable_id: tester-alpha", brief, StringComparison.Ordinal);
+        Assert.Contains("First Tester failure.", brief, StringComparison.Ordinal);
+        Assert.Contains("stable_id: tester-beta", brief, StringComparison.Ordinal);
+        Assert.Contains("Second Tester failure.", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("fallback blocker text", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BuildConvergenceBrief_keeps_advisories_visible_without_making_them_repair_scope")]
+    public void BuildConvergenceBriefKeepsAdvisoriesVisibleWithoutMakingThemRepairScope()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Separate blockers from advisories");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [
+                new ReviewFinding(
+                    "BLOCKER",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "A.Run"),
+                    "Required correctness repair.",
+                    Severity: FindingSeverity.Blocking),
+                new ReviewFinding(
+                    "ADVISORY",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/B.cs", "B.Run"),
+                    "Optional follow-up.",
+                    Severity: FindingSeverity.Advisory)
+            ],
+            []);
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal,
+            developer,
+            reviewer,
+            "findings",
+            "verdict=needs-work",
+            AgentRole.Developer,
+            1,
+            "review.out",
+            ["src/A.cs", "src/B.cs"]);
+        var actionItems = brief[..brief.IndexOf("## PRESERVE_ACCEPTED", StringComparison.Ordinal)];
+        var deferred = brief[brief.IndexOf("## DEFERRED_NON_BLOCKING_ADVISORIES", StringComparison.Ordinal)..];
+
+        Assert.Contains("open_count: 1", actionItems, StringComparison.Ordinal);
+        Assert.Contains("stable_id: BLOCKER", actionItems, StringComparison.Ordinal);
+        Assert.DoesNotContain("stable_id: ADVISORY", actionItems, StringComparison.Ordinal);
+        Assert.Contains("advisory_count: 1", deferred, StringComparison.Ordinal);
+        Assert.Contains("stable_id: ADVISORY", deferred, StringComparison.Ordinal);
+        Assert.Contains("not required repair scope", deferred, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_orders_spec_findings_and_preserves_legacy_shape")]
     public void OrdersSpecFindingsAndPreservesLegacyCategorylessShape()
     {
@@ -425,6 +526,62 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.Contains("accepted_count: 0", brief);
     }
 
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_merges_open_reviewer_and_tester_ledgers")]
+    public void StructuredConvergenceBriefMergesOpenReviewerAndTesterLedgers()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Structured findings stay complete across roles");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [
+                new ReviewFinding(
+                    "reviewer-open",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "A.Run", "reviewer-guard"),
+                    "Reviewer guard remains open.")
+            ],
+            []);
+        RecordReviewerRound(
+            kernel,
+            goal,
+            tester,
+            "needs-work",
+            [
+                new ReviewFinding(
+                    "tester-open",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("tests/A.Tests.cs", "A.Tests", "tester-case"),
+                    "Tester edge case remains open.")
+            ],
+            []);
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal,
+            developer,
+            tester,
+            "Tester edge case remains open.",
+            "structured Tester findings",
+            AgentRole.Developer,
+            2,
+            "tester.out",
+            ["src/A.cs", "tests/A.Tests.cs"]);
+
+        Assert.Contains("open_count: 2", brief);
+        Assert.Contains("stable_id: reviewer-open", brief);
+        Assert.Contains("source_role: Reviewer", brief);
+        Assert.Contains("stable_id: tester-open", brief);
+        Assert.Contains("source_role: Tester", brief);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_deduplicates_multi_round_findings")]
     public void BuildConvergenceBriefDeduplicatesMultiRoundFindings()
     {
@@ -585,6 +742,89 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.Equal(ReviewFindingState.Open, finding.State);
         Assert.Equal(anchor, finding.Location);
     }
+
+    [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_contract_repair_brief_carries_violation_canonical_ledger_and_claimed_resolutions")]
+    public void ContractRepairBriefCarriesViolationCanonicalLedgerAndClaimedResolutions()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Repair reviewer contract");
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var firstLocation = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var secondLocation = new ReviewFindingLocation("src/B.cs", "B.Run", "guard");
+        var opened = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, firstLocation, "First advisory.", FindingSeverity.Advisory),
+            new ReviewFinding("F-2", ReviewFindingState.Open, secondLocation, "Second advisory.", FindingSeverity.Advisory)
+        };
+        var rejected = new[]
+        {
+            opened[0] with { Location = new ReviewFindingLocation("src/C.cs", "C.Run", "guard") },
+            opened[1] with { State = ReviewFindingState.Resolved }
+        };
+        var firstOutput = ReviewerOutput("pass", opened);
+        var rejectedOutput = ReviewerOutput("pass", rejected);
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1",
+            @"C:\tmp",
+            0,
+            firstOutput,
+            "",
+            DateTimeOffset.Parse("2026-07-30T10:00:00Z"),
+            WorkerResultPresent: true));
+        var violation = new ReviewFindingContractViolation(
+            ReviewFindingConvergence.IdentityMovedViolationCode,
+            "F-1 moved.",
+            "F-1",
+            "F-1",
+            firstLocation,
+            rejected[0].Location);
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2",
+            @"C:\tmp",
+            0,
+            rejectedOutput,
+            "",
+            DateTimeOffset.Parse("2026-07-30T10:01:00Z"),
+            StandardOutputPath: @"C:\tmp\reviewer.out.log",
+            WorkerResultPresent: true,
+            ReviewFindingContractViolation: violation));
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildContractRepairBrief(
+            goal,
+            reviewer,
+            violation,
+            1,
+            2,
+            @"C:\tmp\reviewer.out.log");
+
+        Assert.StartsWith("review-finding contract-repair: attempt 1/2", brief, StringComparison.Ordinal);
+        Assert.Contains("violation_code: ERR_REVIEW_FINDING_IDENTITY_MOVED", brief, StringComparison.Ordinal);
+        Assert.Contains("open_count: 2", brief, StringComparison.Ordinal);
+        Assert.Contains($"stable_id: F-1 | severity=advisory | {firstLocation}", brief, StringComparison.Ordinal);
+        Assert.Contains("- stable_id: F-2", brief, StringComparison.Ordinal);
+        Assert.Contains("reuse stable_id and location VERBATIM", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("auto-review-retry", brief, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ReviewFindingState.Open, AutoReviewRetryConvergenceBriefBuilder
+            .ReadStructuredReviewFindingState(goal, reviewer)
+            .Single(finding => finding.StableId == "F-2")
+            .State);
+    }
+
+    private static string ReviewerOutput(string verdict, IReadOnlyList<ReviewFinding> findings) =>
+        string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - deterministic fixture",
+            "blockers: none",
+            $"findings: {JsonSerializer.Serialize(findings)}",
+            "touched_anchors: []",
+            $"verdict: {verdict}",
+            "END_WORKER_RESULT");
 
     private static void DispatchTask(
         AgentOrchestratorKernel kernel,

@@ -8,6 +8,17 @@ using System.Text.Json.Nodes;
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_pre_review_attempt_namespace_cannot_collide_with_acceptance")]
+    public void GoalAcceptanceVerifierPreReviewAttemptNamespaceCannotCollideWithAcceptance()
+    {
+        var preReview = GoalAcceptanceVerifier.OwnerResultsAttemptRoot("pre-review");
+        var acceptance = GoalAcceptanceVerifier.OwnerResultsAttemptRoot("gate");
+
+        Assert.Equal("pre-review-evidence-attempts", preReview);
+        Assert.Equal("acceptance-gate-attempts", acceptance);
+        Assert.NotEqual(preReview, acceptance);
+    }
+
     [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_decodes_legacy_console_bytes_without_replacement")]
     [Xunit.InlineData(0xFA)]
     [Xunit.InlineData(0xB7)]
@@ -753,7 +764,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     private const string CheckedInCliLaneFilter =
         "FullyQualifiedName~CliCommandTests&FullyQualifiedName!~CliCommandTestsGoalLifecycleCommands&FullyQualifiedName!~CliCommandTestsPersistentRunnerCommands&FullyQualifiedName!~CliCommandTestsSubscriptionDispatchCommands&FullyQualifiedName!~CliCommandTestsTerminalSweepCommands";
     private const string CheckedInGoalAcceptanceVerifierLaneFilter =
-        "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests|FullyQualifiedName~RealProcessShardAlphaSmokeTests|FullyQualifiedName~RealProcessShardBetaSmokeTests|FullyQualifiedName~WorkerDispatchJobAccountingTests";
+        "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~RealProcessShardAlphaSmokeTests|FullyQualifiedName~RealProcessShardBetaSmokeTests|FullyQualifiedName~WorkerDispatchJobAccountingTests";
+    private const string CheckedInGoalAcceptanceBuildSlotsLaneFilter =
+        "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests";
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_surfaces_hung_child_without_process_inspection")]
     public async Task GoalAcceptanceVerifierGateHeartbeatSurfacesHungChildWithoutProcessInspection()
@@ -2043,12 +2056,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 "infrastructure tests: Worker sandbox planner",
                 "infrastructure tests: Dashboard validation",
                 "infrastructure tests: Conduct watch sweep scoping",
+                "infrastructure tests: Goal lifecycle commands",
                 "infrastructure tests: Goal worktree cleanup",
                 "infrastructure tests: Worker profiles",
+                "infrastructure tests: Worker dispatch fixtures",
                 "infrastructure tests: Process spawning",
                 "infrastructure tests: Chaos gate",
                 "infrastructure tests: Dotnet build slots",
                 "infrastructure tests: Goal acceptance verifier",
+                "infrastructure tests: Goal acceptance build slots",
                 "infrastructure tests: Provider environment",
                 "infrastructure tests: Remainder balance A",
                 "infrastructure tests: Remainder balance B",
@@ -2072,6 +2088,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
             Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInCliLaneFilter));
             Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInGoalAcceptanceVerifierLaneFilter));
+            Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInGoalAcceptanceBuildSlotsLaneFilter));
             Assert.DoesNotContain(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardHostTests&Category!=HostIntegration"));
             Assert.Contains(infrastructureCalls, call =>
                 call.Any(argument =>
@@ -2346,6 +2363,143 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_concurrent_shards_start_longest_estimated_lanes_first")]
+    public async Task GoalAcceptanceVerifierConcurrentShardsStartLongestEstimatedLanesFirst()
+    {
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        SetPartitionVerdictKeyHooks("tree-estimates", "main-estimates", "commit-estimates");
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 2,
+                "infrastructureTestLanes": [
+                  {
+                    "name": "Light first",
+                    "filter": "FullyQualifiedName~LightFirstTests",
+                    "estimatedSerialSeconds": 1
+                  },
+                  {
+                    "name": "Heavy alpha",
+                    "filter": "FullyQualifiedName~HeavyAlphaTests",
+                    "estimatedSerialSeconds": 100
+                  },
+                  {
+                    "name": "Light second",
+                    "filter": "FullyQualifiedName~LightSecondTests",
+                    "estimatedSerialSeconds": 2
+                  },
+                  {
+                    "name": "Heavy beta",
+                    "filter": "FullyQualifiedName~HeavyBetaTests",
+                    "estimatedSerialSeconds": 99
+                  }
+                ],
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [
+                      "{executable}",
+                      "--results-directory",
+                      "{resultsDirectory}",
+                      "--report-trx-filename",
+                      "{trxFileName}"
+                    ]
+                  }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests",
+                  "type": "dotnet-test",
+                  "runner": "mtp",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var heavyAlphaStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var heavyBetaStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startOrder = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        try
+        {
+            async Task<GoalAcceptanceVerifier.CommandResult> RunEstimatedShardAsync(
+                string[] args,
+                string _,
+                CancellationToken _cancellationToken)
+            {
+                if (args.Length > 0 && args[0] == "dotnet")
+                {
+                    if (args.Length >= 2 && args[1] == "build")
+                    {
+                        var executable = Path.Combine(
+                            GetArtifactsPath(args),
+                            "bin",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                            "debug",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+                        File.WriteAllText(executable, "deterministic shard fixture");
+                    }
+
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
+                }
+
+                WriteMtpTrx(args);
+                var filterIndex = Array.IndexOf(args, "--filter-class");
+                Assert.True(filterIndex >= 0 && filterIndex + 1 < args.Length);
+                var filter = args[filterIndex + 1];
+                startOrder.Enqueue(filter);
+                if (filter.Contains("HeavyAlphaTests", StringComparison.Ordinal))
+                {
+                    heavyAlphaStarted.TrySetResult();
+                    await heavyBetaStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+                else if (filter.Contains("HeavyBetaTests", StringComparison.Ordinal))
+                {
+                    heavyBetaStarted.TrySetResult();
+                    await heavyAlphaStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+
+                return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+            }
+
+            var verifier = new GoalAcceptanceVerifier(RunEstimatedShardAsync);
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("33333333333333333333333333333333"),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotLease: lease);
+
+            Assert.True(result.Passed);
+            var firstWave = startOrder.Take(2).ToArray();
+            Assert.Equal(2, firstWave.Length);
+            Assert.Contains(firstWave, filter => filter.Contains("HeavyAlphaTests", StringComparison.Ordinal));
+            Assert.Contains(firstWave, filter => filter.Contains("HeavyBetaTests", StringComparison.Ordinal));
+            Assert.Equal(
+                [
+                    "infrastructure tests: Light first",
+                    "infrastructure tests: Heavy alpha",
+                    "infrastructure tests: Light second",
+                    "infrastructure tests: Heavy beta"
+                ],
+                result.Checks!
+                    .Where(check => check.Name.StartsWith("infrastructure tests:", StringComparison.Ordinal))
+                    .Select(check => check.Name));
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
         }
     }
 

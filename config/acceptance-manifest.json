@@ -2,9 +2,9 @@
   "version": 1,
   "engine": {
     "slotCount": 4,
-    "maxConcurrentShards": 2,
+    "maxConcurrentShards": 4,
     "enforceStructuralCoverage": true,
-    "laneEstimateComment": "estimatedSerialSeconds uses the conservative per-class maximum from clean receipts; the ~8-minute serial planning ceiling uses a 1.0x multiplier, while live two-wide contention remains a receipt-level acceptance check.",
+    "laneEstimateComment": "estimatedSerialSeconds preserves each prior clean-receipt lane aggregate across class-disjoint split lanes; live four-wide contention remains a receipt-level acceptance check.",
     "timeouts": {
       "defaultMinutes": 40,
       "buildServerShutdownMinutes": 5,
@@ -37,14 +37,24 @@
         "estimatedSerialSeconds": 1.07
       },
       {
+        "name": "Goal lifecycle commands",
+        "filter": "FullyQualifiedName~CliCommandTestsGoalLifecycleCommands|FullyQualifiedName~CliCommandTestsPersistentRunnerCommands|FullyQualifiedName~CliCommandTestsSubscriptionDispatchCommands|FullyQualifiedName~CliCommandTestsTerminalSweepCommands|FullyQualifiedName~GoalGitFactIndexTests|FullyQualifiedName~GoalsPruneTests|FullyQualifiedName~LandingExecutorTests",
+        "estimatedSerialSeconds": 238.29
+      },
+      {
         "name": "Goal worktree cleanup",
-        "filter": "FullyQualifiedName~CliCommandTestsGoalLifecycleCommands|FullyQualifiedName~CliCommandTestsPersistentRunnerCommands|FullyQualifiedName~CliCommandTestsSubscriptionDispatchCommands|FullyQualifiedName~CliCommandTestsTerminalSweepCommands|FullyQualifiedName~GoalGitFactIndexTests|FullyQualifiedName~GoalsPruneTests|FullyQualifiedName~GoalWorktreeTestsAcceptanceLanding|FullyQualifiedName~GoalWorktreeTestsCreationResolution|FullyQualifiedName~GoalWorktreeTestsOrphanEphemeralSweep|FullyQualifiedName~GoalWorktreeTestsRebaseMerge|FullyQualifiedName~GoalWorktreeTestsRemoveCleanup|FullyQualifiedName~GoalWorktreeTestsSqliteTooling|FullyQualifiedName~LandingExecutorTests",
-        "estimatedSerialSeconds": 476.57
+        "filter": "FullyQualifiedName~GoalWorktreeTestsAcceptanceLanding|FullyQualifiedName~GoalWorktreeTestsCreationResolution|FullyQualifiedName~GoalWorktreeTestsOrphanEphemeralSweep|FullyQualifiedName~GoalWorktreeTestsRebaseMerge|FullyQualifiedName~GoalWorktreeTestsRemoveCleanup|FullyQualifiedName~GoalWorktreeTestsSqliteTooling",
+        "estimatedSerialSeconds": 238.28
       },
       {
         "name": "Worker profiles",
-        "filter": "FullyQualifiedName~AdvanceLoopTests|FullyQualifiedName~ConductLoopLockTests|FullyQualifiedName~ConductorLoopHandoffTests|FullyQualifiedName~FirewallSetupCommandTests|FullyQualifiedName~GoalBacklogLinkTests|FullyQualifiedName~GoalLifecycleEventWriterTests|FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~SqliteOrchestratorStateRepositoryTests|FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~WorkerDispatchTestsModelSelectionEnvMutation|FullyQualifiedName~WorkerDispatchTestsSandboxLowIntegrity|FullyQualifiedName~WorkerDispatchTestsSubscriptionPreflight|FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification|FullyQualifiedName~WorkerProcessJobsTests|FullyQualifiedName~WorkerProfileTests|FullyQualifiedName~WorkspaceConsolidatorTests",
-        "estimatedSerialSeconds": 263.18
+        "filter": "FullyQualifiedName~AdvanceLoopTests|FullyQualifiedName~ConductLoopLockTests|FullyQualifiedName~ConductorLoopHandoffTests|FullyQualifiedName~FirewallSetupCommandTests|FullyQualifiedName~GoalBacklogLinkTests|FullyQualifiedName~GoalLifecycleEventWriterTests|FullyQualifiedName~SqliteOrchestratorStateRepositoryTests|FullyQualifiedName~WorkerProfileTests|FullyQualifiedName~WorkspaceConsolidatorTests",
+        "estimatedSerialSeconds": 131.59
+      },
+      {
+        "name": "Worker dispatch fixtures",
+        "filter": "FullyQualifiedName~RealWorkerProcessGuardTests|FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~WorkerDispatchTestsModelSelectionEnvMutation|FullyQualifiedName~WorkerDispatchTestsSandboxLowIntegrity|FullyQualifiedName~WorkerDispatchTestsSubscriptionPreflight|FullyQualifiedName~WorkerDispatchTestsWorkerResultClassification|FullyQualifiedName~WorkerProcessJobsTests",
+        "estimatedSerialSeconds": 131.59
       },
       {
         "name": "Process spawning",
@@ -63,8 +73,13 @@
       },
       {
         "name": "Goal acceptance verifier",
-        "filter": "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests|FullyQualifiedName~RealProcessShardAlphaSmokeTests|FullyQualifiedName~RealProcessShardBetaSmokeTests|FullyQualifiedName~WorkerDispatchJobAccountingTests",
-        "estimatedSerialSeconds": 356.52
+        "filter": "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~RealProcessShardAlphaSmokeTests|FullyQualifiedName~RealProcessShardBetaSmokeTests|FullyQualifiedName~WorkerDispatchJobAccountingTests",
+        "estimatedSerialSeconds": 178.26
+      },
+      {
+        "name": "Goal acceptance build slots",
+        "filter": "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests",
+        "estimatedSerialSeconds": 178.26
       },
       {
         "name": "Provider environment",

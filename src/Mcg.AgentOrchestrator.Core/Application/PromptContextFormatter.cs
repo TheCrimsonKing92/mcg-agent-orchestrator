@@ -219,6 +219,11 @@ internal static class PromptContextFormatter
             "## Prior Task Evidence",
             "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit; open prior-task-evidence.md second only when fuller verification output is needed."
         };
+        if (priorCompletedTasks.Any(task => task.RequiredRole == AgentRole.Planner))
+        {
+            lines.Add("A completed Planner is present: check prior-task-summaries.md for its durable-plan status. When available, read the complete Durable Planner Plan in prior-task-evidence.md before implementation; when marked UNAVAILABLE, stop and retry Planner rather than using a summary or external path.");
+        }
+
         foreach (var priorTask in priorCompletedTasks)
         {
             var verification = priorTask.LastVerification!;
@@ -253,6 +258,7 @@ internal static class PromptContextFormatter
             ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
             ProgressKind.ReviewerEvidenceRequestReceived or
             ProgressKind.ReviewerEvidenceRunRecorded or
+            ProgressKind.PreReviewEvidenceRecorded or
             ProgressKind.GoalPolicyDecision;
     }
 }

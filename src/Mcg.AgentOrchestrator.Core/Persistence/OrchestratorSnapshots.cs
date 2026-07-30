@@ -84,7 +84,8 @@ public sealed record TaskSnapshot(
     IReadOnlyList<string>? CriterionRetryFeedback = null,
     int EmptyOutputRetryCount = 0,
     DateTimeOffset? LatestRetryAt = null,
-    RetryRoundKind? PendingRetryRoundKind = null);
+    RetryRoundKind? PendingRetryRoundKind = null,
+    PreReviewEvidenceReceipt? PreReviewEvidenceReceipt = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -117,7 +118,8 @@ public sealed record TaskVerificationSnapshot(
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
     string? ReviewedCommit = null,
     IReadOnlyList<ReviewFinding>? MergedReviewFindings = null,
-    bool WorkerResultPresent = false)
+    bool WorkerResultPresent = false,
+    ReviewFindingContractViolation? ReviewFindingContractViolation = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

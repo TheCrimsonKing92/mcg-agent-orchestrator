@@ -160,7 +160,8 @@ internal static class GoalDependencyPlanner
             RunsAcceptance: runsAcceptance,
             RequiresOperatorApproval: node.Intake.RiskLabels.Contains("subscription-cost", StringComparer.OrdinalIgnoreCase),
             ProviderKey: node.Intake.RiskLabels.Contains("subscription-cost", StringComparer.OrdinalIgnoreCase) ? "subscription" : null,
-            DependsOn: node.DependsOn);
+            DependsOn: node.DependsOn,
+            ScopeConfidence: node.Intake.ScopeConfidence);
     }
 
     private static List<string> BuildResources(GoalPlanNode node)

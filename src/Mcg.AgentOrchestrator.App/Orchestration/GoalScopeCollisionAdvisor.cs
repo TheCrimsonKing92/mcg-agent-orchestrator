@@ -51,8 +51,8 @@ internal sealed record GoalScopeCollisionReport(
         .ToArray();
 
     public int ExplicitCollisionCount { get; } = Collisions.Count(collision =>
-        collision.ProposedProvenance == FileScopeProvenance.Explicit &&
-        collision.ConflictingProvenance == FileScopeProvenance.Explicit);
+        (collision.ProposedProvenance is FileScopeProvenance.Explicit or FileScopeProvenance.Derived) &&
+        (collision.ConflictingProvenance is FileScopeProvenance.Explicit or FileScopeProvenance.Derived));
 
     public string VerdictToken { get; } = Verdict switch
     {
@@ -178,7 +178,7 @@ internal static class GoalScopeCollisionAdvisor
                 ScopeEvidenceGap.ProposedScopesMissing,
                 "The proposed goal declares no repository file scopes."));
         }
-        else if (!scopes.Any(scope => scope.Provenance == FileScopeProvenance.Explicit))
+        else if (!scopes.Any(scope => scope.IsTrusted))
         {
             gaps.Add(new ScopeEvidenceGapNote(
                 null,
@@ -199,7 +199,7 @@ internal static class GoalScopeCollisionAdvisor
                 ScopeEvidenceGap.ActiveScopesMissing,
                 $"Goal {GoalPrefix(goal)} declares no repository file scopes."));
         }
-        else if (!scopes.Any(scope => scope.Provenance == FileScopeProvenance.Explicit))
+        else if (!scopes.Any(scope => scope.IsTrusted))
         {
             gaps.Add(new ScopeEvidenceGapNote(
                 goal.Id.Value,

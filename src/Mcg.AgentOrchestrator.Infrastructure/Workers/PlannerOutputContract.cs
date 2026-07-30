@@ -1,0 +1,575 @@
+using System.Text;
+using System.Text.RegularExpressions;
+
+namespace Mcg.AgentOrchestrator.Infrastructure;
+
+internal sealed record PlannerOutputContractResult(
+    bool Succeeded,
+    string? Plan,
+    string? IngestedPath,
+    string Diagnostic);
+
+internal static partial class PlannerOutputContract
+{
+    internal const int MaxPlanChars = 40_000;
+    internal const int MinimumPlanChars = 800;
+    internal const string DurablePlanBeginMarker = "<!-- MCG_DURABLE_PLANNER_PLAN:BEGIN -->";
+    internal const string DurablePlanEndMarker = "<!-- MCG_DURABLE_PLANNER_PLAN:END -->";
+    private const int CapturedOutputTailBytes = (MaxPlanChars * 4) + 32_000;
+    private const int AppendAttempts = 4;
+
+    private static readonly (string Label, Regex Heading)[] RequiredSections =
+    [
+        ("premise validity", PremiseValidityHeading()),
+        ("acceptance criterion mapping", AcceptanceMappingHeading()),
+        ("target seams and symbols", TargetSeamsHeading()),
+        ("ownership and lifecycle", OwnershipLifecycleHeading()),
+        ("integration seams", IntegrationSeamsHeading()),
+        ("verification commands and classes", VerificationHeading()),
+        ("risks and stop conditions", RisksHeading())
+    ];
+
+    internal static PlannerOutputContractResult Resolve(
+        string standardOutput,
+        string standardError,
+        string workingDirectory,
+        string? modelHomeDirectory = null)
+    {
+        // Planner plans are an stdout contract. Stderr can contain tool traces or echoed
+        // file contents and must not make an otherwise incomplete Planner result pass.
+        var captured = standardOutput;
+        if (TryExtractDurablePlan(captured, out var plan, out _))
+        {
+            if (TryValidatePlan(
+                    plan,
+                    workingDirectory,
+                    out var revalidatedPlan,
+                    out var receiptDiagnostic))
+            {
+                // Reconciliation reuses the existing receipt without treating its headings
+                // as fresh Planner output or appending another copy.
+                return new PlannerOutputContractResult(true, revalidatedPlan, null, string.Empty);
+            }
+
+            return new PlannerOutputContractResult(
+                false,
+                null,
+                null,
+                $"Planner durable receipt failed revalidation: {receiptDiagnostic}. Retry Planner for contract repair.");
+        }
+
+        if (TryValidatePlan(captured, workingDirectory, out plan, out var diagnostic))
+        {
+            return new PlannerOutputContractResult(true, plan, null, string.Empty);
+        }
+
+        var pathFailures = new List<string>();
+        foreach (var path in FindCandidatePlanPaths(captured, workingDirectory, modelHomeDirectory))
+        {
+            if (!TryReadBoundedPlan(path, out var externalPlan, out var readFailure))
+            {
+                pathFailures.Add($"{path}: {readFailure}");
+                continue;
+            }
+
+            if (TryValidatePlan(externalPlan, workingDirectory, out plan, out var externalDiagnostic))
+            {
+                return new PlannerOutputContractResult(true, plan, path, string.Empty);
+            }
+
+            pathFailures.Add($"{path}: {externalDiagnostic}");
+        }
+
+        var pathDetail = pathFailures.Count == 0
+            ? "no readable orchestrator-workspace or model-home plan artifact was referenced"
+            : string.Join("; ", pathFailures);
+        return new PlannerOutputContractResult(
+            false,
+            null,
+            null,
+            $"Planner output contract failed: {diagnostic}; {pathDetail}. Retry Planner for contract repair.");
+    }
+
+    internal static string ReadCapturedOutputTail(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var startedAtBeginning = true;
+            if (stream.Length > CapturedOutputTailBytes)
+            {
+                stream.Seek(-CapturedOutputTailBytes, SeekOrigin.End);
+                startedAtBeginning = false;
+                SkipUtf8ContinuationBytes(stream);
+            }
+
+            using var reader = new StreamReader(
+                stream,
+                Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: startedAtBeginning);
+            return reader.ReadToEnd();
+        }
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return $"[captured Planner output unreadable: {error.Message}]";
+        }
+    }
+
+    private static void SkipUtf8ContinuationBytes(Stream stream)
+    {
+        while (stream.Position < stream.Length)
+        {
+            var value = stream.ReadByte();
+            if (value < 0)
+            {
+                return;
+            }
+
+            if ((value & 0b1100_0000) != 0b1000_0000)
+            {
+                stream.Seek(-1, SeekOrigin.Current);
+                return;
+            }
+        }
+    }
+
+    internal static bool TryPersistDurableReceipt(
+        string standardOutputPath,
+        string sourcePath,
+        string plan,
+        out string diagnostic)
+    {
+        var normalizedPlan = plan.ReplaceLineEndings("\n");
+        var receipt = BuildIngestedReceipt(sourcePath, normalizedPlan);
+        var existingTail = ReadCapturedOutputTail(standardOutputPath);
+        if (TryExtractDurablePlan(existingTail, out var existingPlan, out _) &&
+            string.Equals(existingPlan.ReplaceLineEndings("\n"), normalizedPlan, StringComparison.Ordinal))
+        {
+            diagnostic = string.Empty;
+            return true;
+        }
+
+        for (var attempt = 1; attempt <= AppendAttempts; attempt++)
+        {
+            try
+            {
+                var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(receipt);
+                using var stream = new FileStream(
+                    standardOutputPath,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete);
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+                diagnostic = string.Empty;
+                return true;
+            }
+            catch (Exception error) when (
+                error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                if (attempt == AppendAttempts || error is not IOException)
+                {
+                    diagnostic = $"could not append durable Planner plan to captured stdout: {error.Message}";
+                    return false;
+                }
+
+                Thread.Sleep(20 * attempt);
+            }
+        }
+
+        diagnostic = "could not append durable Planner plan to captured stdout";
+        return false;
+    }
+
+    internal static bool TryExtractDurablePlan(string text, out string plan, out string diagnostic)
+    {
+        plan = string.Empty;
+        diagnostic = string.Empty;
+        var begin = text.LastIndexOf(DurablePlanBeginMarker, StringComparison.Ordinal);
+        if (begin < 0)
+        {
+            diagnostic = "durable Planner plan begin marker is missing";
+            return false;
+        }
+
+        var contentStart = begin + DurablePlanBeginMarker.Length;
+        var end = text.IndexOf(DurablePlanEndMarker, contentStart, StringComparison.Ordinal);
+        if (end < 0)
+        {
+            diagnostic = "durable Planner plan end marker is missing";
+            return false;
+        }
+
+        plan = text[contentStart..end].Trim();
+        if (plan.Length == 0)
+        {
+            diagnostic = "durable Planner plan is empty";
+            return false;
+        }
+
+        if (plan.Length > MaxPlanChars)
+        {
+            diagnostic = $"durable Planner plan is {plan.Length} characters; maximum is {MaxPlanChars}";
+            plan = string.Empty;
+            return false;
+        }
+
+        return true;
+    }
+
+    internal static bool TryValidate(string text, out string plan, out string diagnostic)
+    {
+        plan = string.Empty;
+        diagnostic = string.Empty;
+        var normalized = text.ReplaceLineEndings("\n");
+        var sections = new List<(string Label, int Start, int BodyStart)>();
+
+        foreach (var (label, heading) in RequiredSections)
+        {
+            var match = heading.Match(normalized);
+            if (!match.Success)
+            {
+                diagnostic = $"missing required section '{label}'";
+                return false;
+            }
+
+            sections.Add((label, match.Index, match.Index + match.Length));
+        }
+
+        sections.Sort((left, right) => left.Start.CompareTo(right.Start));
+        for (var index = 0; index < sections.Count; index++)
+        {
+            var section = sections[index];
+            var end = index + 1 < sections.Count ? sections[index + 1].Start : FindPlanEnd(normalized, section.BodyStart);
+            var body = normalized[section.BodyStart..end].Trim();
+            if (body.Length < 40)
+            {
+                diagnostic = $"required section '{section.Label}' is not substantive";
+                return false;
+            }
+
+            if (!HasRequiredSectionEvidence(section.Label, body))
+            {
+                diagnostic = $"required section '{section.Label}' lacks its mechanical evidence marker";
+                return false;
+            }
+        }
+
+        var planStart = sections[0].Start;
+        var planEnd = FindPlanEnd(normalized, sections[^1].BodyStart);
+        plan = normalized[planStart..planEnd].Trim();
+        if (plan.Length < MinimumPlanChars)
+        {
+            diagnostic = $"complete plan is only {plan.Length} characters; minimum is {MinimumPlanChars}";
+            plan = string.Empty;
+            return false;
+        }
+
+        if (plan.Length > MaxPlanChars)
+        {
+            diagnostic = $"complete plan is {plan.Length} characters; maximum durable size is {MaxPlanChars}";
+            plan = string.Empty;
+            return false;
+        }
+
+        return true;
+    }
+
+    internal static bool TryValidatePlan(
+        string text,
+        string workingDirectory,
+        out string plan,
+        out string diagnostic) =>
+        TryValidate(text, out plan, out diagnostic) &&
+        ValidateCitedPaths(plan, workingDirectory, out diagnostic);
+
+    private static bool ValidateCitedPaths(string plan, string workingDirectory, out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        var targetHeading = TargetSeamsHeading().Match(plan);
+        if (!targetHeading.Success)
+        {
+            diagnostic = "target seam section could not be located for citation validation";
+            return false;
+        }
+
+        var nextHeading = MarkdownHeading().Match(plan, targetHeading.Index + targetHeading.Length);
+        var sectionEnd = nextHeading.Success ? nextHeading.Index : plan.Length;
+        var targetSection = plan[targetHeading.Index..sectionEnd];
+        foreach (Match match in BacktickedCitation().Matches(targetSection))
+        {
+            var citation = match.Groups["citation"].Value.Trim();
+            var citedPath = NormalizeCitedPath(citation);
+            if (citedPath is null)
+            {
+                continue;
+            }
+
+            var lineStart = targetSection.LastIndexOf('\n', Math.Max(0, match.Index - 1));
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+            var prefix = targetSection[lineStart..match.Index];
+            if (NewFileCitationPrefix().IsMatch(prefix))
+            {
+                continue;
+            }
+
+            var candidate = Path.IsPathFullyQualified(citedPath)
+                ? citedPath
+                : Path.Combine(workingDirectory, citedPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(candidate) && !Directory.Exists(candidate))
+            {
+                diagnostic = $"target citation '{citation}' does not exist and is not marked as a new file";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string? NormalizeCitedPath(string citation)
+    {
+        if (citation.Contains('(') || citation.Contains(')'))
+        {
+            return null;
+        }
+
+        var fileMatch = CitedFilePath().Match(citation);
+        if (fileMatch.Success)
+        {
+            return fileMatch.Groups["path"].Value;
+        }
+
+        return citation.Contains('/') || citation.Contains('\\')
+            ? citation
+            : null;
+    }
+
+    private static bool HasRequiredSectionEvidence(string label, string body)
+    {
+        return label switch
+        {
+            "premise validity" =>
+                PremiseValidityMarker().IsMatch(body),
+            "acceptance criterion mapping" =>
+                AcceptanceMappingMarker().IsMatch(body),
+            "target seams and symbols" =>
+                body.Contains('`') &&
+                TargetCitation().IsMatch(body),
+            "ownership and lifecycle" =>
+                OwnershipMarker().IsMatch(body),
+            "integration seams" =>
+                IntegrationSequenceMarker().IsMatch(body),
+            "verification commands and classes" =>
+                body.Contains('`') &&
+                (body.Contains("TEST-VERIFIABLE", StringComparison.OrdinalIgnoreCase) ||
+                 body.Contains("REAL-WORLD-DEPENDENT", StringComparison.OrdinalIgnoreCase)),
+            "risks and stop conditions" =>
+                StopConditionMarker().IsMatch(body),
+            _ => false
+        };
+    }
+
+    internal static string BuildIngestedReceipt(string path, string plan) =>
+        $"{Environment.NewLine}{Environment.NewLine}" +
+        $"## Durable Planner Plan (ingested by orchestrator from {path}){Environment.NewLine}" +
+        DurablePlanBeginMarker +
+        Environment.NewLine +
+        plan.ReplaceLineEndings("\n") +
+        Environment.NewLine +
+        DurablePlanEndMarker +
+        Environment.NewLine;
+
+    private static int FindPlanEnd(string text, int afterLastHeading)
+    {
+        var workerResult = text.IndexOf("\nWORKER_RESULT:", afterLastHeading, StringComparison.OrdinalIgnoreCase);
+        var durableReceiptEnd = text.IndexOf(
+            $"\n{DurablePlanEndMarker}",
+            afterLastHeading,
+            StringComparison.Ordinal);
+        if (workerResult < 0)
+        {
+            return durableReceiptEnd >= 0 ? durableReceiptEnd : text.Length;
+        }
+
+        return durableReceiptEnd >= 0
+            ? Math.Min(workerResult, durableReceiptEnd)
+            : workerResult;
+    }
+
+    private static IReadOnlyList<string> FindCandidatePlanPaths(
+        string text,
+        string workingDirectory,
+        string? modelHomeDirectory)
+    {
+        var candidates = new List<(int Index, string Path)>();
+        foreach (Match match in AbsoluteTextPath().Matches(text))
+        {
+            var raw = match.Groups["path"].Value.Trim().TrimEnd('.', ',', ';', ':', ')', ']');
+            if (!Path.IsPathFullyQualified(raw))
+            {
+                continue;
+            }
+
+            var lineStart = text.LastIndexOfAny(['\r', '\n'], Math.Max(0, match.Index - 1));
+            lineStart = lineStart < 0 ? 0 : lineStart + 1;
+            var lineEnd = text.IndexOfAny(['\r', '\n'], match.Index + match.Length);
+            lineEnd = lineEnd < 0 ? text.Length : lineEnd;
+            var referenceLine = text[lineStart..lineEnd];
+            if (!ExternalPlanReference().IsMatch(referenceLine))
+            {
+                continue;
+            }
+
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(raw);
+            }
+            catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                continue;
+            }
+
+            if (IsAllowedPlanPath(fullPath, workingDirectory, modelHomeDirectory))
+            {
+                candidates.Add((match.Index, fullPath));
+            }
+        }
+
+        return candidates
+            .OrderByDescending(candidate => candidate.Index)
+            .Select(candidate => candidate.Path)
+            .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool IsAllowedPlanPath(
+        string path,
+        string workingDirectory,
+        string? modelHomeDirectory)
+    {
+        if (IsContainedPath(path, workingDirectory))
+        {
+            return true;
+        }
+
+        var home = string.IsNullOrWhiteSpace(modelHomeDirectory)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+            : modelHomeDirectory;
+        return !string.IsNullOrWhiteSpace(home) &&
+            (IsContainedPath(path, Path.Combine(home, ".claude", "plans")) ||
+             IsContainedPath(path, Path.Combine(home, ".codex", "plans")));
+    }
+
+    private static bool IsContainedPath(string path, string root)
+    {
+        try
+        {
+            var fullPath = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var fullRoot = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(fullPath, fullRoot, comparison) ||
+                fullPath.StartsWith(fullRoot + Path.DirectorySeparatorChar, comparison);
+        }
+        catch (Exception error) when (
+            error is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryReadBoundedPlan(string path, out string text, out string diagnostic)
+    {
+        text = string.Empty;
+        diagnostic = string.Empty;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > (MaxPlanChars * 4L) + 4)
+            {
+                diagnostic = $"artifact is {stream.Length} bytes; maximum bounded UTF-8 size is {(MaxPlanChars * 4L) + 4}";
+                return false;
+            }
+
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var buffer = new char[MaxPlanChars + 1];
+            var read = reader.ReadBlock(buffer, 0, buffer.Length);
+            if (read > MaxPlanChars || reader.Peek() >= 0)
+            {
+                diagnostic = $"artifact exceeds maximum durable size {MaxPlanChars}";
+                return false;
+            }
+
+            text = new string(buffer, 0, read);
+            return true;
+        }
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            diagnostic = error.Message;
+            return false;
+        }
+    }
+
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+premise[ \t]+validity[ \t]*$")]
+    private static partial Regex PremiseValidityHeading();
+
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+acceptance[ \t]+(?:criterion|criteria)[ \t]+mapping[ \t]*$")]
+    private static partial Regex AcceptanceMappingHeading();
+
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+target[ \t]+seams?[ \t]+and[ \t]+symbols?[ \t]*$")]
+    private static partial Regex TargetSeamsHeading();
+
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+ownership[ \t]+and[ \t]+lifecycle[ \t]*$")]
+    private static partial Regex OwnershipLifecycleHeading();
+
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+integration[ \t]+seams?[ \t]*$")]
+    private static partial Regex IntegrationSeamsHeading();
+
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+verification[ \t]+commands?[ \t]+and[ \t]+classes[ \t]*$")]
+    private static partial Regex VerificationHeading();
+
+    [GeneratedRegex(@"(?im)^[ \t]{0,3}#{1,6}[ \t]+risks?[ \t]+and[ \t]+stop[ \t]+conditions?[ \t]*$")]
+    private static partial Regex RisksHeading();
+
+    [GeneratedRegex(@"(?im)(?:[`""](?<path>(?:[A-Z]:\\|/)[^`""\r\n]+?\.(?:md|txt))[`""]|(?<path>[A-Z]:\\[^\r\n`""<>|?*]+?\.(?:md|txt)))")]
+    private static partial Regex AbsoluteTextPath();
+
+    [GeneratedRegex(@"(?i)(?:\b(?:plan|planning)\b.{0,120}\b(?:written|saved|created|available|located|file|path)\b|\b(?:written|saved|created|available|located|file|path)\b.{0,120}\b(?:plan|planning)\b)")]
+    private static partial Regex ExternalPlanReference();
+
+    [GeneratedRegex(@"(?i)(?:src[/\\]|tests[/\\]|\.cs\b|`[A-Za-z_][A-Za-z0-9_.]+`)")]
+    private static partial Regex TargetCitation();
+
+    [GeneratedRegex(@"(?i)\b(?:before|after|between|into|from|then|sequence)\b")]
+    private static partial Regex IntegrationSequenceMarker();
+
+    [GeneratedRegex(@"(?i)\b(?:valid|invalid)\b")]
+    private static partial Regex PremiseValidityMarker();
+
+    [GeneratedRegex(@"(?i)\b(?:map|maps|mapped|mapping)\b")]
+    private static partial Regex AcceptanceMappingMarker();
+
+    [GeneratedRegex(@"(?i)\b(?:own|owns|owned|ownership)\b")]
+    private static partial Regex OwnershipMarker();
+
+    [GeneratedRegex(@"(?i)\bstop(?:s|ped|ping)?\b")]
+    private static partial Regex StopConditionMarker();
+
+    [GeneratedRegex(@"(?i)(?:\bnew[ \t]+file\b|\b(?:create|add)\b(?:[ \t]+(?:a|an|the|new))?)[^`\r\n]{0,24}$")]
+    private static partial Regex NewFileCitationPrefix();
+
+    [GeneratedRegex(@"`(?<citation>[^`\r\n]+)`")]
+    private static partial Regex BacktickedCitation();
+
+    [GeneratedRegex(@"(?i)^(?<path>.+?\.(?:cs|csproj|ps1|md|json|yml|yaml|props|targets|txt))(?:(?::\d+)|(?:#L\d+)|(?:::.+))?$")]
+    private static partial Regex CitedFilePath();
+
+    [GeneratedRegex(@"(?m)^[ \t]{0,3}#{1,6}[ \t]+")]
+    private static partial Regex MarkdownHeading();
+}

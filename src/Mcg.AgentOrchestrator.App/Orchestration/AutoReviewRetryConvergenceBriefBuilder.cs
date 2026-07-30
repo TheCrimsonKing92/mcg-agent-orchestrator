@@ -5,6 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class AutoReviewRetryConvergenceBriefBuilder
 {
+    private sealed record StructuredFindingSource(AgentRole Role, ReviewFinding Finding);
+
     internal const string AcceptedShapePreamble =
         "Existing implementation shape is accepted. Do NOT rewrite or re-architect the accepted work; preserve it and close only the residual blockers below.";
 
@@ -36,7 +38,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
 
         if (triggeringTask.RequiredRole == AgentRole.Reviewer)
         {
-            var findings = ReadStructuredReviewFindingState(goal, triggeringTask);
+            var findings = ReadStructuredReviewFindingStates(goal, triggeringTask);
             return BuildStructuredConvergenceBrief(
                 round,
                 triggeringTask,
@@ -44,6 +46,19 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                 targetRole,
                 outputArtifact,
                 findings,
+                changedFileScopes);
+        }
+
+        if (triggeringTask.RequiredRole == AgentRole.Tester &&
+            triggeringTask.LastVerification?.MergedReviewFindings is { Count: > 0 })
+        {
+            return BuildStructuredConvergenceBrief(
+                round,
+                triggeringTask,
+                triggerLabel,
+                targetRole,
+                outputArtifact,
+                ReadStructuredReviewFindingStates(goal, triggeringTask),
                 changedFileScopes);
         }
 
@@ -65,20 +80,31 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         string triggerLabel,
         AgentRole targetRole,
         string outputArtifact,
-        IReadOnlyList<ReviewFinding> findings,
+        IReadOnlyList<StructuredFindingSource> findings,
         IEnumerable<string> changedFileScopes)
     {
         var open = findings
-            .Where(finding => finding.State == ReviewFindingState.Open)
-            .OrderBy(finding => finding.Category == FindingCategory.SpecCompliance ? 0 : 1)
+            .Where(item =>
+                item.Finding.State == ReviewFindingState.Open &&
+                item.Finding.Severity == FindingSeverity.Blocking)
+            .OrderBy(item => item.Finding.Category == FindingCategory.SpecCompliance ? 0 : 1)
+            .ThenBy(item => item.Role)
+            .ThenBy(item => item.Finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+        var deferredAdvisories = findings
+            .Where(item =>
+                item.Finding.State == ReviewFindingState.Open &&
+                item.Finding.Severity == FindingSeverity.Advisory)
+            .OrderBy(item => item.Role)
+            .ThenBy(item => item.Finding.StableId, StringComparer.Ordinal)
             .ToArray();
         var accepted = findings
-            .Where(finding => finding.State == ReviewFindingState.Resolved)
+            .Where(item => item.Finding.State == ReviewFindingState.Resolved)
             .ToArray();
         if (open.Length == 0)
         {
             throw new ReviewFindingConvergenceException(
-                "ERR_REVIEW_NEEDS_WORK_WITHOUT_OPEN_FINDINGS",
+                ReviewFindingConvergence.NeedsWorkWithoutOpenFindingsViolationCode,
                 0,
                 0,
                 "Reviewer verdict=needs-work contained no structured open findings.");
@@ -86,15 +112,17 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
 
         var lines = new List<string>
         {
-            $"auto-review-retry round {round} convergence brief: Reviewer task {triggeringTask.Id.Value[..8]} {triggerLabel}; retry upstream {targetRole} task.",
+            $"auto-review-retry round {round} convergence brief: {triggeringTask.RequiredRole} task {triggeringTask.Id.Value[..8]} {triggerLabel}; retry upstream {targetRole} task.",
             AcceptedShapePreamble,
             "## RESIDUAL_OPEN_ACTION_ITEMS",
             $"open_count: {open.Length}"
         };
 
-        foreach (var finding in open)
+        foreach (var item in open)
         {
+            var finding = item.Finding;
             lines.Add($"- stable_id: {finding.StableId}");
+            lines.Add($"  source_role: {item.Role}");
             if (finding.Category != FindingCategory.Unspecified)
             {
                 lines.Add($"  category: {FindingCategoryJsonConverter.ToWireValue(finding.Category)}");
@@ -106,13 +134,27 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         lines.Add("## PRESERVE_ACCEPTED");
         lines.Add(PreserveAcceptedDirective);
         lines.Add($"accepted_count: {accepted.Length}");
-        foreach (var finding in accepted)
+        foreach (var item in accepted)
         {
+            var finding = item.Finding;
             lines.Add($"- stable_id: {finding.StableId}");
+            lines.Add($"  source_role: {item.Role}");
             lines.Add($"  location: {finding.Location}");
         }
 
-        lines.Add(BuildFocusedTestReceiptMandate(open.Select(finding => finding.Description).ToArray(), changedFileScopes));
+        lines.Add("## DEFERRED_NON_BLOCKING_ADVISORIES");
+        lines.Add("These findings remain visible for Reviewer/follow-up context but are not required repair scope. Do not expand this retry to address them.");
+        lines.Add($"advisory_count: {deferredAdvisories.Length}");
+        foreach (var item in deferredAdvisories)
+        {
+            lines.Add($"- stable_id: {item.Finding.StableId}");
+            lines.Add($"  source_role: {item.Role}");
+            lines.Add($"  location: {item.Finding.Location}");
+        }
+
+        lines.Add(BuildFocusedTestReceiptMandate(
+            open.Select(item => item.Finding.Description).ToArray(),
+            changedFileScopes));
         lines.Add($"Full reviewer output: {outputArtifact}");
         return string.Join(Environment.NewLine, lines);
     }
@@ -216,39 +258,106 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         return findings;
     }
 
+    internal static string BuildContractRepairBrief(
+        Goal goal,
+        TaskSpec reviewerTask,
+        ReviewFindingContractViolation violation,
+        int attempt,
+        int maxAttempts,
+        string outputArtifact)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(reviewerTask);
+        ArgumentNullException.ThrowIfNull(violation);
+
+        var open = ReadStructuredReviewFindingState(
+                goal,
+                reviewerTask.RequiredRole,
+                reviewerTask.LastVerification!.CompletedAt)
+            .Where(finding => finding.State == ReviewFindingState.Open)
+            .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+        var claimedResolutions =
+            WorkerResultBlockers.TryFindReviewFindingRound(
+                reviewerTask.LastVerification,
+                out var rejectedRound,
+                out _)
+                ? rejectedRound.Findings
+                    .Where(finding => finding.State == ReviewFindingState.Resolved)
+                    .Select(finding => finding.StableId)
+                    .OrderBy(stableId => stableId, StringComparer.Ordinal)
+                    .ToArray()
+                : [];
+        var lines = new List<string>
+        {
+            $"review-finding contract-repair: attempt {attempt}/{maxAttempts}; avoided_developer_reopen=1; {reviewerTask.RequiredRole} task {reviewerTask.Id.Value[..8]}",
+            "produced a substantively valid result whose structured findings round was rejected by the review-finding identity contract. Re-submit the SAME conclusion; do not repeat the work and do not change your verdict.",
+            $"violation_code: {violation.Code}",
+            $"violation_prior_stable_id: {violation.PriorStableId ?? "none"}",
+            $"violation_submitted_stable_id: {violation.SubmittedStableId ?? "none"}",
+            $"violation_prior_location: {violation.PriorLocation?.ToString() ?? "none"}",
+            $"violation_submitted_location: {violation.SubmittedLocation?.ToString() ?? "none"}",
+            $"violation_detail: {violation.Message}",
+            "## CANONICAL_OPEN_ACTIVE_RECHECK (authoritative; reuse stable_id and location VERBATIM)",
+            $"open_count: {open.Length}"
+        };
+        foreach (var finding in open)
+        {
+            lines.Add(
+                $"- stable_id: {finding.StableId} | severity={finding.Severity.ToString().ToLowerInvariant()} | {finding.Location}");
+        }
+
+        lines.Add("## PREVIOUSLY_CLAIMED_RESOLUTIONS (not applied; re-assert if still true)");
+        if (claimedResolutions.Length == 0)
+        {
+            lines.Add("- none");
+        }
+        else
+        {
+            lines.AddRange(claimedResolutions.Select(stableId => $"- stable_id: {stableId}"));
+        }
+
+        lines.Add(
+            open.Length == 0
+                ? "Rules: the canonical ledger is empty; report every finding as newly opened. Open a new stable_id only for a defect at an anchor not listed above. Keep verdict and blockers unchanged unless your conclusion actually changed."
+                : "Rules: reuse every carried stable_id and location exactly as printed. Open a new stable_id only for a defect at an anchor not listed above. Keep verdict and blockers unchanged unless your conclusion actually changed.");
+        lines.Add($"Full {reviewerTask.RequiredRole} output: {outputArtifact}");
+        return string.Join(Environment.NewLine, lines);
+    }
+
     internal static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(
         Goal goal,
         TaskSpec triggeringTask)
+        => ReadStructuredReviewFindingState(
+            goal,
+            triggeringTask.RequiredRole,
+            triggeringTask.LastVerification!.CompletedAt);
+
+    private static IReadOnlyList<StructuredFindingSource> ReadStructuredReviewFindingStates(
+        Goal goal,
+        TaskSpec triggeringTask)
     {
-        IReadOnlyList<ReviewFinding> state = [];
-        var verifications = goal.Tasks
-            .Where(task => task.RequiredRole == AgentRole.Reviewer)
-            .SelectMany(task => task.VerificationHistory)
-            .Where(verification => verification.CompletedAt <= triggeringTask.LastVerification!.CompletedAt)
-            .OrderBy(verification => verification.CompletedAt)
+        var completedAt = triggeringTask.LastVerification!.CompletedAt;
+        return new[] { AgentRole.Reviewer, AgentRole.Tester }
+            .SelectMany(role => ReadStructuredReviewFindingState(goal, role, completedAt)
+                .Select(finding => new StructuredFindingSource(role, finding)))
             .ToArray();
+    }
 
-        foreach (var verification in verifications)
-        {
-            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var nextRound, out _))
-            {
-                // Reviewer history legitimately contains records without a structured findings round - manual
-                // verifications (verify-manual) carry only the operator note. Current-round validity is enforced
-                // when the round is recorded; replaying history here must skip such records, not strand the goal.
-                continue;
-            }
-
-            try
-            {
-                state = ReviewFindingConvergence.ApplyRound(state, nextRound);
-            }
-            catch (ReviewFindingConvergenceException)
-            {
-                // A round that cannot be folded was already rejected when it was recorded. Skip it rather
-                // than abandon the brief: the residual-items list is derived from the rounds that ARE valid,
-                // and refusing to build a brief here strands the goal with no retry path at all.
-            }
-        }
+    private static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(
+        Goal goal,
+        AgentRole role,
+        DateTimeOffset completedAt)
+    {
+        var state = goal.Tasks
+            .Where(task => task.RequiredRole == role)
+            .SelectMany(task => task.VerificationHistory)
+            .Where(verification =>
+                verification.CompletedAt <= completedAt &&
+                verification.MergedReviewFindings is not null)
+            .OrderByDescending(verification => verification.CompletedAt)
+            .Select(verification => verification.MergedReviewFindings!)
+            .FirstOrDefault() ?? [];
 
         return state
             .Where(finding => !WorkerResultBlockers.IsSuppressedByCriteriaCorrection(

@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -28,14 +27,11 @@ internal sealed record CrossGoalSubscriptionStartCandidate(
     IReadOnlyList<string> DependsOn,
     string? ProviderKey,
     bool RequiresCostConfirmation,
-    string Detail);
+    string Detail,
+    RepositoryScopeConfidence ScopeConfidence);
 
 internal static class CrossGoalSubscriptionStartPlanner
 {
-    private static readonly Regex FileScopeRegex = new(
-        @"(?<![\w.-])(?:src|tests|scripts|docs|config|\.agents)[\\/][A-Za-z0-9_.\\/\-]+",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
     public static CrossGoalSubscriptionStartPlan Build(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<AgentDefinition> agents,
@@ -55,7 +51,8 @@ internal static class CrossGoalSubscriptionStartPlanner
             RequiredResources: candidate.RequiredResources,
             RequiresOperatorApproval: candidate.RequiresCostConfirmation && !costRiskConfirmed,
             ProviderKey: candidate.ProviderKey,
-            DependsOn: candidate.DependsOn)).ToList();
+            DependsOn: candidate.DependsOn,
+            ScopeConfidence: candidate.ScopeConfidence)).ToList();
         var providerQuotas = intents
             .Where(intent => !string.IsNullOrWhiteSpace(intent.ProviderKey))
             .Select(intent => intent.ProviderKey!)
@@ -94,11 +91,17 @@ internal static class CrossGoalSubscriptionStartPlanner
         var readyTasks = goal.Tasks
             .Where(task => taskIds.Contains(task.Id.Value))
             .ToList();
-        var targetPaths = readyTasks
-            .SelectMany(task => InferFileScopes(goal, task))
+        var scopes = readyTasks
+            .Select(task => GoalFileScopeInference.ForScheduling(goal, task))
+            .ToArray();
+        var targetPaths = scopes
+            .SelectMany(scope => scope.Includes)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var scopeConfidence = scopes.Any(scope => scope.Confidence == RepositoryScopeConfidence.Unknown)
+            ? RepositoryScopeConfidence.Unknown
+            : RepositoryScopeConfidence.Precise;
         var resources = new List<string> { $"goal-state:{goal.Id.Value}" };
         if (readyTasks.Any(task => task.RequiredRole is AgentRole.Developer or AgentRole.Tester))
         {
@@ -126,17 +129,7 @@ internal static class CrossGoalSubscriptionStartPlanner
             goal.DependsOn.Select(id => id.Value).ToArray(),
             providerKey,
             subscriptionPlan.ReadyStartCostRisk is not null,
-            detail);
-    }
-
-    private static string[] InferFileScopes(Goal goal, TaskSpec task)
-    {
-        var text = $"{goal.Objective}\n{task.Description}\n{task.VerificationPlan}";
-        return FileScopeRegex.Matches(text)
-            .Select(match => match.Value.Replace('\\', '/').TrimEnd('.', ',', ';', ':', ')', ']'))
-            .Where(value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+            detail,
+            scopeConfidence);
     }
 }

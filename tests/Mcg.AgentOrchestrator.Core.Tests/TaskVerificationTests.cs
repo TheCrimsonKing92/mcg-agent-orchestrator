@@ -2,6 +2,84 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class TaskVerificationTests
 {
+    [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_round_trips_through_snapshot")]
+    public void PreReviewEvidenceReceiptRoundTripsThroughSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist pre-review evidence", [reviewer]);
+        kernel.RecordPreReviewEvidence(
+            goal.Id,
+            reviewer.Id,
+            new PreReviewEvidenceReceipt(
+                goal.Id.Value,
+                3,
+                "candidate-sha",
+                ["dotnet test --filter FocusedTests"],
+                PreReviewEvidenceDisposition.Green,
+                1,
+                0,
+                [new PreReviewEvidenceCheckReceipt("focused", "dotnet test --filter FocusedTests", true, 0, "receipt")],
+                [],
+                "mapped",
+                "receipt\\result.trx",
+                DateTimeOffset.UtcNow));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var receipt = restored.GetGoal(goal.Id).FindTask(reviewer.Id).PreReviewEvidenceReceipt;
+
+        Assert.NotNull(receipt);
+        Assert.Equal(3, receipt.ReviewerRound);
+        Assert.Equal("candidate-sha", receipt.CandidateSha);
+        Assert.Equal(PreReviewEvidenceDisposition.Green, receipt.Disposition);
+        Assert.Equal("receipt\\result.trx", receipt.EvidencePointer);
+    }
+
+    [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_is_structurally_idempotent_and_current_head_owned")]
+    public void PreReviewEvidenceReceiptIsStructurallyIdempotentAndCurrentHeadOwned()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist one current-head receipt", [reviewer]);
+        var recordedAt = DateTimeOffset.UtcNow;
+        var receiptNumber = 0;
+        PreReviewEvidenceReceipt CreateReceipt() =>
+            new(
+                goal.Id.Value,
+                1,
+                "candidate-sha",
+                ["dotnet test --filter FocusedTests"],
+                PreReviewEvidenceDisposition.Green,
+                1,
+                0,
+                [
+                    new PreReviewEvidenceCheckReceipt(
+                        "focused",
+                        "dotnet test --filter FocusedTests",
+                        true,
+                        0,
+                        "receipt",
+                        ["receipt\\result.trx"])
+                ],
+                [],
+                "mapped",
+                "receipt\\result.trx",
+                recordedAt.AddSeconds(receiptNumber++));
+
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());
+        kernel.RecordPreReviewEvidence(goal.Id, reviewer.Id, CreateReceipt());
+
+        Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.PreReviewEvidenceRecorded));
+        Assert.True(reviewer.PreReviewEvidenceReceipt!.MatchesCurrentCandidate(
+            goal.Id.Value,
+            "candidate-sha",
+            ["dotnet test --filter FocusedTests"]));
+        Assert.False(reviewer.PreReviewEvidenceReceipt.MatchesCurrentCandidate(
+            goal.Id.Value,
+            "stale-sha",
+            ["dotnet test --filter FocusedTests"]));
+    }
+
     [Xunit.Fact(DisplayName = "RecordTaskVerification_persists_result_and_timeline_event")]
     public void RecordTaskVerificationPersistsResultAndTimelineEvent()
 {
@@ -446,6 +524,38 @@ public sealed class TaskVerificationTests
     Assert.Equal("dotnet test", restoredTask.VerificationHistory.Single().Command);
     Assert.Contains(restored.GetGoal(goal.Id).Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried);
 }
+
+    [Xunit.Fact(DisplayName = "TaskVerification_contract_violation_round_trips_through_snapshot")]
+    public void TaskVerificationContractViolationRoundTripsThroughSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal("Round-trip reviewer contract violation");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var reviewer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Reviewer);
+        var violation = new ReviewFindingContractViolation(
+            ReviewFindingConvergence.IdentityMovedViolationCode,
+            "Finding moved.",
+            "F-1",
+            "F-1",
+            new ReviewFindingLocation("src/A.cs", "A.Run"),
+            new ReviewFindingLocation("src/B.cs", "B.Run"));
+        reviewer.RecordVerification(new TaskVerificationRecord(
+            "review",
+            "C:\\repo",
+            1,
+            "invalid round",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            ReviewFindingContractViolation: violation));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredViolation = restored
+            .GetTask(goal.Id, reviewer.Id)
+            .LastVerification!
+            .ReviewFindingContractViolation;
+
+        Assert.Equal(violation, restoredViolation);
+    }
 
 private static void AssertRetainedTextBounded(string text)
 {

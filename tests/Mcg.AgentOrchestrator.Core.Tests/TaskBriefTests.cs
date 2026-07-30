@@ -1149,6 +1149,90 @@ public sealed class TaskBriefTests
     Assert.Contains("No executed test evidence exists for this goal yet.", brief, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_includes_current_head_pre_review_receipt_before_start")]
+    public void BuildTaskBriefReviewerIncludesCurrentHeadPreReviewReceiptBeforeStart()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var reviewer = new TaskSpec(TaskId.New(), "Review current candidate.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Gate review on focused evidence", [reviewer]);
+        kernel.RecordPreReviewEvidence(
+            goal.Id,
+            reviewer.Id,
+            new PreReviewEvidenceReceipt(
+                goal.Id.Value,
+                2,
+                "candidate123",
+                ["dotnet test --filter FullyQualifiedName~ConductorDriverTests"],
+                PreReviewEvidenceDisposition.Green,
+                1,
+                0,
+                [
+                    new PreReviewEvidenceCheckReceipt(
+                        "focused ConductorDriverTests",
+                        "dotnet test --filter FullyQualifiedName~ConductorDriverTests",
+                        true,
+                        0,
+                        "C:\\receipts\\green")
+                ],
+                [],
+                "Orchestration source mapped to its focused test class.",
+                "C:\\receipts\\green\\result.trx",
+                DateTimeOffset.UtcNow));
+
+        var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+
+        Assert.Contains("## Current-HEAD Pre-Review Evidence", brief, StringComparison.Ordinal);
+        Assert.Contains("reviewer_round=2", brief, StringComparison.Ordinal);
+        Assert.Contains("candidate_sha=candidate123", brief, StringComparison.Ordinal);
+        Assert.Contains("C:\\receipts\\green\\result.trx", brief, StringComparison.Ordinal);
+        Assert.True(
+            brief.IndexOf("## Current-HEAD Pre-Review Evidence", StringComparison.Ordinal) <
+            brief.IndexOf("## Executed Test Evidence", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_retry_caps_operational_noise_without_dropping_structured_findings")]
+    public void BuildTaskBriefRetryCapsOperationalNoiseWithoutDroppingStructuredFindings()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var developer = new TaskSpec(TaskId.New(), "Repair findings.", AgentRole.Developer);
+        var reviewer = new TaskSpec(TaskId.New(), "Review repairs.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Preserve every actionable finding", [developer, reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var findings = Enumerable.Range(0, 14)
+            .Select(index => new ReviewFinding(
+                $"finding-{index:D2}",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation($"src/{index:D2}.cs", $"Method{index:D2}"),
+                $"Distinct actionable finding {index:D2}."))
+            .ToArray();
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                "C:\\repo",
+                0,
+                "structured review",
+                "",
+                DateTimeOffset.UtcNow,
+                MergedReviewFindings: findings));
+        for (var index = 0; index < 12; index++)
+        {
+            kernel.RecordTaskNote(goal.Id, developer.Id, $"operational retry noise {index:D2} {new string('x', 300)}");
+        }
+
+        kernel.RetryTask(goal.Id, developer.Id, "retry after structured review");
+
+        var brief = kernel.BuildTaskBrief(goal.Id, developer.Id).Content;
+
+        Assert.Contains("Structured actionable findings (not subject to operational retry caps)", brief, StringComparison.Ordinal);
+        Assert.Contains("finding-00", brief, StringComparison.Ordinal);
+        Assert.Contains("Distinct actionable finding 00.", brief, StringComparison.Ordinal);
+        Assert.Contains("finding-13", brief, StringComparison.Ordinal);
+        Assert.Contains("Distinct actionable finding 13.", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("structured_finding_overflow", brief, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_executed_test_evidence_is_newest_first_and_capped")]
     public void BuildTaskBriefReviewerExecutedTestEvidenceIsNewestFirstAndCapped()
 {

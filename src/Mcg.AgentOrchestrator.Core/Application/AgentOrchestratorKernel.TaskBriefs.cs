@@ -350,7 +350,8 @@ public sealed partial class AgentOrchestratorKernel
                 priorEvidenceLines,
                 [
                     "## Prior Task Evidence",
-                    "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit; open prior-task-evidence.md second only when fuller verification output is needed.",
+                    "Read prior-task-summaries.md first for compact prior files, behavior, verification, risks, and model fit. " +
+                    "When a completed Planner is present, read its complete Durable Planner Plan in prior-task-evidence.md before implementation; otherwise open fuller evidence only when needed.",
                     string.Empty
                 ],
                 CollapsePriority: 10));
@@ -599,7 +600,7 @@ public sealed partial class AgentOrchestratorKernel
         {
             "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
             "## Accumulated retry/review feedback",
-            $"Newest first; capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars. Status legend: still-open, resolved-in-round-N, superseded.",
+            $"Operational entries are newest first and capped at {AccumulatedRetryFeedbackMaxEntries} entries and {AccumulatedRetryFeedbackMaxChars} chars; structured findings below are uncapped. Status legend: still-open, resolved-in-round-N, superseded.",
             "Use this as the current correction context before relying on original task wording, prior task history, branch evidence, or context digests.",
         };
 
@@ -628,6 +629,38 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add($"Prior outcome: {priorOutcomeEvent.OccurredAt:u}; {DescribeTimelineTask(goal, priorOutcomeEvent)}; {priorOutcomeEvent.Kind}: {PromptContextFormatter.TrimPromptBlock(priorOutcomeEvent.Message)}");
         }
 
+        var operationalSectionChars = string.Join(Environment.NewLine, lines).Length;
+        var structuredFindings = goal.Tasks
+            .Where(candidate => candidate.RequiredRole is AgentRole.Reviewer or AgentRole.Tester)
+            .SelectMany(candidate => candidate.VerificationHistory.SelectMany(verification =>
+                (verification.MergedReviewFindings ?? []).Select(finding => new
+                {
+                    candidate.RequiredRole,
+                    verification.CompletedAt,
+                    Finding = finding
+                })))
+            .GroupBy(
+                item => $"{item.RequiredRole}:{item.Finding.StableId}",
+                StringComparer.Ordinal)
+            .Select(group => group
+                .OrderByDescending(item => item.CompletedAt)
+                .First())
+            .Where(item => item.Finding.State == ReviewFindingState.Open)
+            .OrderBy(item => item.RequiredRole)
+            .ThenBy(item => item.Finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+        if (structuredFindings.Length > 0)
+        {
+            lines.Add("## Structured actionable findings (not subject to operational retry caps)");
+            lines.Add($"finding_count: {structuredFindings.Length}; operational retry entries are budgeted separately.");
+            foreach (var item in structuredFindings)
+            {
+                lines.Add(
+                    $"- role={item.RequiredRole}; stable_id={item.Finding.StableId}; severity={item.Finding.Severity}; " +
+                    $"location={item.Finding.Location}; description={PromptContextFormatter.TrimPromptBlock(item.Finding.Description)}");
+            }
+        }
+
         if (task.RequiredRole is AgentRole.Tester or AgentRole.Reviewer &&
             latestRetry?.TaskId is { } retriedTaskId)
         {
@@ -640,7 +673,6 @@ public sealed partial class AgentOrchestratorKernel
                 ReadLatestFailedAcceptanceOperation(workingDirectory, goal.Id, latestRetry.OccurredAt)));
         }
 
-        var sectionChars = string.Join(Environment.NewLine, lines).Length;
         var emittedCount = 0;
         var omittedCount = 0;
         for (var index = 0; index < feedbackEvents.Count; index++)
@@ -658,14 +690,14 @@ public sealed partial class AgentOrchestratorKernel
                 : $"Retry {RetryOrdinalAt(retryEvents, evt.OccurredAt)} of {retryEvents.Count}";
             var line = $"- [{status}] {retryDescriptor}; {evt.OccurredAt:u}; {DescribeTimelineTask(goal, evt)}; {evt.Kind}: {PromptContextFormatter.TrimPromptBlock(message)}";
             if (emittedCount >= AccumulatedRetryFeedbackMaxEntries ||
-                sectionChars + line.Length + Environment.NewLine.Length > AccumulatedRetryFeedbackMaxChars)
+                operationalSectionChars + line.Length + Environment.NewLine.Length > AccumulatedRetryFeedbackMaxChars)
             {
                 omittedCount = feedbackEvents.Count - index;
                 break;
             }
 
             lines.Add(line);
-            sectionChars += line.Length + Environment.NewLine.Length;
+            operationalSectionChars += line.Length + Environment.NewLine.Length;
             emittedCount++;
         }
 
@@ -723,6 +755,31 @@ public sealed partial class AgentOrchestratorKernel
             return [];
         }
 
+        var lines = new List<string>();
+        if (task.PreReviewEvidenceReceipt is { } preReview)
+        {
+            lines.Add("## Current-HEAD Pre-Review Evidence (conductor-owned)");
+            lines.Add(
+                $"Disposition={preReview.Disposition}; reviewer_round={preReview.ReviewerRound}; " +
+                $"candidate_sha={preReview.CandidateSha}; selected={preReview.SelectedFocusedTests.Count}; " +
+                $"passed={preReview.PassedCheckCount}; failed={preReview.FailedCheckCount}.");
+            lines.Add($"Mapping reason: {PromptContextFormatter.TrimPromptBlock(preReview.MappingReason)}");
+            foreach (var check in preReview.Checks)
+            {
+                lines.Add(
+                    $"- {check.Name}: passed={check.Passed}; exit={check.ExitCode?.ToString() ?? "none"}; " +
+                    $"command={PromptContextFormatter.TrimPromptBlock(check.Command)}; artifact={check.ArtifactPath ?? "none"}");
+            }
+
+            if (preReview.FailingTestIdentities.Count > 0)
+            {
+                lines.Add($"Failing tests: {string.Join(", ", preReview.FailingTestIdentities)}");
+            }
+
+            lines.Add($"Evidence pointer: {preReview.EvidencePointer ?? "none"}");
+            lines.Add(string.Empty);
+        }
+
         var receipts = goal.Tasks
             .Where(candidate => candidate.Id != task.Id)
             .SelectMany(candidate => candidate.VerificationHistory.Select(verification => new
@@ -733,11 +790,8 @@ public sealed partial class AgentOrchestratorKernel
             .OrderByDescending(item => item.Verification.CompletedAt)
             .ToList();
 
-        var lines = new List<string>
-        {
-            "## Executed Test Evidence",
-            $"Reviewer is read-only; use these existing verification receipts before asking for reruns. Newest first; capped at {ReviewerExecutedTestEvidenceMaxLines} receipt line(s)."
-        };
+        lines.Add("## Executed Test Evidence");
+        lines.Add($"Reviewer is read-only; use these existing verification receipts before asking for reruns. Newest first; capped at {ReviewerExecutedTestEvidenceMaxLines} receipt line(s).");
 
         if (receipts.Count == 0)
         {

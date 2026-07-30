@@ -486,7 +486,7 @@ public sealed class VerificationAndProcessLogTests
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Kill failure does not fail dispatch");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Planner);
+    var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Researcher);
     var stdoutPath = Path.Combine(root, "out.log");
     var stderrPath = Path.Combine(root, "err.log");
     var exitPath = Path.Combine(root, "exit.txt");

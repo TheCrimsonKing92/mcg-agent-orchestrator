@@ -54,6 +54,8 @@ public sealed class TaskSpec
 
     public TaskProcessRecord? LastProcess { get; private set; }
 
+    public PreReviewEvidenceReceipt? PreReviewEvidenceReceipt { get; private set; }
+
     internal void AssignTo(AgentId agentId)
     {
         AssignedAgentId = agentId;
@@ -101,7 +103,8 @@ public sealed class TaskSpec
                     LastVerification.ReviewFindingTouchedAnchors,
                     LastVerification.ReviewedCommit,
                     LastVerification.MergedReviewFindings,
-                    LastVerification.WorkerResultPresent),
+                    LastVerification.WorkerResultPresent,
+                    LastVerification.ReviewFindingContractViolation),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -117,7 +120,8 @@ public sealed class TaskSpec
                     verification.ReviewFindingTouchedAnchors,
                     verification.ReviewedCommit,
                     verification.MergedReviewFindings,
-                    verification.WorkerResultPresent))
+                    verification.WorkerResultPresent,
+                    verification.ReviewFindingContractViolation))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -176,7 +180,8 @@ public sealed class TaskSpec
             CriterionRetryFeedback,
             EmptyOutputRetryCount,
             LatestRetryAt,
-            PendingRetryRoundKind);
+            PendingRetryRoundKind,
+            PreReviewEvidenceReceipt);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -224,7 +229,8 @@ public sealed class TaskSpec
                     WorkerResultPresent: verification.WorkerResultPresent,
                     ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
                     ReviewedCommit: verification.ReviewedCommit,
-                    MergedReviewFindings: verification.MergedReviewFindings));
+                    MergedReviewFindings: verification.MergedReviewFindings,
+                    ReviewFindingContractViolation: verification.ReviewFindingContractViolation));
             }
         }
 
@@ -244,7 +250,8 @@ public sealed class TaskSpec
                 WorkerResultPresent: snapshot.LastVerification.WorkerResultPresent,
                 ReviewFindingTouchedAnchors: snapshot.LastVerification.ReviewFindingTouchedAnchors,
                 ReviewedCommit: snapshot.LastVerification.ReviewedCommit,
-                MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings);
+                MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings,
+                ReviewFindingContractViolation: snapshot.LastVerification.ReviewFindingContractViolation);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);
@@ -314,6 +321,7 @@ public sealed class TaskSpec
         task.EmptyOutputRetryCount = Math.Max(0, snapshot.EmptyOutputRetryCount);
         task.LatestRetryAt = snapshot.LatestRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
+        task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
         return task;
     }
 
@@ -362,6 +370,18 @@ public sealed class TaskSpec
     internal void SetSubscriptionRetryAfter(DateTimeOffset? retryAfter) => SubscriptionRetryAfter = retryAfter;
 
     internal void ClearSubscriptionRetryAfter() => SubscriptionRetryAfter = null;
+
+    internal bool RecordPreReviewEvidence(PreReviewEvidenceReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        if (PreReviewEvidenceReceipt?.ContentEquals(receipt) == true)
+        {
+            return false;
+        }
+
+        PreReviewEvidenceReceipt = receipt;
+        return true;
+    }
 
     internal void RecordRetry(DateTimeOffset retriedAt, RetryRoundKind? retryRoundKind = null)
     {

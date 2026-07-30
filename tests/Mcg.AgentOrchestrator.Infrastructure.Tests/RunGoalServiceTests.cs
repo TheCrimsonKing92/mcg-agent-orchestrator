@@ -54,9 +54,19 @@ public sealed class RunGoalServiceTests
             Subscription: new SubscriptionLaunchProfile(profileName));
     }
 
+    private static string PlannerSuccessCommand(string marker)
+    {
+        var plan = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
+            "`seed.txt`, ",
+            string.Empty,
+            StringComparison.Ordinal);
+        var encodedPlan = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(plan));
+        return $"Write-Output ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encodedPlan}'))); Write-Output {marker}";
+    }
+
     private static WorkerProfileCatalog EchoProfiles() => new WorkerProfileCatalog(
     [
-        new WorkerProfile("local", "Start-Sleep -Milliseconds 100; Write-Output {subscriptionModelName}")
+        new WorkerProfile("local", $"Start-Sleep -Milliseconds 100; {PlannerSuccessCommand("{subscriptionModelName}")}")
     ]);
 
     private static WorkerProfileCatalog Profiles(params WorkerProfile[] profiles) => new WorkerProfileCatalog(profiles);
@@ -340,7 +350,7 @@ public sealed class RunGoalServiceTests
         var result = await RunGoalService.RunAsync(
             kernel,
             [limited, alternate],
-            Profiles(new WorkerProfile("alternate", "Write-Output {subscriptionModelName}; Write-Output alternate-ok")),
+            Profiles(new WorkerProfile("alternate", PlannerSuccessCommand("{subscriptionModelName}; Write-Output alternate-ok"))),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
@@ -391,7 +401,7 @@ public sealed class RunGoalServiceTests
         var result = await RunGoalService.RunAsync(
             kernel,
             agents,
-            Profiles(new WorkerProfile("qwen-code-cli", "Write-Output {subscriptionModelName}; Write-Output catalog-alternate-ok")),
+            Profiles(new WorkerProfile("qwen-code-cli", PlannerSuccessCommand("{subscriptionModelName}; Write-Output catalog-alternate-ok"))),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
@@ -424,7 +434,7 @@ public sealed class RunGoalServiceTests
         var result = await RunGoalService.RunAsync(
             kernel,
             [stalled, alternate],
-            Profiles(new WorkerProfile("alternate", "Write-Output {subscriptionModelName}; Write-Output heartbeat-ok")),
+            Profiles(new WorkerProfile("alternate", PlannerSuccessCommand("{subscriptionModelName}; Write-Output heartbeat-ok"))),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
@@ -576,7 +586,7 @@ public sealed class RunGoalServiceTests
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary, alternate],
-            Profiles(new WorkerProfile("qwen-code-cli", "Write-Output {subscriptionModelName}; Write-Output connectivity-alternate-ok")),
+            Profiles(new WorkerProfile("qwen-code-cli", PlannerSuccessCommand("{subscriptionModelName}; Write-Output connectivity-alternate-ok"))),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,
@@ -623,7 +633,7 @@ public sealed class RunGoalServiceTests
         var result = await RunGoalService.RunAsync(
             kernel,
             [primary, alternate],
-            Profiles(new WorkerProfile("qwen-code-cli", "Write-Output {subscriptionModelName}; Write-Output model-rejection-alternate-ok")),
+            Profiles(new WorkerProfile("qwen-code-cli", PlannerSuccessCommand("{subscriptionModelName}; Write-Output model-rejection-alternate-ok"))),
             workspace,
             goal,
             allowLargePaidSubscriptionStart: false,

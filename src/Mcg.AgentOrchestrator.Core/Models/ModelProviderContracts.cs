@@ -59,7 +59,8 @@ public sealed record TaskVerificationRecord(
     string? HumanInputQuestion = null,
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
     string? ReviewedCommit = null,
-    IReadOnlyList<ReviewFinding>? MergedReviewFindings = null)
+    IReadOnlyList<ReviewFinding>? MergedReviewFindings = null,
+    ReviewFindingContractViolation? ReviewFindingContractViolation = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

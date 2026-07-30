@@ -179,7 +179,7 @@ public sealed class DispatchRecoveryPolicyTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Reconcile stale heartbeat exit");
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, Now.AddMinutes(-20)));
         var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, Now.AddMinutes(-20), null, null);
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);

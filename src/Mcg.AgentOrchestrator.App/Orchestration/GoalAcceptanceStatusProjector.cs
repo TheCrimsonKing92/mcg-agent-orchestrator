@@ -39,7 +39,9 @@ internal static class GoalAcceptanceStatusProjector
         if (outcomes.Count > 0)
         {
             var currentOutcome = outcomes[0];
-            hasCurrentPassedOutcome = currentOutcome.Outcome.Equals("passed", StringComparison.OrdinalIgnoreCase);
+            hasCurrentPassedOutcome =
+                currentOutcome.Outcome.Equals("passed", StringComparison.OrdinalIgnoreCase) ||
+                currentOutcome.Outcome.Equals("gate-passed", StringComparison.OrdinalIgnoreCase);
             if (!hasCurrentPassedOutcome)
             {
                 blockers.Add(new GoalAcceptanceBlocker(

@@ -1185,6 +1185,87 @@ public sealed class DispatchExecutionTests
         Assert.Equal("A-1", Assert.Single(restored.GetOpenAdvisoryReviewFindings(goal.Id)).StableId);
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_rejected_by_identity_contract_stores_typed_violation")]
+    public void RecordDispatchExecutionResultReviewerPassRejectedByIdentityContractStoresTypedViolation()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Repair moved reviewer identity", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow));
+        var accepted = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            "none");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-2", "C:\\repo", clock.UtcNow));
+        var moved = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2", "C:\\repo", 0, moved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        var violation = Assert.IsType<ReviewFindingContractViolation>(
+            reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, violation.Code);
+        Assert.Equal("A-1", violation.PriorStableId);
+        Assert.Equal("A-1", violation.SubmittedStableId);
+        Assert.Null(reviewer.LastVerification.MergedReviewFindings);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.ReviewFindingContractViolationRecorded &&
+            evt.Message.Contains("code=ERR_REVIEW_FINDING_IDENTITY_MOVED", StringComparison.Ordinal) &&
+            evt.Message.Contains("reviewer_wall_ms=", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_canonicalized_identity_is_recorded_as_a_note")]
+    public void RecordDispatchExecutionResultCanonicalizedIdentityIsRecordedAsNote()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Canonicalize reviewer identity", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow));
+        var accepted = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"A-1","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion.","severity":"advisory"}]""",
+            "none");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1", "C:\\repo", 0, accepted, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-2", "C:\\repo", clock.UtcNow));
+        var resolved = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"A-NEW","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Readability suggestion resolved.","severity":"advisory"}]""",
+            "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2", "C:\\repo", 0, resolved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Equal("A-1", Assert.Single(reviewer.LastVerification!.MergedReviewFindings!).StableId);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("submitted_stable_id=A-NEW", StringComparison.Ordinal) &&
+            evt.Message.Contains("canonical_stable_id=A-1", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "GetOpenAdvisoryReviewFindings_does_not_fall_back_after_latest_review_fails")]
     public void GetOpenAdvisoryReviewFindingsDoesNotFallBackAfterLatestReviewFails()
     {

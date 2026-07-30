@@ -342,7 +342,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         try
         {
             var kernel = new AgentOrchestratorKernel();
-            var goal = kernel.CreateGoal("Scoped conduct reconcile", [new TaskSpec(TaskId.New(), "Plan", AgentRole.Planner)]);
+            var goal = kernel.CreateGoal("Scoped conduct reconcile", [new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             var task = goal.Tasks.Single();
             var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
@@ -389,7 +389,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         try
         {
             var kernel = new AgentOrchestratorKernel();
-            var goal = kernel.CreateGoal("Recover unreconciled dispatch", [new TaskSpec(TaskId.New(), "Plan", AgentRole.Planner)]);
+            var goal = kernel.CreateGoal("Recover unreconciled dispatch", [new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)]);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
             var task = goal.Tasks.Single();
             var startedAt = DateTimeOffset.UtcNow.AddMinutes(-5);
