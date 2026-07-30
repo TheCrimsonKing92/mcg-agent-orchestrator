@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -97,6 +98,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly Regex TautologyPattern = new(
         @"Assert\.True\(\s*true\s*\)|Assert\.False\(\s*false\s*\)|Assert\.Equal\(\s*(?<v>\w+)\s*,\s*\k<v>\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
+    private static readonly Encoding StrictUtf16LittleEndian = new UnicodeEncoding(false, true, true);
+    private static readonly Encoding StrictUtf16BigEndian = new UnicodeEncoding(true, true, true);
+    private static readonly Encoding StrictUtf32LittleEndian = new UTF32Encoding(false, true, true);
+    private static readonly Encoding StrictUtf32BigEndian = new UTF32Encoding(true, true, true);
 
     private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD", "--"];
     private const string CoreProject = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
@@ -3950,6 +3957,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ResultSummary: "candidate trusted discovery failed");
             }
 
+            var discoveryDecodeFault = candidateDiscovery.Output.Contains('\uFFFD', StringComparison.Ordinal);
             IReadOnlySet<string>? mainDiscoveredTests = null;
             var mainProjectPath = Path.Combine(
                 mainWorktreePath,
@@ -4018,6 +4026,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         ResultSummary: "trusted main discovery failed");
                 }
 
+                discoveryDecodeFault |= mainDiscovery.Output.Contains('\uFFFD', StringComparison.Ordinal);
                 mainDiscoveredTests = TestCoverageInvariant.ParseDiscoveredTests(
                     mainDiscovery.Output,
                     bareTestList: UsesMicrosoftTestingPlatform(broadCheck));
@@ -4056,6 +4065,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     $"classification: {coverage.FailureClassification}",
                     coverage.Summary
                 };
+                if (discoveryDecodeFault)
+                {
+                    details.Add(
+                        "discovery output contains Unicode replacement characters; captured process output decoding is corrupt");
+                }
                 details.AddRange(coverage.EmptyPartitions.Take(10).Select(name => $"empty partition: {name}"));
                 details.AddRange(coverage.MissingTests.Take(10).Select(name => $"missing test: {name}"));
                 return new AcceptanceCheckResult(
@@ -5858,7 +5872,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string QuoteForPosix(string value) =>
         $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
 
-    private static async Task<string> ReadFileWithRetryAsync(string path)
+    internal static async Task<string> ReadFileWithRetryAsync(string path)
     {
         // A reparented grandchild may still hold the file's write handle; open shared and tolerate
         // transient locks. The output we need (the child's own writes) is already flushed on exit.
@@ -5868,8 +5882,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 using var stream = new FileStream(
                     path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using var reader = new StreamReader(stream);
-                return await reader.ReadToEndAsync().ConfigureAwait(false);
+                using var buffer = new MemoryStream();
+                await stream.CopyToAsync(buffer).ConfigureAwait(false);
+                return DecodeCapturedOutput(buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)));
             }
             catch (FileNotFoundException)
             {
@@ -5883,6 +5898,83 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         return string.Empty;
     }
+
+    internal static string DecodeCapturedOutput(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.IsEmpty)
+        {
+            return string.Empty;
+        }
+
+        if (bytes.StartsWith(Encoding.UTF8.Preamble))
+        {
+            return StrictUtf8.GetString(bytes[Encoding.UTF8.Preamble.Length..]);
+        }
+
+        if (bytes.StartsWith(Encoding.UTF32.Preamble))
+        {
+            return StrictUtf32LittleEndian.GetString(bytes[Encoding.UTF32.Preamble.Length..]);
+        }
+
+        if (bytes.StartsWith(StrictUtf32BigEndian.Preamble))
+        {
+            return StrictUtf32BigEndian.GetString(bytes[StrictUtf32BigEndian.Preamble.Length..]);
+        }
+
+        if (bytes.StartsWith(Encoding.Unicode.Preamble))
+        {
+            return StrictUtf16LittleEndian.GetString(bytes[Encoding.Unicode.Preamble.Length..]);
+        }
+
+        if (bytes.StartsWith(Encoding.BigEndianUnicode.Preamble))
+        {
+            return StrictUtf16BigEndian.GetString(bytes[Encoding.BigEndianUnicode.Preamble.Length..]);
+        }
+
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException) when (OperatingSystem.IsWindows())
+        {
+            return DecodeWindowsOem(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            return Encoding.Latin1.GetString(bytes);
+        }
+    }
+
+    private static string DecodeWindowsOem(ReadOnlySpan<byte> bytes)
+    {
+        const uint CpOem = 1;
+        var source = bytes.ToArray();
+        var charCount = MultiByteToWideChar(CpOem, 0, source, source.Length, null, 0);
+        if (charCount <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Unable to decode captured output with the Windows OEM code page. Win32Error={Marshal.GetLastWin32Error()}.");
+        }
+
+        var chars = new char[charCount];
+        var converted = MultiByteToWideChar(CpOem, 0, source, source.Length, chars, chars.Length);
+        if (converted != charCount)
+        {
+            throw new InvalidOperationException(
+                $"Unable to decode captured output with the Windows OEM code page. Win32Error={Marshal.GetLastWin32Error()}.");
+        }
+
+        return new string(chars);
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern int MultiByteToWideChar(
+        uint codePage,
+        uint flags,
+        byte[] multiByteText,
+        int byteCount,
+        [Out] char[]? wideText,
+        int charCount);
 
     private static void TryDeleteFile(string path)
     {
