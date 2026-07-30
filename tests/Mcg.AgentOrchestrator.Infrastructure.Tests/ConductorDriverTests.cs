@@ -252,7 +252,8 @@ public sealed class ConductorDriverTests
         Func<bool>? hasGateReadyGoal = null,
         Func<Goal, int>? getAcceptanceSlotCount = null,
         Func<int>? getWorkerAdmissionCapacity = null,
-        TimeSpan? buildServerShutdownTimeout = null)
+        TimeSpan? buildServerShutdownTimeout = null,
+        Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -290,7 +291,8 @@ public sealed class ConductorDriverTests
             recordReviewerEvidenceRequestReceived: recordReviewerEvidenceRequestReceived,
             recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded,
             retryTaskWithRoundKind: retryTaskWithRoundKind,
-            buildServerShutdownTimeout: buildServerShutdownTimeout);
+            buildServerShutdownTimeout: buildServerShutdownTimeout,
+            writeEscalationWithResult: writeEscalationWithResult);
     }
 
     private sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -888,7 +890,11 @@ public sealed class ConductorDriverTests
                 return DispatchStartOutcome.SpawnFailed(startFailReason);
             },
             buildServerShutdown: () => { shutdownCalled = true; },
-            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+            writeEscalationWithResult: (_, _, reason) =>
+            {
+                escalationReason = reason;
+                return new LandingEscalationWriteResult(2, "ok", 25, "timeout", 3, "error");
+            });
         driver.PhaseTimingSink = phaseTimings.Add;
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
@@ -906,7 +912,9 @@ public sealed class ConductorDriverTests
         Assert.Contains(
             phaseTimings,
             line => line.Contains("phase=escalation-write", StringComparison.Ordinal) &&
-                    line.Contains("sink=json result=completed", StringComparison.Ordinal));
+                    line.Contains("json_ms=2 json=ok", StringComparison.Ordinal) &&
+                    line.Contains("collab_ms=25 collab=timeout", StringComparison.Ordinal) &&
+                    line.Contains("channel_ms=3 channel=error", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_dispatch_remediation_runs_once_per_tick_and_rearms")]
@@ -985,6 +993,16 @@ public sealed class ConductorDriverTests
         {
             releaseShutdown.Set();
         }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_build_server_shutdown_reports_process_exit_code")]
+    public void ConductorDriverBuildServerShutdownReportsProcessExitCode()
+    {
+        var result = ConductorDriver.RunBuildServerShutdown(
+            Directory.GetCurrentDirectory(),
+            TimeSpan.FromSeconds(5));
+
+        Assert.Matches(@"^(ran|error) exit=-?\d+$", result);
     }
 
     // ── Running state ─────────────────────────────────────────────────────

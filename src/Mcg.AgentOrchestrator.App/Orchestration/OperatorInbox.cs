@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -73,6 +74,21 @@ public sealed record OperatorInboxItem(
     DateTimeOffset? AcknowledgedAt,
     string? AcknowledgementNote);
 
+internal sealed record LandingEscalationWriteResult(
+    long JsonElapsedMilliseconds,
+    string JsonOutcome,
+    long CollaborationElapsedMilliseconds,
+    string CollaborationOutcome,
+    long ChannelElapsedMilliseconds,
+    string ChannelOutcome)
+{
+    internal static LandingEscalationWriteResult CompletedWithoutExternalSinks { get; } =
+        new(0, "ok", 0, "skipped", 0, "skipped");
+
+    internal static LandingEscalationWriteResult Error { get; } =
+        new(0, "error", 0, "skipped", 0, "skipped");
+}
+
 internal static class OperatorInbox
 {
     internal enum LandingEscalationResolution
@@ -93,7 +109,10 @@ internal static class OperatorInbox
     private const string HoldFailureFileName = "ownership-hold-failures.json";
     private const int MaxLandingEscalationLockAttempts = 100;
     private static readonly TimeSpan LandingEscalationLockBackoff = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan DefaultLandingEscalationLockTimeout =
+        TimeSpan.FromTicks(LandingEscalationLockBackoff.Ticks * MaxLandingEscalationLockAttempts);
     private static readonly TimeSpan DefaultCollaborationRaiseTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DefaultChannelSendTimeout = TimeSpan.FromSeconds(5);
     internal const int MaxHoldWriteRetries = 5;
     private static readonly TimeSpan InitialHoldWriteBackoff = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaxHoldWriteBackoff = TimeSpan.FromSeconds(2);
@@ -469,42 +488,64 @@ internal static class OperatorInbox
         }
     }
 
-    public static void RecordLandingEscalation(
+    public static LandingEscalationWriteResult RecordLandingEscalation(
         OrchestratorWorkspace workspace,
         Goal goal,
         string reason,
         string integrationBranch,
         IOperatorChannel? channel = null,
         ICollaborationItemStore? collaborationStore = null,
-        TimeSpan? collaborationRaiseTimeout = null)
+        TimeSpan? collaborationRaiseTimeout = null,
+        TimeSpan? channelSendTimeout = null,
+        TimeSpan? landingEscalationLockTimeout = null)
     {
-        using (AcquireLandingEscalationLock(workspace))
+        var jsonClock = Stopwatch.StartNew();
+        var jsonOutcome = "ok";
+        var escalationLock = TryAcquireLandingEscalationLock(
+            workspace,
+            landingEscalationLockTimeout ?? DefaultLandingEscalationLockTimeout);
+        if (escalationLock is null)
         {
-            var existing = LoadLandingEscalationsUnsafe(workspace).ToList();
-            var acceptanceFailureOccurredAt = goal.LatestAcceptanceFailure?.OccurredAt;
-            var staleAcceptanceEscalation = acceptanceFailureOccurredAt is not null &&
-                existing.Any(item =>
-                    item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
-                    item.ResolvedAtUtc is not null &&
-                    item.AcceptanceFailureOccurredAt == acceptanceFailureOccurredAt);
-            if (staleAcceptanceEscalation)
-            {
-                return;
-            }
-
-            existing = existing
-                .Where(e =>
-                    !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
-                    e.ResolvedAtUtc is not null)
-                .ToList();
-            existing.Add(new LandingEscalationRecord(
-                goal.Id.Value,
-                reason,
-                integrationBranch,
-                DateTimeOffset.UtcNow,
-                AcceptanceFailureOccurredAt: acceptanceFailureOccurredAt));
-            SaveLandingEscalationsUnsafe(workspace, existing);
+            jsonOutcome = "lock-timeout";
         }
+        else
+        {
+            using (escalationLock)
+            {
+                var existing = LoadLandingEscalationsUnsafe(workspace).ToList();
+                var acceptanceFailureOccurredAt = goal.LatestAcceptanceFailure?.OccurredAt;
+                var staleAcceptanceEscalation = acceptanceFailureOccurredAt is not null &&
+                    existing.Any(item =>
+                        item.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) &&
+                        item.ResolvedAtUtc is not null &&
+                        item.AcceptanceFailureOccurredAt == acceptanceFailureOccurredAt);
+                if (staleAcceptanceEscalation)
+                {
+                    jsonClock.Stop();
+                    return new LandingEscalationWriteResult(
+                        ElapsedMilliseconds(jsonClock.Elapsed),
+                        "skipped-stale",
+                        0,
+                        "skipped",
+                        0,
+                        "skipped");
+                }
+
+                existing = existing
+                    .Where(e =>
+                        !e.GoalId.Equals(goal.Id.Value, StringComparison.OrdinalIgnoreCase) ||
+                        e.ResolvedAtUtc is not null)
+                    .ToList();
+                existing.Add(new LandingEscalationRecord(
+                    goal.Id.Value,
+                    reason,
+                    integrationBranch,
+                    DateTimeOffset.UtcNow,
+                    AcceptanceFailureOccurredAt: acceptanceFailureOccurredAt));
+                SaveLandingEscalationsUnsafe(workspace, existing);
+            }
+        }
+        jsonClock.Stop();
 
         var goalPrefix = goal.Id.Value[..8];
         var sourceKey = $"landing-escalation:{goal.Id.Value}:{reason}";
@@ -512,25 +553,29 @@ internal static class OperatorInbox
 
         var store = collaborationStore
             ?? CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-        try
-        {
-            store.RaiseAsync(
+        var collaborationClock = Stopwatch.StartNew();
+        var collaborationOutcome = RunBoundedOnBackground(
+            () => store.RaiseAsync(
                 CollaborationItemType.Decision,
                 goal.Id.Value,
                 $"Landing parked on {integrationBranch}",
                 reason,
                 itemId)
-                .WaitAsync(collaborationRaiseTimeout ?? DefaultCollaborationRaiseTimeout)
                 .GetAwaiter()
-                .GetResult();
-        }
-        catch
-        {
-            // Best-effort: JSON fallback already written.
-        }
+                .GetResult(),
+            collaborationRaiseTimeout ?? DefaultCollaborationRaiseTimeout);
+        collaborationClock.Stop();
 
         if (channel is null or NullOperatorChannel)
-            return;
+        {
+            return new LandingEscalationWriteResult(
+                ElapsedMilliseconds(jsonClock.Elapsed),
+                jsonOutcome,
+                ElapsedMilliseconds(collaborationClock.Elapsed),
+                collaborationOutcome,
+                0,
+                "skipped");
+        }
 
         var command = BuildEscalationCommand(goalPrefix, integrationBranch);
         var actionLabel = integrationBranch.StartsWith("conductor:", StringComparison.OrdinalIgnoreCase)
@@ -551,15 +596,75 @@ internal static class OperatorInbox
             $"escalated at {DateTimeOffset.UtcNow:u}; branch={integrationBranch}",
             [new OperatorEscalationAction(actionLabel, command, RequiresConfirm: requiresConfirm, RequiresInput: command.Contains('<'))],
             null);
+        var channelClock = Stopwatch.StartNew();
+        var channelOutcome = RunBoundedAsync(
+            () => channel.SendEscalationAsync(escalation),
+            channelSendTimeout ?? DefaultChannelSendTimeout);
+        channelClock.Stop();
+        return new LandingEscalationWriteResult(
+            ElapsedMilliseconds(jsonClock.Elapsed),
+            jsonOutcome,
+            ElapsedMilliseconds(collaborationClock.Elapsed),
+            collaborationOutcome,
+            ElapsedMilliseconds(channelClock.Elapsed),
+            channelOutcome);
+    }
+
+    private static string RunBoundedOnBackground(Action action, TimeSpan timeout)
+    {
         try
         {
-            channel.SendEscalationAsync(escalation).GetAwaiter().GetResult();
+            var task = Task.Run(action);
+            if (task.Wait(timeout))
+            {
+                return "ok";
+            }
+
+            _ = task.ContinueWith(
+                static faulted => _ = faulted.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return "timeout";
         }
         catch
         {
-            // Best-effort: inbox JSON write already succeeded.
+            return "error";
         }
     }
+
+    private static string RunBoundedAsync(Func<Task> action, TimeSpan timeout)
+    {
+        Task? task = null;
+        try
+        {
+            task = action();
+            task
+                .WaitAsync(timeout)
+                .GetAwaiter()
+                .GetResult();
+            return "ok";
+        }
+        catch (TimeoutException)
+        {
+            if (task is not null)
+            {
+                _ = task.ContinueWith(
+                    static faulted => _ = faulted.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+            return "timeout";
+        }
+        catch
+        {
+            return "error";
+        }
+    }
+
+    private static long ElapsedMilliseconds(TimeSpan elapsed) =>
+        (long)Math.Ceiling(elapsed.TotalMilliseconds);
 
     public static bool ResolveLandingEscalation(
         OrchestratorWorkspace workspace,
@@ -902,17 +1007,37 @@ internal static class OperatorInbox
 
     private static FileStream AcquireLandingEscalationLock(OrchestratorWorkspace workspace)
     {
+        return TryAcquireLandingEscalationLock(workspace, DefaultLandingEscalationLockTimeout)
+            ?? throw new IOException(
+                $"Timed out acquiring landing-escalation lock after {DefaultLandingEscalationLockTimeout.TotalSeconds:0.#} seconds.");
+    }
+
+    private static FileStream? TryAcquireLandingEscalationLock(
+        OrchestratorWorkspace workspace,
+        TimeSpan timeout)
+    {
         Directory.CreateDirectory(workspace.OrchestratorDirectory);
         var path = Path.Combine(workspace.OrchestratorDirectory, LandingEscalationLockFileName);
-        for (var attempt = 1; ; attempt++)
+        var clock = Stopwatch.StartNew();
+        for (;;)
         {
             try
             {
                 return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             }
-            catch (IOException) when (attempt < MaxLandingEscalationLockAttempts)
+            catch (IOException) when (clock.Elapsed < timeout)
             {
-                Thread.Sleep(LandingEscalationLockBackoff);
+                var remaining = timeout - clock.Elapsed;
+                if (remaining > TimeSpan.Zero)
+                {
+                    Thread.Sleep(remaining < LandingEscalationLockBackoff
+                        ? remaining
+                        : LandingEscalationLockBackoff);
+                }
+            }
+            catch (IOException)
+            {
+                return null;
             }
         }
     }

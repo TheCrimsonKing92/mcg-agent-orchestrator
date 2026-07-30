@@ -54,7 +54,7 @@ internal sealed class ConductorDriver
     private readonly Action<Goal> _record;
     private readonly Func<Goal, GoalWorktreeRemoveResult> _cleanup;
     private readonly Action<Goal> _completeGoal;
-    private readonly Action<Goal, GoalLifecycleState, string> _writeEscalation;
+    private readonly Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult> _writeEscalation;
     private readonly Func<Goal, ChangeRiskTier?> _classifyChangeRisk;
     private readonly Action<TimeSpan> _emptyOutputBackoffDelay;
     private readonly Func<Goal, DispatchReadinessVerdict> _evaluateReadiness;
@@ -496,8 +496,9 @@ internal sealed class ConductorDriver
         _writeEscalation = (goal, state, reason) =>
         {
             var source = $"conductor:{state}";
-            OperatorInbox.RecordLandingEscalation(workspace, goal, reason, source, channel);
+            var result = OperatorInbox.RecordLandingEscalation(workspace, goal, reason, source, channel);
             eventWriter.AppendGoalEscalated(goal.Id, state, reason, source);
+            return result;
         };
 
         _classifyChangeRisk = goal =>
@@ -577,7 +578,8 @@ internal sealed class ConductorDriver
         Func<Goal, string?>? tryBuildAwaitingClarificationEscalationReason = null,
         Func<Goal, int>? getAcceptanceSlotCount = null,
         Func<int>? getWorkerAdmissionCapacity = null,
-        TimeSpan? buildServerShutdownTimeout = null)
+        TimeSpan? buildServerShutdownTimeout = null,
+        Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -618,7 +620,11 @@ internal sealed class ConductorDriver
         _record = record;
         _cleanup = cleanup;
         _completeGoal = completeGoal ?? (_ => { });
-        _writeEscalation = writeEscalation;
+        _writeEscalation = writeEscalationWithResult ?? ((goal, state, reason) =>
+        {
+            writeEscalation(goal, state, reason);
+            return LandingEscalationWriteResult.CompletedWithoutExternalSinks;
+        });
         _classifyChangeRisk = classifyChangeRisk;
         _emptyOutputBackoffDelay = emptyOutputBackoffDelay ?? Thread.Sleep;
         _evaluateReadiness = evaluateReadiness ?? (goal =>
@@ -1628,7 +1634,7 @@ internal sealed class ConductorDriver
 
     private void EmitGoalPhaseTiming(string phase, Goal goal, TimeSpan elapsed, string detail)
     {
-        var elapsedMilliseconds = Math.Max(1L, (long)Math.Ceiling(elapsed.TotalMilliseconds));
+        var elapsedMilliseconds = (long)Math.Ceiling(elapsed.TotalMilliseconds);
         PhaseTimingSink?.Invoke(
             $"phase={phase} goal={goal.Id.Value[..8]} elapsed_ms={elapsedMilliseconds} {detail}");
     }
@@ -1667,7 +1673,7 @@ internal sealed class ConductorDriver
         }
     }
 
-    private static string RunBuildServerShutdown(string workingDirectory, TimeSpan timeout)
+    internal static string RunBuildServerShutdown(string workingDirectory, TimeSpan timeout)
     {
         try
         {
@@ -1699,7 +1705,9 @@ internal sealed class ConductorDriver
                 int.MaxValue);
             if (process.WaitForExit(timeoutMilliseconds))
             {
-                return "ran";
+                return process.ExitCode == 0
+                    ? "ran exit=0"
+                    : $"error exit={process.ExitCode}";
             }
 
             try
@@ -2244,11 +2252,10 @@ internal sealed class ConductorDriver
         string reason)
     {
         var escalationClock = Stopwatch.StartNew();
-        var result = "error";
+        var sinkResult = LandingEscalationWriteResult.Error;
         try
         {
-            _writeEscalation(goal, state, reason);
-            result = "completed";
+            sinkResult = _writeEscalation(goal, state, reason);
         }
         finally
         {
@@ -2257,7 +2264,9 @@ internal sealed class ConductorDriver
                 "escalation-write",
                 goal,
                 escalationClock.Elapsed,
-                $"sink=json result={result}");
+                $"json_ms={sinkResult.JsonElapsedMilliseconds} json={sinkResult.JsonOutcome} " +
+                $"collab_ms={sinkResult.CollaborationElapsedMilliseconds} collab={sinkResult.CollaborationOutcome} " +
+                $"channel_ms={sinkResult.ChannelElapsedMilliseconds} channel={sinkResult.ChannelOutcome}");
         }
         return MakeResult(goal.Id.Value, goalPrefix, policy,
             new ConductorAdvanceOutcome.Escalated(state, reason));
