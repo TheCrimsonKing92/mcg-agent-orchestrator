@@ -507,6 +507,9 @@ internal static class OperatorInbox
         if (escalationLock is null)
         {
             jsonOutcome = "lock-timeout";
+            Console.Error.WriteLine(
+                $"warning: landing escalation JSON record was not written for goal {goal.Id.Value[..8]} " +
+                $"because the landing-escalation lock timed out.");
         }
         else
         {

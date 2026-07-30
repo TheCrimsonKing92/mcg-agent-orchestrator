@@ -636,17 +636,22 @@ public sealed class CollaborationItemStoreTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Escalation lock contention");
 
-        var result = OperatorInbox.RecordLandingEscalation(
-            workspace,
-            goal,
-            "merge conflict",
-            "integration",
-            channel: null,
-            collaborationStore: fakeStore,
-            landingEscalationLockTimeout: TimeSpan.Zero);
+        LandingEscalationWriteResult? result = null;
+        var warning = AsyncLocalConsoleRouter.CaptureError(() =>
+            result = OperatorInbox.RecordLandingEscalation(
+                workspace,
+                goal,
+                "merge conflict",
+                "integration",
+                channel: null,
+                collaborationStore: fakeStore,
+                landingEscalationLockTimeout: TimeSpan.Zero));
 
-        Xunit.Assert.Equal("lock-timeout", result.JsonOutcome);
+        Xunit.Assert.Equal("lock-timeout", result!.JsonOutcome);
         Xunit.Assert.Equal("ok", result.CollaborationOutcome);
+        Xunit.Assert.Contains("warning: landing escalation JSON record was not written", warning);
+        Xunit.Assert.Contains(goal.Id.Value[..8], warning);
+        Xunit.Assert.Contains("lock timed out", warning);
         Xunit.Assert.Single(fakeStore.Items);
     }
 

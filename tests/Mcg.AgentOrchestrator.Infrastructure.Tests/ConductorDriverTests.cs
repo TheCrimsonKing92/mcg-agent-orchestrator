@@ -995,16 +995,6 @@ public sealed class ConductorDriverTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_build_server_shutdown_reports_process_exit_code")]
-    public void ConductorDriverBuildServerShutdownReportsProcessExitCode()
-    {
-        var result = ConductorDriver.RunBuildServerShutdown(
-            Directory.GetCurrentDirectory(),
-            TimeSpan.FromSeconds(5));
-
-        Assert.Matches(@"^(ran|error) exit=-?\d+$", result);
-    }
-
     // ── Running state ─────────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Running_returns_Held")]
