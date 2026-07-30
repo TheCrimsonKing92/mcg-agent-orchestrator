@@ -413,7 +413,14 @@ public sealed class DashboardRenderingTests
         "manual-verification passed",
         "C:\\repo",
         0,
-        "Evidence checked.\nModel fit: OpenAI/gpt-5.3-codex - underpowered - missed required tests.",
+        "Evidence checked.\nModel fit: OpenAI/gpt-5.3-codex - adequate - focused implementation.",
+        string.Empty,
+        DateTimeOffset.UtcNow));
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+        "manual-verification passed",
+        "C:\\repo",
+        0,
+        "Evidence checked.\nModel fit: openai/GPT-5.3-CODEX - underpowered - missed required tests.",
         string.Empty,
         DateTimeOffset.UtcNow));
 
@@ -423,18 +430,19 @@ public sealed class DashboardRenderingTests
     var taskEvidence = evidenceDto.Tasks.Single(item => item.TaskId == task.Id.Value);
     var modelFit = evidenceDto.ModelFit.Single();
 
-    Assert.Equal("Model fit: OpenAI/gpt-5.3-codex - underpowered - missed required tests.", taskEvidence.ModelFitNote);
+    Assert.Equal("Model fit: openai/GPT-5.3-CODEX - underpowered - missed required tests.", taskEvidence.ModelFitNote);
     Assert.Equal("OpenAI", modelFit.ProviderName);
     Assert.Equal("gpt-5.3-codex", modelFit.ModelName);
-    Assert.Equal(1, modelFit.NoteCount);
-    Assert.Equal(0, modelFit.AdequateCount);
+    Assert.Equal(2, modelFit.NoteCount);
+    Assert.Equal(1, modelFit.AdequateCount);
     Assert.Equal(0, modelFit.OverkillCount);
     Assert.Equal(1, modelFit.UnderpoweredCount);
     Assert.Equal(0, modelFit.UnknownCount);
+    Assert.True(modelFit.TaskShapes!.Contains("focused implementation"));
     Assert.True(modelFit.TaskShapes!.Contains("missed required tests"));
-    Assert.Contains("Model fit: OpenAI/gpt-5.3-codex: 1 note; underpowered 1; shapes missed required tests", html, StringComparison.Ordinal);
-    Assert.Contains("- OpenAI/gpt-5.3-codex: 1 note; underpowered 1; shapes missed required tests", transcript, StringComparison.Ordinal);
-    Assert.Contains("Model fit: OpenAI/gpt-5.3-codex - underpowered - missed required tests.", transcript, StringComparison.Ordinal);
+    Assert.Contains("Model fit: OpenAI/gpt-5.3-codex: 2 notes; adequate 1, underpowered 1; shapes focused implementation, missed required tests", html, StringComparison.Ordinal);
+    Assert.Contains("- OpenAI/gpt-5.3-codex: 2 notes; adequate 1, underpowered 1; shapes focused implementation, missed required tests", transcript, StringComparison.Ordinal);
+    Assert.Contains("Model fit: openai/GPT-5.3-CODEX - underpowered - missed required tests.", transcript, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "Dashboard_subscription_cost_preview_surfaces_prior_model_fit")]

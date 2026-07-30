@@ -1441,6 +1441,22 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual-verification passed",
+            root,
+            0,
+            string.Empty,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            ModelFitNote: "Model fit: Anthropic/claude-opus-5 - adequate - conflict analysis"));
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual-verification passed",
+            root,
+            0,
+            string.Empty,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            ModelFitNote: "Model fit: anthropic/CLAUDE-OPUS-5 - underpowered - landing repair"));
         kernel.RequestHumanInput(goal.Id, task.Id, "Choose a retry path.");
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Failed, "Worker failed before producing evidence.");
 
@@ -1473,6 +1489,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
                 ref profiles,
                 ref currentGoal));
         Xunit.Assert.Contains("acknowledged", ackOutput);
+        Xunit.Assert.DoesNotContain("An item with the same key has already been added", ackOutput, StringComparison.Ordinal);
 
         var hiddenOutput = CaptureConsole(() =>
             CliCommandDispatcher.ExecuteCommand(

@@ -130,4 +130,34 @@ public sealed class ModelFitEvidenceTests
         Assert.True(observation is not null, "expected note to parse");
         Assert.Equal("unknown", observation!.Fit);
     }
+
+    [Xunit.Fact(DisplayName = "ModelFitEvidence_merges_provider_and_model_casing_variants")]
+    public void ModelFitEvidenceMergesProviderAndModelCasingVariants()
+    {
+        string?[] notes =
+        [
+            "Model fit: Anthropic/claude-opus-5 - adequate - focused review",
+            "Model fit: anthropic/CLAUDE-OPUS-5 - overkill - FOCUSED REVIEW",
+            "Model fit: ANTHROPIC/claude-opus-5 - underpowered - integration repair"
+        ];
+
+        var firstRun = ModelFitEvidence.BuildSummary(notes);
+        var secondRun = ModelFitEvidence.BuildSummary(notes);
+
+        var summary = Assert.Single(firstRun);
+        Assert.Equal("Anthropic", summary.ProviderName);
+        Assert.Equal("claude-opus-5", summary.ModelName);
+        Assert.Equal(3, summary.NoteCount);
+        Assert.Equal(1, summary.AdequateCount);
+        Assert.Equal(1, summary.OverkillCount);
+        Assert.Equal(1, summary.UnderpoweredCount);
+        Assert.Equal(0, summary.UnknownCount);
+        Assert.Equal(["focused review", "integration repair"], summary.TaskShapes);
+
+        var repeated = Assert.Single(secondRun);
+        Assert.Equal(summary.ProviderName, repeated.ProviderName);
+        Assert.Equal(summary.ModelName, repeated.ModelName);
+        Assert.Equal(summary.NoteCount, repeated.NoteCount);
+        Assert.Equal(summary.TaskShapes, repeated.TaskShapes);
+    }
 }

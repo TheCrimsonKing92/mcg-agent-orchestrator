@@ -713,7 +713,7 @@ internal static class SubscriptionPlanBuilder
     {
         var fitByModel = ModelFitEvidence
             .BuildSummary(goal.Tasks.SelectMany(ModelFitEvidence.FindNotes))
-            .ToDictionary(fit => BuildModelFitKey(fit.ProviderName, fit.ModelName), StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(fit => BuildModelFitKey(fit.ProviderName, fit.ModelName), ModelFitEvidence.IdentityComparer);
 
         return items
             .Where(item => item.CanPrepare && !string.IsNullOrWhiteSpace(item.ProviderName))
@@ -818,7 +818,7 @@ internal static class SubscriptionPlanBuilder
 
     private static string BuildModelFitKey(string providerName, string modelName)
     {
-        return $"{providerName}/{modelName}";
+        return ModelFitEvidence.BuildIdentityKey(providerName, modelName);
     }
 
     private static string? BuildModelFitRecommendation(ModelFitSummary? fit, string providerName, string modelName)

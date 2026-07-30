@@ -5,6 +5,12 @@ public sealed record ModelFitObservation(string ProviderName, string ModelName, 
 public static class ModelFitEvidence
 {
     public const string NotePrefix = "Model fit:";
+    public static StringComparer IdentityComparer { get; } = StringComparer.OrdinalIgnoreCase;
+
+    public static string BuildIdentityKey(string? providerName, string? modelName)
+    {
+        return $"{providerName ?? string.Empty}/{modelName ?? string.Empty}";
+    }
 
     // Single source for the note format; emitters must not restate it so the
     // parser and prompts cannot drift apart.
@@ -77,22 +83,23 @@ public static class ModelFitEvidence
             .Where(observation => observation is not null)
             .Cast<ModelFitObservation>()
             .GroupBy(
-                observation => new
-                {
-                    observation.ProviderName,
-                    observation.ModelName
-                })
-            .OrderBy(group => group.Key.ProviderName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(group => group.Key.ModelName, StringComparer.OrdinalIgnoreCase)
-            .Select(group => new ModelFitSummary(
-                group.Key.ProviderName,
-                group.Key.ModelName,
-                group.Count(),
-                group.Count(observation => observation.Fit == "adequate"),
-                group.Count(observation => observation.Fit == "overkill"),
-                group.Count(observation => observation.Fit == "underpowered"),
-                group.Count(observation => observation.Fit == "unknown"),
-                BuildTaskShapes(group)))
+                observation => BuildIdentityKey(observation.ProviderName, observation.ModelName),
+                IdentityComparer)
+            .OrderBy(group => group.First().ProviderName, IdentityComparer)
+            .ThenBy(group => group.First().ModelName, IdentityComparer)
+            .Select(group =>
+            {
+                var first = group.First();
+                return new ModelFitSummary(
+                    first.ProviderName,
+                    first.ModelName,
+                    group.Count(),
+                    group.Count(observation => observation.Fit == "adequate"),
+                    group.Count(observation => observation.Fit == "overkill"),
+                    group.Count(observation => observation.Fit == "underpowered"),
+                    group.Count(observation => observation.Fit == "unknown"),
+                    BuildTaskShapes(group));
+            })
             .ToList();
     }
 
