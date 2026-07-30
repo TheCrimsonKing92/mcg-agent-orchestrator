@@ -80,6 +80,10 @@ private static int PersistResolvedParkedHumanWaitsForNextTick(
 private static GoalObjectivePlan BuildGoalObjectivePlan(CliExecutionContext context, string objective, bool simple) =>
     GoalObjectivePlanner.Build(objective, simple, context.Kernel.BuildTaskDurationStats());
 
+private static void PrintScopeCollisionAdvisory(CliExecutionContext context, string rawObjective) =>
+    ConsoleViews.PrintGoalScopeCollisionReport(
+        GoalScopeCollisionAdvisor.Build([rawObjective], context.Kernel.Goals));
+
 private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
 {
     switch (command)
@@ -118,6 +122,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
+                PrintScopeCollisionAdvisory(context, runObjective);
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
                 PrintClosedSourceBacklogWarning(runSourceBacklogLink);
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
@@ -132,6 +137,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var goalObjectivePlan = BuildGoalObjectivePlan(context, goalObjective, simple: false);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+            PrintScopeCollisionAdvisory(context, goalObjective);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
@@ -145,6 +151,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var simpleObjectivePlan = BuildGoalObjectivePlan(context, simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
             ConsoleViews.PrintGoalObjectivePlan(simpleObjectivePlan);
+            PrintScopeCollisionAdvisory(context, simpleObjective);
             var simpleSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, simpleObjective);
             PrintClosedSourceBacklogWarning(simpleSourceBacklogLink);
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);

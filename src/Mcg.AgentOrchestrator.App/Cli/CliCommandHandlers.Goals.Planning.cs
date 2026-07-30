@@ -100,6 +100,11 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
 
     var plan = GoalDependencyPlanner.Build(intake);
     ConsoleViews.PrintGoalDependencyPlan(plan);
+    foreach (var node in plan.Nodes)
+    {
+        PrintScopeCollisionAdvisory(context, node.ReadyObjective);
+    }
+
     if (!createGoals && !createSimpleGoals)
     {
         return false;

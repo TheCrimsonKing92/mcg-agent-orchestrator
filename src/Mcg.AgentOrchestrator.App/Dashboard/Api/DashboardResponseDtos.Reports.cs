@@ -310,6 +310,35 @@ internal sealed record BacklogGoalPlanDto(
     CompiledGoalGraphDto CompiledGraph,
     ParallelExecutionPlanDto ParallelPlan);
 
+internal sealed record GoalScopeCollisionAdvisoryDto(
+    int ReportCount,
+    IReadOnlyList<GoalScopeCollisionReportDto> Reports);
+
+internal sealed record GoalScopeCollisionReportDto(
+    string IntakeItemId,
+    string Heading,
+    string Verdict,
+    int ComparedGoalCount,
+    int ExplicitCollisionCount,
+    IReadOnlyList<string> ConflictingGoalIds,
+    IReadOnlyList<DeclaredFileScopeDto> ProposedScopes,
+    IReadOnlyList<ScopeCollisionDto> Collisions,
+    IReadOnlyList<ScopeEvidenceGapDto> EvidenceGaps);
+
+internal sealed record DeclaredFileScopeDto(string Path, string Provenance);
+
+internal sealed record ScopeCollisionDto(
+    string GoalId,
+    string GoalPrefix,
+    string GoalStatus,
+    string Kind,
+    string ProposedPath,
+    string ProposedProvenance,
+    string ConflictingPath,
+    string ConflictingProvenance);
+
+internal sealed record ScopeEvidenceGapDto(string? GoalId, string Gap, string Message);
+
 internal sealed record CrossGoalStartPlanDto(
     int CandidateCount,
     IReadOnlyList<CrossGoalStartCandidateDto> Candidates,

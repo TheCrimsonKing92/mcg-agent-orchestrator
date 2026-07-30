@@ -120,6 +120,35 @@ internal static partial class DashboardEndpoints
         return Json(DashboardResponseMapper.ToBacklogGoalPlanDto(intake, plan));
     }
 
+    private static async Task<IResult> GetScopeCollisionAdvisoryAsync(
+        HttpContext context,
+        DashboardEndpointServices services)
+    {
+        var heading = DashboardRequestParser.GetQueryValue(context.Request, "heading");
+        var maxValue = DashboardRequestParser.GetQueryValue(context.Request, "max");
+        var maxItems = string.IsNullOrWhiteSpace(maxValue)
+            ? 10
+            : int.TryParse(maxValue, out var parsedMax) && parsedMax > 0
+                ? parsedMax
+                : throw new ArgumentException("Scope collision advisory max must be a positive integer.");
+        var intake = BacklogIntakePlanner.Build(
+            services.Workspace.BacklogStorePath,
+            string.IsNullOrWhiteSpace(heading) ? null : heading,
+            maxItems);
+        if (intake.Items.Count == 0)
+        {
+            throw new InvalidOperationException("No backlog items matched the requested filter.");
+        }
+
+        var current = await LoadAsync(services, context.RequestAborted);
+        var reports = intake.Items
+            .Select(item => (
+                Item: item,
+                Report: GoalScopeCollisionAdvisor.Build([item.SuggestedObjective], current.Goals)))
+            .ToArray();
+        return Json(DashboardResponseMapper.ToGoalScopeCollisionAdvisoryDto(reports));
+    }
+
     private static async Task<IResult> GetCrossGoalStartPlanAsync(HttpContext context, DashboardEndpointServices services)
     {
         var current = await LoadAsync(services, context.RequestAborted);

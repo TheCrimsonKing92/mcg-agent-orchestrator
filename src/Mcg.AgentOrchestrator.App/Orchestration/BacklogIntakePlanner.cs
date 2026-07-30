@@ -22,6 +22,8 @@ internal sealed record BacklogIntakePlan(string BacklogPath, IReadOnlyList<Backl
 
 internal static class BacklogIntakePlanner
 {
+    internal const string TargetScopeHeadingLine = "Target files/scopes:";
+
     private static readonly Regex PathRegex = new(
         @"(?<![\w.-])(?:src|tests|scripts|docs|config|\.agents|\.github)[\\/][A-Za-z0-9_.\\/\-]+",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -211,7 +213,7 @@ internal static class BacklogIntakePlanner
             string.Empty,
             body,
             string.Empty,
-            "Target files/scopes:",
+            TargetScopeHeadingLine,
             .. targetFiles.Select(path => $"- {path}"),
             string.Empty,
             "Verification:",
