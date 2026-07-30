@@ -34,7 +34,9 @@ public static class AgentOutputDirectives
             "commands: <commands run or none>",
             "tests: <pass|fail|not-run|deferred|inconclusive - token first, then current-round evidence>",
             "commit: <commit sha or none>",
-            "blockers: <none|premise-invalid - fact and evidence (Planner/Researcher only)|exact-blocker - token first; blank is invalid; put deferred-verification notes in tests>"
+            role == AgentRole.Reviewer
+                ? "blockers: <none - token first when verdict is pass; exact-blocker - token first for every open blocking finding; blank is invalid; advisory findings belong only in findings>"
+                : "blockers: <none|premise-invalid - fact and evidence (Planner/Researcher only)|exact-blocker - token first; blank is invalid; put deferred-verification notes in tests>"
         };
 
         if (role == AgentRole.Researcher)
@@ -44,7 +46,7 @@ public static class AgentOutputDirectives
         else if (role == AgentRole.Reviewer)
         {
             lines.Add("evidence-request: <optional; ProjectAlias: FullyQualifiedName~TestClass or ProjectAlias: TestClass1,TestClass2>");
-            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,location:{file,region,hunk?},description}; [] when none>");
+            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,location:{file,region,hunk?},description}; severity is required; [] when none>");
             lines.Add("touched_anchors: <one-line JSON array of {file,region,hunk?} for prior finding anchors touched by this round's diff; [] when none>");
             lines.Add("verdict: <pass|needs-work|fail>");
         }

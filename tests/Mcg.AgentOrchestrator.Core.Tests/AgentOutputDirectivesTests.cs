@@ -14,10 +14,32 @@ public sealed class AgentOutputDirectivesTests
             AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer));
         Assert.Contains(
             AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
-            line => line.StartsWith("findings:", StringComparison.Ordinal));
+            line =>
+                line.StartsWith("findings:", StringComparison.Ordinal) &&
+                line.Contains("severity:blocking|advisory", StringComparison.Ordinal) &&
+                line.Contains("severity is required", StringComparison.Ordinal));
         Assert.Contains(
             AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
             line => line.StartsWith("touched_anchors:", StringComparison.Ordinal));
+        Assert.Contains(
+            AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
+            line =>
+                line.StartsWith("blockers:", StringComparison.Ordinal) &&
+                line.Contains("none - token first when verdict is pass", StringComparison.Ordinal) &&
+                line.Contains("blank is invalid", StringComparison.Ordinal) &&
+                line.Contains("advisory findings belong only in findings", StringComparison.Ordinal));
+        Assert.Contains(
+            "When no open blocking findings remain, use `verdict: pass` and `blockers: none` even when open advisory findings remain",
+            SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "When none remain, use `verdict: pass` and `blockers: none` even with open advisories",
+            SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer, TaskComplexity.Simple),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "requires `needs-work` or `fail`",
+            SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer),
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Role_requirements_define_canonical_inconclusive_and_premise_invalid_results")]

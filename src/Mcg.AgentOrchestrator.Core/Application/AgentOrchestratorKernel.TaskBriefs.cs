@@ -771,13 +771,13 @@ public sealed partial class AgentOrchestratorKernel
         };
         foreach (var finding in open)
         {
-            lines.Add($"- {finding.StableId} | {finding.Location} | {finding.Description}");
+            lines.Add($"- {finding.StableId} | severity={finding.Severity.ToString().ToLowerInvariant()} | {finding.Location} | {finding.Description}");
         }
 
         lines.Add($"RESOLVED_CARRIED count={resolved.Length}");
         foreach (var finding in resolved)
         {
-            lines.Add($"- {finding.StableId} | {finding.Location} | carry forward; do not re-review unless this exact anchor was touched.");
+            lines.Add($"- {finding.StableId} | severity={finding.Severity.ToString().ToLowerInvariant()} | {finding.Location} | carry forward; do not re-review unless this exact anchor was touched.");
         }
 
         lines.Add("ROUND_DIFF_TOUCHED_ANCHORS (system-derived; authoritative for regression reopening):");
