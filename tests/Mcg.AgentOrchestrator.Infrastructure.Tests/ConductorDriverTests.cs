@@ -2891,14 +2891,14 @@ public sealed class ConductorDriverTests
             (
                 Name: "core",
                 Files: new[] { "src/Mcg.AgentOrchestrator.Core/Domain/TaskSpec.cs" },
-                MappingNeedsInput: true,
-                NoApplicableTests: false,
+                MappingNeedsInput: false,
+                NoApplicableTests: true,
                 RequestFragment: (string?)null),
             (
                 Name: "infrastructure",
                 Files: new[] { "src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerResultParser.cs" },
-                MappingNeedsInput: true,
-                NoApplicableTests: false,
+                MappingNeedsInput: false,
+                NoApplicableTests: true,
                 RequestFragment: (string?)null),
             (
                 Name: "dashboard",
@@ -2923,14 +2923,14 @@ public sealed class ConductorDriverTests
                 Files: Enumerable.Range(1, 6)
                     .Select(index => $"src/Mcg.AgentOrchestrator.Core/Domain/Changed{index}.cs")
                     .ToArray(),
-                MappingNeedsInput: true,
-                NoApplicableTests: false,
+                MappingNeedsInput: false,
+                NoApplicableTests: true,
                 RequestFragment: (string?)null),
             (
                 Name: "full-suite",
                 Files: new[] { "Directory.Build.props" },
-                MappingNeedsInput: true,
-                NoApplicableTests: false,
+                MappingNeedsInput: false,
+                NoApplicableTests: true,
                 RequestFragment: (string?)null),
             (
                 Name: "generated-unmapped",
