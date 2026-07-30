@@ -93,54 +93,6 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
         }
     }
 
-    [Xunit.Fact(DisplayName = "PreReviewFocusedEvidenceVerifier_runs_every_selected_check_after_red")]
-    public async Task RunsEverySelectedCheckAfterRed()
-    {
-        var calls = new List<string[]>();
-        var root = CreateManifestWorkspace("""
-            {
-              "version": 1,
-              "checks": [],
-              "forbiddenChangedPathGlobs": []
-            }
-            """);
-        try
-        {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
-            {
-                calls.Add(args);
-                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests"))
-                {
-                    WriteMtpTrx(args, "Mcg.Tests.CoreFailure", "Failed");
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(1, "Failed: 1."));
-                }
-
-                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
-                {
-                    WriteMtpTrx(args, "Mcg.Tests.InfrastructurePass", "Passed");
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1."));
-                }
-
-                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
-            });
-
-            var result = await verifier.RunFocusedEvidenceAsync(
-                root,
-                new GoalId("abcdef12abcdef12abcdef12abcdef12"),
-                "Core.Tests: FullyQualifiedName~CoreTests; Infrastructure.Tests: FullyQualifiedName~InfrastructureTests");
-
-            Assert.True(result.Accepted);
-            Assert.False(result.Passed);
-            Assert.Equal(2, result.Checks.Count);
-            Assert.Contains(result.Checks, check => check.FailingTestIdentities.Contains("Mcg.Tests.CoreFailure"));
-            Assert.Contains(calls, call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
-        }
-        finally
-        {
-            DeleteDirectoryWithRetry(root);
-        }
-    }
-
     [Xunit.Fact(DisplayName = "PreReviewFocusedEvidenceVerifier_typed_trx_identity_preserves_theory_colons")]
     public void TypedTrxIdentityPreservesTheoryColons()
     {

@@ -84,9 +84,18 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         IEnumerable<string> changedFileScopes)
     {
         var open = findings
-            .Where(item => item.Finding.State == ReviewFindingState.Open)
+            .Where(item =>
+                item.Finding.State == ReviewFindingState.Open &&
+                item.Finding.Severity == FindingSeverity.Blocking)
             .OrderBy(item => item.Finding.Category == FindingCategory.SpecCompliance ? 0 : 1)
             .ThenBy(item => item.Role)
+            .ThenBy(item => item.Finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+        var deferredAdvisories = findings
+            .Where(item =>
+                item.Finding.State == ReviewFindingState.Open &&
+                item.Finding.Severity == FindingSeverity.Advisory)
+            .OrderBy(item => item.Role)
             .ThenBy(item => item.Finding.StableId, StringComparer.Ordinal)
             .ToArray();
         var accepted = findings
@@ -131,6 +140,16 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             lines.Add($"- stable_id: {finding.StableId}");
             lines.Add($"  source_role: {item.Role}");
             lines.Add($"  location: {finding.Location}");
+        }
+
+        lines.Add("## DEFERRED_NON_BLOCKING_ADVISORIES");
+        lines.Add("These findings remain visible for Reviewer/follow-up context but are not required repair scope. Do not expand this retry to address them.");
+        lines.Add($"advisory_count: {deferredAdvisories.Length}");
+        foreach (var item in deferredAdvisories)
+        {
+            lines.Add($"- stable_id: {item.Finding.StableId}");
+            lines.Add($"  source_role: {item.Role}");
+            lines.Add($"  location: {item.Finding.Location}");
         }
 
         lines.Add(BuildFocusedTestReceiptMandate(

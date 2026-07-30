@@ -2164,23 +2164,24 @@ internal sealed class ConductorDriver
                 MappingNeedsInput: generatedArtifactsBlock);
         }
 
-        var focusedChecks = plan.Checks
-            .Where(check => FindArgument(check.Command, "--filter") >= 0)
+        var projectWideChecks = plan.Checks
+            .Where(check => FindArgument(check.Command, "--filter") < 0)
             .ToArray();
-        if (focusedChecks.Length == 0)
+        if (projectWideChecks.Length > 0)
         {
             return new PreReviewEvidenceContext(
                 candidateSha,
                 [],
                 null,
-                $"{plan.Summary} No filtered test target mapped; project-wide checks are deferred to the acceptance gate.",
-                NoApplicableTests: true,
-                MappingNeedsInput: false);
+                $"{plan.Summary} Project-wide checks require a Tester-selected bounded filter before Reviewer dispatch: " +
+                $"{string.Join(", ", projectWideChecks.Select(check => check.Name))}.",
+                NoApplicableTests: false,
+                MappingNeedsInput: true);
         }
 
-        var selected = focusedChecks.Select(check => check.CommandLine).ToArray();
+        var selected = plan.Checks.Select(check => check.CommandLine).ToArray();
         var requests = new List<string>();
-        foreach (var check in focusedChecks)
+        foreach (var check in plan.Checks)
         {
             var filterIndex = FindArgument(check.Command, "--filter");
             var project = check.Command.FirstOrDefault(argument =>

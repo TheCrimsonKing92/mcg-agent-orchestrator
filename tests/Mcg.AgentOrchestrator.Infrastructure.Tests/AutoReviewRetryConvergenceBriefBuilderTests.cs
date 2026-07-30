@@ -55,6 +55,58 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.DoesNotContain("fallback blocker text", brief, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "BuildConvergenceBrief_keeps_advisories_visible_without_making_them_repair_scope")]
+    public void BuildConvergenceBriefKeepsAdvisoriesVisibleWithoutMakingThemRepairScope()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Separate blockers from advisories");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [
+                new ReviewFinding(
+                    "BLOCKER",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "A.Run"),
+                    "Required correctness repair.",
+                    Severity: FindingSeverity.Blocking),
+                new ReviewFinding(
+                    "ADVISORY",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/B.cs", "B.Run"),
+                    "Optional follow-up.",
+                    Severity: FindingSeverity.Advisory)
+            ],
+            []);
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
+            goal,
+            developer,
+            reviewer,
+            "findings",
+            "verdict=needs-work",
+            AgentRole.Developer,
+            1,
+            "review.out",
+            ["src/A.cs", "src/B.cs"]);
+        var actionItems = brief[..brief.IndexOf("## PRESERVE_ACCEPTED", StringComparison.Ordinal)];
+        var deferred = brief[brief.IndexOf("## DEFERRED_NON_BLOCKING_ADVISORIES", StringComparison.Ordinal)..];
+
+        Assert.Contains("open_count: 1", actionItems, StringComparison.Ordinal);
+        Assert.Contains("stable_id: BLOCKER", actionItems, StringComparison.Ordinal);
+        Assert.DoesNotContain("stable_id: ADVISORY", actionItems, StringComparison.Ordinal);
+        Assert.Contains("advisory_count: 1", deferred, StringComparison.Ordinal);
+        Assert.Contains("stable_id: ADVISORY", deferred, StringComparison.Ordinal);
+        Assert.Contains("not required repair scope", deferred, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "AutoReviewRetryConvergenceBriefBuilder_orders_spec_findings_and_preserves_legacy_shape")]
     public void OrdersSpecFindingsAndPreservesLegacyCategorylessShape()
     {
