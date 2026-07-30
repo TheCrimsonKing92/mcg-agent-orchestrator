@@ -1285,18 +1285,20 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         return true;
     }
 
-    private static TaskSnapshot MergeTaskSnapshot(TaskSnapshot baseline, TaskSnapshot stored, TaskSnapshot current) =>
-        stored with
+    private static TaskSnapshot MergeTaskSnapshot(TaskSnapshot baseline, TaskSnapshot stored, TaskSnapshot current)
+    {
+        var attemptAuthority = PickChangedAttemptAuthority(baseline, stored, current);
+        return stored with
         {
             Description = PickStoreOwned(baseline.Description, stored.Description, current.Description),
             RequiredRole = PickStoreOwned(baseline.RequiredRole, stored.RequiredRole, current.RequiredRole),
-            Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
-            AssignedAgentId = PickTickOwned(baseline.AssignedAgentId, stored.AssignedAgentId, current.AssignedAgentId),
-            LastExecution = PickTickOwned(baseline.LastExecution, stored.LastExecution, current.LastExecution),
-            LastVerification = PickStoreOwned(baseline.LastVerification, stored.LastVerification, current.LastVerification),
+            Status = attemptAuthority is null ? PickTickOwned(baseline.Status, stored.Status, current.Status) : attemptAuthority.Status,
+            AssignedAgentId = attemptAuthority is null ? PickTickOwned(baseline.AssignedAgentId, stored.AssignedAgentId, current.AssignedAgentId) : attemptAuthority.AssignedAgentId,
+            LastExecution = attemptAuthority is null ? PickTickOwned(baseline.LastExecution, stored.LastExecution, current.LastExecution) : attemptAuthority.LastExecution,
+            LastVerification = attemptAuthority is null ? PickStoreOwned(baseline.LastVerification, stored.LastVerification, current.LastVerification) : attemptAuthority.LastVerification,
             VerificationHistory = PickStoreOwnedList(baseline.VerificationHistory, stored.VerificationHistory, current.VerificationHistory),
-            LastDispatch = PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch),
-            LastProcess = PickTickOwned(baseline.LastProcess, stored.LastProcess, current.LastProcess),
+            LastDispatch = attemptAuthority is null ? PickTickOwned(baseline.LastDispatch, stored.LastDispatch, current.LastDispatch) : attemptAuthority.LastDispatch,
+            LastProcess = attemptAuthority is null ? PickSameAttemptProcess(baseline.LastProcess, stored.LastProcess, current.LastProcess) : attemptAuthority.LastProcess,
             VerificationPlan = PickStoreOwned(baseline.VerificationPlan, stored.VerificationPlan, current.VerificationPlan),
             SubscriptionRetryAfter = PickStoreOwned(baseline.SubscriptionRetryAfter, stored.SubscriptionRetryAfter, current.SubscriptionRetryAfter),
             SubscriptionLimitReviewNote = PickStoreOwned(baseline.SubscriptionLimitReviewNote, stored.SubscriptionLimitReviewNote, current.SubscriptionLimitReviewNote),
@@ -1308,6 +1310,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             LatestRetryAt = PickStoreOwned(baseline.LatestRetryAt, stored.LatestRetryAt, current.LatestRetryAt),
             PendingRetryRoundKind = PickStoreOwned(baseline.PendingRetryRoundKind, stored.PendingRetryRoundKind, current.PendingRetryRoundKind)
         };
+    }
 
     private static IReadOnlyList<ProgressEventSnapshot> MergeTimeline(
         IReadOnlyList<ProgressEventSnapshot> baseline,
@@ -1334,6 +1337,93 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 
     private static T PickStoreOwned<T>(T baseline, T stored, T current) =>
         PickWithSameFieldPrecedence(baseline, stored, current, preferStoredOnConflict: true);
+
+    private static TaskSnapshot? PickChangedAttemptAuthority(
+        TaskSnapshot baseline,
+        TaskSnapshot stored,
+        TaskSnapshot current)
+    {
+        var storedDispatchChanged = !SameDispatchAttempt(baseline.LastDispatch, stored.LastDispatch);
+        var currentDispatchChanged = !SameDispatchAttempt(baseline.LastDispatch, current.LastDispatch);
+        if (storedDispatchChanged != currentDispatchChanged)
+            return storedDispatchChanged ? stored : current;
+        if (storedDispatchChanged)
+            return PickNewerDispatchAttempt(stored, current);
+
+        var storedProcessChanged = !SameProcessAttempt(baseline.LastProcess, stored.LastProcess);
+        var currentProcessChanged = !SameProcessAttempt(baseline.LastProcess, current.LastProcess);
+        if (storedProcessChanged != currentProcessChanged)
+            return storedProcessChanged ? stored : current;
+        if (storedProcessChanged)
+            return PickNewerProcessAttempt(stored, current);
+
+        if (stored.LastProcess?.WasCancelled != current.LastProcess?.WasCancelled)
+            return stored.LastProcess?.WasCancelled is true ? stored : current;
+
+        return null;
+    }
+
+    private static TaskSnapshot PickNewerDispatchAttempt(TaskSnapshot stored, TaskSnapshot current)
+    {
+        if (stored.LastDispatch is null)
+            return current.LastDispatch is null ? stored : current;
+        if (current.LastDispatch is null)
+            return stored;
+
+        return stored.LastDispatch.DispatchedAt >= current.LastDispatch.DispatchedAt ? stored : current;
+    }
+
+    private static TaskSnapshot PickNewerProcessAttempt(TaskSnapshot stored, TaskSnapshot current)
+    {
+        if (stored.LastProcess is null)
+            return current.LastProcess is null ? stored : current;
+        if (current.LastProcess is null)
+            return stored;
+        if (stored.LastProcess.StartedAt != current.LastProcess.StartedAt)
+            return stored.LastProcess.StartedAt > current.LastProcess.StartedAt ? stored : current;
+        if (stored.LastProcess.WasCancelled != current.LastProcess.WasCancelled)
+            return stored.LastProcess.WasCancelled ? stored : current;
+        if (stored.LastProcess.CompletedAt is null != current.LastProcess.CompletedAt is null)
+            return stored.LastProcess.CompletedAt is not null ? stored : current;
+
+        return stored.LastProcess.CompletedAt >= current.LastProcess.CompletedAt ? stored : current;
+    }
+
+    private static bool SameDispatchAttempt(TaskDispatchSnapshot? left, TaskDispatchSnapshot? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+
+        return left.DispatchedAt == right.DispatchedAt;
+    }
+
+    private static bool SameProcessAttempt(TaskProcessSnapshot? left, TaskProcessSnapshot? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+
+        return left.ProcessId == right.ProcessId && left.StartedAt == right.StartedAt;
+    }
+
+    private static TaskProcessSnapshot? PickSameAttemptProcess(
+        TaskProcessSnapshot? baseline,
+        TaskProcessSnapshot? stored,
+        TaskProcessSnapshot? current)
+    {
+        var storedChanged = !SnapshotEquals(baseline, stored);
+        var currentChanged = !SnapshotEquals(baseline, current);
+        if (!storedChanged || !currentChanged)
+            return PickTickOwned(baseline, stored, current);
+
+        if (stored?.WasCancelled != current?.WasCancelled)
+            return stored?.WasCancelled is true ? stored : current;
+        if (stored?.CompletedAt is null != current?.CompletedAt is null)
+            return stored?.CompletedAt is not null ? stored : current;
+        if (stored?.CompletedAt != current?.CompletedAt)
+            return stored?.CompletedAt > current?.CompletedAt ? stored : current;
+
+        return current;
+    }
 
     private static T PickWithSameFieldPrecedence<T>(T baseline, T stored, T current, bool preferStoredOnConflict)
     {
@@ -1482,7 +1572,13 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 return result;
 
             // Short BEGIN IMMEDIATE: re-read version, write one row if version unchanged.
-            var casSucceeded = await TryCasWriteGoalRowAsync(goalId, newSnapshot, loadedVersion, resolvedOperation, cancellationToken);
+            var casSucceeded = await TryCasWriteGoalRowAsync(
+                goalId,
+                newSnapshot,
+                humanInputRequests: null,
+                loadedVersion,
+                resolvedOperation,
+                cancellationToken);
             if (casSucceeded)
                 return result;
 
@@ -1492,6 +1588,61 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             if (attempt >= MaxBusyRetries)
                 throw new InvalidOperationException(
                     $"TransactGoalAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
+
+            await Task.Delay(versionMismatchDelay, cancellationToken);
+            versionMismatchDelay = Math.Min(versionMismatchDelay * 2, 1000);
+        }
+    }
+
+    public async Task<T> TransactGoalStateAsync<T>(
+        GoalId goalId,
+        Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        return await TransactGoalStateAsync(
+            ResolveOperationTag($"{nameof(TransactGoalStateAsync)}({ShortGoalId(goalId.Value)})"),
+            goalId,
+            transaction,
+            cancellationToken);
+    }
+
+    public async Task<T> TransactGoalStateAsync<T>(
+        string operationName,
+        GoalId goalId,
+        Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+        CancellationToken cancellationToken = default)
+    {
+        var versionMismatchDelay = 50;
+        var resolvedOperation = ResolveOperationTag($"{nameof(TransactGoalStateAsync)}({ShortGoalId(goalId.Value)})", operationName);
+        for (var attempt = 1; ; attempt++)
+        {
+            var (loadedState, loadedVersion) = await LoadGoalStateAndVersionAsync(goalId, cancellationToken);
+            var (shouldSave, newState, result) = await transaction(loadedState, cancellationToken);
+
+            if (!shouldSave || newState is null)
+                return result;
+
+            if (!string.Equals(newState.Goal.Id, goalId.Value, StringComparison.Ordinal) ||
+                newState.HumanInputRequests.Any(request =>
+                    !string.Equals(request.GoalId, goalId.Value, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"TransactGoalStateAsync for goal {goalId.Value[..8]} cannot persist state owned by another goal.");
+            }
+
+            var casSucceeded = await TryCasWriteGoalRowAsync(
+                goalId,
+                newState.Goal,
+                newState.HumanInputRequests,
+                loadedVersion,
+                resolvedOperation,
+                cancellationToken);
+            if (casSucceeded)
+                return result;
+
+            if (attempt >= MaxBusyRetries)
+                throw new InvalidOperationException(
+                    $"TransactGoalStateAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
 
             await Task.Delay(versionMismatchDelay, cancellationToken);
             versionMismatchDelay = Math.Min(versionMismatchDelay * 2, 1000);
@@ -1517,12 +1668,54 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         }, cancellationToken);
     }
 
+    private async Task<(GoalStateSnapshot? State, int Version)> LoadGoalStateAndVersionAsync(
+        GoalId goalId,
+        CancellationToken cancellationToken)
+    {
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            GoalSnapshot? goalSnapshot;
+            int version;
+            await using (var goalCommand = conn.CreateCommand())
+            {
+                goalCommand.CommandText = "SELECT snapshot_json, COALESCE(version, 0) FROM goals WHERE id = $id";
+                goalCommand.Parameters.AddWithValue("$id", goalId.Value);
+                await using var reader = await goalCommand.ExecuteReaderAsync(cancellationToken);
+                if (!await reader.ReadAsync(cancellationToken))
+                    return ((GoalStateSnapshot?)null, 0);
+
+                goalSnapshot = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions);
+                version = reader.GetInt32(1);
+            }
+
+            var humanInputRequests = new List<HumanInputRequestSnapshot>();
+            await using (var inputCommand = conn.CreateCommand())
+            {
+                inputCommand.CommandText = "SELECT snapshot_json FROM human_input_requests WHERE goal_id = $goal_id";
+                inputCommand.Parameters.AddWithValue("$goal_id", goalId.Value);
+                await using var reader = await inputCommand.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var request = JsonSerializer.Deserialize<HumanInputRequestSnapshot>(
+                        reader.GetString(0),
+                        SerializerOptions);
+                    if (request is not null)
+                        humanInputRequests.Add(request);
+                }
+            }
+
+            return (new GoalStateSnapshot(goalSnapshot!, humanInputRequests), version);
+        }, cancellationToken);
+    }
+
     // Attempts a short CAS write for one goal row. Acquires BEGIN IMMEDIATE, re-reads the version,
     // writes only if it matches expectedVersion, increments version, then commits.
     // Returns true on success, false when the version has changed (caller should retry).
     private async Task<bool> TryCasWriteGoalRowAsync(
         GoalId goalId,
         GoalSnapshot snapshot,
+        IReadOnlyList<HumanInputRequestSnapshot>? humanInputRequests,
         int expectedVersion,
         string operationName,
         CancellationToken cancellationToken)
@@ -1551,6 +1744,27 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             var updatedAt = DateTimeOffset.UtcNow.ToString("O");
             telemetry.AddWrite(await UpsertGoalRowAsync(conn, snapshot, updatedAt, versionSql: "$version", cancellationToken, currentVersion + 1));
             telemetry.AddWrite(await UpsertModelFitHistoryRowsAsync(conn, snapshot, cancellationToken));
+            if (humanInputRequests is not null)
+            {
+                foreach (var request in humanInputRequests)
+                {
+                    var json = JsonSerializer.Serialize(request, SerializerOptions);
+                    await using var inputCommand = conn.CreateCommand();
+                    inputCommand.CommandText = """
+                        INSERT INTO human_input_requests (id, goal_id, snapshot_json)
+                        VALUES ($id, $goal_id, $json)
+                        ON CONFLICT(id) DO UPDATE SET
+                            goal_id       = excluded.goal_id,
+                            snapshot_json = excluded.snapshot_json
+                        """;
+                    inputCommand.Parameters.AddWithValue("$id", request.Id);
+                    inputCommand.Parameters.AddWithValue("$goal_id", request.GoalId);
+                    inputCommand.Parameters.AddWithValue("$json", json);
+                    telemetry.AddWrite(
+                        await inputCommand.ExecuteNonQueryAsync(cancellationToken),
+                        Encoding.UTF8.GetByteCount(json));
+                }
+            }
 
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             telemetry.Emit("commit");

@@ -130,10 +130,12 @@ internal static class SubscriptionPlanBuilder
         WorkerProfileCatalog profiles,
         Func<TaskSpec, int?>? estimatePromptCharacterCount = null,
         IReadOnlyList<ModelOutcomeRecord>? scorecard = null,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<string, bool>? commandExists = null)
     {
         var validations = OrchestratorHealthInspector
-            .InspectCurrentEnvironment(new AgentCatalog(agents), profiles)
+            .InspectCurrentEnvironment(new AgentCatalog(agents), profiles, commandExists)
             .WorkerProfiles
             .ToDictionary(profile => profile.Name, StringComparer.OrdinalIgnoreCase);
 
@@ -141,7 +143,18 @@ internal static class SubscriptionPlanBuilder
 
         var allowCheapLaneInPlan = scorecard is not null;
         var items = goal.Tasks
-            .Select(task => BuildItem(goal, task, agents, profiles, validations, estimatePromptCharacterCount, scorecardLookup, now, allowCheapLaneInPlan))
+            .Select(task => BuildItem(
+                goal,
+                task,
+                agents,
+                profiles,
+                validations,
+                estimatePromptCharacterCount,
+                scorecardLookup,
+                now,
+                allowCheapLaneInPlan,
+                sandboxOptions,
+                commandExists))
             .ToList();
         var readyModelUsage = BuildModelSummary(goal, items);
         var providerBudgets = BuildProviderBudgetSummary(goal, items);
@@ -180,7 +193,9 @@ internal static class SubscriptionPlanBuilder
         Func<TaskSpec, int?>? estimatePromptCharacterCount = null,
         IReadOnlyDictionary<string, ModelOutcomeRecord>? scorecardLookup = null,
         DateTimeOffset? now = null,
-        bool allowCheapLane = false)
+        bool allowCheapLane = false,
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<string, bool>? commandExists = null)
     {
         var taskNumber = TaskDisplayNumber.Resolve(goal, task.Id);
         if (task.AssignedAgentId is null)
@@ -240,7 +255,14 @@ internal static class SubscriptionPlanBuilder
                     ["Run delegate or add the missing agent profile."]));
         }
 
-        var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(agent, goal, task, profiles, allowCheapLane: allowCheapLane);
+        var templateVariables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(
+            agent,
+            goal,
+            task,
+            profiles,
+            allowCheapLane,
+            sandboxOptions,
+            commandExists);
         var effectiveProviderName = GetTemplateValue(templateVariables, "providerName") ?? agent.Model.ProviderName;
         var effectiveModelName = GetTemplateValue(templateVariables, "apiModelName") ?? agent.Model.ModelName;
         var usesComplexModel = UsesComplexModel(agent, effectiveProviderName, effectiveModelName);
@@ -252,7 +274,14 @@ internal static class SubscriptionPlanBuilder
 
         try
         {
-            var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(agent, goal, task, profiles, allowCheapLane: allowCheapLane);
+            var profileName = WorkerProfileDispatcher.ResolveSubscriptionProfileName(
+                agent,
+                goal,
+                task,
+                profiles,
+                allowCheapLane,
+                sandboxOptions,
+                commandExists);
             var dispatchLane = GetTemplateValue(templateVariables, "dispatchLane");
             var effectiveDispatchLane = string.IsNullOrWhiteSpace(dispatchLane)
                 ? profileName

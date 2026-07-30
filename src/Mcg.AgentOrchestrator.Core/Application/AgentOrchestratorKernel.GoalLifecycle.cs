@@ -210,6 +210,26 @@ public sealed partial class AgentOrchestratorKernel
         return ReopenTerminalGoalWithNonTerminalTasks(goal, reason);
     }
 
+    public bool ReopenVerifyingGoalAfterAcceptanceAttemptInvalidated(GoalId goalId, string reason)
+    {
+        var goal = GetGoal(goalId);
+        var reopenReason = reason?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(reopenReason))
+        {
+            throw new ArgumentException("Acceptance invalidation reason cannot be empty.", nameof(reason));
+        }
+
+        if (goal.Status != GoalStatus.Verifying ||
+            goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
+        {
+            return false;
+        }
+
+        goal.SetStatus(GoalStatus.Active);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, reopenReason);
+        return true;
+    }
+
     public bool NormalizePrematureCompletedGoalToVerified(GoalId goalId, string reason)
     {
         var goal = GetGoal(goalId);

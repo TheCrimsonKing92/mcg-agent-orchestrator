@@ -20,7 +20,7 @@ internal sealed record ConductorParallelAcceptanceCandidate(
             return true;
         }
 
-        return ScopePaths.Any(left => other.ScopePaths.Any(right => PathsOverlap(left, right)));
+        return ScopePaths.Any(left => other.ScopePaths.Any(right => RepositoryPathOverlap.Overlaps(left, right)));
     }
 
     public string CandidateKey =>
@@ -35,7 +35,7 @@ internal sealed record ConductorParallelAcceptanceCandidate(
     {
         var paths = fileScopes
             .Where(scope => !string.IsNullOrWhiteSpace(scope))
-            .Select(NormalizePath)
+            .Select(RepositoryPathOverlap.Normalize)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -52,14 +52,6 @@ internal sealed record ConductorParallelAcceptanceCandidate(
 
         return new ConductorParallelAcceptanceCandidate(goal, slotIndex, paths, resources, branchHeadSha, mainHeadSha);
     }
-
-    private static bool PathsOverlap(string left, string right) =>
-        left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
-        left.StartsWith(right + "/", StringComparison.OrdinalIgnoreCase) ||
-        right.StartsWith(left + "/", StringComparison.OrdinalIgnoreCase);
-
-    private static string NormalizePath(string path) =>
-        path.Replace('\\', '/').Trim().TrimStart('/').TrimEnd('/');
 }
 
 internal sealed record ConductorParallelAcceptanceRunResult(

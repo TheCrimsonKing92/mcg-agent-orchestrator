@@ -88,6 +88,80 @@ public sealed class TaskBriefTests
     Assert.Contains("suspected-defective-criterion", brief, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_reviewer_convergence_scope_preserves_finding_severity")]
+    public void BuildTaskBriefReviewerConvergenceScopePreservesFindingSeverity()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var reviewer = new TaskSpec(TaskId.New(), "Review severity-aware convergence.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Preserve advisory severity across review rounds", [reviewer]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    kernel.RecordTaskVerification(
+        goal.Id,
+        reviewer.Id,
+        new TaskVerificationRecord(
+            "review",
+            "C:\\repo",
+            0,
+            """
+            WORKER_RESULT:
+            files: none
+            commands: review
+            tests: not-run - Reviewer is read-only
+            commit: none
+            blockers: exact-blocker - B-1 correctness blocker
+            findings: [{"stable_id":"B-1","state":"open","severity":"blocking","location":{"file":"src/B.cs","region":"B.Run"},"description":"Correctness blocker fixed."}]
+            touched_anchors: []
+            verdict: needs-work
+            model_fit: Anthropic/claude-opus-5 - adequate - focused review - severity receipt
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true));
+    kernel.RetryTask(goal.Id, reviewer.Id, "Address B-1 before the next review.");
+    clock.Advance();
+    kernel.RecordTaskVerification(
+        goal.Id,
+        reviewer.Id,
+        new TaskVerificationRecord(
+            "review",
+            "C:\\repo",
+            0,
+            """
+            WORKER_RESULT:
+            files: none
+            commands: review
+            tests: not-run - Reviewer is read-only
+            commit: none
+            blockers: none
+            findings: [{"stable_id":"A-1","state":"open","severity":"advisory","location":{"file":"src/A.cs","region":"A.Run"},"description":"Readability follow-up."},{"stable_id":"B-1","state":"resolved","severity":"blocking","location":{"file":"src/B.cs","region":"B.Run"},"description":"Correctness blocker fixed."}]
+            touched_anchors: []
+            verdict: pass
+            model_fit: Anthropic/claude-opus-5 - adequate - focused review - severity receipt
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """,
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true));
+    kernel.RetryTask(goal.Id, reviewer.Id, "Run the next review round.");
+
+    var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+
+    Assert.Contains(
+        "- A-1 | severity=advisory | src/A.cs::A.Run | Readability follow-up.",
+        brief,
+        StringComparison.Ordinal);
+    Assert.Contains(
+        "- B-1 | severity=blocking | src/B.cs::B.Run | carry forward; do not re-review unless this exact anchor was touched.",
+        brief,
+        StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "AgentTaskRunner_prefers_bounded_source_survey_for_research_prompts")]
     public async Task AgentTaskRunnerPrefersBoundedSourceSurveyForResearchPrompts()
 {

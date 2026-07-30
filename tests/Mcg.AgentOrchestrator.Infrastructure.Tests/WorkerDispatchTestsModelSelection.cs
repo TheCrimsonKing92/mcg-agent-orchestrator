@@ -848,6 +848,50 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     Assert.Contains("--model 'gpt-5.3-codex-spark'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_does_not_override_constrained_developer_alias_with_cheap_lane")]
+    public void WorkerProfileDispatcherDoesNotOverrideConstrainedDeveloperAliasWithCheapLane()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Fix a typo",
+        [new TaskSpec(TaskId.New(), "Update one label.", AgentRole.Developer)]);
+    var agent = AgentCatalog.Default().GetRequired(AgentRole.Developer) with
+    {
+        Subscription = new SubscriptionLaunchProfile(
+            "codex-cli",
+            AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            AgentCatalog.RoutineSubscriptionReasoningEffort),
+        IsProviderRoutingConstrained = true
+    };
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-only; reasons: simple code objective; risk labels: small-task, low-risk.");
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        DateTimeOffset.Parse("2026-07-29T12:00:00Z"));
+
+    Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
+    Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
+    Assert.DoesNotContain("codex-spark", task.LastDispatch.Command, StringComparison.OrdinalIgnoreCase);
+    Assert.Contains("provider-constrained: Developer remains on OpenAI", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_keeps_complex_high_risk_developer_on_default_lane")]
     public void WorkerProfileDispatcherKeepsComplexHighRiskDeveloperOnDefaultLane()
 {
@@ -1340,6 +1384,218 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Equal("claude-haiku-4-5", task.LastDispatch.ModelName);
 }
 
+    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_operator_OpenAI_selection_constrains_all_light_roles")]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void WorkerProfileDispatcherOperatorOpenAiSelectionConstrainsAllLightRoles(AgentRole role)
+{
+    var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        role.ToString(),
+        "OpenAI",
+        "gpt-5.4-mini",
+        null));
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Inspect the requested change.", role);
+    var goal = kernel.CreateGoal("Keep the explicit OpenAI assignment", [task]);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var planItem = SubscriptionPlanBuilder.Build(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        sandboxOptions: sandbox,
+        commandExists: _ => true).Items.Single();
+
+    Assert.True(agent.IsProviderRoutingConstrained);
+    Assert.Equal("OpenAI", planItem.ProviderName);
+    Assert.Equal("codex-cli", planItem.ProfileName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, planItem.SubscriptionModelName);
+}
+
+    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_operator_Anthropic_selection_constrains_all_light_roles")]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void WorkerProfileDispatcherOperatorAnthropicSelectionConstrainsAllLightRoles(AgentRole role)
+{
+    var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        role.ToString(),
+        "Anthropic",
+        "claude-sonnet-4-6",
+        null,
+        SubscriptionModelAlias: "claude-sonnet-4-6"));
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Inspect the requested change.", role);
+    var goal = kernel.CreateGoal("Keep the explicit Anthropic assignment", [task]);
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var planItem = SubscriptionPlanBuilder.Build(
+        goal,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        sandboxOptions: sandbox,
+        commandExists: _ => true).Items.Single();
+
+    Assert.True(agent.IsProviderRoutingConstrained);
+    Assert.Equal("Anthropic", planItem.ProviderName);
+    Assert.Equal("claude-cli", planItem.ProfileName);
+    Assert.Equal("claude-sonnet-4-6", planItem.SubscriptionModelName);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_OpenAI_constraint_aligns_plan_preflight_command_and_receipt")]
+    public void WorkerProfileDispatcherOpenAiConstraintAlignsPlanPreflightCommandAndReceipt()
+{
+    var root = CreateTempDirectory();
+    var promptRoot = Path.Combine(root, "prompts");
+    var workingDirectory = Path.Combine(root, "repo");
+    Directory.CreateDirectory(workingDirectory);
+    var dispatchedAt = DateTimeOffset.Parse("2026-07-29T12:00:00Z");
+    var agent = DashboardRequestParser.CreateAgentDefinition(new AgentSubmissionDto(
+        AgentRole.Planner.ToString(),
+        "OpenAI",
+        "gpt-5.4-mini",
+        null));
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Plan the requested source change.", AgentRole.Planner);
+    var goal = kernel.CreateGoal("Dispatch an explicitly OpenAI-only planner", [task]);
+    var profiles = WorkerProfileCatalog.Default();
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var planItem = SubscriptionPlanBuilder.Build(goal, [agent], profiles).Items.Single();
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    WorkerProfileDispatcher.PrepareSubscriptionTask(
+        kernel,
+        goal,
+        task,
+        [agent],
+        profiles,
+        promptRoot,
+        workingDirectory,
+        dispatchedAt,
+        sandboxOptions: sandbox);
+
+    var dispatch = task.LastDispatch!;
+    var preflight = File.ReadAllText(Path.Combine(
+        workingDirectory,
+        ".orchestrator-context",
+        goal.Id.Value,
+        "subscription-preflight.md"));
+    Assert.Equal(planItem.ProfileName, dispatch.WorkerName);
+    Assert.Equal(planItem.ProviderName, dispatch.ProviderName);
+    Assert.Equal(planItem.SubscriptionModelName, dispatch.ModelName);
+    Assert.StartsWith("codex exec", dispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("claude", dispatch.Command, StringComparison.OrdinalIgnoreCase);
+    Assert.Contains("profile: codex-cli", preflight, StringComparison.Ordinal);
+    Assert.Contains("model: OpenAI/gpt-5.5", preflight, StringComparison.Ordinal);
+    Assert.Contains("model-selection: provider-constrained: Planner remains on OpenAI", preflight, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_stale_catalog_repair_preserves_explicit_provider_constraint")]
+    public void AgentCatalogStoreStaleCatalogRepairPreservesExplicitProviderConstraint()
+{
+    var root = CreateTempDirectory();
+    var path = Path.Combine(root, "agents.json");
+    var legacyAgent = AgentCatalog.Default().GetRequired(AgentRole.Researcher) with
+    {
+        Name = "Pinned OpenAI researcher",
+        Subscription = new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSolSubscriptionModelAlias),
+        IsProviderRoutingConstrained = null
+    };
+    AgentCatalogStore.Save(path, new AgentCatalog([legacyAgent]));
+
+    AgentCatalog repairedCatalog = null!;
+    var warning = CaptureConsoleError(() => repairedCatalog = AgentCatalogStore.Load(path));
+    var repairedAgent = repairedCatalog.GetRequired(AgentRole.Researcher);
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Research the requested source change.", AgentRole.Researcher);
+    var goal = kernel.CreateGoal("Route a repaired explicit catalog", [task]);
+    kernel.ActivateGoal(goal.Id, [repairedAgent]);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var planItem = SubscriptionPlanBuilder.Build(
+        goal,
+        [repairedAgent],
+        WorkerProfileCatalog.Default(),
+        sandboxOptions: sandbox,
+        commandExists: _ => true).Items.Single();
+
+    Assert.True(repairedAgent.IsProviderRoutingConstrained);
+    Assert.Contains("1 customized assignment(s) are provider-constrained", warning, StringComparison.Ordinal);
+    Assert.Equal("OpenAI", planItem.ProviderName);
+    Assert.Equal("codex-cli", planItem.ProfileName);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, planItem.SubscriptionModelName);
+}
+
+    [Xunit.Fact(DisplayName = "AgentCatalogStore_legacy_built_in_catalog_routing_is_fallback_independent")]
+    public void AgentCatalogStoreLegacyBuiltInCatalogRoutingIsFallbackIndependent()
+{
+    var root = CreateTempDirectory();
+    var legacyCatalogs = new[]
+    {
+        ("openai", AgentCatalog.Default()),
+        ("ollama", AgentCatalog.OllamaDefault())
+    };
+
+    foreach (var (name, builtInCatalog) in legacyCatalogs)
+    {
+        var path = Path.Combine(root, $"{name}-agents.json");
+        var legacyCatalog = new AgentCatalog(builtInCatalog.Agents
+            .Select(agent => agent with { IsProviderRoutingConstrained = null })
+            .ToList());
+        AgentCatalogStore.Save(path, legacyCatalog);
+
+        AgentCatalog defaultLoad = null!;
+        AgentCatalog ollamaFallbackLoad = null!;
+        var defaultWarning = CaptureConsoleError(() => defaultLoad = AgentCatalogStore.Load(path));
+        var ollamaFallbackWarning = CaptureConsoleError(
+            () => ollamaFallbackLoad = AgentCatalogStore.Load(path, AgentCatalog.OllamaDefault()));
+
+        Assert.All(defaultLoad.Agents, agent => Assert.False(agent.IsProviderRoutingConstrained));
+        Assert.Equal(
+            defaultLoad.Agents.Select(agent => agent.IsProviderRoutingConstrained),
+            ollamaFallbackLoad.Agents.Select(agent => agent.IsProviderRoutingConstrained));
+        Assert.Contains("6 built-in-compatible assignment(s) remain automatic", defaultWarning, StringComparison.Ordinal);
+        Assert.Contains("6 built-in-compatible assignment(s) remain automatic", ollamaFallbackWarning, StringComparison.Ordinal);
+    }
+}
+
+    [Xunit.Fact(DisplayName = "AgentCatalog_Ollama_defaults_explicitly_enable_automatic_routing")]
+    public void AgentCatalogOllamaDefaultsExplicitlyEnableAutomaticRouting()
+{
+    Assert.All(AgentCatalog.OllamaDefault().Agents, agent => Assert.False(agent.IsProviderRoutingConstrained));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_constrained_high_risk_reviewer_preserves_risk_reason")]
+    public void WorkerProfileDispatcherConstrainedHighRiskReviewerPreservesRiskReason()
+{
+    var agent = AgentCatalog.Default().GetRequired(AgentRole.Reviewer) with
+    {
+        IsProviderRoutingConstrained = true
+    };
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Review the high-risk change.", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Review a high-risk migration", [task]);
+    kernel.RecordGoalPolicyDecision(
+        goal.Id,
+        "Intake pipeline decision (auto): developer-reviewer; risk labels: complex, high-risk.");
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+
+    var variables = WorkerProfileDispatcher.BuildSubscriptionTemplateVariables(
+        agent,
+        goal,
+        task,
+        WorkerProfileCatalog.Default(),
+        sandboxOptions: sandbox,
+        commandExists: _ => true);
+
+    Assert.Equal(
+        "full-profile: Reviewer high-risk/complex intake labels require exhaustive review",
+        variables["modelSelectionReason"]);
+}
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_light_readonly_role_resolves_haiku_with_recorded_reason")]
     public void WorkerProfileDispatcherLightReadonlyRoleResolvesHaikuWithRecordedReason()
 {
@@ -1352,6 +1608,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var task = new TaskSpec(TaskId.New(), "Research repository-local evidence for the change.", AgentRole.Researcher);
     var goal = kernel.CreateGoal("Route light read-only role", [task]);
     var agents = AgentCatalog.Default().Agents;
+    Assert.All(agents, agent => Assert.False(agent.IsProviderRoutingConstrained));
     kernel.ActivateGoal(goal.Id, agents);
     var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
     WorkerProfileDispatcher.PrepareSubscriptionTask(

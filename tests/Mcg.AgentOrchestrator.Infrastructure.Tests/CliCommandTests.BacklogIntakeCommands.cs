@@ -298,6 +298,55 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains("0 dependency edge(s)", output);
         Xunit.Assert.Contains("Parallel batches:", output);
         Xunit.Assert.Contains("Create commands:", output);
+        Xunit.Assert.Contains("heading=\"Add feature A planner\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("heading=\"Add feature B planner\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("heading=\"Add feature C planner\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Equal(
+            3,
+            output.Split("\"intakeItemId\":", StringSplitOptions.None).Length - 1);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_plan_excludes_the_goal_created_from_the_same_backlog_item")]
+    public void CliGoalPlanExcludesTheGoalCreatedFromTheSameBacklogItem()
+    {
+        var root = CreateTempDirectory();
+        WritePlanningBacklog(root);
+        var workspace = CreateRefinedWorkspace(root);
+        var intake = BacklogIntakePlanner.Build(workspace.BacklogStorePath, "Add feature A planner", maxItems: 1);
+        var item = Xunit.Assert.Single(intake.Items);
+        var kernel = new AgentOrchestratorKernel();
+        var linkedGoal = kernel.CreateGoal(
+            item.SuggestedObjective,
+            [new TaskSpec(TaskId.New(), "Implement planned work.", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(linkedGoal.Id, item.Id);
+        var differentlyLinkedGoal = kernel.CreateGoal(
+            item.SuggestedObjective,
+            [new TaskSpec(TaskId.New(), "Implement other planned work.", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(differentlyLinkedGoal.Id, "different-backlog-item");
+        var unlinkedGoal = kernel.CreateGoal(
+            item.SuggestedObjective,
+            [new TaskSpec(TaskId.New(), "Implement unlinked planned work.", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["goal-plan", "Add feature A planner"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.Contains($"item={item.Id}", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("comparedGoals=2", output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(linkedGoal.Id.Value[..8], output, StringComparison.Ordinal);
+        Xunit.Assert.Contains(differentlyLinkedGoal.Id.Value[..8], output, StringComparison.Ordinal);
+        Xunit.Assert.Contains(unlinkedGoal.Id.Value[..8], output, StringComparison.Ordinal);
+        Xunit.Assert.Equal(3, kernel.Goals.Count);
     }
 
 
@@ -474,6 +523,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         var root = CreateTempDirectory();
         WritePlanningBacklog(root);
         var workspace = CreateRefinedWorkspace(root);
+        var intake = BacklogIntakePlanner.Build(workspace.BacklogStorePath, headingFilter: null, maxItems: 10);
         var kernel = new AgentOrchestratorKernel();
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -497,6 +547,9 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.NotNull(currentGoal);
         Xunit.Assert.DoesNotContain(kernel.Goals, goal => goal.Objective.Contains("Explicit dependencies:", StringComparison.Ordinal));
         Xunit.Assert.All(kernel.Goals, goal => Xunit.Assert.Single(goal.Tasks));
+        Xunit.Assert.Equal(
+            intake.Items.Select(item => item.Id).Order(StringComparer.Ordinal),
+            kernel.Goals.Select(goal => goal.SourceBacklogItemId).Order(StringComparer.Ordinal));
         Xunit.Assert.Contains("Created simple goal", output);
     }
 

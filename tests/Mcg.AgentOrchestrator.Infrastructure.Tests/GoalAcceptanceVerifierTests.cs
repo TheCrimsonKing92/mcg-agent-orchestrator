@@ -1,12 +1,71 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
+    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_decodes_legacy_console_bytes_without_replacement")]
+    [Xunit.InlineData(0xFA)]
+    [Xunit.InlineData(0xB7)]
+    public void GoalAcceptanceVerifierDecodesLegacyConsoleBytesWithoutReplacement(int legacyByte)
+    {
+        var output = GoalAcceptanceVerifier.DecodeCapturedOutput(
+            [.. Encoding.ASCII.GetBytes("case:"), (byte)legacyByte, (byte)legacyByte, (byte)legacyByte]);
+
+        Assert.StartsWith("case:", output, StringComparison.Ordinal);
+        Assert.DoesNotContain('\uFFFD', output);
+        Assert.DoesNotContain('\0', output);
+        Assert.Equal(8, output.Length);
+        Assert.Equal(output[5], output[6]);
+        Assert.Equal(output[6], output[7]);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_prefers_strict_UTF8_over_legacy_console_decoding")]
+    public void GoalAcceptanceVerifierPrefersStrictUtf8OverLegacyConsoleDecoding()
+    {
+        var output = GoalAcceptanceVerifier.DecodeCapturedOutput(Encoding.UTF8.GetBytes("case:···"));
+
+        Assert.Equal("case:···", output);
+        Assert.DoesNotContain("Â·", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_preserves_BOM_based_output_decoding")]
+    public void GoalAcceptanceVerifierPreservesBomBasedOutputDecoding()
+    {
+        const string expected = "captured · output";
+        var utf8 = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(expected)).ToArray();
+        var utf16 = Encoding.Unicode.GetPreamble().Concat(Encoding.Unicode.GetBytes(expected)).ToArray();
+
+        Assert.Equal(expected, GoalAcceptanceVerifier.DecodeCapturedOutput(utf8));
+        Assert.Equal(expected, GoalAcceptanceVerifier.DecodeCapturedOutput(utf16));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_reads_legacy_capture_and_tolerates_missing_file")]
+    public async Task GoalAcceptanceVerifierReadsLegacyCaptureAndToleratesMissingFile()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcg-capture-{Guid.NewGuid():N}.out");
+        try
+        {
+            await File.WriteAllBytesAsync(path, [0xFA, 0xFA, 0xFA]);
+
+            var output = await GoalAcceptanceVerifier.ReadFileWithRetryAsync(path);
+
+            Assert.DoesNotContain('\uFFFD', output);
+            Assert.Equal(3, output.Length);
+            Assert.Equal(
+                string.Empty,
+                await GoalAcceptanceVerifier.ReadFileWithRetryAsync(path + ".missing"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "LockAttribution_emits_LOCK_receipt_with_holder_identity")]
     public void LockAttributionEmitsLockReceiptWithHolderIdentity()
     {

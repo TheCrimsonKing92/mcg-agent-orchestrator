@@ -99,7 +99,29 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
         Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
         CancellationToken cancellationToken = default) =>
         TransactGoalAsync(goalId, transaction, cancellationToken);
+
+    /// <summary>
+    /// Performs the same goal-scoped optimistic transaction while also loading and atomically
+    /// persisting that goal's human-input requests. Use this path when a goal mutation can create
+    /// or complete a human wait.
+    /// </summary>
+    Task<T> TransactGoalStateAsync<T>(
+        GoalId goalId,
+        Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support goal-scoped state transactions.");
+
+    Task<T> TransactGoalStateAsync<T>(
+        string operationName,
+        GoalId goalId,
+        Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+        CancellationToken cancellationToken = default) =>
+        TransactGoalStateAsync(goalId, transaction, cancellationToken);
 }
+
+public sealed record GoalStateSnapshot(
+    GoalSnapshot Goal,
+    IReadOnlyList<HumanInputRequestSnapshot> HumanInputRequests);
 
 public sealed record OrchestratorStateOutboxMessage(
     string Id,

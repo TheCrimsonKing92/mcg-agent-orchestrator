@@ -563,6 +563,8 @@ public abstract class CliCommandTestBase
 
         public int TransactGoalDelegateCalls { get; private set; }
 
+        public int LastSavedGoalStateHumanInputCount { get; private set; }
+
         public List<string> LoadedGoalIds { get; } = [];
 
         public List<IReadOnlyList<string>> LoadGoalBatches { get; } = [];
@@ -789,6 +791,63 @@ public abstract class CliCommandTestBase
             if (shouldSave && newSnapshot is not null)
             {
                 await SaveGoalSnapshotsAsync([newSnapshot], cancellationToken);
+            }
+
+            return result;
+        }
+
+        public async Task<T> TransactGoalStateAsync<T>(
+            GoalId goalId,
+            Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            TransactGoalCount++;
+            if (BeforeNextTransaction is { } before)
+            {
+                BeforeNextTransaction = null;
+                before(_kernel);
+            }
+
+            GoalStateSnapshot? LoadState()
+            {
+                var snapshot = _kernel.ExportSnapshot();
+                var goal = snapshot.Goals.FirstOrDefault(candidate => candidate.Id == goalId.Value);
+                if (goal is null)
+                    return null;
+
+                var humanInputRequests = snapshot.HumanInputRequests
+                    .Where(request => request.GoalId == goalId.Value)
+                    .ToArray();
+                return new GoalStateSnapshot(goal, humanInputRequests);
+            }
+
+            var state = LoadState();
+            TransactGoalDelegateCalls++;
+            var (shouldSave, newState, result) = await transaction(state, cancellationToken);
+            if (shouldSave && newState is not null && BeforeGoalCasRetry is { } beforeRetry)
+            {
+                BeforeGoalCasRetry = null;
+                beforeRetry(_kernel);
+                state = LoadState();
+                TransactGoalDelegateCalls++;
+                (shouldSave, newState, result) = await transaction(state, cancellationToken);
+            }
+
+            if (shouldSave && newState is not null)
+            {
+                SaveGoalSnapshotsCount++;
+                LastSavedGoalStateHumanInputCount = newState.HumanInputRequests.Count;
+                var snapshot = _kernel.ExportSnapshot();
+                var goals = snapshot.Goals
+                    .Select(goal => goal.Id == goalId.Value ? newState.Goal : goal)
+                    .ToList();
+                var humanInputRequests = snapshot.HumanInputRequests
+                    .Where(request => request.GoalId != goalId.Value)
+                    .Concat(newState.HumanInputRequests)
+                    .ToArray();
+                _kernel = AgentOrchestratorKernel.FromSnapshot(
+                    snapshot with { Goals = goals, HumanInputRequests = humanInputRequests });
             }
 
             return result;

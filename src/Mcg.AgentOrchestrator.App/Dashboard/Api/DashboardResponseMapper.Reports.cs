@@ -33,6 +33,38 @@ public static BacklogGoalPlanDto ToBacklogGoalPlanDto(BacklogIntakePlan intake, 
         ToParallelExecutionPlanDto(plan.ParallelPlan));
 }
 
+public static GoalScopeCollisionAdvisoryDto ToGoalScopeCollisionAdvisoryDto(
+    IReadOnlyList<(BacklogIntakeItem Item, GoalScopeCollisionReport Report)> reports)
+{
+    return new GoalScopeCollisionAdvisoryDto(
+        reports.Count,
+        reports.Select(entry => new GoalScopeCollisionReportDto(
+            entry.Item.Id,
+            entry.Item.Heading,
+            entry.Report.VerdictToken,
+            entry.Report.ComparedGoalCount,
+            entry.Report.ExplicitCollisionCount,
+            entry.Report.ConflictingGoalIds,
+            entry.Report.ProposedScopes
+                .Select(scope => new DeclaredFileScopeDto(scope.Path, scope.Provenance.ToString()))
+                .ToArray(),
+            entry.Report.Collisions
+                .Select(collision => new ScopeCollisionDto(
+                    collision.GoalId,
+                    collision.GoalPrefix,
+                    collision.GoalStatus,
+                    collision.Kind.ToString(),
+                    collision.ProposedPath,
+                    collision.ProposedProvenance.ToString(),
+                    collision.ConflictingPath,
+                    collision.ConflictingProvenance.ToString()))
+                .ToArray(),
+            entry.Report.EvidenceGaps
+                .Select(gap => new ScopeEvidenceGapDto(gap.GoalId, gap.Gap.ToString(), TimelineText(gap.Message)))
+                .ToArray()))
+            .ToArray());
+}
+
 public static CrossGoalStartPlanDto ToCrossGoalStartPlanDto(CrossGoalSubscriptionStartPlan plan, GoalDrainPolicy? drainPolicy = null)
 {
     return new CrossGoalStartPlanDto(

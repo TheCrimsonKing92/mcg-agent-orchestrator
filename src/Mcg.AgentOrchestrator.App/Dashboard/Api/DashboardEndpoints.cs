@@ -45,6 +45,7 @@ internal static partial class DashboardEndpoints
         api.MapGet("/continuations", () => Json(services.Continuations.GetStatuses()));
         api.MapGet("/continuations/summary", () => Json(services.Continuations.GetSummary()));
         api.MapGet("/backlog/goal-plan", async Task<IResult> (HttpContext context) => await Safe(() => GetBacklogGoalPlan(context, services)));
+        api.MapGet("/goals/scope-collision-advisory", async Task<IResult> (HttpContext context) => await Safe(() => GetScopeCollisionAdvisoryAsync(context, services)));
         api.MapGet("/goals/cross-start-plan", async Task<IResult> (HttpContext context) => await Safe(() => GetCrossGoalStartPlanAsync(context, services)));
         api.MapGet("/system/dashboard-host", () => Json(BuildHostInfo(services)));
         api.MapGet("/system/architecture", () => Json(BuildArchitectureReport(services)));

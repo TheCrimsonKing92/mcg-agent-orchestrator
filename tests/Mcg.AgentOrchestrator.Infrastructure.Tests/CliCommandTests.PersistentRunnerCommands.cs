@@ -303,7 +303,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.True(methodEnd > methodStart, "Could not isolate ExecuteGoalScopedTaskMutationCommand.");
         var methodSource = source[methodStart..methodEnd];
 
-        Xunit.Assert.Contains("TransactGoalAsync", methodSource, StringComparison.Ordinal);
+        Xunit.Assert.Contains("TransactGoalStateAsync", methodSource, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("LoadSingleGoalKernel", methodSource, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("LoadAsync", methodSource, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("reloadKernel", methodSource, StringComparison.Ordinal);
@@ -929,7 +929,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Equal(1, repository.TransactionCount);
         Xunit.Assert.Equal(0, repository.LoadCount);
-        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
         Xunit.Assert.False(repository.IsInTransaction);
         Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
@@ -979,7 +979,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             Xunit.Assert.Contains("mode=target-scoped-fast-path", output);
             Xunit.Assert.Contains("goalsWalked=1", output);
             Xunit.Assert.Equal(0, repository.LoadCount);
-            Xunit.Assert.Equal(1, repository.LoadGoalCount);
+            Xunit.Assert.Equal(1, repository.LoadGoalsCount);
             Xunit.Assert.Contains(target.Id.Value, repository.LoadedGoalIds);
             Xunit.Assert.DoesNotContain(current.Id.Value, repository.LoadedGoalIds);
             Xunit.Assert.Equal(target.Id, currentGoal!.Id);
@@ -1267,7 +1267,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(GoalStatus.Active, restored.Status);
         Xunit.Assert.Equal(0, repository.TransactionCount);
-        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
         Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
     }
@@ -1340,7 +1340,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(0, repository.LoadCount);
-        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal(1, repository.TransactionCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
         Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
@@ -1350,6 +1350,59 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
         Xunit.Assert.Equal(0, restoredTask.LastProcess!.ExitCode);
         Xunit.Assert.NotNull(restoredTask.LastVerification);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_refresh_dispatch_atomically_persists_premise_invalid_human_wait")]
+    public async Task PersistentRunnerRefreshDispatchAtomicallyPersistsPremiseInvalidHumanWait()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Validate the implementation premise", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Premise validation canary", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, """
+            WORKER_RESULT:
+            files: none
+            commands: inspected src/Mcg.AgentOrchestrator.Core/Domain/OrchestrationEnums.cs
+            tests: not-run - read-only premise validation
+            commit: none
+            blockers: premise-invalid - AgentRole.Judge is absent from the inspected enum at the current HEAD
+            model_fit: Anthropic/claude-opus-5 - adequate - premise validation - sufficient
+            skills: orchestrator-worker-verification
+            confidence: high
+            END_WORKER_RESULT
+            """);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var changed = false;
+        CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+            ["refresh-dispatch", goal.Id.Value[..8], "1"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var restored = await repository.LoadAsync();
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, restoredTask.Status);
+        Xunit.Assert.True(restoredTask.LastVerification?.WorkerResultPresent);
+        Xunit.Assert.Equal(1, repository.LastSavedGoalStateHumanInputCount);
+        var request = Xunit.Assert.Single(restored.HumanInputRequests);
+        Xunit.Assert.False(request.IsCompleted);
+        Xunit.Assert.Contains("premise-invalid", request.Question, StringComparison.Ordinal);
+        Xunit.Assert.Equal(task.Id, request.TaskId);
+        Xunit.Assert.Equal(0, repository.TransactAsyncCount);
+        Xunit.Assert.Equal(1, repository.TransactGoalCount);
     }
 
 
@@ -1386,7 +1439,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(0, repository.LoadCount);
-        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal(1, repository.TransactionCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
         Xunit.Assert.Equal([target.Id.Value], repository.LoadedGoalIds);
@@ -2000,7 +2053,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             ref currentGoal));
 
         Xunit.Assert.Equal(0, repository.LoadCount);
-        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Contains(completed.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.DoesNotContain(active.Id.Value, repository.LoadedGoalIds);
         Xunit.Assert.Equal(completed.Id, currentGoal!.Id);
@@ -2054,11 +2107,45 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 ref currentGoal));
 
             Xunit.Assert.Equal(0, repository.LoadCount);
-            Xunit.Assert.Equal(1, repository.LoadGoalCount);
+            Xunit.Assert.Equal(1, repository.LoadGoalsCount);
             Xunit.Assert.Contains(completed.Id.Value, repository.LoadedGoalIds);
             Xunit.Assert.DoesNotContain(active.Id.Value, repository.LoadedGoalIds);
             Xunit.Assert.Equal(completed.Id, currentGoal!.Id);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_input_needed_hydrates_goal_human_waits")]
+    public void PersistentRunnerInputNeededHydratesGoalHumanWaits()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Validate premise", AgentRole.Planner);
+        var goal = kernel.CreateGoal("Answerable premise wait", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RequestHumanInput(
+            goal.Id,
+            task.Id,
+            "Planner reported premise-invalid; clarify or abandon.");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["input-needed", goal.Id.Value[..8]],
+            repository,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("human input worklist: 1 open", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("premise-invalid", output, StringComparison.Ordinal);
+        Xunit.Assert.Equal(1, repository.LoadGoalsCount);
+        Xunit.Assert.Equal(0, repository.LoadGoalCount);
+        Xunit.Assert.Equal(goal.Id, currentGoal!.Id);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_provenance_loads_completed_goals_on_demand")]

@@ -55,6 +55,8 @@ public sealed class Goal
 
     public bool IsMetadataOnly { get; }
 
+    public bool IsTerminal => IsTerminalMetadataStatus(Status);
+
     public string? MetadataResultCommit { get; private set; }
 
     public DateTimeOffset? MetadataCreatedAt { get; private set; }

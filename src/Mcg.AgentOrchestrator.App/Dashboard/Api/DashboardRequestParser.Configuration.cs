@@ -105,7 +105,8 @@ public static AgentDefinition CreateAgentDefinition(AgentSubmissionDto submissio
             submission.MaxOutputTokens ?? DefaultMaxOutputTokens(providerName)),
         ExecutionPolicy: executionPolicy,
         Subscription: subscription,
-        ComplexModel: complexModel);
+        ComplexModel: complexModel,
+        IsProviderRoutingConstrained: true);
 }
 
 private static SubscriptionMode DefaultSubscriptionMode(string providerName)

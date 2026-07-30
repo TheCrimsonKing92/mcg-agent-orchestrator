@@ -327,6 +327,49 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_matches_truncated_theory_names_with_middle_dot_ellipsis")]
+    public void TestCoverageInvariantMatchesTruncatedTheoryNamesWithMiddleDotEllipsis()
+    {
+        const string testName = "TheoryTests.Runs(value: abc···)";
+        var trx = WriteTrx(("1", testName, "Passed"));
+        try
+        {
+            var discovered = TestCoverageInvariant.ParseDiscoveredTests(testName, bareTestList: true);
+
+            var result = TestCoverageInvariant.Evaluate(
+                discovered,
+                [new TestPartitionCoverage("theories", true, [trx])]);
+
+            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Empty(result.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_does_not_canonicalize_replacement_character_names")]
+    public void TestCoverageInvariantDoesNotCanonicalizeReplacementCharacterNames()
+    {
+        const string trxName = "TheoryTests.Runs(value: abc···)";
+        const string corruptedDiscoveryName = "TheoryTests.Runs(value: abc���)";
+        var trx = WriteTrx(("1", trxName, "Passed"));
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>([corruptedDiscoveryName], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("theories", true, [trx])]);
+
+            Xunit.Assert.False(result.Passed);
+            Xunit.Assert.Contains(corruptedDiscoveryName, result.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_bare_MTP_discovery_ignores_summaries_and_diagnostics")]
     public void TestCoverageInvariantBareMtpDiscoveryIgnoresSummariesAndDiagnostics()
     {

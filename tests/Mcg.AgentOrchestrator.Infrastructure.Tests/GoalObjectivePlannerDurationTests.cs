@@ -183,7 +183,9 @@ public sealed class GoalObjectivePlannerDurationTests
             ref currentGoal));
 
         var jsonLine = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
-            .Single(line => line.TrimStart().StartsWith("{", StringComparison.Ordinal));
+            .Single(line =>
+                line.TrimStart().StartsWith("{", StringComparison.Ordinal) &&
+                line.Contains("\"historicalOutcomeRates\":", StringComparison.Ordinal));
         using var document = JsonDocument.Parse(jsonLine);
         var rates = document.RootElement.GetProperty("historicalOutcomeRates");
         Xunit.Assert.Equal(0.2, rates.GetProperty("realFailureRate").GetDouble(), precision: 6);

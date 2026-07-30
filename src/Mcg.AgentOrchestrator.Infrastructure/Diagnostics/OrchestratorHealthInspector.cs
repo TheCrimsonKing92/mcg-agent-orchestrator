@@ -69,7 +69,10 @@ public static class OrchestratorHealthInspector
         return new OrchestratorHealthReport(providers, agentValidations, profiles);
     }
 
-    public static OrchestratorHealthReport InspectCurrentEnvironment(AgentCatalog agents, WorkerProfileCatalog workerProfiles)
+    public static OrchestratorHealthReport InspectCurrentEnvironment(
+        AgentCatalog agents,
+        WorkerProfileCatalog workerProfiles,
+        Func<string, bool>? commandExists = null)
     {
         var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
@@ -77,7 +80,7 @@ public static class OrchestratorHealthInspector
             environment[(string)entry.Key] = entry.Value?.ToString();
         }
 
-        return Inspect(environment, agents, workerProfiles, LocalCommandExists);
+        return Inspect(environment, agents, workerProfiles, commandExists ?? LocalCommandExists);
     }
 
     private static ProviderConfigurationStatus InspectProvider(

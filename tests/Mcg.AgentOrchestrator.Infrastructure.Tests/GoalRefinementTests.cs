@@ -1057,3 +1057,43 @@ public sealed class GoalRefinementTests
         return (service, kernel, goal.Id, collab);
     }
 }
+
+public sealed class GoalScopeCollisionConsoleViewTests
+{
+    [Xunit.Fact(DisplayName = "Goal_scope_collision_advisory_renders_attributed_operator_evidence")]
+    public void RendersAttributedOperatorEvidence()
+    {
+        var conflictingGoal = new Goal(
+            GoalId.New(),
+            $"Generated intake objective\n\n{BacklogIntakePlanner.TargetScopeHeadingLine}\n- src/Feature/File.cs",
+            [new TaskSpec(TaskId.New(), "Implement planned work.", AgentRole.Developer)]);
+        var report = GoalScopeCollisionAdvisor.Build(
+            ["Change src/Feature/File.cs."],
+            [conflictingGoal]);
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            ConsoleViews.PrintGoalScopeCollisionReport(report, "backlog-123", "Feature heading"));
+
+        Xunit.Assert.Contains("Scope collision advisory:", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("item=backlog-123", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("heading=\"Feature heading\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"intakeItemId\":\"backlog-123\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("overlap-detected", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains(conflictingGoal.Id.Value[..8], output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("src/Feature/File.cs", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Explicit", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Inferred", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Goal_scope_collision_advisory_never_renders_false_all_clear")]
+    public void NeverRendersFalseAllClear()
+    {
+        var report = GoalScopeCollisionAdvisor.Build(["No paths declared."], []);
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            ConsoleViews.PrintGoalScopeCollisionReport(report));
+
+        Xunit.Assert.Contains("insufficient-evidence", output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("no-overlap-detected", output, StringComparison.Ordinal);
+    }
+}

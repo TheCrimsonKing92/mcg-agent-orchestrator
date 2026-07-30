@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 public sealed class CollaborationItemStoreTests
 {
@@ -518,6 +519,142 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.False(second);
     }
 
+    [Xunit.Fact(DisplayName = "LandingEscalation_collaboration_timeout_preserves_json_record")]
+    public void LandingEscalationCollaborationTimeoutPreservesJsonRecord()
+    {
+        using var raiseStarted = new ManualResetEventSlim();
+        var pendingRaise = new TaskCompletionSource<CollaborationItem>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var fakeStore = new FakeCollaborationItemStore
+        {
+            RaiseStarted = raiseStarted,
+            PendingRaise = pendingRaise.Task
+        };
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Escalation timeout keeps durable fallback");
+
+        var record = Task.Run(() => OperatorInbox.RecordLandingEscalation(
+            workspace,
+            goal,
+            "merge conflict",
+            "integration",
+            channel: null,
+            collaborationStore: fakeStore,
+            collaborationRaiseTimeout: TimeSpan.FromMilliseconds(25)));
+
+        Xunit.Assert.True(raiseStarted.Wait(TimeSpan.FromSeconds(1)));
+        Xunit.Assert.True(record.Wait(TimeSpan.FromSeconds(1)));
+        Xunit.Assert.Equal("timeout", record.Result.CollaborationOutcome);
+        var jsonPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
+        Xunit.Assert.True(File.Exists(jsonPath));
+        Xunit.Assert.Contains(goal.Id.Value, File.ReadAllText(jsonPath), StringComparison.Ordinal);
+        pendingRaise.SetCanceled();
+    }
+
+    [Xunit.Fact(DisplayName = "LandingEscalation_real_store_write_lock_is_bounded_and_preserves_json_record")]
+    public async Task LandingEscalationRealStoreWriteLockIsBoundedAndPreservesJsonRecord()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var databasePath = Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db");
+        var store = new CollaborationItemStore(databasePath);
+        await store.RaiseAsync(CollaborationItemType.Decision, "seed", "seed", "seed");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Real collaboration lock");
+
+        await using var lockConnection = new SqliteConnection(
+            $"Data Source={databasePath};Mode=ReadWriteCreate;Pooling=False;");
+        await lockConnection.OpenAsync();
+        await using var lockCommand = lockConnection.CreateCommand();
+        lockCommand.CommandText = "BEGIN IMMEDIATE;";
+        await lockCommand.ExecuteNonQueryAsync();
+
+        try
+        {
+            var record = Task.Run(() => OperatorInbox.RecordLandingEscalation(
+                workspace,
+                goal,
+                "merge conflict",
+                "integration",
+                channel: null,
+                collaborationStore: store,
+                collaborationRaiseTimeout: TimeSpan.FromMilliseconds(25)));
+
+            Xunit.Assert.True(record.Wait(TimeSpan.FromSeconds(1)));
+            Xunit.Assert.Equal("timeout", record.Result.CollaborationOutcome);
+            var jsonPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.json");
+            Xunit.Assert.True(File.Exists(jsonPath));
+            Xunit.Assert.Contains(goal.Id.Value, File.ReadAllText(jsonPath), StringComparison.Ordinal);
+        }
+        finally
+        {
+            lockCommand.CommandText = "ROLLBACK;";
+            await lockCommand.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "LandingEscalation_channel_timeout_is_bounded_and_attributed")]
+    public void LandingEscalationChannelTimeoutIsBoundedAndAttributed()
+    {
+        var fakeStore = new FakeCollaborationItemStore();
+        var channel = new PendingOperatorChannel();
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Channel timeout");
+
+        var record = Task.Run(() => OperatorInbox.RecordLandingEscalation(
+            workspace,
+            goal,
+            "merge conflict",
+            "integration",
+            channel,
+            fakeStore,
+            channelSendTimeout: TimeSpan.FromMilliseconds(25)));
+
+        Xunit.Assert.True(channel.SendStarted.Wait(TimeSpan.FromSeconds(1)));
+        Xunit.Assert.True(record.Wait(TimeSpan.FromSeconds(1)));
+        Xunit.Assert.Equal("timeout", record.Result.ChannelOutcome);
+        channel.Completion.SetResult();
+    }
+
+    [Xunit.Fact(DisplayName = "LandingEscalation_lock_exhaustion_degrades_to_best_effort")]
+    public void LandingEscalationLockExhaustionDegradesToBestEffort()
+    {
+        var fakeStore = new FakeCollaborationItemStore();
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        Directory.CreateDirectory(workspace.OrchestratorDirectory);
+        var lockPath = Path.Combine(workspace.OrchestratorDirectory, "landing-escalations.lock");
+        using var heldLock = new FileStream(
+            lockPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Escalation lock contention");
+
+        LandingEscalationWriteResult? result = null;
+        var warning = AsyncLocalConsoleRouter.CaptureError(() =>
+            result = OperatorInbox.RecordLandingEscalation(
+                workspace,
+                goal,
+                "merge conflict",
+                "integration",
+                channel: null,
+                collaborationStore: fakeStore,
+                landingEscalationLockTimeout: TimeSpan.Zero));
+
+        Xunit.Assert.Equal("lock-timeout", result!.JsonOutcome);
+        Xunit.Assert.Equal("ok", result.CollaborationOutcome);
+        Xunit.Assert.Contains("warning: landing escalation JSON record was not written", warning);
+        Xunit.Assert.Contains(goal.Id.Value[..8], warning);
+        Xunit.Assert.Contains("lock timed out", warning);
+        Xunit.Assert.Single(fakeStore.Items);
+    }
+
     private static string DbPath() =>
         Path.Combine(CreateTempDirectory(), "collab.db");
 }
@@ -533,6 +670,8 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     private readonly Dictionary<string, NotificationDelivery> _notificationDeliveries = new(StringComparer.Ordinal);
 
     public IReadOnlyList<CollaborationItem> Items => _items;
+    public ManualResetEventSlim? RaiseStarted { get; init; }
+    public Task<CollaborationItem>? PendingRaise { get; init; }
 
     public Task<CollaborationItem> RaiseAsync(
         CollaborationItemType type,
@@ -542,6 +681,12 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
         string? correlationKey = null,
         CancellationToken cancellationToken = default)
     {
+        RaiseStarted?.Set();
+        if (PendingRaise is not null)
+        {
+            return PendingRaise;
+        }
+
         var item = new CollaborationItem(
             Guid.NewGuid().ToString("n"),
             type, goalId, CollaborationItemStatus.Raised,
@@ -849,5 +994,21 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
             decidedAt);
         _audits.Add(audit);
         return audit;
+    }
+}
+
+internal sealed class PendingOperatorChannel : IOperatorChannel
+{
+    public string ChannelType => "pending-test";
+    public ManualResetEventSlim SendStarted { get; } = new();
+    public TaskCompletionSource Completion { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task SendEscalationAsync(
+        OperatorEscalation escalation,
+        CancellationToken cancellationToken = default)
+    {
+        SendStarted.Set();
+        return Completion.Task;
     }
 }

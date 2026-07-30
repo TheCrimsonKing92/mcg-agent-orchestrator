@@ -367,6 +367,7 @@ public sealed class FundamentalAliasTests
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
         Xunit.Assert.Contains("Agents:", output);
+        Xunit.Assert.Contains("provider-routing=automatic", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_config_doctor_runs_health_check")]

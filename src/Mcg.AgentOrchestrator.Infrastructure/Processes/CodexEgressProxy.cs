@@ -205,7 +205,6 @@ public sealed class CodexEgressProxy : IDisposable
         var pumps = Task.WhenAny(toUpstream, toClient);
         await Task.WhenAny(pumps, watchdog).ConfigureAwait(false);
 
-        var cutByWatchdog = watchdog.IsCompleted && !pumps.IsCompleted;
         await tunnelCts.CancelAsync().ConfigureAwait(false);
         try
         {
@@ -216,6 +215,7 @@ public sealed class CodexEgressProxy : IDisposable
             // Expected once we tear the sockets down.
         }
 
+        var cutByWatchdog = watchdog.Status == TaskStatus.RanToCompletion && watchdog.Result;
         var faulted = (toUpstream.IsFaulted || toClient.IsFaulted) && !cutByWatchdog;
         var closeReason = cutByWatchdog
             ? CodexEgressCloseReason.IdleCut
@@ -264,7 +264,7 @@ public sealed class CodexEgressProxy : IDisposable
         }
     }
 
-    private async Task IdleWatchdogAsync(StrongBox<long> lastActivity, StrongBox<long> maxIdle, CancellationTokenSource tunnelCts)
+    private async Task<bool> IdleWatchdogAsync(StrongBox<long> lastActivity, StrongBox<long> maxIdle, CancellationTokenSource tunnelCts)
     {
         var probe = TimeSpan.FromMilliseconds(Math.Min(1000, Math.Max(100, IdleTimeout.TotalMilliseconds / 4)));
         var idleMs = (long)IdleTimeout.TotalMilliseconds;
@@ -273,6 +273,11 @@ public sealed class CodexEgressProxy : IDisposable
             while (!tunnelCts.IsCancellationRequested)
             {
                 await Task.Delay(probe, tunnelCts.Token).ConfigureAwait(false);
+                if (tunnelCts.IsCancellationRequested)
+                {
+                    return false;
+                }
+
                 var idle = Environment.TickCount64 - Volatile.Read(ref lastActivity.Value);
                 if (idle > Volatile.Read(ref maxIdle.Value))
                 {
@@ -281,7 +286,7 @@ public sealed class CodexEgressProxy : IDisposable
 
                 if (_mode == CodexEgressProxyMode.Enforce && idle >= idleMs)
                 {
-                    return; // Signal a stall cut; caller tears the tunnel down.
+                    return true; // Signal a stall cut; caller tears the tunnel down.
                 }
             }
         }
@@ -289,6 +294,8 @@ public sealed class CodexEgressProxy : IDisposable
         {
             // Tunnel ended first.
         }
+
+        return false;
     }
 
     /// <summary>Reads the CONNECT request line and headers (up to the blank line). Returns null if malformed.</summary>

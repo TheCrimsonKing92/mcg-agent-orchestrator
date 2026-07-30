@@ -385,6 +385,19 @@ internal sealed class ConductorBatchLoop
                     try
                     {
                         intentResult = _operatorIntents.ExecutePending(kernel, scopedGoal);
+                        if (intentResult.MutatedGoalState)
+                        {
+                            var invalidation = AcceptanceAttemptRetryInvalidation.Apply(
+                                kernel,
+                                scopedGoal,
+                                driver.ParallelAcceptanceAttemptCoordinator,
+                                "Operator intent made an acceptance-verified task dispatchable; invalidated the current acceptance attempt before redispatch.");
+                            if (invalidation.Changed)
+                            {
+                                preWalkIntentLines.Add(
+                                    $"ACCEPTANCE_INVALIDATED goal={ShortGoalId(scopedGoal.Id.Value)} attempt_staled={invalidation.AttemptInvalidated.ToString().ToLowerInvariant()} goal_reopened={invalidation.GoalReopened.ToString().ToLowerInvariant()}");
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -414,12 +427,13 @@ internal sealed class ConductorBatchLoop
                 .Where(g => !IsPreWalkExcludedGoal(g))
                 .ToArray();
             var eligible = preWalkCandidates
+                .Where(g => !preWalkIntentChangedGoalIds.Contains(g.Id))
                 .Where(g => IsLoopEligibleGoal(g, driver, goalProjectionCache))
                 .ToArray();
             ResetScopedGoalStallCounters(eligible, unscopedDispatchableTicks);
             preWalkClock.Stop();
             preTickTimingLines.Add(FormatPhaseTiming(nextTick, "prewalk", preWalkClock.Elapsed,
-                $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}"));
+                $"scoped={scopedGoals.Length} candidates={preWalkCandidates.Length} eligible={eligible.Length} deferred_intent={preWalkIntentChangedGoalIds.Count} excluded_parked={parkedExcludedCount} excluded_terminal={terminalExcludedCount} cache_entries={goalProjectionCache.Count}"));
 
             if (eligible.Length == 0)
             {
@@ -589,6 +603,7 @@ internal sealed class ConductorBatchLoop
             var perGoalPhaseTimingLines = new List<string>();
             driver.PhaseTimingSink = line => perGoalPhaseTimingLines.Add($"PHASE_TIMING tick={totalTicks} {line}");
             var goalWalkTimings = new List<GoalWalkTiming>();
+            driver.BeginTick();
             var goalWalkClock = Stopwatch.StartNew();
             var glanceDurationStats = _progressiveReviewGlances is null
                 ? Array.Empty<TaskDurationStatsRecord>()
@@ -640,6 +655,25 @@ internal sealed class ConductorBatchLoop
                     }
 
                     FinishGoalWalk("dependency-held");
+                    continue;
+                }
+
+                if (driver.ParallelAcceptanceAttemptCoordinator.TryGetLiveInvalidatedAttempt(
+                        goal.Id.Value,
+                        out var invalidatedAttempt))
+                {
+                    var holdReason =
+                        $"invalidated acceptance attempt {invalidatedAttempt.AttemptId} process {invalidatedAttempt.OwnerProcessId} is still exiting";
+                    var progressLine = $"GOAL goal={label} result=held reason={Sanitize(holdReason)}";
+                    if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
+                    {
+                        changedGoalIds.Add(goal.Id);
+                        Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → held: {holdReason}");
+                        kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: held: {holdReason}");
+                    }
+
+                    tickHeld++;
+                    FinishGoalWalk("acceptance-cancellation-pending");
                     continue;
                 }
 

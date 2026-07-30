@@ -82,12 +82,12 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
         return new AgentCatalog(
         [
-            new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-ideation"), "OpenAI ideation", AgentRole.Ideation, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex()),
-            new(new AgentId("openai-reviewer"), "OpenAI reviewer", AgentRole.Reviewer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex())
+            new(new AgentId("openai-planner"), "OpenAI planner", AgentRole.Planner, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-ideation"), "OpenAI ideation", AgentRole.Ideation, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-researcher"), "OpenAI researcher", AgentRole.Researcher, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-developer"), "OpenAI developer", AgentRole.Developer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-tester"), "OpenAI tester", AgentRole.Tester, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false),
+            new(new AgentId("openai-reviewer"), "OpenAI reviewer", AgentRole.Reviewer, OpenAiBase(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: Codex(), ComplexModel: OpenAiComplex(), IsProviderRoutingConstrained: false)
         ]);
     }
 
@@ -104,12 +104,12 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
         return new AgentCatalog(
         [
-            new(new AgentId("anthropic-planner"), "Anthropic planner", AgentRole.Planner, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-ideation"), "Anthropic ideation", AgentRole.Ideation, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-researcher"), "Anthropic researcher", AgentRole.Researcher, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-developer"), "Anthropic developer", AgentRole.Developer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-tester"), "Anthropic tester", AgentRole.Tester, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
-            new(new AgentId("anthropic-reviewer"), "Anthropic reviewer", AgentRole.Reviewer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet()),
+            new(new AgentId("anthropic-planner"), "Anthropic planner", AgentRole.Planner, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-ideation"), "Anthropic ideation", AgentRole.Ideation, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-researcher"), "Anthropic researcher", AgentRole.Researcher, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-developer"), "Anthropic developer", AgentRole.Developer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-tester"), "Anthropic tester", AgentRole.Tester, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
+            new(new AgentId("anthropic-reviewer"), "Anthropic reviewer", AgentRole.Reviewer, Haiku(), ExecutionPolicy: AgentExecutionPolicy.PreferSubscription, Subscription: ClaudeCli(), ComplexModel: Sonnet(), IsProviderRoutingConstrained: false),
         ]);
     }
 
@@ -123,12 +123,12 @@ public sealed record AgentCatalog(IReadOnlyList<AgentDefinition> Agents)
 
         return new AgentCatalog(
         [
-            new(new AgentId("ollama-planner"), "Ollama planner", AgentRole.Planner, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
-            new(new AgentId("ollama-ideation"), "Ollama ideation", AgentRole.Ideation, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
-            new(new AgentId("ollama-researcher"), "Ollama researcher", AgentRole.Researcher, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
-            new(new AgentId("ollama-developer"), "Ollama developer", AgentRole.Developer, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
-            new(new AgentId("ollama-tester"), "Ollama tester", AgentRole.Tester, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens)),
-            new(new AgentId("ollama-reviewer"), "Ollama reviewer", AgentRole.Reviewer, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens))
+            new(new AgentId("ollama-planner"), "Ollama planner", AgentRole.Planner, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("ollama-ideation"), "Ollama ideation", AgentRole.Ideation, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("ollama-researcher"), "Ollama researcher", AgentRole.Researcher, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("ollama-developer"), "Ollama developer", AgentRole.Developer, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("ollama-tester"), "Ollama tester", AgentRole.Tester, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false),
+            new(new AgentId("ollama-reviewer"), "Ollama reviewer", AgentRole.Reviewer, Coder(OutputTokenPolicy.RoutineLocalMaxOutputTokens), ComplexModel: Qwen3(OutputTokenPolicy.ComplexLocalMaxOutputTokens), IsProviderRoutingConstrained: false)
         ]);
     }
 }
@@ -143,13 +143,13 @@ public static class AgentCatalogStore
 
         if (!File.Exists(path))
         {
-            return NormalizePaidProviderCaps(defaultCatalog);
+            return NormalizePaidProviderCaps(defaultCatalog, defaultCatalog);
         }
 
         var catalog = TryDeserialize(path);
         if (catalog is not null && catalog.Agents.Count > 0)
         {
-            return NormalizePaidProviderCaps(catalog);
+            return NormalizePaidProviderCaps(catalog, defaultCatalog);
         }
 
         var bak = path + ".bak";
@@ -159,7 +159,7 @@ public static class AgentCatalogStore
             var bakCatalog = TryDeserialize(bak);
             if (bakCatalog is not null && bakCatalog.Agents.Count > 0)
             {
-                return NormalizePaidProviderCaps(bakCatalog);
+                return NormalizePaidProviderCaps(bakCatalog, defaultCatalog);
             }
             Console.Error.WriteLine("[AgentCatalogStore] WARNING: backup is also corrupt; falling back to built-in defaults.");
         }
@@ -168,7 +168,7 @@ public static class AgentCatalogStore
             Console.Error.WriteLine($"[AgentCatalogStore] WARNING: '{Path.GetFileName(path)}' is corrupt or empty and no backup exists; falling back to built-in defaults.");
         }
 
-        return NormalizePaidProviderCaps(defaultCatalog);
+        return NormalizePaidProviderCaps(defaultCatalog, defaultCatalog);
     }
 
     public static void Save(string path, AgentCatalog catalog)
@@ -189,12 +189,65 @@ public static class AgentCatalogStore
         catch { return null; }
     }
 
-    private static AgentCatalog NormalizePaidProviderCaps(AgentCatalog catalog)
+    private static AgentCatalog NormalizePaidProviderCaps(AgentCatalog catalog, AgentCatalog defaultCatalog)
     {
-        return new AgentCatalog(catalog.Agents.Select(NormalizeAgent).ToList());
+        var builtInRoutingCandidates = AgentCatalog.Default().Agents
+            .Concat(AgentCatalog.AnthropicDefault().Agents)
+            .Concat(AgentCatalog.OllamaDefault().Agents)
+            .Concat(defaultCatalog.Agents)
+            .ToList();
+        var normalizedAgents = new List<AgentDefinition>(catalog.Agents.Count);
+        var repairedAutomaticCount = 0;
+        var repairedConstrainedCount = 0;
+        foreach (var agent in catalog.Agents)
+        {
+            var normalized = NormalizeAgent(agent, builtInRoutingCandidates);
+            normalizedAgents.Add(normalized);
+            if (agent.IsProviderRoutingConstrained is null)
+            {
+                if (normalized.IsProviderRoutingConstrained == true)
+                {
+                    repairedConstrainedCount++;
+                }
+                else
+                {
+                    repairedAutomaticCount++;
+                }
+            }
+        }
+
+        if (repairedAutomaticCount + repairedConstrainedCount > 0)
+        {
+            Console.Error.WriteLine(
+                $"[AgentCatalogStore] WARNING: migrated legacy provider-routing settings: " +
+                $"{repairedAutomaticCount} built-in-compatible assignment(s) remain automatic; " +
+                $"{repairedConstrainedCount} customized assignment(s) are provider-constrained. " +
+                "Run 'config agents' to inspect provider-routing.");
+        }
+
+        return new AgentCatalog(normalizedAgents);
     }
 
-    private static AgentDefinition NormalizeAgent(AgentDefinition agent)
+    private static AgentDefinition NormalizeAgent(
+        AgentDefinition agent,
+        IReadOnlyList<AgentDefinition> builtInRoutingCandidates)
+    {
+        var normalized = NormalizeAgentConfiguration(agent);
+
+        if (normalized.IsProviderRoutingConstrained is not null)
+        {
+            return normalized;
+        }
+
+        var matchesBuiltInRouting = builtInRoutingCandidates
+            .Where(candidate => candidate.Id == normalized.Id && candidate.Role == normalized.Role)
+            .Any(candidate => RoutingConfigurationMatches(
+                normalized,
+                NormalizeAgentConfiguration(candidate)));
+        return normalized with { IsProviderRoutingConstrained = !matchesBuiltInRouting };
+    }
+
+    private static AgentDefinition NormalizeAgentConfiguration(AgentDefinition agent)
     {
         return agent with
         {
@@ -204,6 +257,14 @@ public static class AgentCatalogStore
                 : NormalizeModel(agent.ComplexModel, AgentCatalog.ComplexApiMaxOutputTokens, AgentCatalog.ComplexReasoningEffort),
             Subscription = NormalizeSubscription(agent)
         };
+    }
+
+    private static bool RoutingConfigurationMatches(AgentDefinition current, AgentDefinition desired)
+    {
+        return current.Model == desired.Model &&
+            current.ExecutionPolicy == desired.ExecutionPolicy &&
+            current.Subscription == desired.Subscription &&
+            current.ComplexModel == desired.ComplexModel;
     }
 
     private static ModelProfile NormalizeModel(ModelProfile model, int defaultMaxOutputTokens, string defaultReasoningEffort)

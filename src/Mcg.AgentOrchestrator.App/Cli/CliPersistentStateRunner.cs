@@ -21,7 +21,7 @@ internal static class CliPersistentStateRunner
         IReadOnlyList<AgentDefinition> Agents,
         WorkerProfileCatalog WorkerProfiles,
         Goal? CurrentGoal,
-        GoalSnapshot Snapshot,
+        GoalStateSnapshot State,
         CliCommandHandlers.GoalScopedTaskMutationOutcome Outcome);
 
     public static bool ExecuteCommand(
@@ -1325,18 +1325,17 @@ internal static class CliPersistentStateRunner
         var commandAgents = agents;
         var commandProfiles = workerProfiles;
 
-        var result = stateRepository.TransactGoalAsync(
+        var result = stateRepository.TransactGoalStateAsync(
                 $"cli:{args[0].ToLowerInvariant()}",
                 goalId,
-                (snapshot, cancellationToken) =>
+                (state, cancellationToken) =>
                 {
-                    if (snapshot is null)
+                    if (state is null)
                     {
                         throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
                     }
 
-                    var humanInputRequests = LoadGoalHumanInputSnapshots(stateRepository, goalId, cancellationToken);
-                    var kernel = KernelFromGoalSnapshot(snapshot, humanInputRequests);
+                    var kernel = KernelFromGoalSnapshot(state.Goal, state.HumanInputRequests);
                     var transactionAgents = commandAgents;
                     var transactionProfiles = commandProfiles;
                     var transactionCurrentGoal = ResolveCurrentGoal(kernel, goalId.Value);
@@ -1353,15 +1352,15 @@ internal static class CliPersistentStateRunner
                     transactionAgents = context.Agents;
                     transactionProfiles = context.WorkerProfiles;
                     transactionCurrentGoal = context.CurrentGoal;
-                    var updatedSnapshot = outcome.ShouldSave ? ExportGoalSnapshot(kernel, goalId) : snapshot;
+                    var updatedState = outcome.ShouldSave ? ExportGoalStateSnapshot(kernel, goalId) : state;
                     var transactionResult = new GoalScopedTaskMutationResult(
                         outcome.ShouldSave,
                         transactionAgents,
                         transactionProfiles,
                         transactionCurrentGoal,
-                        updatedSnapshot,
+                        updatedState,
                         outcome);
-                    return Task.FromResult((outcome.ShouldSave, updatedSnapshot, transactionResult));
+                    return Task.FromResult((outcome.ShouldSave, updatedState, transactionResult));
                 })
             .GetAwaiter()
             .GetResult();
@@ -1502,25 +1501,27 @@ internal static class CliPersistentStateRunner
             return false;
         }
 
-        var transactionResult = stateRepository.TransactGoalAsync(
+        var transactionResult = stateRepository.TransactGoalStateAsync(
                 goalId,
-                (snapshot, _) =>
+                (state, _) =>
                 {
-                    if (snapshot is null)
+                    if (state is null)
                     {
                         throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists; retry refresh.");
                     }
 
-                    var transactionKernel = KernelFromGoalSnapshot(snapshot);
+                    var transactionKernel = KernelFromGoalSnapshot(state.Goal, state.HumanInputRequests);
                     var appliedCount = ApplyRefreshResults(transactionKernel, results);
-                    GoalSnapshot? updatedSnapshot = appliedCount > 0 ? ExportGoalSnapshot(transactionKernel, goalId) : snapshot;
-                    return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (int Applied, GoalSnapshot Snapshot) Result)>(
-                        (appliedCount > 0, updatedSnapshot, (appliedCount, updatedSnapshot!)));
+                    var updatedState = appliedCount > 0 ? ExportGoalStateSnapshot(transactionKernel, goalId) : state;
+                    return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, (int Applied, GoalStateSnapshot State) Result)>(
+                        (appliedCount > 0, updatedState, (appliedCount, updatedState)));
                 })
             .GetAwaiter()
             .GetResult();
 
-        currentGoal = KernelFromGoalSnapshot(transactionResult.Snapshot).GetGoal(goalId);
+        currentGoal = KernelFromGoalSnapshot(
+            transactionResult.State.Goal,
+            transactionResult.State.HumanInputRequests).GetGoal(goalId);
         return transactionResult.Applied > 0;
     }
 
@@ -2180,23 +2181,13 @@ internal static class CliPersistentStateRunner
         GoalId goalId,
         CancellationToken cancellationToken = default)
     {
-        var snapshot = stateRepository.LoadGoalAsync(goalId, cancellationToken).GetAwaiter().GetResult()
-            ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
-        return KernelFromGoalSnapshot(snapshot);
-    }
-
-    private static IReadOnlyList<HumanInputRequestSnapshot> LoadGoalHumanInputSnapshots(
-        ITransactionalOrchestratorStateRepository stateRepository,
-        GoalId goalId,
-        CancellationToken cancellationToken = default)
-    {
         var kernel = stateRepository.LoadGoalsAsync([goalId], cancellationToken).GetAwaiter().GetResult();
         if (!kernel.Goals.Any(goal => goal.Id == goalId))
         {
             throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
         }
 
-        return kernel.ExportSnapshot().HumanInputRequests;
+        return kernel;
     }
 
     private static AgentOrchestratorKernel LoadGoalSnapshotsById(
@@ -2225,6 +2216,14 @@ internal static class CliPersistentStateRunner
     private static GoalSnapshot ExportGoalSnapshot(AgentOrchestratorKernel kernel, GoalId goalId) =>
         kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
             ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
+
+    private static GoalStateSnapshot ExportGoalStateSnapshot(AgentOrchestratorKernel kernel, GoalId goalId)
+    {
+        var snapshot = kernel.ExportSnapshot();
+        var goal = snapshot.Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
+            ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
+        return new GoalStateSnapshot(goal, snapshot.HumanInputRequests);
+    }
 
     private static void PersistSingleGoalSnapshot(
         ITransactionalOrchestratorStateRepository stateRepository,

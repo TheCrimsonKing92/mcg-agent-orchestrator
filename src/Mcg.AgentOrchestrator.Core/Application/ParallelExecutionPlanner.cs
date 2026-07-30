@@ -240,21 +240,7 @@ public static class ParallelExecutionPlanner
 
     private static bool OverlapsPaths(IReadOnlyList<string> left, IReadOnlyList<string> right)
     {
-        return left.Any(l => right.Any(r => PathsOverlap(l, r)));
-    }
-
-    private static bool PathsOverlap(string left, string right)
-    {
-        var a = NormalizePath(left);
-        var b = NormalizePath(right);
-        return a.Equals(b, StringComparison.OrdinalIgnoreCase) ||
-            a.StartsWith(b + "/", StringComparison.OrdinalIgnoreCase) ||
-            b.StartsWith(a + "/", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string NormalizePath(string path)
-    {
-        return path.Replace('\\', '/').Trim('/').Trim();
+        return left.Any(l => right.Any(r => RepositoryPathOverlap.Overlaps(l, r)));
     }
 }
 

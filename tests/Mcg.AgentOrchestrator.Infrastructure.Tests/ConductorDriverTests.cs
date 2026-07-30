@@ -251,7 +251,9 @@ public sealed class ConductorDriverTests
         Func<WorkerSandboxPrepRecoverableAction, bool>? recoverSandboxPrep = null,
         Func<bool>? hasGateReadyGoal = null,
         Func<Goal, int>? getAcceptanceSlotCount = null,
-        Func<int>? getWorkerAdmissionCapacity = null)
+        Func<int>? getWorkerAdmissionCapacity = null,
+        TimeSpan? buildServerShutdownTimeout = null,
+        Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -288,7 +290,9 @@ public sealed class ConductorDriverTests
             runFocusedEvidence: runFocusedEvidence,
             recordReviewerEvidenceRequestReceived: recordReviewerEvidenceRequestReceived,
             recordReviewerEvidenceRunRecorded: recordReviewerEvidenceRunRecorded,
-            retryTaskWithRoundKind: retryTaskWithRoundKind);
+            retryTaskWithRoundKind: retryTaskWithRoundKind,
+            buildServerShutdownTimeout: buildServerShutdownTimeout,
+            writeEscalationWithResult: writeEscalationWithResult);
     }
 
     private sealed class FakeAcceptanceVerifier : IGoalAcceptanceVerifier
@@ -514,6 +518,41 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalOperationStatus.Failed, blockedOutcome.Status);
         Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.BranchHeadSha));
         Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_cancellation_probe_stops_reopened_Active_goal")]
+    public async Task ConductorDriverAcceptanceCancellationProbeStopsReopenedActiveGoal()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                DefaultAgents(),
+                "Cancel stale acceptance before retry dispatch");
+            var task = goal.Tasks.Single();
+
+            await repository.SaveAsync(kernel);
+            Assert.True(ConductorDriver.IsAcceptanceAttemptCancelled(workspace, goal.Id));
+
+            PassVerification(kernel, goal, task);
+            await repository.SaveAsync(kernel);
+            Assert.False(ConductorDriver.IsAcceptanceAttemptCancelled(workspace, goal.Id));
+
+            kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance attempt launched.");
+            await repository.SaveAsync(kernel);
+            Assert.False(ConductorDriver.IsAcceptanceAttemptCancelled(workspace, goal.Id));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_slot_path_skips_already_merged_branch_before_lease")]
@@ -840,6 +879,7 @@ public sealed class ConductorDriverTests
         var callCount = 0;
         var shutdownCalled = false;
         string? escalationReason = null;
+        var phaseTimings = new List<string>();
         const string startFailReason = "Recorded dispatch start failed: worker command refused to launch";
 
         var driver = MakeDriver(
@@ -850,7 +890,12 @@ public sealed class ConductorDriverTests
                 return DispatchStartOutcome.SpawnFailed(startFailReason);
             },
             buildServerShutdown: () => { shutdownCalled = true; },
-            writeEscalation: (_, _, reason) => { escalationReason = reason; });
+            writeEscalationWithResult: (_, _, reason) =>
+            {
+                escalationReason = reason;
+                return new LandingEscalationWriteResult(2, "ok", 25, "timeout", 3, "error");
+            });
+        driver.PhaseTimingSink = phaseTimings.Add;
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
@@ -859,6 +904,95 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
         Assert.Equal(GoalLifecycleState.Dispatched, ((ConductorAdvanceOutcome.Escalated)result.Outcome).State);
         Assert.Equal(startFailReason, escalationReason);
+        var remediationTiming = Assert.Single(
+            phaseTimings,
+            line => line.Contains("phase=dispatch-remediation", StringComparison.Ordinal));
+        Assert.Contains("result=ran", remediationTiming, StringComparison.Ordinal);
+        Assert.Matches(@"elapsed_ms=[1-9]\d*", remediationTiming);
+        Assert.Contains(
+            phaseTimings,
+            line => line.Contains("phase=escalation-write", StringComparison.Ordinal) &&
+                    line.Contains("json_ms=2 json=ok", StringComparison.Ordinal) &&
+                    line.Contains("collab_ms=25 collab=timeout", StringComparison.Ordinal) &&
+                    line.Contains("channel_ms=3 channel=error", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_dispatch_remediation_runs_once_per_tick_and_rearms")]
+    public void ConductorDriverDispatchRemediationRunsOncePerTickAndRearms()
+    {
+        var (_, firstGoal) = SimpleGoal("First failing dispatch");
+        var (_, secondGoal) = SimpleGoal("Second failing dispatch");
+        var shutdownCalls = 0;
+        var phaseTimings = new List<string>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => DispatchStartOutcome.SpawnFailed("spawn failed"),
+            buildServerShutdown: () => shutdownCalls++);
+        driver.PhaseTimingSink = phaseTimings.Add;
+
+        driver.BeginTick();
+        driver.AdvanceOnce(firstGoal, ConductorAutonomyPolicy.Conservative);
+        driver.AdvanceOnce(secondGoal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(1, shutdownCalls);
+        var firstTickResults = phaseTimings
+            .Where(line => line.Contains("phase=dispatch-remediation", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, firstTickResults.Length);
+        Assert.Contains("result=ran", firstTickResults[0], StringComparison.Ordinal);
+        Assert.Contains("result=skipped-tick-latch", firstTickResults[1], StringComparison.Ordinal);
+
+        driver.BeginTick();
+        driver.AdvanceOnce(firstGoal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(2, shutdownCalls);
+        Assert.Contains(
+            phaseTimings.Skip(firstTickResults.Length),
+            line => line.Contains("phase=dispatch-remediation", StringComparison.Ordinal) &&
+                    line.Contains("result=ran", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_dispatch_remediation_timeout_is_bounded_and_preserves_failure")]
+    public void ConductorDriverDispatchRemediationTimeoutIsBoundedAndPreservesFailure()
+    {
+        var (_, goal) = SimpleGoal("Timed out remediation");
+        using var shutdownEntered = new ManualResetEventSlim();
+        using var releaseShutdown = new ManualResetEventSlim();
+        var phaseTimings = new List<string>();
+        var startCalls = 0;
+        const string spawnFailReason = "worker spawn failed with access denied";
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => ++startCalls == 1
+                ? DispatchStartOutcome.SpawnFailed(spawnFailReason)
+                : DispatchStartOutcome.EmptyBatch("retry started no processes"),
+            buildServerShutdown: () =>
+            {
+                shutdownEntered.Set();
+                releaseShutdown.Wait();
+            },
+            buildServerShutdownTimeout: TimeSpan.FromMilliseconds(25));
+        driver.PhaseTimingSink = phaseTimings.Add;
+
+        try
+        {
+            var advance = Task.Run(() =>
+                driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
+
+            Assert.True(shutdownEntered.Wait(TimeSpan.FromSeconds(1)));
+            Assert.True(advance.Wait(TimeSpan.FromSeconds(1)));
+            var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(advance.Result.Outcome);
+
+            Assert.Equal(spawnFailReason, escalated.Reason);
+            Assert.Contains(
+                phaseTimings,
+                line => line.Contains("phase=dispatch-remediation", StringComparison.Ordinal) &&
+                        line.Contains("result=timeout", StringComparison.Ordinal));
+        }
+        finally
+        {
+            releaseShutdown.Set();
+        }
     }
 
     // ── Running state ─────────────────────────────────────────────────────

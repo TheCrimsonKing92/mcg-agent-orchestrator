@@ -76,7 +76,7 @@ internal static class SdlcRolePromptRequirements
                 "- If your only blocker is missing executed focused test evidence, put `evidence-request: <ProjectAlias>: <FullyQualifiedName~TestClass or TestClass1,TestClass2>` in WORKER_RESULT, using `Core.Tests` or `Infrastructure.Tests`; do not request full or unfiltered suites.",
                 "- If a brief criterion contradicts the pre-change contract observable on main, report it as `suspected-defective-criterion` instead of enforcing it as a blocker.",
                 "- Treat the structured Review Convergence Scope as authoritative: actively re-check OPEN findings and net-new diff code; carry RESOLVED findings forward without re-review unless this round's diff touched that finding's exact structural anchor.",
-                "- Emit every finding in the one-line `findings` JSON field with stable_id, open|resolved state, structural location (file + region + optional hunk), and description. Emit exact prior anchors touched by this round in `touched_anchors`; similar defects on newly introduced code get new stable IDs.",
+                "- Emit every finding in the one-line `findings` JSON field with stable_id, open|resolved state, required severity (`blocking` or `advisory`), structural location (file + region + optional hunk), and description. Missing or unrecognized severity is treated as blocking. Any remediable open blocking finding requires `needs-work` plus its exact blocker in `blockers`; reserve `fail` for a non-remediable stop that should escalate instead of auto-retry. When no open blocking findings remain, use `verdict: pass` and `blockers: none` even when open advisory findings remain; advisories belong only in `findings`. Emit exact prior anchors touched by this round in `touched_anchors`; similar defects on newly introduced code get new stable IDs.",
                 "- State residual risk, test gaps, and whether acceptance is justified.",
                 "- Do not approve based only on a summary from another role.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
@@ -102,8 +102,8 @@ internal static class SdlcRolePromptRequirements
         }
 
         var lines = requirements.ToList();
-        lines.Add("- High-risk review enumeration contract: if your verdict is needs-work, list all acceptance-blocking findings you discover in one ranked pass (P1/P2); do not stop at the first blocker because the Developer receives exactly one findings list per cycle.");
-        lines.Add("- Keep the WORKER_RESULT blockers field format unchanged; put the complete ranked blocker list in that existing field.");
+        lines.Add("- High-risk review enumeration contract: if any open blocking findings are remediable, use `needs-work` and list all acceptance-blocking findings in one ranked pass (P1/P2); do not stop at the first blocker because the Developer receives exactly one findings list per cycle.");
+        lines.Add("- Keep the WORKER_RESULT blockers field format unchanged: put exactly the complete ranked open blocking set in `blockers`; when none remain, use `verdict: pass` and `blockers: none`. Keep advisories only in `findings`.");
         return lines;
     }
 
@@ -186,7 +186,7 @@ internal static class SdlcRolePromptRequirements
                 "- Staleness policy: branch-behind-main alone is NOT a blocker; the deterministic acceptance gate rebases and verifies the integrated result. Staleness may block only with concrete integration-risk evidence: merge-tree conflicts, semantic overlap with landed changes in the same files, or a diff that no longer applies. Otherwise record staleness as advisory.",
                 "- If your only blocker is missing executed focused test evidence, put `evidence-request: <ProjectAlias>: <FullyQualifiedName~TestClass or TestClass1,TestClass2>` in WORKER_RESULT, using `Core.Tests` or `Infrastructure.Tests`; do not request full or unfiltered suites.",
                 "- If a brief criterion contradicts the pre-change contract observable on main, report it as `suspected-defective-criterion` instead of enforcing it as a blocker.",
-                "- Treat structured Review Convergence Scope as authoritative: re-check OPEN findings and new diff code; carry RESOLVED findings without re-review unless their exact anchor was touched. Emit one-line `findings` and `touched_anchors` JSON fields; similar defects on new code get new stable IDs.",
+                "- Treat structured Review Convergence Scope as authoritative: re-check OPEN findings and new diff code; carry RESOLVED findings without re-review unless their exact anchor was touched. Every one-line `findings` JSON item requires severity `blocking` or `advisory`; missing severity is blocking. Any remediable open blocker requires `needs-work` plus its exact text in `blockers`; reserve `fail` for a non-remediable stop that should escalate instead of auto-retry. When none remain, use `verdict: pass` and `blockers: none` even with open advisories, which belong only in `findings`. Emit `touched_anchors`; similar defects on new code get new stable IDs.",
                 "- Challenge generic summaries by comparing implementation evidence with verification evidence.",
                 "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."

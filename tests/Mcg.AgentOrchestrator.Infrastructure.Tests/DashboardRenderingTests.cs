@@ -3535,3 +3535,40 @@ private static void WriteHeartbeat(
         JsonSerializer.Serialize(heartbeat));
 }
 }
+
+public sealed class GoalScopeCollisionDashboardMapperTests
+{
+    [Xunit.Fact(DisplayName = "Dashboard_scope_collision_advisory_mapper_preserves_operator_evidence")]
+    public void PreservesOperatorEvidence()
+    {
+        var goal = new AgentOrchestratorKernel().CreateGoal(
+            "Change src/Feature/File.cs.",
+            [new TaskSpec(TaskId.New(), "Implement planned work.", AgentRole.Developer)]);
+        var report = GoalScopeCollisionAdvisor.Build(
+            ["Also change src/Feature/File.cs."],
+            [goal]);
+        var item = new BacklogIntakeItem(
+            "backlog-1",
+            "Feature change",
+            "Body",
+            ["src/Feature/File.cs"],
+            [AgentRole.Developer],
+            ["concurrency"],
+            ["Focused tests."],
+            ["none"],
+            "Also change src/Feature/File.cs.",
+            "workspace",
+            "acceptance",
+            "follow-up");
+
+        var dto = DashboardResponseMapper.ToGoalScopeCollisionAdvisoryDto([(item, report)]);
+
+        var mappedReport = Xunit.Assert.Single(dto.Reports);
+        var collision = Xunit.Assert.Single(mappedReport.Collisions);
+        Xunit.Assert.Equal("overlap-detected", mappedReport.Verdict);
+        Xunit.Assert.Equal(goal.Id.Value, collision.GoalId);
+        Xunit.Assert.Equal("src/Feature/File.cs", collision.ProposedPath);
+        Xunit.Assert.Equal("Explicit", collision.ProposedProvenance);
+        Xunit.Assert.Equal("Explicit", collision.ConflictingProvenance);
+    }
+}
