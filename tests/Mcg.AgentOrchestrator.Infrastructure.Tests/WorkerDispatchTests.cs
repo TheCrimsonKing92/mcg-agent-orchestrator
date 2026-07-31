@@ -24,6 +24,74 @@ protected static AgentDefinition TestSubscriptionAgent(string id, string name, A
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("test-subscription", "test-model", "low"));
 
+protected static void CompleteResearcherArtifact(AgentOrchestratorKernel kernel, Goal goal)
+{
+    var researcher = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Researcher);
+    var artifactRoot = CreateTempDirectory();
+    var outputPath = Path.Combine(artifactRoot, "researcher.out.log");
+    File.WriteAllText(outputPath, ResearcherContractFixture());
+    var result = ResearcherOutputContract.Resolve(File.ReadAllText(outputPath));
+    var diagnostic = string.Empty;
+    if (!result.Succeeded ||
+        result.Research is null ||
+        !ResearcherOutputContract.TryPersistDurableReceipt(
+            outputPath,
+            result.Research,
+            out diagnostic))
+    {
+        throw new InvalidOperationException(
+            $"Could not create the Researcher test artifact: {result.Diagnostic ?? diagnostic}");
+    }
+
+    kernel.RecordTaskVerification(
+        goal.Id,
+        researcher.Id,
+        new TaskVerificationRecord(
+            "researcher fixture",
+            artifactRoot,
+            0,
+            "Researcher fixture completed with a durable artifact.",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: outputPath));
+}
+
+protected static void CompletePlannerArtifact(AgentOrchestratorKernel kernel, Goal goal)
+{
+    var planner = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Planner);
+    var artifactRoot = CreateTempDirectory();
+    File.WriteAllText(Path.Combine(artifactRoot, "seed.txt"), "seed");
+    var outputPath = Path.Combine(artifactRoot, "planner.out.log");
+    var plan = PlannerContractPlanFixture();
+    File.WriteAllText(outputPath, "Planner fixture completed.");
+    if (!PlannerOutputContract.TryPersistDurableReceipt(
+            outputPath,
+            outputPath,
+            plan,
+            out var diagnostic))
+    {
+        throw new InvalidOperationException($"Could not create the Planner test artifact: {diagnostic}");
+    }
+
+    kernel.RecordTaskVerification(
+        goal.Id,
+        planner.Id,
+        new TaskVerificationRecord(
+            "planner fixture",
+            artifactRoot,
+            0,
+            "Planner fixture completed with a durable artifact.",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: outputPath));
+}
+
+protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKernel kernel, Goal goal)
+{
+    CompleteResearcherArtifact(kernel, goal);
+    CompletePlannerArtifact(kernel, goal);
+}
+
 
 
 

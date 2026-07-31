@@ -811,6 +811,7 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     var goal = kernel.CreateGoal("Implement the feature");
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(

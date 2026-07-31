@@ -172,7 +172,7 @@ public sealed class DispatchRecoveryPolicyTests
         var stdout = Path.Combine(root, "out.log");
         var stderr = Path.Combine(root, "err.log");
         var exit = Path.Combine(root, "worker.exit.txt");
-        File.WriteAllText(stdout, "WORKER_RESULT:\ntests: pass\nEND_WORKER_RESULT\n");
+        File.WriteAllText(stdout, WorkerDispatchTestSupport.ResearcherContractFixture());
         File.WriteAllText(stderr, string.Empty);
         File.WriteAllText(exit, "0");
         var clock = new TestClock(Now);

@@ -354,6 +354,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         new ModelProfile("Anthropic", "claude-sonnet-4-6", ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
     kernel.ActivateGoal(goal.Id, [agent]);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var previousDispatch = ReopenTaskWithRecoverableDispatchLimit(kernel, goal, task);
     var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli");
@@ -395,12 +396,14 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("custom-codex", "gpt-5.3-codex", "medium"));
     kernel.ActivateGoal(goal.Id, [agent]);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var profiles = new WorkerProfileCatalog(
     [
         new WorkerProfile("custom-codex", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --api-reasoning {apiReasoningEffort} --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})")
     ]);
     var contextDirectory = Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value);
+    new WorkerArtifactWriter().Write(goal, task, workingDirectory);
     var expectedPromptCharacters = kernel.BuildTaskBrief(
         goal.Id,
         task.Id,
@@ -509,6 +512,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
     kernel.ActivateGoal(goal.Id, [agent]);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -1181,6 +1185,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         AgentRole.Developer,
         new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
     var profile = new WorkerProfile("codex-cli", "codex exec");
 
     var results = WorkerProfileDispatcher.PrepareReadyTasks(kernel, goal, profile, promptRoot, workingDirectory, dispatchedAt);
@@ -1209,6 +1214,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Dispatch with working directory context");
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
     var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
     var profile = new WorkerProfile("codex-cli", "codex exec --sandbox workspace-write --cd {workingDirectory}");
 
@@ -2741,6 +2747,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly);
     kernel.ActivateGoal(goal.Id, [agent]);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
     WorkerProfileDispatcher.PrepareSubscriptionTask(

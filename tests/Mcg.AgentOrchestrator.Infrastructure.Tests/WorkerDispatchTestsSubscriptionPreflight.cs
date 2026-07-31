@@ -1364,6 +1364,7 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     var goal = kernel.CreateGoal("Review repeated subscription usage limits");
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
     kernel.RecordTaskDispatch(
@@ -1565,6 +1566,7 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     var goal = kernel.CreateGoal("Implement the feature with a prepped workspace");
     var agents = AgentCatalog.Default().Agents;
     kernel.ActivateGoal(goal.Id, agents);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     File.WriteAllText(Path.Combine(worktree, WorkerSandboxPreparer.ReceiptFileName), "{}");
