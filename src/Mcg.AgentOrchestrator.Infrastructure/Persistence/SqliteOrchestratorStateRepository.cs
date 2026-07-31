@@ -704,7 +704,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
             }
 
-            var (shouldSave, result) = await transaction(kernel, CheckpointAsync, cancellationToken);
+            bool shouldSave;
+            T result;
+            using (StateDbWriteSession.Enter(_dbPath, conn))
+            {
+                (shouldSave, result) = await transaction(kernel, CheckpointAsync, cancellationToken);
+            }
 
             if (shouldSave)
                 await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
@@ -736,7 +741,13 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         try
         {
             var kernel = await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
-            var (shouldSave, result, outboxMessages) = await transaction(kernel, cancellationToken);
+            bool shouldSave;
+            T result;
+            IReadOnlyList<OrchestratorStateOutboxMessage> outboxMessages;
+            using (StateDbWriteSession.Enter(_dbPath, conn))
+            {
+                (shouldSave, result, outboxMessages) = await transaction(kernel, cancellationToken);
+            }
 
             if (shouldSave)
                 await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
@@ -827,7 +838,11 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 return false;
             }
 
-            var result = await processor(message, cancellationToken);
+            OrchestratorStateOutboxProcessingResult result;
+            using (StateDbWriteSession.Enter(_dbPath, conn))
+            {
+                result = await processor(message, cancellationToken);
+            }
             await using var cmd = conn.CreateCommand();
             if (result.Disposition == OrchestratorStateOutboxDisposition.Complete)
             {

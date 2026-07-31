@@ -1443,6 +1443,7 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
             var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
             var orphanKernel = new AgentOrchestratorKernel();
             var orphanGoal = orphanKernel.CreateGoal("Orphaned acceptance retry audit");

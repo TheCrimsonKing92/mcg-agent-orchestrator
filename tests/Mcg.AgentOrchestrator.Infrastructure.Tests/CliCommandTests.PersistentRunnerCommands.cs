@@ -11,6 +11,22 @@ using System.Text.Json;
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 {
+    [Xunit.Fact]
+    public async Task OperatorDecisionRepositoryBootstrapsFreshStateStoreBeforeUse()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        Xunit.Assert.False(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
+
+        var repository = CliCommandHandlers.CreateOperatorDecisionStateRepository(
+            ["answer", "request-id", "answer"],
+            workspace);
+
+        Xunit.Assert.True(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Empty(restored.Goals);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_backlog_show_loads_kernel_state_for_linked_goals")]
     public async Task PersistentRunnerBacklogShowLoadsKernelStateForLinkedGoals()
     {

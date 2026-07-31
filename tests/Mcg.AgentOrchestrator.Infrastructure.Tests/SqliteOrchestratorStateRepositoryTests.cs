@@ -30,6 +30,18 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.False(File.Exists(db));
     }
 
+    [Xunit.Fact]
+    public async Task ReadOnlyLoadOfAbsentDatabaseFailsWithoutCreatingIt()
+    {
+        var db = TempDb(migrate: false);
+        var repository = SqliteOrchestratorStateRepository.OpenReadOnly(db);
+
+        await Assert.ThrowsAsync<SqliteException>(() =>
+            repository.LoadGoalsAsync([GoalId.New()]));
+
+        Assert.False(File.Exists(db));
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_read_only_open_loads_one_goal_without_writing")]
     public async Task ReadOnlyOpenLoadsOneGoalWithoutWriting()
     {
@@ -1936,6 +1948,199 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(goal.Timeline, evt => evt.Message == "TIMELINE_SENTINEL_0");
         Assert.Equal("REFINED_SPEC_SENTINEL_0", goal.RefinedSpec?.BehavioralContract);
         Assert.Contains(goal.Tasks, task => task.Description == "TASK_DESCRIPTION_SENTINEL_0");
+    }
+
+    [Xunit.Fact]
+    public async Task SpawnRegistryWritesJoinAmbientStateTransactionConnection()
+    {
+        var db = TempDb();
+        var repository = new SqliteOrchestratorStateRepository(db);
+        var registry = new SpawnRegistry(db);
+        var identity = new SpawnProcessIdentity(
+            424242,
+            DateTimeOffset.Parse("2026-07-30T12:00:00Z"),
+            @"C:\tools\worker.exe");
+
+        await repository.TransactAsync((_, _) =>
+        {
+            registry.Register("ambient-register", identity);
+            return Task.FromResult((ShouldSave: false, Result: true));
+        });
+        var active = Assert.Single(registry.ListActive());
+
+        await repository.TransactAsync((_, _) =>
+        {
+            registry.RecordDiagnostic(active.Id, "ambient-diagnostic");
+            registry.MarkReleased(identity.ProcessId, "ambient-release");
+            return Task.FromResult((ShouldSave: false, Result: true));
+        });
+
+        Assert.Empty(registry.ListActive());
+        using var connection = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.QueryOnlyRead);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT released_at, last_diagnostic
+            FROM spawn_registry
+            WHERE id = $id
+            """;
+        command.Parameters.AddWithValue("$id", active.Id);
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.False(reader.IsDBNull(0));
+        Assert.Equal("ambient-release", reader.GetString(1));
+    }
+
+    [Xunit.Fact]
+    public async Task SpawnRegistryWriteRollsBackWithAmbientStateTransaction()
+    {
+        var db = TempDb();
+        var repository = new SqliteOrchestratorStateRepository(db);
+        var registry = new SpawnRegistry(db);
+        var identity = new SpawnProcessIdentity(
+            424243,
+            DateTimeOffset.Parse("2026-07-30T12:01:00Z"),
+            @"C:\tools\worker.exe");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            repository.TransactAsync<bool>((_, _) =>
+            {
+                registry.Register("ambient-rollback", identity);
+                throw new InvalidOperationException("rollback");
+            }));
+
+        Assert.Empty(registry.ListActive());
+    }
+
+    [Xunit.Fact]
+    public async Task AmbientStateWriteSessionCapturedFromEndedNestedScopeCannotFallThroughToOuterSession()
+    {
+        var outerDb = TempDb();
+        var nestedDb = TempDb();
+        using var outerConnection = StateDbConnectionFactory.Open(outerDb, StateDbConnectionProfile.ReadWrite);
+        using var nestedConnection = StateDbConnectionFactory.Open(nestedDb, StateDbConnectionProfile.ReadWrite);
+        var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var proceed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var actionRan = false;
+        Task<bool> delayed;
+
+        using (StateDbWriteSession.Enter(outerDb, outerConnection))
+        {
+            using (StateDbWriteSession.Enter(nestedDb, nestedConnection))
+            {
+                delayed = Task.Run(async () =>
+                {
+                    captured.SetResult();
+                    await proceed.Task;
+                    return StateDbWriteSession.TryExecute(outerDb, _ => actionRan = true);
+                });
+                await captured.Task;
+            }
+
+            proceed.SetResult();
+            Assert.False(await delayed);
+        }
+
+        Assert.False(actionRan);
+    }
+
+    [Xunit.Fact]
+    public void AmbientStateWriteSessionDoesNotShareConnectionAcrossStores()
+    {
+        var firstDb = TempDb();
+        var secondDb = TempDb();
+        using var connection = StateDbConnectionFactory.Open(firstDb, StateDbConnectionProfile.ReadWrite);
+        using var session = StateDbWriteSession.Enter(firstDb, connection);
+        var actionRan = false;
+
+        Assert.False(StateDbWriteSession.TryExecute(secondDb, _ => actionRan = true));
+        Assert.False(actionRan);
+    }
+
+    [Xunit.Fact]
+    public async Task AmbientStateWriteSessionSerializesParallelSpawnRegistryMutations()
+    {
+        var db = TempDb();
+        var registry = new SpawnRegistry(db);
+        using var connection = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite);
+        using var firstEntered = new ManualResetEventSlim();
+        using var releaseFirst = new ManualResetEventSlim();
+        using var secondAttempted = new ManualResetEventSlim();
+        using var secondFinished = new ManualResetEventSlim();
+        var triggerInvocationCount = 0;
+        connection.CreateFunction(
+            "hold_spawn_insert",
+            () =>
+            {
+                if (Interlocked.Increment(ref triggerInvocationCount) == 1)
+                {
+                    firstEntered.Set();
+                    releaseFirst.Wait();
+                }
+
+                return 0;
+            });
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                CREATE TEMP TRIGGER serialize_spawn_registry_insert
+                BEFORE INSERT ON spawn_registry
+                BEGIN
+                    SELECT hold_spawn_insert();
+                END
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        using var session = StateDbWriteSession.Enter(db, connection);
+        var first = Task.Factory.StartNew(
+            () => registry.Register(
+                "parallel-first",
+                new SpawnProcessIdentity(
+                    424244,
+                    DateTimeOffset.Parse("2026-07-30T12:02:00Z"),
+                    @"C:\tools\worker.exe")),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        var firstArrived = firstEntered.Wait(TimeSpan.FromSeconds(5));
+        Task second = Task.CompletedTask;
+        var secondStarted = false;
+        var secondCompletedEarly = false;
+        try
+        {
+            if (firstArrived)
+            {
+                second = Task.Factory.StartNew(
+                    () =>
+                    {
+                        secondAttempted.Set();
+                        registry.Register(
+                            "parallel-second",
+                            new SpawnProcessIdentity(
+                                424245,
+                                DateTimeOffset.Parse("2026-07-30T12:03:00Z"),
+                                @"C:\tools\worker.exe"));
+                        secondFinished.Set();
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default);
+                secondStarted = secondAttempted.Wait(TimeSpan.FromSeconds(5));
+                secondCompletedEarly = secondFinished.Wait(TimeSpan.FromMilliseconds(100));
+            }
+        }
+        finally
+        {
+            releaseFirst.Set();
+        }
+
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(firstArrived);
+        Assert.True(secondStarted);
+        Assert.False(secondCompletedEarly);
+        Assert.True(secondFinished.IsSet);
+        Assert.Equal(2, triggerInvocationCount);
     }
 
     private static string TempDb(bool migrate = true)
