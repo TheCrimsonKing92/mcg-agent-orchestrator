@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
@@ -2141,6 +2142,47 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.False(secondCompletedEarly);
         Assert.True(secondFinished.IsSet);
         Assert.Equal(2, triggerInvocationCount);
+    }
+
+    [Xunit.Fact]
+    public void CleanupStateWriteJoinsAmbientStateDatabaseConnection()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        using var connection = StateDbConnectionFactory.Open(
+            workspace.SqliteStatePath,
+            StateDbConnectionProfile.ReadWrite);
+        var ambientConnectionUsed = false;
+        connection.CreateFunction(
+            "mark_cleanup_state_write",
+            () =>
+            {
+                ambientConnectionUsed = true;
+                return 0;
+            });
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                CREATE TEMP TRIGGER observe_cleanup_state_write
+                BEFORE INSERT ON worktree_cleanup_backoff
+                BEGIN
+                    SELECT mark_cleanup_state_write();
+                END
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        using (StateDbWriteSession.Enter(workspace.SqliteStatePath, connection))
+        {
+            var backoff = GoalWorktrees.RecordGoalCleanupNeeded(
+                root,
+                GoalId.New(),
+                "remove:ambient-write-test");
+            Assert.NotNull(backoff);
+        }
+
+        Assert.True(ambientConnectionUsed);
     }
 
     private static string TempDb(bool migrate = true)

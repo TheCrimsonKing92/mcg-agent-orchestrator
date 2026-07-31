@@ -175,7 +175,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             File.WriteAllText(sourceB, GuardSource("B", enabled: false));
             CommitAll(repositoryRoot, "Add review targets", "2026-01-01T00:01:00Z");
             var round1Commit = ReadHead(repositoryRoot);
-            var repository = new SqliteOrchestratorStateRepository(db);
+            var repository = CreateMigratedStateRepository(db);
             var kernel = new AgentOrchestratorKernel();
             var goal = GoalLifecycleCommands.CreateAndActivateGoal(
                 kernel,
@@ -318,7 +318,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             CommitAll(repositoryRoot, "Add review target", "2026-01-01T00:01:00Z");
             var round1Commit = ReadHead(repositoryRoot);
             var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
-            var repository = new SqliteOrchestratorStateRepository(db);
+            var repository = CreateMigratedStateRepository(db);
             var kernel = new AgentOrchestratorKernel();
             var goal = GoalLifecycleCommands.CreateAndActivateGoal(
                 kernel,

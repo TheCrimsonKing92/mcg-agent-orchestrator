@@ -221,23 +221,29 @@ public static partial class GoalWorktrees
     {
         try
         {
-            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
-            var observation = RecordCleanupDebtObserved(conn, path, warningOperation, reason);
-            var retryDuration = observation.Debt.EscalatedAtUtc is null
-                ? CleanupBackoffDurationFor(reason)
-                : CleanupOptions.EscalatedRetryInterval;
-            using var command = conn.CreateCommand();
-            command.CommandText = """
-                INSERT INTO worktree_cleanup_backoff(path, skip_until_utc, reason)
-                VALUES ($path, $skipUntilUtc, $reason)
-                ON CONFLICT(path) DO UPDATE SET
-                    skip_until_utc = excluded.skip_until_utc,
-                    reason = excluded.reason;
-            """;
-            command.Parameters.AddWithValue("$path", NormalizePath(path));
-            command.Parameters.AddWithValue("$skipUntilUtc", CleanupUtcNow().Add(retryDuration).ToString("O"));
-            command.Parameters.AddWithValue("$reason", reason);
-            command.ExecuteNonQuery();
+            var observation = WithCleanupBackoffConnection(
+                path,
+                cleanupStateRoot,
+                conn =>
+                {
+                    var result = RecordCleanupDebtObserved(conn, path, warningOperation, reason);
+                    var retryDuration = result.Debt.EscalatedAtUtc is null
+                        ? CleanupBackoffDurationFor(reason)
+                        : CleanupOptions.EscalatedRetryInterval;
+                    using var command = conn.CreateCommand();
+                    command.CommandText = """
+                        INSERT INTO worktree_cleanup_backoff(path, skip_until_utc, reason)
+                        VALUES ($path, $skipUntilUtc, $reason)
+                        ON CONFLICT(path) DO UPDATE SET
+                            skip_until_utc = excluded.skip_until_utc,
+                            reason = excluded.reason;
+                    """;
+                    command.Parameters.AddWithValue("$path", NormalizePath(path));
+                    command.Parameters.AddWithValue("$skipUntilUtc", CleanupUtcNow().Add(retryDuration).ToString("O"));
+                    command.Parameters.AddWithValue("$reason", reason);
+                    command.ExecuteNonQuery();
+                    return result;
+                });
             if (observation.EscalatedNow)
             {
                 RaiseCleanupDebtAttention(path, reason, observation.Debt, goalId);
@@ -299,16 +305,22 @@ public static partial class GoalWorktrees
             if (!File.Exists(statePath))
                 return;
 
-            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
-            wasEscalated = HasCleanupDebtEscalation(conn, NormalizePath(path));
-            using var command = conn.CreateCommand();
-            command.CommandText = "DELETE FROM worktree_cleanup_backoff WHERE path = $path";
-            command.Parameters.AddWithValue("$path", NormalizePath(path));
-            command.ExecuteNonQuery();
-            using var journalCommand = conn.CreateCommand();
-            journalCommand.CommandText = "DELETE FROM worktree_cleanup_journal WHERE path = $path";
-            journalCommand.Parameters.AddWithValue("$path", NormalizePath(path));
-            journalCommand.ExecuteNonQuery();
+            wasEscalated = WithCleanupBackoffConnection(
+                path,
+                cleanupStateRoot,
+                conn =>
+                {
+                    var escalated = HasCleanupDebtEscalation(conn, NormalizePath(path));
+                    using var command = conn.CreateCommand();
+                    command.CommandText = "DELETE FROM worktree_cleanup_backoff WHERE path = $path";
+                    command.Parameters.AddWithValue("$path", NormalizePath(path));
+                    command.ExecuteNonQuery();
+                    using var journalCommand = conn.CreateCommand();
+                    journalCommand.CommandText = "DELETE FROM worktree_cleanup_journal WHERE path = $path";
+                    journalCommand.Parameters.AddWithValue("$path", NormalizePath(path));
+                    journalCommand.ExecuteNonQuery();
+                    return escalated;
+                });
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
@@ -331,11 +343,16 @@ public static partial class GoalWorktrees
                 return;
             }
 
-            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
-            using var command = conn.CreateCommand();
-            command.CommandText = "DELETE FROM worktree_cleanup_backoff WHERE path = $path";
-            command.Parameters.AddWithValue("$path", NormalizePath(path));
-            command.ExecuteNonQuery();
+            WithCleanupBackoffConnection(
+                path,
+                cleanupStateRoot,
+                conn =>
+                {
+                    using var command = conn.CreateCommand();
+                    command.CommandText = "DELETE FROM worktree_cleanup_backoff WHERE path = $path";
+                    command.Parameters.AddWithValue("$path", NormalizePath(path));
+                    command.ExecuteNonQuery();
+                });
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {
@@ -351,10 +368,29 @@ public static partial class GoalWorktrees
     private static string CleanupStateStorePathForRoot(string executionDirectory) =>
         Path.Combine(Path.GetFullPath(executionDirectory), ".orchestrator", "state.db");
 
-    private static SqliteConnection OpenCleanupBackoffConnection(string path, string? cleanupStateRoot = null)
+    private static void WithCleanupBackoffConnection(
+        string path,
+        string? cleanupStateRoot,
+        Action<SqliteConnection> action)
     {
         var statePath = CleanupBackoffStorePath(path, cleanupStateRoot);
-        return OpenCleanupStateConnection(statePath);
+        WithCleanupStateConnection(statePath, action);
+    }
+
+    private static TResult WithCleanupBackoffConnection<TResult>(
+        string path,
+        string? cleanupStateRoot,
+        Func<SqliteConnection, TResult> action)
+    {
+        var result = default(TResult)!;
+        WithCleanupBackoffConnection(
+            path,
+            cleanupStateRoot,
+            connection =>
+            {
+                result = action(connection);
+            });
+        return result;
     }
 
     private static SqliteConnection OpenCleanupBackoffReadConnection(string path, string? cleanupStateRoot = null)
@@ -363,10 +399,18 @@ public static partial class GoalWorktrees
         return OpenCleanupStateReadConnection(statePath);
     }
 
-    private static SqliteConnection OpenCleanupStateConnection(string statePath) =>
-        StateDbConnectionFactory.Open(
+    private static void WithCleanupStateConnection(
+        string statePath,
+        Action<SqliteConnection> action)
+    {
+        if (StateDbWriteSession.TryExecute(statePath, action))
+            return;
+
+        using var connection = StateDbConnectionFactory.Open(
             statePath,
             StateDbConnectionProfile.ReadWrite);
+        action(connection);
+    }
 
     private static SqliteConnection OpenCleanupStateReadConnection(string statePath) =>
         StateDbConnectionFactory.Open(
@@ -381,8 +425,18 @@ public static partial class GoalWorktrees
     {
         try
         {
-            using var conn = OpenCleanupBackoffConnection(path, cleanupStateRoot);
-            _ = RecordCleanupDebtObserved(conn, path, operation, backoff.Reason, incrementFailureCount: false);
+            WithCleanupBackoffConnection(
+                path,
+                cleanupStateRoot,
+                conn =>
+                {
+                    _ = RecordCleanupDebtObserved(
+                        conn,
+                        path,
+                        operation,
+                        backoff.Reason,
+                        incrementFailureCount: false);
+                });
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
         {

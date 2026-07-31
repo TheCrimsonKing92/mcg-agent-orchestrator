@@ -142,8 +142,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
-    [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_conduct_handoff_reads_production_authority_transfer_signal")]
-    public void ProgramStartupLifecycleConductHandoffReadsProductionAuthorityTransferSignal()
+    [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_authority_transfer_signal_suppresses_cleanup_for_every_command")]
+    public void ProgramStartupLifecycleAuthorityTransferSignalSuppressesCleanupForEveryCommand()
     {
         const string variable = "MCG_ORCHESTRATOR_HANDOFF_READY_PATH";
         var previous = Environment.GetEnvironmentVariable(variable);
@@ -152,7 +152,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Environment.SetEnvironmentVariable(variable, "successor.ready");
 
             Assert.True(ProgramStartupLifecycle.IsAuthorityTransferRequested(["conduct", "--loop"]));
-            Assert.False(ProgramStartupLifecycle.IsAuthorityTransferRequested(["status"]));
+            Assert.True(ProgramStartupLifecycle.IsAuthorityTransferRequested(["status"]));
         }
         finally
         {

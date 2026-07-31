@@ -419,8 +419,7 @@ static bool IsGoalEventsFollowCommand(IReadOnlyList<string> startupArgs)
 
 internal static class ProgramStartupLifecycle
 {
-    internal static bool IsAuthorityTransferRequested(IReadOnlyList<string> startupArgs) =>
-        CliPersistentStateRunner.IsConductLoop(startupArgs) &&
+    internal static bool IsAuthorityTransferRequested(IReadOnlyList<string> _) =>
         ConductorLoopHandoff.IsAuthorityTransferRequested;
 
     internal static void EnsureStateDbInitialized(

@@ -54,6 +54,12 @@ public static OrchestratorWorkspace CreateRefinedWorkspace(string root)
     return workspace;
 }
 
+public static SqliteOrchestratorStateRepository CreateMigratedStateRepository(string databasePath)
+{
+    _ = StateDbMigrations.EnsureUpToDate(databasePath);
+    return new SqliteOrchestratorStateRepository(databasePath);
+}
+
 public static void SeedSpecRefinerBinding(OrchestratorWorkspace workspace)
 {
     ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([

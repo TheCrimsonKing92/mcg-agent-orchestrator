@@ -847,7 +847,7 @@ public sealed class AdvanceLoopTests
     using var sandboxScope = ClearWorkerSandboxEnvironment();
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
     var kernel = new AgentOrchestratorKernel();
     var planner = new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner);
     var researcher = new TaskSpec(TaskId.New(), "Research the work", AgentRole.Researcher);
@@ -1075,7 +1075,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
     var agents = new AgentCatalog(
     [
         new AgentDefinition(
@@ -1137,7 +1137,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
     var primary = new AgentDefinition(
         new AgentId("primary-planner"),
         "Primary Planner",
@@ -1205,7 +1205,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
     var agents = new AgentCatalog(
     [
         new AgentDefinition(
@@ -1279,7 +1279,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
     var kernel = new AgentOrchestratorKernel();
     var goal = CreateRefinedGoal(kernel, "Restore bounded continuation text", [new TaskSpec(TaskId.New(), "Wait", AgentRole.Developer)]);
     await repository.SaveAsync(kernel);
@@ -1333,7 +1333,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
     var agents = AgentCatalog.Default();
     AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);
     WorkerProfileStore.Save(workspace.WorkerProfilePath, WorkerProfileCatalog.Default());
@@ -1394,7 +1394,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
 {
     var root = CreateTempDirectory();
     var workspace = OrchestratorWorkspace.ForDirectory(root);
-    var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+    var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
     using var service = new DashboardContinuationService(TimeSpan.FromMilliseconds(10), 3);
     using var lifetime = new FakeHostLifetime();
     var services = new DashboardEndpointServices(
