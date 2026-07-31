@@ -8,6 +8,36 @@ using System.Text.Json.Nodes;
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_scrubs_launch_context_env_so_the_gate_verdict_is_hermetic")]
+    public void GoalAcceptanceVerifierScrubsLaunchContextEnvSoTheGateVerdictIsHermetic()
+    {
+        var environment = new System.Collections.Specialized.StringDictionary
+        {
+            // Handoff vars leak in from a handoff-spawned conductor and make CLI grandchildren skip
+            // startup cleanup, which silently greened a real backlog-list regression on some runs.
+            ["MCG_ORCHESTRATOR_HANDOFF_READY_PATH"] = @"C:\ready.txt",
+            ["MCG_ORCHESTRATOR_HANDOFF_TOKEN"] = "token-1",
+            ["mcg_orchestrator_handoff_incumbent_pid"] = "4242",
+            [WorkerSandboxOptions.EnabledVariable] = "1",
+            [WorkerSandboxOptions.AccountVariable] = "worker",
+            // Unrelated inputs the suite legitimately needs must survive.
+            ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = @"C:\repo",
+            ["PATH"] = @"C:\windows"
+        };
+
+        GoalAcceptanceVerifier.ScrubNonHermeticEnvironment(environment);
+
+        Assert.Empty(environment.Keys
+            .Cast<string>()
+            .Where(name => name.StartsWith(
+                GoalAcceptanceVerifier.HandoffEnvironmentVariablePrefix,
+                StringComparison.OrdinalIgnoreCase)));
+        Assert.False(environment.ContainsKey(WorkerSandboxOptions.EnabledVariable));
+        Assert.False(environment.ContainsKey(WorkerSandboxOptions.AccountVariable));
+        Assert.Equal(@"C:\repo", environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"]);
+        Assert.Equal(@"C:\windows", environment["PATH"]);
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_pre_review_attempt_namespace_cannot_collide_with_acceptance")]
     public void GoalAcceptanceVerifierPreReviewAttemptNamespaceCannotCollideWithAcceptance()
     {

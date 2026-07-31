@@ -5789,6 +5789,40 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return (context.HeartbeatPath, context.StableSlotHeartbeatPath);
     }
 
+    internal const string HandoffEnvironmentVariablePrefix = "MCG_ORCHESTRATOR_HANDOFF_";
+
+    // The acceptance suite verifies the CODE and must run hermetically — NOT under whatever runtime config
+    // the operator's conductor happened to be launched with. Anything surviving here is an ambient input the
+    // gate silently depends on, which makes its verdict a statement about the launcher. Two proven leaks:
+    //
+    // 1. Worker-dispatch vars (MCG_WORKER_SANDBOX and friends) control how real workers launch (low
+    //    integrity). Several tests read WorkerSandboxOptions.FromEnvironment(), so running `conduct` with
+    //    MCG_WORKER_SANDBOX=1 flipped those tests' expected sandbox mode — failing acceptance INSIDE the
+    //    watch while the same suite passed when `acceptance` ran standalone.
+    // 2. Handoff coordination vars: a handoff-spawned conductor carries MCG_ORCHESTRATOR_HANDOFF_*, the gate
+    //    child inherits them, and CLI grandchildren then see authority-transfer-requested and SKIP startup
+    //    cleanup. That masked a real backlog-list regression — identical code failed one run and passed the
+    //    next purely on how the conductor had been launched. Stripped by prefix rather than by name because
+    //    those constants live in the App layer.
+    internal static void ScrubNonHermeticEnvironment(
+        System.Collections.Specialized.StringDictionary environment)
+    {
+        environment.Remove(WorkerSandboxOptions.EnabledVariable);
+        environment.Remove(WorkerSandboxOptions.AccountVariable);
+        environment.Remove(WorkerSandboxOptions.CredentialTargetVariable);
+        environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+
+        foreach (var handoffVariable in environment.Keys
+                     .Cast<string>()
+                     .Where(name => name.StartsWith(
+                         HandoffEnvironmentVariablePrefix,
+                         StringComparison.OrdinalIgnoreCase))
+                     .ToArray())
+        {
+            environment.Remove(handoffVariable);
+        }
+    }
+
     private static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
         string workingDirectory,
@@ -5835,18 +5869,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
-
-        // The acceptance suite verifies the CODE and must run hermetically — NOT under the operator's
-        // live worker-dispatch runtime config. MCG_WORKER_SANDBOX (and friends) control how real
-        // workers are launched (low integrity); several tests read WorkerSandboxOptions.FromEnvironment(),
-        // so when the operator runs `conduct` with MCG_WORKER_SANDBOX=1 that var is inherited by this
-        // child process and flips those tests' expected sandbox mode — failing acceptance INSIDE the
-        // watch while the same suite passes when `acceptance` is run standalone (without the var). Strip
-        // the worker-dispatch vars so the suite always runs against the default configuration.
-        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.EnabledVariable);
-        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.AccountVariable);
-        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.CredentialTargetVariable);
-        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+        ScrubNonHermeticEnvironment(startInfo.EnvironmentVariables);
 
         int? startedProcessId = null;
         try

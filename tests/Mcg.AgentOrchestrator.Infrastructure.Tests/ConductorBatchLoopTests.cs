@@ -2737,7 +2737,12 @@ public sealed class ConductorBatchLoopTests
         ConductorParallelAcceptanceCandidate candidate,
         ConductorParallelAcceptanceAttemptOutcome expected)
     {
-        for (var i = 0; i < 50; i++)
+        // Failsafe bound, NOT an assertion about speed: the attempt runs on a dedicated thread doing real
+        // lease-file I/O, so this must be generous enough that only a genuine hang trips it. The former
+        // fixed 50 x 20ms (~1s) poll made machine speed the pass condition and failed under concurrent
+        // acceptance lanes with "Expected: BlockedBuildSlot, Actual: Running".
+        var waitBudget = Stopwatch.StartNew();
+        while (waitBudget.Elapsed < TimeSpan.FromSeconds(30))
         {
             var decision = coordinator.Evaluate(candidate, ConductorAutonomyPolicy.Conservative, PassingRun);
             if (decision.Attempt.Outcome == expected)

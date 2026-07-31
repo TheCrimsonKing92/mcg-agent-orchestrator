@@ -129,7 +129,10 @@ function Stop-OwnedProcessTree {
         $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
         if (Test-Path -LiteralPath $taskkill) {
             try {
-                & $taskkill /PID $RootProcessId /T /F | Out-Null
+                # Redirect ALL streams, not just stdout: a child that exits between enumeration and kill
+                # makes taskkill write "ERROR: The process "N" not found." to stderr, which then surfaces
+                # as caller stderr even though the process being gone is the outcome we wanted.
+                & $taskkill /PID $RootProcessId /T /F *> $null
                 return
             }
             catch {
