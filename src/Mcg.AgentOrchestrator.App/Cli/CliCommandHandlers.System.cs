@@ -840,7 +840,7 @@ internal static partial class CliCommandHandlers
         return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var stateRepository = new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath);
+            var stateRepository = CreateOperatorDecisionStateRepository(parts, context.Workspace);
             var agents = context.Agents;
             var workerProfiles = context.WorkerProfiles;
             Goal? currentGoal = null;
@@ -854,6 +854,14 @@ internal static partial class CliCommandHandlers
                 ref currentGoal,
                 DiscordDecisionOperatorChannel.Instance);
         }, cancellationToken);
+    }
+
+    internal static ITransactionalOrchestratorStateRepository CreateOperatorDecisionStateRepository(
+        IReadOnlyList<string> parts,
+        OrchestratorWorkspace workspace)
+    {
+        ProgramStartupLifecycle.EnsureStateDbInitialized(parts, workspace);
+        return new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     }
 
     private sealed class DiscordDecisionOperatorChannel : IOperatorChannel

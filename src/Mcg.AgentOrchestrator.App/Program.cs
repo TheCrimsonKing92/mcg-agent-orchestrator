@@ -145,11 +145,6 @@ if (IsGoalEventsFollowCommand(startupArgs))
     }
 }
 
-ProgramStartupLifecycle.InitializeWorkerProcessTracking(
-    RunsStartupCleanup(startupArgs),
-    ConductorLoopHandoff.IsAuthorityTransferRequested,
-    workspace.SqliteStatePath,
-    workspace.ExecutionDirectory);
 var providers = ProviderRegistryFactory.CreateDefaultProviders();
 var agentFallback = ProviderRegistryFactory.IsOllamaReachable() ? AgentCatalog.OllamaDefault() : null;
 var agents = AgentCatalogStore.Load(workspace.AgentCatalogPath, agentFallback).Agents;
@@ -218,15 +213,26 @@ AgentOrchestratorKernel kernel;
 Goal? currentGoal;
 try
 {
+    var isConductLoop = CliPersistentStateRunner.IsConductLoop(startupArgs);
+    var authorityTransferRequested =
+        ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs);
+    if (isConductLoop)
+    {
+        // A handoff successor must not migrate or load state until the incumbent
+        // explicitly transfers its sole-writer authority.
+        ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
+    }
+
+    ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
+
+    ProgramStartupLifecycle.InitializeWorkerProcessTracking(
+        RunsStartupCleanup(startupArgs),
+        authorityTransferRequested,
+        workspace.SqliteStatePath,
+        workspace.ExecutionDirectory);
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
     kernel = await stateRepository.LoadAsync();
     currentGoal = OrchestratorEntityResolver.GetLatestGoal(kernel);
-    if (CliPersistentStateRunner.IsConductLoop(startupArgs))
-    {
-        // A handoff successor completes normal startup and state/config loading while the
-        // incumbent retains exclusive authority, then waits for the explicit lease transfer.
-        ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
-    }
 }
 catch (Exception ex)
 {
@@ -413,6 +419,30 @@ static bool IsGoalEventsFollowCommand(IReadOnlyList<string> startupArgs)
 
 internal static class ProgramStartupLifecycle
 {
+    internal static bool IsAuthorityTransferRequested(IReadOnlyList<string> _) =>
+        ConductorLoopHandoff.IsAuthorityTransferRequested;
+
+    internal static void EnsureStateDbInitialized(
+        IReadOnlyList<string> startupArgs,
+        OrchestratorWorkspace workspace)
+    {
+        if (CliPersistentStateRunner.HasStateDbMigrationAuthority(startupArgs))
+        {
+            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            return;
+        }
+
+        if (StateDbMigrations.IsUpToDate(workspace.SqliteStatePath))
+            return;
+
+        // A first-use non-conductor command gets a short-lived, explicit bootstrap
+        // authority. Repositories remain schema-write-free, and established read
+        // commands never take this lease or run migrations.
+        using var bootstrapAuthority = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        if (!StateDbMigrations.IsUpToDate(workspace.SqliteStatePath))
+            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+    }
+
     internal static void InitializeWorkerProcessTracking(
         bool runsStartupCleanup,
         bool authorityTransferRequested,

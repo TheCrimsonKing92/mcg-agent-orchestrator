@@ -13,10 +13,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 {
     public const string CurrentSchemaVersion = "1";
     private const int GoalMetadataTitleMaxChars = 240;
+    private const int MaxOptimisticConcurrencyRetries = 6;
     private readonly string _dbPath;
     private readonly Action<string>? _statementObserver;
     private readonly SqliteWriteTelemetry _writeTelemetry;
     private readonly Action? _beforeOutboxCommit;
+    private readonly StateDbConnectionProfile _connectionProfile;
     private static readonly AsyncLocal<string?> CurrentWriteOperationTag = new();
     private static readonly string[] CoreSchemaTableNames =
     [
@@ -32,15 +34,27 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     {
     }
 
+    public static SqliteOrchestratorStateRepository OpenReadOnly(string dbPath) =>
+        new(
+            dbPath,
+            statementObserver: null,
+            telemetryOptions: null,
+            beforeOutboxCommit: null,
+            StateDbConnectionProfile.QueryOnlyRead);
+
+    public static string VerifyJournalMode(string dbPath)
+    {
+        using var connection = StateDbConnectionFactory.Open(
+            dbPath,
+            StateDbConnectionProfile.QueryOnlyRead);
+        return StateDbConnectionFactory.ReadJournalMode(connection);
+    }
+
     public static string ValidateReadOnlySchema(string dbPath)
     {
-        var builder = new SqliteConnectionStringBuilder
-        {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadOnly
-        };
-        using var conn = new SqliteConnection(builder.ConnectionString);
-        conn.Open();
+        using var conn = StateDbConnectionFactory.Open(
+            dbPath,
+            StateDbConnectionProfile.QueryOnlyRead);
 
         using var version = conn.CreateCommand();
         version.CommandText = "SELECT value FROM meta WHERE key = 'schema_version'";
@@ -97,12 +111,27 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         Action<string>? statementObserver,
         SqliteWriteTelemetryOptions? telemetryOptions,
         Action? beforeOutboxCommit = null)
+        : this(
+            dbPath,
+            statementObserver,
+            telemetryOptions,
+            beforeOutboxCommit,
+            StateDbConnectionProfile.ReadWrite)
+    {
+    }
+
+    private SqliteOrchestratorStateRepository(
+        string dbPath,
+        Action<string>? statementObserver,
+        SqliteWriteTelemetryOptions? telemetryOptions,
+        Action? beforeOutboxCommit,
+        StateDbConnectionProfile connectionProfile)
     {
         _dbPath = dbPath;
         _statementObserver = statementObserver;
         _writeTelemetry = new SqliteWriteTelemetry(dbPath, telemetryOptions);
         _beforeOutboxCommit = beforeOutboxCommit;
-        EnsureSchema();
+        _connectionProfile = connectionProfile;
     }
 
     internal static IDisposable UseWriteOperationTag(string operationTag)
@@ -120,10 +149,22 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             ? fallback
             : CurrentWriteOperationTag.Value!;
 
-    private static string ResolveOperationTag(string fallback, string operationName) =>
-        string.IsNullOrWhiteSpace(operationName)
-            ? throw new ArgumentException("Operation name cannot be empty.", nameof(operationName))
-            : operationName.Trim();
+    private static string ResolveOperationTag(string fallback, string operationName)
+    {
+        if (string.IsNullOrWhiteSpace(operationName))
+            throw new ArgumentException("Operation name cannot be empty.", nameof(operationName));
+
+        var operation = operationName.Trim();
+        var ambient = CurrentWriteOperationTag.Value;
+        if (string.IsNullOrWhiteSpace(ambient) ||
+            operation.Equals(ambient, StringComparison.Ordinal) ||
+            operation.StartsWith(ambient + "/", StringComparison.Ordinal))
+        {
+            return operation;
+        }
+
+        return $"{ambient}/{operation}";
+    }
 
     private sealed class RestoreWriteOperationTag : IDisposable
     {
@@ -149,35 +190,28 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     // a WAL read/lock slot, so a later writer meets "database is locked" that busy_timeout cannot wait
     // out (it is not a plain lock-wait). The sibling CollaborationItemStore already does this; the
     // state repo did not, which let a goal-create issued during a conduct --loop tick crash the loop.
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
-
-    private SqliteConnection OpenConnection()
-    {
-        var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        // busy_timeout is PER-CONNECTION (unlike WAL, which is a persistent DB property set once in
-        // EnsureSchema). Without it a connection that meets a held lock fails IMMEDIATELY with
-        // "database is locked" — so a `backlog-add`/`status`/etc. issued while the conductor holds a
-        // brief per-tick write lock errors out instead of waiting. Setting it lets concurrent commands
-        // (and concurrent goal drivers) wait out the short write window, which WAL already keeps small.
-        RunNonQuery(conn, BusyTimeoutPragma());
-        return conn;
-    }
+    private SqliteConnection OpenConnection(int? busyTimeoutMilliseconds = null) =>
+        StateDbConnectionFactory.Open(
+            _dbPath,
+            _connectionProfile,
+            busyTimeoutMilliseconds ?? _writeTelemetry.Options.BusyTimeoutMilliseconds,
+            _statementObserver);
 
     // Cap on retrying a transient SQLITE_BUSY/LOCKED before giving up. busy_timeout (30s) handles the
     // simple lock-wait, but the deadlock-avoidance path (and pooling artifacts) can still surface an
     // immediate BUSY; this bounded retry turns that into a brief wait instead of a fatal throw that
     // would kill a conduct --loop on a concurrent writer.
-    private const int MaxBusyRetries = 6;
-
     private static bool IsTransientLock(SqliteException ex) =>
         ex.SqliteErrorCode == 5 /* SQLITE_BUSY */ || ex.SqliteErrorCode == 6 /* SQLITE_LOCKED */;
 
     private static async Task<T> WithBusyRetryAsync<T>(
         Func<Task<T>> operation,
         CancellationToken ct,
-        int maxBusyRetries = MaxBusyRetries)
+        TimeSpan? retryBudget = null,
+        int maxBusyRetries = int.MaxValue)
     {
+        var budget = retryBudget ?? TimeSpan.FromMilliseconds(StateDbConnectionFactory.DefaultBusyTimeoutMilliseconds);
+        var stopwatch = Stopwatch.StartNew();
         var delayMs = 50;
         for (var attempt = 1; ; attempt++)
         {
@@ -185,9 +219,16 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             {
                 return await operation();
             }
-            catch (SqliteException ex) when (attempt < maxBusyRetries && IsTransientLock(ex))
+            catch (SqliteException ex) when (
+                attempt < maxBusyRetries &&
+                IsTransientLock(ex) &&
+                stopwatch.Elapsed < budget)
             {
-                await Task.Delay(delayMs, ct);
+                var remaining = budget - stopwatch.Elapsed;
+                var delay = TimeSpan.FromMilliseconds(Math.Min(delayMs, Math.Max(0, remaining.TotalMilliseconds)));
+                if (delay <= TimeSpan.Zero)
+                    throw;
+                await Task.Delay(delay, ct);
                 delayMs = Math.Min(delayMs * 2, 1000);
             }
         }
@@ -201,12 +242,15 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         var acquisitionStopwatch = Stopwatch.StartNew();
         try
         {
+            var retryBudget = _writeTelemetry.Options.BusyRetryBudget;
             var conn = await WithBusyRetryAsync(async () =>
             {
-                var conn = OpenConnection();
+                var remainingMilliseconds = Math.Max(
+                    1,
+                    (int)Math.Ceiling((retryBudget - acquisitionStopwatch.Elapsed).TotalMilliseconds));
+                var conn = OpenConnection(remainingMilliseconds);
                 try
                 {
-                    await SetBusyTimeoutAsync(conn, cancellationToken);
                     await RunNonQueryAsync(
                         conn,
                         "BEGIN IMMEDIATE",
@@ -219,7 +263,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                     await conn.DisposeAsync();
                     throw;
                 }
-            }, cancellationToken, _writeTelemetry.Options.MaxBusyRetries);
+            }, cancellationToken, retryBudget, _writeTelemetry.Options.MaxBusyRetries);
             acquisitionStopwatch.Stop();
             return new WriteConnection(
                 conn,
@@ -233,35 +277,23 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         }
     }
 
-    private string BusyTimeoutPragma() =>
-        "PRAGMA busy_timeout=" + _writeTelemetry.Options.BusyTimeoutMilliseconds.ToString(CultureInfo.InvariantCulture);
-
     private sealed record WriteConnection(
         SqliteConnection Connection,
         SqliteWriteTelemetry.WriteTelemetryScope Telemetry);
 
-    private void EnsureSchema()
+    internal void ApplyCoreSchemaMigration(SqliteConnection conn)
     {
-        var directory = Path.GetDirectoryName(_dbPath);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-
-        using var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        RunNonQuery(conn, BusyTimeoutPragma());
         if (CoreSchemaTablesAlreadyExist(conn))
         {
             MigrateVersionColumn(conn);
             if (!PracticeRegistrySchemaExists(conn))
-                PracticeRegistryStore.EnsureSchemaAndSeed(conn);
+                PracticeRegistryStore.ApplySchemaMigration(conn);
             if (!StateOutboxSchemaExists(conn))
                 EnsureStateOutboxSchema(conn);
             MigrateStateOutboxColumns(conn);
-            BackfillModelFitHistoryOutcomeColumns(conn);
             return;
         }
 
-        RunNonQuery(conn, "PRAGMA journal_mode=WAL");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS meta (
                 key   TEXT PRIMARY KEY,
@@ -311,7 +343,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_goals_source_backlog_item_id ON goals(source_backlog_item_id)");
         EnsureStateOutboxSchema(conn);
         RunNonQuery(conn, $"INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '{CurrentSchemaVersion}')");
-        PracticeRegistryStore.EnsureSchemaAndSeed(conn);
+        PracticeRegistryStore.ApplySchemaMigration(conn);
     }
 
     private void EnsureStateOutboxSchema(SqliteConnection conn)
@@ -371,7 +403,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_model_fit_history_outcome_class ON model_fit_history(outcome_class)");
     }
 
-    private void BackfillModelFitHistoryOutcomeColumns(SqliteConnection conn)
+    internal void ApplyModelFitHistoryBackfillMigration(SqliteConnection conn)
     {
         var kernel = LoadFromConnectionAsync(conn, goalIds: null, CancellationToken.None).GetAwaiter().GetResult();
         foreach (var row in ModelFitHistory.FromGoals(kernel.Goals))
@@ -384,6 +416,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 WHERE goal_id = $goal_id
                   AND task_id = $task_id
                   AND timestamp = $timestamp
+                  AND (outcome_rule IS NOT $outcome_rule
+                       OR outcome_class <> $outcome_class)
                 """;
             cmd.Parameters.AddWithValue("$outcome_rule", row.OutcomeRule ?? (object)DBNull.Value);
             cmd.Parameters.AddWithValue("$outcome_class", TaskOutcomeClassifier.FormatClass(row.OutcomeClass));
@@ -670,7 +704,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
             }
 
-            var (shouldSave, result) = await transaction(kernel, CheckpointAsync, cancellationToken);
+            bool shouldSave;
+            T result;
+            using (StateDbWriteSession.Enter(_dbPath, conn))
+            {
+                (shouldSave, result) = await transaction(kernel, CheckpointAsync, cancellationToken);
+            }
 
             if (shouldSave)
                 await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
@@ -702,7 +741,13 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         try
         {
             var kernel = await LoadFromConnectionAsync(conn, goalIds: null, cancellationToken);
-            var (shouldSave, result, outboxMessages) = await transaction(kernel, cancellationToken);
+            bool shouldSave;
+            T result;
+            IReadOnlyList<OrchestratorStateOutboxMessage> outboxMessages;
+            using (StateDbWriteSession.Enter(_dbPath, conn))
+            {
+                (shouldSave, result, outboxMessages) = await transaction(kernel, cancellationToken);
+            }
 
             if (shouldSave)
                 await WriteSnapshotAsync(conn, kernel, telemetry, cancellationToken);
@@ -793,7 +838,11 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 return false;
             }
 
-            var result = await processor(message, cancellationToken);
+            OrchestratorStateOutboxProcessingResult result;
+            using (StateDbWriteSession.Enter(_dbPath, conn))
+            {
+                result = await processor(message, cancellationToken);
+            }
             await using var cmd = conn.CreateCommand();
             if (result.Disposition == OrchestratorStateOutboxDisposition.Complete)
             {
@@ -1528,8 +1577,9 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 
         try
         {
-            await using var conn = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly;Pooling=False;");
-            await conn.OpenAsync(cancellationToken);
+            await using var conn = StateDbConnectionFactory.Open(
+                dbPath,
+                StateDbConnectionProfile.QueryOnlyRead);
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT COALESCE(version, 0) FROM goals WHERE id = $id LIMIT 1";
             cmd.Parameters.AddWithValue("$id", goalId);
@@ -1588,7 +1638,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             // Version mismatch detected: concurrent writer incremented the version between our
             // load and our CAS write. Treat this as a transient error and retry the full
             // load-mutate-CAS cycle — same retry budget as SQLITE_BUSY.
-            if (attempt >= MaxBusyRetries)
+            if (attempt >= MaxOptimisticConcurrencyRetries)
                 throw new InvalidOperationException(
                     $"TransactGoalAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
 
@@ -1643,7 +1693,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             if (casSucceeded)
                 return result;
 
-            if (attempt >= MaxBusyRetries)
+            if (attempt >= MaxOptimisticConcurrencyRetries)
                 throw new InvalidOperationException(
                     $"TransactGoalStateAsync: optimistic concurrency retries exhausted for goal {goalId.Value[..8]}");
 
@@ -1902,9 +1952,6 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             TaskOutcomeClassifier.ParseClass(reader.IsDBNull(11) ? null : reader.GetString(11)),
             reader.IsDBNull(12) ? null : reader.GetString(12));
     }
-
-    private async Task SetBusyTimeoutAsync(SqliteConnection conn, CancellationToken cancellationToken)
-        => await RunNonQueryAsync(conn, BusyTimeoutPragma(), cancellationToken);
 
     private void RunNonQuery(SqliteConnection conn, string sql)
     {

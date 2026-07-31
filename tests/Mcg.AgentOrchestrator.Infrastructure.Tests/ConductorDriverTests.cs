@@ -655,7 +655,7 @@ public sealed class ConductorDriverTests
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(root);
-            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             var kernel = new AgentOrchestratorKernel();
             var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
                 kernel,

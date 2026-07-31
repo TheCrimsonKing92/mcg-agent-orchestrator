@@ -716,7 +716,7 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
             Assert.Equal(GoalStatus.Verified, goal.Status);
             GoalOperationJournal.Completed(repo, goal, "acceptance", "Acceptance passed and merge completed.");
 
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             await stateRepository.SaveAsync(kernel);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
@@ -1101,7 +1101,7 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Queued persistence goal");
 
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             await stateRepository.SaveAsync(kernel);
 
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;

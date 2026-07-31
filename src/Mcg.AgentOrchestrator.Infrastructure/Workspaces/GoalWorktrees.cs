@@ -198,25 +198,6 @@ public static partial class GoalWorktrees
     private static readonly string[] LockHolderCandidates =
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
     private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
-    private const string CleanupBackoffTableSql = """
-        CREATE TABLE IF NOT EXISTS worktree_cleanup_backoff (
-            path TEXT PRIMARY KEY NOT NULL,
-            skip_until_utc TEXT NOT NULL,
-            reason TEXT NOT NULL
-        );
-        """;
-    private const string CleanupDebtJournalTableSql = """
-        CREATE TABLE IF NOT EXISTS worktree_cleanup_journal (
-            path TEXT PRIMARY KEY NOT NULL,
-            first_seen_utc TEXT NOT NULL,
-            last_seen_utc TEXT NOT NULL,
-            last_operation TEXT NOT NULL,
-            last_reason TEXT NOT NULL,
-            skip_count INTEGER NOT NULL DEFAULT 0,
-            escalated_at_utc TEXT NULL
-        );
-        """;
-
     // Process-wide test seams; tests replacing these hooks must use the
     // GoalWorktreeCleanupHooks collection so replacements cannot overlap.
     // Called best-effort before directory deletion to release any

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -98,6 +99,9 @@ public sealed class ConductorBatchLoopTests
     private static string NoStopPath() =>
         Path.Combine(Path.GetTempPath(), $"conduct-stop-{Guid.NewGuid():N}.txt");
 
+    private static SqliteOrchestratorStateRepository OpenStateRepository(string dbPath)
+        => CreateMigratedStateRepository(dbPath);
+
     private static Goal CreateVerifiedSimpleGoal(AgentOrchestratorKernel kernel, string objective)
     {
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), objective);
@@ -117,6 +121,40 @@ public sealed class ConductorBatchLoopTests
     {
         Assert.False(ConductorBatchLoop.DefaultSelfRelaunchEnabled);
         Assert.Equal(expected, ConductorBatchLoop.ResolveSelfRelaunchEnabled(configuredValue));
+    }
+
+    [Xunit.Theory(DisplayName = "StateDb_startup_migrations_require_conductor_authority_or_explicit_backlog_bootstrap")]
+    [Xunit.InlineData("conduct", "--loop", true)]
+    [Xunit.InlineData("conduct", "--watch", true)]
+    [Xunit.InlineData("backlog-intake", "queued item", true)]
+    [Xunit.InlineData("status", null, false)]
+    [Xunit.InlineData("backlog-show", null, false)]
+    [Xunit.InlineData("operator-intent-status", "intent-id", false)]
+    public void StateDbStartupMigrationsRequireConductorAuthorityOrExplicitBacklogBootstrap(
+        string command,
+        string? argument,
+        bool expected)
+    {
+        var args = argument is null ? [command] : new[] { command, argument };
+
+        Assert.Equal(expected, CliPersistentStateRunner.HasStateDbMigrationAuthority(args));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_loop_start_reports_verified_journal_mode")]
+    public void BatchLoopLoopStartReportsVerifiedJournalMode()
+    {
+        var (kernel, _) = SimpleGoal();
+        var output = CaptureConsole(() =>
+            new ConductorBatchLoop().Run(
+                kernel,
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 0,
+                journalMode: "wal"));
+
+        Assert.Contains("LOOP_START policy=Conservative", output, StringComparison.Ordinal);
+        Assert.Contains("journalMode=wal", output, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_default_self_relaunch_activation_does_not_schedule_or_execute")]
@@ -2434,7 +2472,7 @@ public sealed class ConductorBatchLoopTests
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/ParkBoundary.cs");
-        var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var stateRepository = OpenStateRepository(workspace.SqliteStatePath);
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var calls = new List<string[]>();
         var firstTargetCompleted = false;
@@ -4028,6 +4066,9 @@ public sealed class ConductorBatchLoopTests
         var originalWarnings = GoalWorktrees.CleanupWarningSink;
         try
         {
+            Directory.CreateDirectory(Path.Combine(root, ".git"));
+            _ = StateDbMigrations.EnsureUpToDate(
+                OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
             var kernel = new AgentOrchestratorKernel();
             var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "historical cleanup blocker goal");
             kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
@@ -4508,7 +4549,7 @@ public sealed class ConductorBatchLoopTests
     public async Task LoopPersistsEachTickDispatchSurvivesReload()
     {
         var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-persist-{Guid.NewGuid():N}.db");
-        var repo = new SqliteOrchestratorStateRepository(db);
+        var repo = OpenStateRepository(db);
 
         // Seed a single-task goal and commit it.
         GoalId goalId = default;
@@ -4552,11 +4593,11 @@ public sealed class ConductorBatchLoopTests
         Assert.True(task.LastProcess is not null);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorBatchLoop_critical_dispatch_start_retries_and_persists_dispatch_records_before_slot_release")]
-    public async Task CriticalDispatchStartRetriesAndPersistsDispatchRecordsBeforeSlotRelease()
+    [Xunit.Fact(DisplayName = "ConductorBatchLoop_critical_dispatch_start_persists_records_before_slot_release_without_outer_retry")]
+    public async Task CriticalDispatchStartPersistsRecordsBeforeSlotReleaseWithoutOuterRetry()
     {
         var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-dispatch-start-{Guid.NewGuid():N}.db");
-        var repo = new SqliteOrchestratorStateRepository(db);
+        var repo = OpenStateRepository(db);
 
         GoalId goalId = default;
         TaskId taskId = default;
@@ -4584,8 +4625,6 @@ public sealed class ConductorBatchLoopTests
                     (checkpoint, changedGoalIds) =>
                     {
                         attempts++;
-                        if (attempts < 3)
-                            throw SqliteBusy();
                         var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
                         var snaps = checkpoint.ExportSnapshot().Goals
                             .Where(goal => changed.Contains(goal.Id))
@@ -4608,7 +4647,7 @@ public sealed class ConductorBatchLoopTests
 
         var reloaded = await repo.LoadAsync();
         var task = reloaded.GetTask(goalId, taskId);
-        Assert.Equal(3, attempts);
+        Assert.Equal(1, attempts);
         Assert.True(task.LastDispatch is not null);
         Assert.True(task.LastProcess is not null);
         Assert.Equal(1, reloaded.Goals.Single(g => g.Id == goalId).Timeline.Count(evt =>
@@ -4621,7 +4660,7 @@ public sealed class ConductorBatchLoopTests
     public async Task FinalCheckpointPreservesCliRetryWrittenAfterLastTick()
     {
         var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-final-checkpoint-merge-{Guid.NewGuid():N}.db");
-        var repo = new SqliteOrchestratorStateRepository(db);
+        var repo = OpenStateRepository(db);
         var developerTaskId = TaskId.New();
         var testerTaskId = TaskId.New();
         var kernel = new AgentOrchestratorKernel();
@@ -4708,7 +4747,7 @@ public sealed class ConductorBatchLoopTests
     public async Task CriticalDispatchStartExhaustionPersistsNeitherRecord()
     {
         var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-dispatch-start-fail-{Guid.NewGuid():N}.db");
-        var repo = new SqliteOrchestratorStateRepository(db);
+        var repo = OpenStateRepository(db);
 
         GoalId goalId = default;
         TaskId taskId = default;
@@ -8388,31 +8427,24 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains(goal.Id.Value[..8], ex.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "PersistGoalTick_busy_retries_and_succeeds_before_budget")]
-    public void PersistGoalTickBusyRetriesAndSucceedsBeforeBudget()
+    [Xunit.Fact(DisplayName = "PersistGoalTick_busy_is_not_retried_after_repository_budget")]
+    public void PersistGoalTickBusyIsNotRetriedAfterRepositoryBudget()
     {
         var (kernel, _) = SimpleGoal("busy persistence clears");
         var driver = MakeDriver();
-        var ticks = new List<BatchTickSummary>();
         var attempts = 0;
 
-        var summary = new ConductorBatchLoop().Run(
+        Assert.Throws<InvalidOperationException>(() => new ConductorBatchLoop().Run(
             kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(),
             maxIterations: 1,
-            onTick: ticks.Add,
             persistGoalTick: (_, _) =>
             {
                 attempts++;
-                if (attempts < 3)
-                    throw SqliteBusy();
+                throw SqliteBusy();
             },
-            busyWriteDelay: _ => { });
+            busyWriteDelay: _ => { }));
 
-        Assert.Equal(1, summary.Ticks);
-        Assert.True(attempts >= 3, $"Expected at least 3 persistence attempts, got {attempts}");
-        var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
-        Assert.Equal(2, lines.Count(line => line.Contains("TICK_WRITE_BUSY", StringComparison.Ordinal)));
-        Assert.DoesNotContain(lines, line => line.Contains("TICK_WRITE_DEGRADED", StringComparison.Ordinal));
+        Assert.Equal(1, attempts);
     }
 
     [Xunit.Fact(DisplayName = "PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition")]

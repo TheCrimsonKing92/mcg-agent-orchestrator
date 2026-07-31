@@ -46,6 +46,42 @@ public sealed class GoalWorktreeTestsOrphanEphemeralSweep : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees_cleanup_status_contains_non_WAL_legacy_state_failure")]
+    public void GoalWorktreesCleanupStatusContainsNonWalLegacyStateFailure()
+    {
+        var root = CreateTempDirectory();
+        var originalWarnings = GoalWorktrees.CleanupWarningSink;
+        try
+        {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var statePath = Path.Combine(orchestratorDirectory, "state.db");
+            using (var connection = new SqliteConnection(
+                       $"Data Source={statePath};Mode=ReadWriteCreate;Pooling=False;"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "PRAGMA journal_mode=DELETE";
+                Assert.Equal("delete", command.ExecuteScalar()?.ToString(), ignoreCase: true);
+            }
+
+            var warnings = new List<GoalWorktreeCleanupWarning>();
+            GoalWorktrees.CleanupWarningSink = warnings.Add;
+
+            Assert.Empty(GoalWorktrees.ListCleanupDebt(root));
+            Assert.Contains(
+                warnings,
+                warning =>
+                    warning.Operation == "cleanup-status:read" &&
+                    warning.Exception is InvalidOperationException);
+        }
+        finally
+        {
+            GoalWorktrees.CleanupWarningSink = originalWarnings;
+            DeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktreeOrphanSweepScheduler_sweep_now_deletes_orphaned_worktree_directory")]
     public void GoalWorktreeOrphanSweepSchedulerSweepNowDeletesOrphanedWorktreeDirectory()
     {

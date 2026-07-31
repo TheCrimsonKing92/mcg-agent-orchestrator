@@ -11,6 +11,22 @@ using System.Text.Json;
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 {
+    [Xunit.Fact]
+    public async Task OperatorDecisionRepositoryBootstrapsFreshStateStoreBeforeUse()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        Xunit.Assert.False(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
+
+        var repository = CliCommandHandlers.CreateOperatorDecisionStateRepository(
+            ["answer", "request-id", "answer"],
+            workspace);
+
+        Xunit.Assert.True(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Empty(restored.Goals);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_backlog_show_loads_kernel_state_for_linked_goals")]
     public async Task PersistentRunnerBacklogShowLoadsKernelStateForLinkedGoals()
     {
@@ -18,7 +34,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var workspace = CreateRefinedWorkspace(root);
         var backlogStore = new BacklogStore(workspace.BacklogStorePath);
         var item = await backlogStore.AddAsync("Persistent linked item");
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Persistent backlog-show linked goal", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
@@ -67,7 +83,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Park from persistent runner", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -107,7 +123,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Park from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -152,7 +168,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Unpark from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -599,7 +615,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goalA = kernel.CreateGoal("Concurrent progress A", [new TaskSpec(TaskId.New(), "Do A", AgentRole.Developer)]);
         var goalB = kernel.CreateGoal("Concurrent progress B", [new TaskSpec(TaskId.New(), "Do B", AgentRole.Developer)]);
@@ -613,6 +629,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         async Task RunProgressAsync(GoalId goalId, string message)
         {
             await Task.Yield();
+            // The primary helper already migrated this store; concurrent opens must remain schema-free.
             var localRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
             IReadOnlyList<AgentDefinition> localAgents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
@@ -661,7 +678,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var active = kernel.CreateGoal("Active unpark rejection", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var completed = kernel.CreateGoal("Completed unpark rejection", [new TaskSpec(TaskId.New(), "Done work", AgentRole.Developer)]);
@@ -787,7 +804,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "Cli_startup_short_read_command_exits_within_two_seconds_and_releases_state")]
+    [Xunit.Fact(DisplayName = "Cli_startup_short_read_command_bootstraps_fresh_state_and_releases_it")]
     public async Task CliStartupShortReadCommandExitsWithinTwoSecondsAndReleasesState()
     {
         var root = CreateTempDirectory();
@@ -802,8 +819,36 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         var statePath = Path.Combine(root, ".orchestrator", "state.db");
         Xunit.Assert.True(File.Exists(statePath));
+        Xunit.Assert.True(StateDbMigrations.IsUpToDate(statePath));
         using var stateLockProbe = File.Open(statePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         Xunit.Assert.True(stateLockProbe.CanWrite);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_startup_read_command_bootstraps_unmigrated_non_wal_state")]
+    public void CliStartupReadCommandBootstrapsUnmigratedNonWalState()
+    {
+        var root = CreateTempDirectory();
+        var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+        var statePath = Path.Combine(orchestratorDirectory, "state.db");
+        Directory.CreateDirectory(orchestratorDirectory);
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={statePath}"))
+        {
+            connection.Open();
+        }
+        Xunit.Assert.False(StateDbMigrations.IsUpToDate(statePath));
+
+        var result = RunAppCli(root, ["goals"]);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.True(StateDbMigrations.IsUpToDate(statePath));
+        using var migrated = new Microsoft.Data.Sqlite.SqliteConnection(
+            $"Data Source={statePath};Mode=ReadOnly;Pooling=False");
+        migrated.Open();
+        using var journalMode = migrated.CreateCommand();
+        journalMode.CommandText = "PRAGMA journal_mode";
+        Xunit.Assert.Equal(
+            "wal",
+            Convert.ToString(journalMode.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
     }
 
 

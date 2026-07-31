@@ -38,7 +38,7 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
     [Xunit.Fact(DisplayName = "BatchLoop_reconciles_all_passed_completed_tasks_to_verified_in_one_tick")]
     public async Task BatchLoopReconcilesAllPassedCompletedTasksToVerifiedInOneTick()
     {
-        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var repo = CreateMigratedStateRepository(TempDb());
         var seed = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(seed, DefaultAgents(), "Promote all-passed goal");
         var task = goal.Tasks.Single();
@@ -111,7 +111,7 @@ public sealed class ConductorBatchLoopVerificationReconcileTests
     [Xunit.Fact(DisplayName = "Tick_merge_reconciles_verified_status_from_stored_row_when_snapshot_is_stale")]
     public async Task TickMergeReconcilesVerifiedStatusFromStoredRowWhenSnapshotIsStale()
     {
-        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var repo = CreateMigratedStateRepository(TempDb());
         var seed = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(seed, DefaultAgents(), "Merge stored verification");
         var task = goal.Tasks.Single();

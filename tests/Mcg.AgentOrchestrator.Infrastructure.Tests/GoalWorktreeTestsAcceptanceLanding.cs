@@ -66,7 +66,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             RunGit(worktreePath, "commit", "-m", "Goal work");
 
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
             using var lockConnection = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadWrite;Pooling=False;");
@@ -605,7 +605,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Conduct persistence goal");
 
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             await stateRepository.SaveAsync(kernel);
 
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -728,7 +728,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Goal work");
 
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
             using var verifierEntered = new ManualResetEventSlim(false);

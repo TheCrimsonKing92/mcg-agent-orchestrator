@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
@@ -13,13 +14,157 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     public void ExistingSchemaStartupSkipsDdl()
     {
         var db = TempDb();
-        _ = new SqliteOrchestratorStateRepository(db);
 
         var statements = new List<string>();
         _ = new SqliteOrchestratorStateRepository(db, statements.Add);
 
-        Assert.DoesNotContain(statements, IsWriteCategoryStartupStatement);
-        Assert.Contains(statements, s => s.StartsWith("PRAGMA busy_timeout", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(statements);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_constructor_does_not_create_or_migrate_database")]
+    public void ConstructorDoesNotCreateOrMigrateDatabase()
+    {
+        var db = TempDb(migrate: false);
+
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        Assert.False(File.Exists(db));
+    }
+
+    [Xunit.Fact]
+    public async Task ReadOnlyLoadOfAbsentDatabaseFailsWithoutCreatingIt()
+    {
+        var db = TempDb(migrate: false);
+        var repository = SqliteOrchestratorStateRepository.OpenReadOnly(db);
+
+        await Assert.ThrowsAsync<SqliteException>(() =>
+            repository.LoadGoalsAsync([GoalId.New()]));
+
+        Assert.False(File.Exists(db));
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_read_only_open_loads_one_goal_without_writing")]
+    public async Task ReadOnlyOpenLoadsOneGoalWithoutWriting()
+    {
+        var db = TempDb();
+        var writable = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = RecordDispatchOutcome(
+            kernel,
+            AgentRole.Developer,
+            "OpenAI",
+            "gpt-5.5",
+            TaskComplexity.Complex,
+            exitCode: 0,
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - scoped edit");
+        await writable.SaveAsync(kernel);
+
+        using (var stale = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            stale.Open();
+            ExecuteSql(stale, "UPDATE model_fit_history SET outcome_rule = NULL, outcome_class = 'unknown-era'");
+        }
+
+        using var observer = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
+        observer.Open();
+        var beforeDataVersion = Convert.ToInt64(Scalar(observer, "PRAGMA data_version"));
+
+        var readOnly = SqliteOrchestratorStateRepository.OpenReadOnly(db);
+        var loaded = await readOnly.LoadGoalsAsync([goal.Id]);
+
+        Assert.Equal(goal.Id, Assert.Single(loaded.Goals).Id);
+        Assert.Equal(beforeDataVersion, Convert.ToInt64(Scalar(observer, "PRAGMA data_version")));
+        Assert.Equal("unknown-era", Scalar(observer, "SELECT outcome_class FROM model_fit_history"));
+        await Assert.ThrowsAsync<SqliteException>(() => readOnly.SaveAsync(loaded));
+    }
+
+    [Xunit.Fact(DisplayName = "StateDbConnectionFactory_applies_standard_pragmas_to_every_profile")]
+    public void StateDbConnectionFactoryAppliesStandardPragmasToEveryProfile()
+    {
+        var db = TempDb();
+        _ = new SqliteOrchestratorStateRepository(db);
+
+        using var readWrite = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite);
+        Assert.Equal("wal", Scalar(readWrite, "PRAGMA journal_mode")?.ToString(), ignoreCase: true);
+        Assert.Equal(StateDbConnectionFactory.DefaultBusyTimeoutMilliseconds, Convert.ToInt32(Scalar(readWrite, "PRAGMA busy_timeout")));
+        Assert.Equal(0, Convert.ToInt32(Scalar(readWrite, "PRAGMA query_only")));
+
+        using var readOnly = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.QueryOnlyRead);
+        Assert.Equal("wal", Scalar(readOnly, "PRAGMA journal_mode")?.ToString(), ignoreCase: true);
+        Assert.Equal(StateDbConnectionFactory.DefaultBusyTimeoutMilliseconds, Convert.ToInt32(Scalar(readOnly, "PRAGMA busy_timeout")));
+        Assert.Equal(1, Convert.ToInt32(Scalar(readOnly, "PRAGMA query_only")));
+
+        using var fastRead = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.FastFailRead);
+        Assert.Equal(StateDbConnectionFactory.FastFailBusyTimeoutMilliseconds, Convert.ToInt32(Scalar(fastRead, "PRAGMA busy_timeout")));
+        Assert.Equal(1, Convert.ToInt32(Scalar(fastRead, "PRAGMA query_only")));
+    }
+
+    [Xunit.Fact(DisplayName = "StateDbConnectionFactory_existing_delete_database_is_promoted_to_WAL")]
+    public void ExistingDeleteDatabaseIsPromotedToWal()
+    {
+        var db = TempDb();
+        using (var connection = new SqliteConnection($"Data Source={db};Mode=ReadWriteCreate;Pooling=False;"))
+        {
+            connection.Open();
+            ExecuteSql(connection, "PRAGMA journal_mode=DELETE");
+        }
+
+        var journalMode = StateDbMigrations.EnsureUpToDate(db);
+
+        Assert.Equal("wal", journalMode, ignoreCase: true);
+        Assert.Equal("wal", SqliteOrchestratorStateRepository.VerifyJournalMode(db), ignoreCase: true);
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_ambient_write_tag_names_originating_verb")]
+    public async Task AmbientWriteTagNamesOriginatingVerb()
+    {
+        var db = TempDb();
+        var diagnosticsPath = DiagnosticsPath(db);
+        var repository = new SqliteOrchestratorStateRepository(
+            db,
+            statementObserver: null,
+            new SqliteWriteTelemetryOptions
+            {
+                DiagnosticsPath = diagnosticsPath,
+                WarningHoldThreshold = TimeSpan.Zero,
+                CriticalHoldThreshold = TimeSpan.FromMinutes(1),
+                MirrorToConductEventStream = false
+            });
+
+        using (SqliteOrchestratorStateRepository.UseWriteOperationTag("cli:goal"))
+        {
+            await repository.SaveAsync("create", new AgentOrchestratorKernel());
+        }
+
+        var receipt = JsonNode.Parse(File.ReadAllLines(diagnosticsPath).Single())!.AsObject();
+        Assert.Equal("cli:goal/create", receipt["operation"]?.GetValue<string>());
+    }
+
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_contended_write_uses_one_elapsed_budget")]
+    public async Task ContendedWriteUsesOneElapsedBudget()
+    {
+        var db = TempDb();
+        _ = new SqliteOrchestratorStateRepository(db);
+        using var holder = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite);
+        ExecuteSql(holder, "BEGIN IMMEDIATE");
+        var repository = new SqliteOrchestratorStateRepository(
+            db,
+            statementObserver: null,
+            new SqliteWriteTelemetryOptions
+            {
+                BusyTimeoutMilliseconds = 200,
+                BusyRetryBudget = TimeSpan.FromMilliseconds(250),
+                MaxBusyRetries = int.MaxValue,
+                MirrorToConductEventStream = false
+            });
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        await Assert.ThrowsAsync<SqliteException>(() =>
+            repository.SaveAsync(new AgentOrchestratorKernel()));
+        stopwatch.Stop();
+        ExecuteSql(holder, "ROLLBACK");
+
+        Assert.InRange(stopwatch.Elapsed, TimeSpan.FromMilliseconds(150), TimeSpan.FromSeconds(2));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_fresh_schema_creates_expected_catalog_objects")]
@@ -32,7 +177,20 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         conn.Open();
 
         Xunit.Assert.Equal(
-            ["engineering_practices", "goals", "human_input_requests", "meta", "model_fit_history", "state_outbox"],
+            [
+                "backlog_intake_records",
+                "engineering_practices",
+                "goals",
+                "human_input_requests",
+                "meta",
+                "model_fit_history",
+                "schema_migrations",
+                "spawn_registry",
+                "sqlite_sequence",
+                "state_outbox",
+                "worktree_cleanup_backoff",
+                "worktree_cleanup_journal"
+            ],
             QueryStrings(conn, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"));
         Xunit.Assert.Equal(
             ["ix_engineering_practices_enabled_priority", "ix_goals_status", "ix_model_fit_history_model", "ix_model_fit_history_outcome_class", "ix_model_fit_history_role", "ix_state_outbox_kind"],
@@ -100,6 +258,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         {
             DiagnosticsPath = diagnosticsPath,
             BusyTimeoutMilliseconds = 100,
+            BusyRetryBudget = TimeSpan.FromMilliseconds(250),
             MaxBusyRetries = 1,
             BeginImmediateCommandTimeoutSeconds = 1,
             MirrorToConductEventStream = false
@@ -121,13 +280,17 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             });
 
         await holderStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-
-        await Assert.ThrowsAsync<SqliteException>(() =>
-            blockedRepo.TransactAsync(
-                "blocked-writer-test",
-                (kernel, _) => Task.FromResult((ShouldSave: true, Result: kernel.Goals.Count))));
-
         await holderTask;
+
+        using (var holder = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite))
+        {
+            ExecuteSql(holder, "BEGIN IMMEDIATE");
+            await Assert.ThrowsAsync<SqliteException>(() =>
+                blockedRepo.TransactAsync(
+                    "blocked-writer-test",
+                    (kernel, _) => Task.FromResult((ShouldSave: true, Result: kernel.Goals.Count))));
+            ExecuteSql(holder, "ROLLBACK");
+        }
 
         var receipts = File.ReadAllLines(diagnosticsPath)
             .Where(line => !string.IsNullOrWhiteSpace(line))
@@ -747,7 +910,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     public void IdempotentSchemaMigrationAddsVersionAndOutcomeColumns()
     {
         // Simulate a DB created by an old binary (no version column) by creating schema manually.
-        var db = TempDb();
+        var db = TempDb(migrate: false);
         using var setupConn = new SqliteConnection($"Data Source={db};Mode=ReadWriteCreate;Pooling=False;");
         setupConn.Open();
         // Microsoft.Data.Sqlite executes only one statement per ExecuteNonQuery; split each DDL.
@@ -763,8 +926,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Exec(setupConn, "INSERT INTO meta (key, value) VALUES ('schema_version', '1')");
         setupConn.Close();
 
-        // Opening the repo on this old-schema DB should add the version column without recreating tables.
-        _ = new SqliteOrchestratorStateRepository(db);
+        // The explicit authority path upgrades the old schema without constructor writes.
+        _ = StateDbMigrations.EnsureUpToDate(db);
 
         using var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
         checkConn.Open();
@@ -792,13 +955,14 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             Exec(setupConn, "DROP TABLE state_outbox");
             Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
             Exec(setupConn, "CREATE INDEX ix_state_outbox_kind ON state_outbox(kind)");
+            Exec(setupConn, "DELETE FROM schema_migrations WHERE migration_number = 1");
         }
 
         Assert.Equal(
             SqliteOrchestratorStateRepository.CurrentSchemaVersion,
             SqliteOrchestratorStateRepository.ValidateReadOnlySchema(db));
 
-        _ = new SqliteOrchestratorStateRepository(db);
+        _ = StateDbMigrations.EnsureUpToDate(db);
 
         using var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
         checkConn.Open();
@@ -827,8 +991,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             Exec(setupConn, "DROP TABLE state_outbox");
             Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
             Exec(setupConn, "INSERT INTO state_outbox (id, kind, payload_json, created_at) VALUES ('legacy-message', 'acceptance-retry-audit', '{}', '2026-07-26T00:00:00.0000000+00:00')");
+            Exec(setupConn, "DELETE FROM schema_migrations WHERE migration_number = 1");
         }
 
+        _ = StateDbMigrations.EnsureUpToDate(db);
         var repository = new SqliteOrchestratorStateRepository(db);
 
         using (var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
@@ -858,7 +1024,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_backfills_outcome_columns_from_classifier_timeline")]
     public async Task BackfillsOutcomeColumnsFromClassifierTimeline()
     {
-        var db = TempDb();
+        var db = TempDb(migrate: false);
         var kernel = new AgentOrchestratorKernel();
         var known = RecordDispatchOutcome(
             kernel,
@@ -882,6 +1048,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         SeedOldSchemaState(db, kernel, unknown.Id.Value);
         var before = ReadOutcomeClassCounts(db, hasOutcomeColumns: false);
 
+        _ = StateDbMigrations.EnsureUpToDate(db);
         var repo = new SqliteOrchestratorStateRepository(db);
         var after = ReadOutcomeClassCounts(db, hasOutcomeColumns: true);
         var rows = await repo.ListModelFitHistoryAsync();
@@ -1784,10 +1951,247 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(goal.Tasks, task => task.Description == "TASK_DESCRIPTION_SENTINEL_0");
     }
 
-    private static string TempDb()
+    [Xunit.Fact]
+    public async Task SpawnRegistryWritesJoinAmbientStateTransactionConnection()
+    {
+        var db = TempDb();
+        var repository = new SqliteOrchestratorStateRepository(db);
+        var registry = new SpawnRegistry(db);
+        var identity = new SpawnProcessIdentity(
+            424242,
+            DateTimeOffset.Parse("2026-07-30T12:00:00Z"),
+            @"C:\tools\worker.exe");
+
+        await repository.TransactAsync((_, _) =>
+        {
+            registry.Register("ambient-register", identity);
+            return Task.FromResult((ShouldSave: false, Result: true));
+        });
+        var active = Assert.Single(registry.ListActive());
+
+        await repository.TransactAsync((_, _) =>
+        {
+            registry.RecordDiagnostic(active.Id, "ambient-diagnostic");
+            registry.MarkReleased(identity.ProcessId, "ambient-release");
+            return Task.FromResult((ShouldSave: false, Result: true));
+        });
+
+        Assert.Empty(registry.ListActive());
+        using var connection = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.QueryOnlyRead);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT released_at, last_diagnostic
+            FROM spawn_registry
+            WHERE id = $id
+            """;
+        command.Parameters.AddWithValue("$id", active.Id);
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        Assert.False(reader.IsDBNull(0));
+        Assert.Equal("ambient-release", reader.GetString(1));
+    }
+
+    [Xunit.Fact]
+    public async Task SpawnRegistryWriteRollsBackWithAmbientStateTransaction()
+    {
+        var db = TempDb();
+        var repository = new SqliteOrchestratorStateRepository(db);
+        var registry = new SpawnRegistry(db);
+        var identity = new SpawnProcessIdentity(
+            424243,
+            DateTimeOffset.Parse("2026-07-30T12:01:00Z"),
+            @"C:\tools\worker.exe");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            repository.TransactAsync<bool>((_, _) =>
+            {
+                registry.Register("ambient-rollback", identity);
+                throw new InvalidOperationException("rollback");
+            }));
+
+        Assert.Empty(registry.ListActive());
+    }
+
+    [Xunit.Fact]
+    public async Task AmbientStateWriteSessionCapturedFromEndedNestedScopeCannotFallThroughToOuterSession()
+    {
+        var outerDb = TempDb();
+        var nestedDb = TempDb();
+        using var outerConnection = StateDbConnectionFactory.Open(outerDb, StateDbConnectionProfile.ReadWrite);
+        using var nestedConnection = StateDbConnectionFactory.Open(nestedDb, StateDbConnectionProfile.ReadWrite);
+        var captured = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var proceed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var actionRan = false;
+        Task<bool> delayed;
+
+        using (StateDbWriteSession.Enter(outerDb, outerConnection))
+        {
+            using (StateDbWriteSession.Enter(nestedDb, nestedConnection))
+            {
+                delayed = Task.Run(async () =>
+                {
+                    captured.SetResult();
+                    await proceed.Task;
+                    return StateDbWriteSession.TryExecute(outerDb, _ => actionRan = true);
+                });
+                await captured.Task;
+            }
+
+            proceed.SetResult();
+            Assert.False(await delayed);
+        }
+
+        Assert.False(actionRan);
+    }
+
+    [Xunit.Fact]
+    public void AmbientStateWriteSessionDoesNotShareConnectionAcrossStores()
+    {
+        var firstDb = TempDb();
+        var secondDb = TempDb();
+        using var connection = StateDbConnectionFactory.Open(firstDb, StateDbConnectionProfile.ReadWrite);
+        using var session = StateDbWriteSession.Enter(firstDb, connection);
+        var actionRan = false;
+
+        Assert.False(StateDbWriteSession.TryExecute(secondDb, _ => actionRan = true));
+        Assert.False(actionRan);
+    }
+
+    [Xunit.Fact]
+    public async Task AmbientStateWriteSessionSerializesParallelSpawnRegistryMutations()
+    {
+        var db = TempDb();
+        var registry = new SpawnRegistry(db);
+        using var connection = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite);
+        using var firstEntered = new ManualResetEventSlim();
+        using var releaseFirst = new ManualResetEventSlim();
+        using var secondAttempted = new ManualResetEventSlim();
+        using var secondFinished = new ManualResetEventSlim();
+        var triggerInvocationCount = 0;
+        connection.CreateFunction(
+            "hold_spawn_insert",
+            () =>
+            {
+                if (Interlocked.Increment(ref triggerInvocationCount) == 1)
+                {
+                    firstEntered.Set();
+                    releaseFirst.Wait();
+                }
+
+                return 0;
+            });
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                CREATE TEMP TRIGGER serialize_spawn_registry_insert
+                BEFORE INSERT ON spawn_registry
+                BEGIN
+                    SELECT hold_spawn_insert();
+                END
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        using var session = StateDbWriteSession.Enter(db, connection);
+        var first = Task.Factory.StartNew(
+            () => registry.Register(
+                "parallel-first",
+                new SpawnProcessIdentity(
+                    424244,
+                    DateTimeOffset.Parse("2026-07-30T12:02:00Z"),
+                    @"C:\tools\worker.exe")),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        var firstArrived = firstEntered.Wait(TimeSpan.FromSeconds(5));
+        Task second = Task.CompletedTask;
+        var secondStarted = false;
+        var secondCompletedEarly = false;
+        try
+        {
+            if (firstArrived)
+            {
+                second = Task.Factory.StartNew(
+                    () =>
+                    {
+                        secondAttempted.Set();
+                        registry.Register(
+                            "parallel-second",
+                            new SpawnProcessIdentity(
+                                424245,
+                                DateTimeOffset.Parse("2026-07-30T12:03:00Z"),
+                                @"C:\tools\worker.exe"));
+                        secondFinished.Set();
+                    },
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default);
+                secondStarted = secondAttempted.Wait(TimeSpan.FromSeconds(5));
+                secondCompletedEarly = secondFinished.Wait(TimeSpan.FromMilliseconds(100));
+            }
+        }
+        finally
+        {
+            releaseFirst.Set();
+        }
+
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(firstArrived);
+        Assert.True(secondStarted);
+        Assert.False(secondCompletedEarly);
+        Assert.True(secondFinished.IsSet);
+        Assert.Equal(2, triggerInvocationCount);
+    }
+
+    [Xunit.Fact]
+    public void CleanupStateWriteJoinsAmbientStateDatabaseConnection()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        using var connection = StateDbConnectionFactory.Open(
+            workspace.SqliteStatePath,
+            StateDbConnectionProfile.ReadWrite);
+        var ambientConnectionUsed = false;
+        connection.CreateFunction(
+            "mark_cleanup_state_write",
+            () =>
+            {
+                ambientConnectionUsed = true;
+                return 0;
+            });
+        using (var command = connection.CreateCommand())
+        {
+            command.CommandText = """
+                CREATE TEMP TRIGGER observe_cleanup_state_write
+                BEFORE INSERT ON worktree_cleanup_backoff
+                BEGIN
+                    SELECT mark_cleanup_state_write();
+                END
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        using (StateDbWriteSession.Enter(workspace.SqliteStatePath, connection))
+        {
+            var backoff = GoalWorktrees.RecordGoalCleanupNeeded(
+                root,
+                GoalId.New(),
+                "remove:ambient-write-test");
+            Assert.NotNull(backoff);
+        }
+
+        Assert.True(ambientConnectionUsed);
+    }
+
+    private static string TempDb(bool migrate = true)
     {
         var dir = CreateTempDirectory();
-        return Path.Combine(dir, "state.db");
+        var path = Path.Combine(dir, "state.db");
+        if (migrate)
+            _ = StateDbMigrations.EnsureUpToDate(path);
+        return path;
     }
 
     private static GoalSnapshot BuildTerminalGoalSnapshot(int index)
@@ -1854,7 +2258,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             || trimmed.StartsWith("INSERT ", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("ALTER ", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("DROP ", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("PRAGMA journal_mode", StringComparison.OrdinalIgnoreCase);
+            || trimmed.StartsWith("PRAGMA journal_mode=", StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<string> QueryStrings(SqliteConnection conn, string sql)
@@ -1866,6 +2270,20 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         while (reader.Read())
             results.Add(reader.GetString(0));
         return results;
+    }
+
+    private static object? Scalar(SqliteConnection conn, string sql)
+    {
+        using var command = conn.CreateCommand();
+        command.CommandText = sql;
+        return command.ExecuteScalar();
+    }
+
+    private static void ExecuteSql(SqliteConnection conn, string sql)
+    {
+        using var command = conn.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 
     private static void SeedOldSchemaState(string db, AgentOrchestratorKernel kernel, string? stripClassifierTimelineForGoalId = null)

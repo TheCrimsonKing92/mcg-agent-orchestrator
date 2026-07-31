@@ -22,6 +22,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
     {
         var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? owned = null;
         Process? sentinel = null;
         try
@@ -64,6 +65,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
     {
         var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? wrapper = null;
         try
         {
@@ -99,6 +101,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
         var dbPath = Path.Combine(root, "state.db");
         Directory.CreateDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
         Process? incumbentWorker = null;
         Process? successorWorker = null;
         try
@@ -136,6 +139,24 @@ public sealed class WorkerProcessJobsTests : IDisposable
             }
 
             try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_authority_transfer_signal_suppresses_cleanup_for_every_command")]
+    public void ProgramStartupLifecycleAuthorityTransferSignalSuppressesCleanupForEveryCommand()
+    {
+        const string variable = "MCG_ORCHESTRATOR_HANDOFF_READY_PATH";
+        var previous = Environment.GetEnvironmentVariable(variable);
+        try
+        {
+            Environment.SetEnvironmentVariable(variable, "successor.ready");
+
+            Assert.True(ProgramStartupLifecycle.IsAuthorityTransferRequested(["conduct", "--loop"]));
+            Assert.True(ProgramStartupLifecycle.IsAuthorityTransferRequested(["status"]));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, previous);
         }
     }
 

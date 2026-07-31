@@ -49,8 +49,23 @@ public static IDisposable ClearProtectedPidEnvironment()
 public static OrchestratorWorkspace CreateRefinedWorkspace(string root)
 {
     var workspace = OrchestratorWorkspace.ForDirectory(root);
+    _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
     SeedSpecRefinerBinding(workspace);
     return workspace;
+}
+
+public static SqliteOrchestratorStateRepository CreateMigratedStateRepository(
+    string databasePath,
+    Action<string>? statementObserver = null,
+    SqliteWriteTelemetryOptions? telemetryOptions = null,
+    Action? beforeOutboxCommit = null)
+{
+    _ = StateDbMigrations.EnsureUpToDate(databasePath);
+    return new SqliteOrchestratorStateRepository(
+        databasePath,
+        statementObserver,
+        telemetryOptions,
+        beforeOutboxCommit);
 }
 
 public static void SeedSpecRefinerBinding(OrchestratorWorkspace workspace)

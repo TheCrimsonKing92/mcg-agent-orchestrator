@@ -51,6 +51,7 @@ public static class PrototypeWorkspaceSeeder
         kernel.ActivateGoal(goal.Id, agents);
         SeedGoal(kernel, goal, agents, workspace);
 
+        _ = StateDbMigrations.EnsureUpToDate(statePath);
         new SqliteOrchestratorStateRepository(statePath).SaveAsync(kernel).GetAwaiter().GetResult();
         AgentCatalogStore.Save(agentCatalogPath, new AgentCatalog(agents));
         WorkerProfileStore.Save(workerProfilePath, workerProfiles);
