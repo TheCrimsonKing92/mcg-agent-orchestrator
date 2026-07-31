@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "engine": {
+    "slotCount": 1,
+    "maxConcurrentShards": 1,
+    "enforceStructuralCoverage": false,
+    "timeouts": {
+      "defaultMinutes": 2,
+      "buildServerShutdownMinutes": 1,
+      "discoveryMinutes": 1
+    },
+    "mtpInvocations": [
+      {
+        "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+        "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+        "arguments": [
+          "{executable}",
+          "--results-directory",
+          "{resultsDirectory}",
+          "--report-trx",
+          "--report-trx-filename",
+          "{trxFileName}"
+        ]
+      }
+    ]
+  },
+  "checks": [
+    {
+      "name": "core tests",
+      "type": "dotnet-test",
+      "runner": "mtp",
+      "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+      "arguments": [
+        "--verbosity",
+        "minimal"
+      ]
+    }
+  ],
+  "forbiddenChangedPathGlobs": []
+}

@@ -21,6 +21,11 @@ if (args.Length >= 1 && args[0] == ConductorSuccessorSelfCheck.SubcommandName)
     return ConductorSuccessorSelfCheck.Run(args);
 }
 
+if (args.Length >= 1 && args[0] == PostLandingCanaryCommand.SubcommandName)
+{
+    return PostLandingCanaryCommand.Run(args);
+}
+
 var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
 OrchestratorProjectSelection projectSelection;
 OrchestratorTenantSelection tenantSelection;

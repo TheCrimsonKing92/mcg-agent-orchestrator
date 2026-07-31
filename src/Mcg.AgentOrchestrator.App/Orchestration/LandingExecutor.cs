@@ -10,7 +10,8 @@ public sealed record LandingResult(
     LandingDecision Decision,
     string IntegrationBranch,
     bool MainAdvanced,
-    string Message);
+    string Message,
+    string? MergeCommitSha = null);
 
 internal sealed record LandingChangedFilesResult(string[] Files, string? UnknownReason);
 
@@ -151,7 +152,7 @@ internal static class LandingExecutor
             OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
             StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
             return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
-                true, $"Promoted: {goalBranch} integrated via {IntegrationBranchName} into main.");
+                true, $"Promoted: {goalBranch} integrated via {IntegrationBranchName} into main.", mergeCommitSha);
         }
 
         var escalate = (LandingDecision.Escalate)decision;

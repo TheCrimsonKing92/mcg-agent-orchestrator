@@ -52,10 +52,38 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             return false;
 
         case "merge":
+            var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
+            if (!engineHealth.AllowsAcceptance)
+            {
+                Console.WriteLine(
+                    $"Workspace merge blocked: acceptance engine circuit is {engineHealth.Health}. " +
+                    "Repair it, then run acceptance-engine clear <note>.");
+                return false;
+            }
+
+            var mergeWorktreePath = context.Worktrees.TryResolve(executionDirectory, goal.Id);
+            var mergeChangedFiles = mergeWorktreePath is null
+                ? Array.Empty<string>()
+                : context.Worktrees.GetChangedFiles(mergeWorktreePath);
             var merge = context.Worktrees.TryFastForwardMerge(executionDirectory, goal.Id);
             Console.WriteLine(merge is null
                 ? "Goal has no workspace branch to merge."
                 : FormatWorkspaceMerge(merge));
+            if (merge?.FastForwarded == true)
+            {
+                var landingSha = GitCli.Run(executionDirectory, "rev-parse", "HEAD");
+                if (!landingSha.Succeeded || string.IsNullOrWhiteSpace(landingSha.Output))
+                {
+                    throw new InvalidOperationException(
+                        $"Post-landing canary could not resolve the merged main SHA: {landingSha.Error}");
+                }
+
+                PostLandingCanaryFactory.CreateDefault(context.Workspace)
+                    .HandleLanding(new ConductorLandingReceipt(
+                        goal.Id.Value,
+                        mergeChangedFiles,
+                        landingSha.Output.Trim()));
+            }
             return false;
 
         case "rebase":

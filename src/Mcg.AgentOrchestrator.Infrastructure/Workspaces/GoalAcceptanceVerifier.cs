@@ -2548,27 +2548,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? testResultsDirectoryOverride = null)
     {
         var attemptName = $"acceptance-{Slug(check.Name)}";
-        var buildRun = dotnetTestBuildPhase is null
-            ? new DotnetTestBuildPhaseResult(
-                await RunManagedDotnetCheckAsync(
-                    check,
-                    BuildDotnetTestBuildArguments(check),
-                    worktreePath,
-                    goalId,
-                    stableSlotIndex,
-                    stableSlotLease,
-                    $"{attemptName}-build",
-                    cancellationToken).ConfigureAwait(false),
-                ContributesToCheck: true)
-            : await EnsureDotnetTestBuildPhaseAsync(
-                dotnetTestBuildPhase,
-                check,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                attemptName,
-                cancellationToken).ConfigureAwait(false);
+        var effectiveBuildPhase = dotnetTestBuildPhase ??
+            new DotnetTestBuildPhase(BuildDotnetTestBuildArguments(check), cachePlan: null);
+        var buildRun = await EnsureDotnetTestBuildPhaseAsync(
+            effectiveBuildPhase,
+            check,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            attemptName,
+            cancellationToken).ConfigureAwait(false);
         if (!buildRun.Run.Result.Passed)
         {
             return (buildRun.Run.Result with
@@ -2584,7 +2574,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId,
             stableSlotIndex,
             stableSlotLease,
-            dotnetTestBuildPhase?.BuildEnvironment,
+            effectiveBuildPhase.BuildEnvironment,
             attemptName,
             cancellationToken,
             testResultsDirectoryOverride).ConfigureAwait(false);
@@ -2777,7 +2767,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             stableSlotLease,
             $"{attemptName}-build",
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            executionEnvironment: phase.BuildEnvironment).ConfigureAwait(false);
         return new DotnetTestBuildPhaseResult(phase.Run.Value, ContributesToCheck: true);
     }
 
@@ -2961,10 +2952,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         string attemptName,
         CancellationToken cancellationToken,
-        Action<DotnetBuildEnvironment>? afterLeasePrepared = null)
+        Action<DotnetBuildEnvironment>? afterLeasePrepared = null,
+        DotnetBuildEnvironment? executionEnvironment = null)
     {
         var elapsed = Stopwatch.StartNew();
-        var environment = ResolveExecutionEnvironment(
+        var environment = executionEnvironment ?? ResolveExecutionEnvironment(
             goalId,
             attemptName,
             stableSlotIndex,

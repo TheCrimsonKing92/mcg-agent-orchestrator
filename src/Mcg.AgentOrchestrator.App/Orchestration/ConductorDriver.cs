@@ -2922,7 +2922,8 @@ internal sealed class ConductorDriver
             // Main has already advanced, so losing this receipt would permanently miss the relaunch.
             SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                 goal.Id.Value,
-                landingFileScopes));
+                landingFileScopes,
+                landResult.MergeCommitSha));
 
             // Gate 4: advisory semantic acceptance runs only after deterministic acceptance and
             // successful landing. It records judge receipts for observability but never gates landing.
@@ -3148,4 +3149,5 @@ internal sealed class ConductorDriver
 
 internal sealed record ConductorLandingReceipt(
     string GoalId,
-    IReadOnlyList<string> ChangedFiles);
+    IReadOnlyList<string> ChangedFiles,
+    string? LandingSha = null);
