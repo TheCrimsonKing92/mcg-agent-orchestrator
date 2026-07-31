@@ -6,14 +6,27 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static partial class GoalWorktrees
 {
-    public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string executionDirectory, GoalId goalId) =>
-        TryGetCleanupBackoff(WorktreePath(executionDirectory, goalId));
+    public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(
+        string executionDirectory,
+        GoalId goalId,
+        GoalWorktreeCleanupHooks? hooks = null) =>
+        TryGetCleanupBackoff(WorktreePath(executionDirectory, goalId), hooks ?? GoalWorktreeCleanupHooks.Default);
 
-    public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string path) =>
-        TryReadOrphanCleanupBackoff(path, out var entry) ? ToCleanupBackoff(entry) : null;
-
-    public static IReadOnlyList<GoalWorktreeCleanupDebt> ListCleanupDebt(string executionDirectory)
+    public static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(
+        string path,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
+        return TryReadOrphanCleanupBackoff(path, out var entry, hooks: hooks)
+            ? ToCleanupBackoff(entry, hooks)
+            : null;
+    }
+
+    public static IReadOnlyList<GoalWorktreeCleanupDebt> ListCleanupDebt(
+        string executionDirectory,
+        GoalWorktreeCleanupHooks? hooks = null)
+    {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
         var statePath = CleanupStateStorePathForRoot(executionDirectory);
         if (!File.Exists(statePath))
         {
@@ -43,12 +56,12 @@ public static partial class GoalWorktrees
                 }
 
                 var firstSeenUtc = ReadOptionalDateTimeOffset(reader, 3) ??
-                    skipUntilUtc - CleanupBackoffDurationFor(reason);
+                    skipUntilUtc - CleanupBackoffDurationFor(reason, hooks);
                 var lastSeenUtc = ReadOptionalDateTimeOffset(reader, 4) ?? firstSeenUtc;
                 var lastOperation = reader.IsDBNull(5) ? "(recorded)" : reader.GetString(5);
                 var failureCount = reader.IsDBNull(6) ? 0 : reader.GetInt32(6);
                 var escalatedAtUtc = ReadOptionalDateTimeOffset(reader, 7);
-                var now = CleanupUtcNow();
+                var now = hooks.CleanupUtcNow();
                 var age = now - firstSeenUtc;
                 if (age < TimeSpan.Zero)
                 {
@@ -76,7 +89,7 @@ public static partial class GoalWorktrees
         }
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
-            WarnCleanupFailure(executionDirectory, "cleanup-status:read", ex);
+            WarnCleanupFailure(executionDirectory, "cleanup-status:read", ex, hooks);
         }
 
         return debts;
@@ -85,11 +98,13 @@ public static partial class GoalWorktrees
     public static GoalWorktreeCleanupBackoff? RecordGoalCleanupNeeded(
         string executionDirectory,
         GoalId goalId,
-        string reason)
+        string reason,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
         var path = WorktreePath(executionDirectory, goalId);
-        RecordCleanupNeeded(path, reason, goalId: goalId);
-        return TryGetCleanupBackoff(path);
+        RecordCleanupNeeded(path, reason, goalId: goalId, hooks: hooks);
+        return TryGetCleanupBackoff(path, hooks);
     }
 
 
@@ -152,7 +167,7 @@ public static partial class GoalWorktrees
         return Path.GetDirectoryName(Path.GetFullPath(orphanPath)) ?? Path.GetFullPath(orphanPath);
     }
 
-    private static void TryDeleteEmptyDirectory(string path)
+    private static void TryDeleteEmptyDirectory(string path, GoalWorktreeCleanupHooks hooks)
     {
         try
         {
@@ -163,7 +178,7 @@ public static partial class GoalWorktrees
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            WarnCleanupFailure(path, "owned-ephemeral-sweep:empty-root", ex);
+            WarnCleanupFailure(path, "owned-ephemeral-sweep:empty-root", ex, hooks);
         }
     }
 
@@ -171,8 +186,10 @@ public static partial class GoalWorktrees
         string path,
         string operation,
         out OrphanCleanupBackoffEntry entry,
-        string? cleanupStateRoot = null)
+        string? cleanupStateRoot = null,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
         entry = default!;
         if (!operation.Equals("orphan-sweep", StringComparison.OrdinalIgnoreCase) &&
             !operation.Equals("owned-ephemeral-sweep", StringComparison.OrdinalIgnoreCase) &&
@@ -181,18 +198,18 @@ public static partial class GoalWorktrees
             return false;
         }
 
-        if (!TryReadOrphanCleanupBackoff(path, out var existingEntry, cleanupStateRoot))
+        if (!TryReadOrphanCleanupBackoff(path, out var existingEntry, cleanupStateRoot, hooks))
         {
             return false;
         }
 
         entry = existingEntry;
-        if (entry.SkipUntilUtc > CleanupUtcNow())
+        if (entry.SkipUntilUtc > hooks.CleanupUtcNow())
         {
             return true;
         }
 
-        ClearOrphanCleanupDelay(path, cleanupStateRoot);
+        ClearOrphanCleanupDelay(path, cleanupStateRoot, hooks);
         return false;
     }
 
@@ -200,11 +217,15 @@ public static partial class GoalWorktrees
         string path,
         string reason,
         string? cleanupStateRoot = null,
-        GoalId? goalId = null) =>
-        RecordOrphanCleanupBackoff(path, reason, "remove:cleanup-needed", cleanupStateRoot, goalId);
+        GoalId? goalId = null,
+        GoalWorktreeCleanupHooks? hooks = null) =>
+        RecordOrphanCleanupBackoff(path, reason, "remove:cleanup-needed", cleanupStateRoot, goalId, hooks);
 
-    private static void ClearCleanupNeeded(string path, string? cleanupStateRoot = null) =>
-        ClearOrphanCleanupBackoff(path, cleanupStateRoot);
+    private static void ClearCleanupNeeded(
+        string path,
+        string? cleanupStateRoot = null,
+        GoalWorktreeCleanupHooks? hooks = null) =>
+        ClearOrphanCleanupBackoff(path, cleanupStateRoot, hooks ?? GoalWorktreeCleanupHooks.Default);
 
     private static bool IsLockHeldCleanupNeededReason(string reason) =>
         reason.EndsWith(":lock-held", StringComparison.OrdinalIgnoreCase);
@@ -217,8 +238,10 @@ public static partial class GoalWorktrees
         string reason,
         string warningOperation = "orphan-sweep:backoff",
         string? cleanupStateRoot = null,
-        GoalId? goalId = null)
+        GoalId? goalId = null,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
         try
         {
             var observation = WithCleanupBackoffConnection(
@@ -226,10 +249,10 @@ public static partial class GoalWorktrees
                 cleanupStateRoot,
                 conn =>
                 {
-                    var result = RecordCleanupDebtObserved(conn, path, warningOperation, reason);
+                    var result = RecordCleanupDebtObserved(conn, path, warningOperation, reason, hooks: hooks);
                     var retryDuration = result.Debt.EscalatedAtUtc is null
-                        ? CleanupBackoffDurationFor(reason)
-                        : CleanupOptions.EscalatedRetryInterval;
+                        ? CleanupBackoffDurationFor(reason, hooks)
+                        : hooks.CleanupOptions().EscalatedRetryInterval;
                     using var command = conn.CreateCommand();
                     command.CommandText = """
                         INSERT INTO worktree_cleanup_backoff(path, skip_until_utc, reason)
@@ -239,29 +262,35 @@ public static partial class GoalWorktrees
                             reason = excluded.reason;
                     """;
                     command.Parameters.AddWithValue("$path", NormalizePath(path));
-                    command.Parameters.AddWithValue("$skipUntilUtc", CleanupUtcNow().Add(retryDuration).ToString("O"));
+                    command.Parameters.AddWithValue("$skipUntilUtc", hooks.CleanupUtcNow().Add(retryDuration).ToString("O"));
                     command.Parameters.AddWithValue("$reason", reason);
                     command.ExecuteNonQuery();
                     return result;
                 });
             if (observation.EscalatedNow)
             {
-                RaiseCleanupDebtAttention(path, reason, observation.Debt, goalId);
+                RaiseCleanupDebtAttention(path, reason, observation.Debt, goalId, hooks);
             }
 
-            WarnCleanupFailure(path, warningOperation, new TimeoutException(BuildCleanupRetryMessage(path, reason, TryGetCleanupBackoff(path, cleanupStateRoot))));
+            WarnCleanupFailure(
+                path,
+                warningOperation,
+                new TimeoutException(BuildCleanupRetryMessage(path, reason, TryGetCleanupBackoff(path, cleanupStateRoot, hooks))),
+                hooks);
         }
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
-            WarnCleanupFailure(path, "orphan-sweep:backoff-write", ex);
+            WarnCleanupFailure(path, "orphan-sweep:backoff-write", ex, hooks);
         }
     }
 
     private static bool TryReadOrphanCleanupBackoff(
         string path,
         out OrphanCleanupBackoffEntry entry,
-        string? cleanupStateRoot = null)
+        string? cleanupStateRoot = null,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
         entry = default!;
         try
         {
@@ -291,13 +320,17 @@ public static partial class GoalWorktrees
         }
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
-            WarnCleanupFailure(path, "orphan-sweep:backoff-read", ex);
+            WarnCleanupFailure(path, "orphan-sweep:backoff-read", ex, hooks);
             return false;
         }
     }
 
-    private static void ClearOrphanCleanupBackoff(string path, string? cleanupStateRoot = null)
+    private static void ClearOrphanCleanupBackoff(
+        string path,
+        string? cleanupStateRoot = null,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
         var wasEscalated = false;
         try
         {
@@ -324,16 +357,19 @@ public static partial class GoalWorktrees
         }
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
-            WarnCleanupFailure(path, "orphan-sweep:backoff-clear", ex);
+            WarnCleanupFailure(path, "orphan-sweep:backoff-clear", ex, hooks);
         }
 
         if (wasEscalated)
         {
-            ResolveCleanupDebtAttention(path);
+            ResolveCleanupDebtAttention(path, hooks);
         }
     }
 
-    private static void ClearOrphanCleanupDelay(string path, string? cleanupStateRoot = null)
+    private static void ClearOrphanCleanupDelay(
+        string path,
+        string? cleanupStateRoot,
+        GoalWorktreeCleanupHooks hooks)
     {
         try
         {
@@ -356,7 +392,7 @@ public static partial class GoalWorktrees
         }
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
-            WarnCleanupFailure(path, "orphan-sweep:backoff-delay-clear", ex);
+            WarnCleanupFailure(path, "orphan-sweep:backoff-delay-clear", ex, hooks);
         }
     }
 
@@ -421,6 +457,7 @@ public static partial class GoalWorktrees
         string path,
         string operation,
         OrphanCleanupBackoffEntry backoff,
+        GoalWorktreeCleanupHooks hooks,
         string? cleanupStateRoot = null)
     {
         try
@@ -435,12 +472,13 @@ public static partial class GoalWorktrees
                         path,
                         operation,
                         backoff.Reason,
-                        incrementFailureCount: false);
+                        incrementFailureCount: false,
+                        hooks: hooks);
                 });
         }
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
-            WarnCleanupFailure(path, "orphan-sweep:journal-write", ex);
+            WarnCleanupFailure(path, "orphan-sweep:journal-write", ex, hooks);
         }
     }
 
@@ -449,10 +487,13 @@ public static partial class GoalWorktrees
         string path,
         string operation,
         string reason,
-        bool incrementFailureCount = true)
+        bool incrementFailureCount = true,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
         var normalizedPath = NormalizePath(path);
-        var now = CleanupUtcNow();
+        var now = hooks.CleanupUtcNow();
+        var cleanupOptions = hooks.CleanupOptions();
         var wasEscalated = HasCleanupDebtEscalation(conn, normalizedPath);
         using var command = conn.CreateCommand();
         command.CommandText = """
@@ -489,7 +530,7 @@ public static partial class GoalWorktrees
         command.Parameters.AddWithValue("$operation", operation);
         command.Parameters.AddWithValue("$reason", reason);
         command.Parameters.AddWithValue("$failureIncrement", incrementFailureCount ? 1 : 0);
-        command.Parameters.AddWithValue("$escalationThreshold", CleanupOptions.EscalationThreshold);
+        command.Parameters.AddWithValue("$escalationThreshold", cleanupOptions.EscalationThreshold);
         command.ExecuteNonQuery();
 
         using var read = conn.CreateCommand();
@@ -521,15 +562,15 @@ public static partial class GoalWorktrees
             reader.GetString(2),
             firstSeen,
             lastSeen,
-            now.Add(escalatedAt is null ? CleanupBackoffDurationFor(reason) : CleanupOptions.EscalatedRetryInterval),
+            now.Add(escalatedAt is null ? CleanupBackoffDurationFor(reason, hooks) : cleanupOptions.EscalatedRetryInterval),
             age,
-            escalatedAt is null ? CleanupBackoffDurationFor(reason) : CleanupOptions.EscalatedRetryInterval,
+            escalatedAt is null ? CleanupBackoffDurationFor(reason, hooks) : cleanupOptions.EscalatedRetryInterval,
             failureCount,
             escalatedAt);
         var escalatedNow = incrementFailureCount &&
             !wasEscalated &&
             escalatedAt is not null &&
-            failureCount >= CleanupOptions.EscalationThreshold;
+            failureCount >= cleanupOptions.EscalationThreshold;
         return new CleanupDebtObservation(debt, escalatedNow);
     }
 
@@ -557,14 +598,15 @@ public static partial class GoalWorktrees
         string path,
         string reason,
         GoalWorktreeCleanupDebt debt,
-        GoalId? goalId)
+        GoalId? goalId,
+        GoalWorktreeCleanupHooks hooks)
     {
-        var lockHolders = FindLockHoldersForCleanup(path);
+        var lockHolders = hooks.FindLockHoldersForCleanup(path);
         var message = BuildCleanupDebtEscalationMessage(path, reason, debt, lockHolders);
-        WarnCleanupFailure(path, "cleanup-debt-escalated", new IOException(message));
+        WarnCleanupFailure(path, "cleanup-debt-escalated", new IOException(message), hooks);
         try
         {
-            CollaborationItemStore.ForDirectory(CleanupAttentionDirectory(path))
+            CollaborationItemStore.ForDirectory(CleanupAttentionDirectory(path, hooks))
                 .RaiseAsync(
                     CollaborationItemType.Decision,
                     goalId?.Value,
@@ -579,27 +621,27 @@ public static partial class GoalWorktrees
         }
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
-            WarnCleanupFailure(path, "cleanup-debt-attention-raise", ex);
+            WarnCleanupFailure(path, "cleanup-debt-attention-raise", ex, hooks);
         }
     }
 
-    private static void ResolveCleanupDebtAttention(string path)
+    private static void ResolveCleanupDebtAttention(string path, GoalWorktreeCleanupHooks hooks)
     {
         try
         {
-            _ = CollaborationItemStore.ForDirectory(CleanupAttentionDirectory(path))
+            _ = CollaborationItemStore.ForDirectory(CleanupAttentionDirectory(path, hooks))
                 .TryResolveAsync(CleanupAttentionCorrelationKey(path), "worktree cleanup succeeded")
                 .GetAwaiter()
                 .GetResult();
         }
         catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
-            WarnCleanupFailure(path, "cleanup-debt-attention-resolve", ex);
+            WarnCleanupFailure(path, "cleanup-debt-attention-resolve", ex, hooks);
         }
     }
 
-    private static string CleanupAttentionDirectory(string path) =>
-        CleanupAttentionStoreDirectory ?? Path.Combine(LocateCleanupStateRoot(path), ".orchestrator");
+    private static string CleanupAttentionDirectory(string path, GoalWorktreeCleanupHooks hooks) =>
+        hooks.CleanupAttentionStoreDirectory() ?? Path.Combine(LocateCleanupStateRoot(path), ".orchestrator");
 
     private static string CleanupAttentionCorrelationKey(string path) =>
         $"worktree-cleanup-debt:{NormalizePath(path)}";
@@ -607,12 +649,16 @@ public static partial class GoalWorktrees
     private static string Prefix(string goalId) =>
         goalId[..Math.Min(8, goalId.Length)].ToLowerInvariant();
 
-    private static TimeSpan CleanupBackoffDurationFor(string reason) =>
-        IsBudgetExhaustedCleanupNeededReason(reason) ? CleanupBudgetExhaustedBackoffDuration : CleanupBackoffDuration;
+    private static TimeSpan CleanupBackoffDurationFor(string reason, GoalWorktreeCleanupHooks hooks) =>
+        IsBudgetExhaustedCleanupNeededReason(reason)
+            ? hooks.CleanupBudgetExhaustedBackoffDuration()
+            : hooks.CleanupBackoffDuration();
 
-    private static GoalWorktreeCleanupBackoff ToCleanupBackoff(OrphanCleanupBackoffEntry entry)
+    private static GoalWorktreeCleanupBackoff ToCleanupBackoff(
+        OrphanCleanupBackoffEntry entry,
+        GoalWorktreeCleanupHooks hooks)
     {
-        var remaining = entry.SkipUntilUtc - CleanupUtcNow();
+        var remaining = entry.SkipUntilUtc - hooks.CleanupUtcNow();
         if (remaining < TimeSpan.Zero)
         {
             remaining = TimeSpan.Zero;
@@ -621,8 +667,13 @@ public static partial class GoalWorktrees
         return new GoalWorktreeCleanupBackoff(entry.Reason, entry.SkipUntilUtc, remaining);
     }
 
-    private static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(string path, string? cleanupStateRoot) =>
-        TryReadOrphanCleanupBackoff(path, out var entry, cleanupStateRoot) ? ToCleanupBackoff(entry) : null;
+    private static GoalWorktreeCleanupBackoff? TryGetCleanupBackoff(
+        string path,
+        string? cleanupStateRoot,
+        GoalWorktreeCleanupHooks hooks) =>
+        TryReadOrphanCleanupBackoff(path, out var entry, cleanupStateRoot, hooks)
+            ? ToCleanupBackoff(entry, hooks)
+            : null;
 
     public static string FormatCleanupBackoff(GoalWorktreeCleanupBackoff backoff) =>
         $"reason={backoff.Reason} skip_until_utc={backoff.SkipUntilUtc:O} remaining_wait={FormatRemainingWait(backoff.RemainingWait)}";

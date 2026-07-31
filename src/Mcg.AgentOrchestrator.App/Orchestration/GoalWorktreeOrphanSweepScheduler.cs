@@ -16,9 +16,12 @@ internal static class GoalWorktreeOrphanSweepScheduler
         GoalWorktrees.ConfigureCleanup(Options, attentionStoreDirectory);
     }
 
-    public static GoalWorktreeSweepResult SweepNow(string executionDirectory, AgentOrchestratorKernel? kernel = null)
+    public static GoalWorktreeSweepResult SweepNow(
+        string executionDirectory,
+        AgentOrchestratorKernel? kernel = null,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
-        var result = GoalWorktrees.SweepOrphanedWorktrees(executionDirectory, kernel);
+        var result = GoalWorktrees.SweepOrphanedWorktrees(executionDirectory, kernel, hooks);
         lock (Gate)
         {
             LastSweepByDirectory[Normalize(executionDirectory)] = DateTimeOffset.UtcNow;
@@ -27,7 +30,10 @@ internal static class GoalWorktreeOrphanSweepScheduler
         return result;
     }
 
-    public static GoalWorktreeSweepResult SweepIfDue(string executionDirectory, AgentOrchestratorKernel? kernel = null)
+    public static GoalWorktreeSweepResult SweepIfDue(
+        string executionDirectory,
+        AgentOrchestratorKernel? kernel = null,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
         lock (Gate)
         {
@@ -38,7 +44,7 @@ internal static class GoalWorktreeOrphanSweepScheduler
             }
         }
 
-        return SweepNow(executionDirectory, kernel);
+        return SweepNow(executionDirectory, kernel, hooks);
     }
 
     private static string Normalize(string path) =>
