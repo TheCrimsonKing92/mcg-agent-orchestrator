@@ -6,7 +6,13 @@ public sealed record GoalWorktreeMergeResult(
     bool FastForwarded,
     string BranchName,
     string Message,
-    string? SuggestedCommand);
+    string? SuggestedCommand,
+    IReadOnlyList<string>? ChangedFiles = null);
+
+public sealed record GoalWorktreeChangedFilesResult(
+    bool Succeeded,
+    IReadOnlyList<string> Files,
+    string? FailureReason);
 
 public enum GoalWorktreeRebaseStatus
 {

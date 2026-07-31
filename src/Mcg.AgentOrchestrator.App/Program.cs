@@ -21,6 +21,11 @@ if (args.Length >= 1 && args[0] == ConductorSuccessorSelfCheck.SubcommandName)
     return ConductorSuccessorSelfCheck.Run(args);
 }
 
+if (args.Length >= 1 && args[0] == PostLandingCanaryCommand.SubcommandName)
+{
+    return PostLandingCanaryCommand.Run(args);
+}
+
 var executionDirectory = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
 OrchestratorProjectSelection projectSelection;
 OrchestratorTenantSelection tenantSelection;
@@ -382,8 +387,14 @@ static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
         command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
 }
 
+// Startup cleanup is DESTRUCTIVE (kills registry-owned worker pids, sweeps orphan worktrees), so it is
+// gated on owning the process lifecycle — not on merely loading kernel state. Dependency-aware backlog
+// commands hydrate state to resolve dependencies but must never sweep: when bc642e02 moved backlog-list
+// out of SkipsKernelState into RequiresKernelBacklogState, this predicate silently turned the sweep on
+// for a read-only query. Keep the two concerns separate.
 static bool RunsStartupCleanup(IReadOnlyList<string> startupArgs) =>
-    !CliPersistentStateRunner.SkipsKernelState(startupArgs);
+    !CliPersistentStateRunner.SkipsKernelState(startupArgs) &&
+    !CliPersistentStateRunner.RequiresKernelBacklogState(startupArgs);
 
 static int ExitCompletedStartupCommand(int exitCode)
 {

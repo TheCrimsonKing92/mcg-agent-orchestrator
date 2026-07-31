@@ -10,15 +10,16 @@ public sealed record LandingResult(
     LandingDecision Decision,
     string IntegrationBranch,
     bool MainAdvanced,
-    string Message);
-
-internal sealed record LandingChangedFilesResult(string[] Files, string? UnknownReason);
+    string Message,
+    string? MergeCommitSha = null,
+    IReadOnlyList<string>? ChangedFiles = null);
 
 internal static class LandingExecutor
 {
     public const string IntegrationBranchName = "integration";
     private const string TempWorktreeDirName = ".orchestrator-integration-tmp";
     private const string OwnershipHoldReasonPrefix = "ownership-denylist hold";
+    private const string MutationHoldReasonPrefix = "landing mutation blocked:";
     internal static Func<string, string[], GitCli.GitResult> GitRunner { get; set; } =
         (workingDirectory, args) => GitCli.Run(workingDirectory, args);
 
@@ -28,7 +29,8 @@ internal static class LandingExecutor
         OrchestratorWorkspace workspace,
         IOperatorChannel? channel = null,
         ConductorAutonomyPolicy? policy = null,
-        IGoalLifecycleEventWriter? eventWriter = null)
+        IGoalLifecycleEventWriter? eventWriter = null,
+        Func<string?>? mutationBlocker = null)
     {
         var executionDirectory = workspace.ExecutionDirectory;
         var goalPrefix = goal.Id.Value[..8];
@@ -40,6 +42,35 @@ internal static class LandingExecutor
                 $"Goal branch '{goalBranch}' does not exist. Create the workspace first with: workspace create {goalPrefix}");
         }
 
+        var changedFilesResult = GoalWorktrees.ResolveChangedFilesAgainstHead(
+            executionDirectory,
+            goal.Id,
+            GitRunner);
+        if (!changedFilesResult.Succeeded)
+        {
+            var diffDecision = new LandingDecision.Escalate(
+                $"diff scope unknown: {changedFilesResult.FailureReason}");
+            OperatorInbox.RecordLandingEscalation(
+                workspace,
+                goal,
+                diffDecision.Reason,
+                IntegrationBranchName,
+                channel);
+            eventWriter?.AppendGoalEscalated(
+                goal.Id,
+                GoalLifecycleState.Verified,
+                diffDecision.Reason,
+                IntegrationBranchName);
+            return new LandingResult(
+                goal.Id.Value,
+                goalPrefix,
+                diffDecision,
+                IntegrationBranchName,
+                false,
+                $"Landing blocked before merge: {diffDecision.Reason}");
+        }
+
+        var changedFiles = changedFilesResult.Files;
         EnsureIntegrationBranch(executionDirectory);
 
         var tempPath = Path.Combine(executionDirectory, TempWorktreeDirName);
@@ -53,7 +84,22 @@ internal static class LandingExecutor
         bool mergeSucceeded;
         try
         {
-            mergeSucceeded = MergeGoalIntoIntegration(executionDirectory, tempPath, goalBranch);
+            var blockReason = mutationBlocker?.Invoke();
+            if (!string.IsNullOrWhiteSpace(blockReason))
+            {
+                return BuildMutationBlockedResult(goal, goalPrefix, blockReason);
+            }
+
+            mergeSucceeded = MergeGoalIntoIntegration(
+                executionDirectory,
+                tempPath,
+                goalBranch,
+                mutationBlocker,
+                out var integrationBlockReason);
+            if (!string.IsNullOrWhiteSpace(integrationBlockReason))
+            {
+                return BuildMutationBlockedResult(goal, goalPrefix, integrationBlockReason);
+            }
         }
         finally
         {
@@ -83,17 +129,6 @@ internal static class LandingExecutor
                 false, $"Parked on {IntegrationBranchName}: {acceptanceDecision.Reason}");
         }
 
-        var changedFilesResult = GetChangedFiles(executionDirectory, goalBranch);
-        if (changedFilesResult.UnknownReason is not null)
-        {
-            var diffDecision = new LandingDecision.Escalate($"diff scope unknown: {changedFilesResult.UnknownReason}");
-            OperatorInbox.RecordLandingEscalation(workspace, goal, diffDecision.Reason, IntegrationBranchName, channel);
-            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, diffDecision.Reason, IntegrationBranchName);
-            return new LandingResult(goal.Id.Value, goalPrefix, diffDecision, IntegrationBranchName,
-                false, $"Parked on {IntegrationBranchName}: {diffDecision.Reason}");
-        }
-
-        var changedFiles = changedFilesResult.Files;
         var ownershipGuard = RepositoryOwnershipMap.GuardWriteSet(changedFiles);
         if (ownershipGuard.RequiresOperatorApproval && policy?.AllowsAutonomousHighRiskOwnership != true)
         {
@@ -132,6 +167,16 @@ internal static class LandingExecutor
                 mergeCommitSha,
                 "LandingExecutor");
 
+            var blockReason = mutationBlocker?.Invoke();
+            if (!string.IsNullOrWhiteSpace(blockReason))
+            {
+                GoalOperationJournal.TombstoneLandingIntent(
+                    executionDirectory,
+                    goal,
+                    $"landing mutation blocked after intent write: {blockReason}");
+                return BuildMutationBlockedResult(goal, goalPrefix, blockReason);
+            }
+
             var merge = RunGit(executionDirectory, "merge", "--ff-only", IntegrationBranchName);
             if (merge.ExitCode != 0)
             {
@@ -151,7 +196,9 @@ internal static class LandingExecutor
             OperatorInbox.ClearOwnershipHoldsAfterLanding(workspace, goal, $"land {goalPrefix}");
             StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
             return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
-                true, $"Promoted: {goalBranch} integrated via {IntegrationBranchName} into main.");
+                true, $"Promoted: {goalBranch} integrated via {IntegrationBranchName} into main.",
+                mergeCommitSha,
+                changedFiles);
         }
 
         var escalate = (LandingDecision.Escalate)decision;
@@ -179,8 +226,11 @@ internal static class LandingExecutor
     private static bool MergeGoalIntoIntegration(
         string executionDirectory,
         string tempPath,
-        string goalBranch)
+        string goalBranch,
+        Func<string?>? mutationBlocker,
+        out string? blockReason)
     {
+        blockReason = null;
         var add = RunGit(executionDirectory, "worktree", "add", tempPath, IntegrationBranchName);
         if (add.ExitCode != 0)
         {
@@ -188,8 +238,29 @@ internal static class LandingExecutor
                 $"Failed to create integration worktree at '{tempPath}': {add.Error}");
         }
 
+        blockReason = mutationBlocker?.Invoke();
+        if (!string.IsNullOrWhiteSpace(blockReason))
+        {
+            return false;
+        }
+
         var merge = RunGit(tempPath, "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}");
         return merge.ExitCode == 0;
+    }
+
+    private static LandingResult BuildMutationBlockedResult(
+        Goal goal,
+        string goalPrefix,
+        string blockReason)
+    {
+        var reason = $"{MutationHoldReasonPrefix} {blockReason}";
+        return new LandingResult(
+            goal.Id.Value,
+            goalPrefix,
+            new LandingDecision.Escalate(reason),
+            IntegrationBranchName,
+            MainAdvanced: false,
+            $"Landing held before merge: {blockReason}");
     }
 
     private static bool IsIntegrationFastForwardableIntoMain(string executionDirectory)
@@ -230,32 +301,11 @@ internal static class LandingExecutor
             .Any(wt => string.Equals(wt, normalized, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static LandingChangedFilesResult GetChangedFiles(string executionDirectory, string goalBranch)
-    {
-        var result = RunGit(executionDirectory, "diff", "--name-only", $"main...{goalBranch}");
-        if (result.DrainTimedOut)
-        {
-            return new LandingChangedFilesResult([], "git diff output drain timed out");
-        }
-
-        if (result.ExitCode != 0)
-        {
-            return new LandingChangedFilesResult([], $"git diff failed: {result.Error}");
-        }
-
-        if (string.IsNullOrWhiteSpace(result.Output))
-        {
-            return new LandingChangedFilesResult([], null);
-        }
-
-        var files = result.Output
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToArray();
-        return new LandingChangedFilesResult(files, null);
-    }
-
     internal static bool IsOwnershipHoldEscalation(string reason) =>
         reason.StartsWith(OwnershipHoldReasonPrefix, StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsMutationHoldEscalation(string reason) =>
+        reason.StartsWith(MutationHoldReasonPrefix, StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<OwnershipHoldRequest> BuildOwnershipHoldRequests(
         Goal goal,

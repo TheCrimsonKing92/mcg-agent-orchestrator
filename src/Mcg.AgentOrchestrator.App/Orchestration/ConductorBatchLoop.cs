@@ -42,6 +42,8 @@ internal sealed class ConductorBatchLoop
     private readonly Func<ConductorLoopHandoffRequest, ConductorLoopHandoffResult>? _handoffOnMaxDuration;
     private readonly Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? _selfRelaunch;
     private readonly bool _selfRelaunchEnabled;
+    private readonly PostLandingCanaryCoordinator? _postLandingCanary;
+    private readonly AcceptanceEngineCircuitBreaker? _acceptanceEngineCircuit;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly Func<DateTimeOffset> _utcNow;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
@@ -64,7 +66,9 @@ internal sealed class ConductorBatchLoop
         ProgressiveReviewGlanceCoordinator? progressiveReviewGlances = null,
         ProgressiveReviewSteeringCoordinator? progressiveReviewSteering = null,
         Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? selfRelaunch = null,
-        bool selfRelaunchEnabled = DefaultSelfRelaunchEnabled)
+        bool selfRelaunchEnabled = DefaultSelfRelaunchEnabled,
+        PostLandingCanaryCoordinator? postLandingCanary = null,
+        AcceptanceEngineCircuitBreaker? acceptanceEngineCircuit = null)
     {
         _sweep = measuredSweep ?? (kernel =>
         {
@@ -82,6 +86,8 @@ internal sealed class ConductorBatchLoop
         _handoffOnMaxDuration = handoffOnMaxDuration;
         _selfRelaunch = selfRelaunch;
         _selfRelaunchEnabled = selfRelaunchEnabled;
+        _postLandingCanary = postLandingCanary;
+        _acceptanceEngineCircuit = postLandingCanary?.CircuitBreaker ?? acceptanceEngineCircuit;
         _conductEventLogWriter = conductEventLogWriter;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
@@ -110,7 +116,24 @@ internal sealed class ConductorBatchLoop
     {
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
         var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
+        var previousLandingMutationBlocker = driver.LandingMutationBlocker;
+        var canaryTasks = new List<Task<PostLandingCanaryDisposition>>();
+        var canaryTasksGate = new object();
         CurrentConductEventLogWriter.Value = _conductEventLogWriter;
+        driver.LandingMutationBlocker = () =>
+        {
+            var existingBlock = previousLandingMutationBlocker?.Invoke();
+            if (!string.IsNullOrWhiteSpace(existingBlock))
+            {
+                return existingBlock;
+            }
+
+            var snapshot = (_acceptanceEngineCircuit ?? _postLandingCanary?.CircuitBreaker)?.Read();
+            return snapshot is { AllowsAcceptance: false }
+                ? $"acceptance engine circuit is {snapshot.Health} for {snapshot.LandingSha ?? "unknown-sha"}; " +
+                  $"reason={snapshot.FailureReason ?? "canary-pending"}"
+                : null;
+        };
         try
         {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -137,20 +160,33 @@ internal sealed class ConductorBatchLoop
         ConductorLoopHandoffResult? selfRelaunchHandoff = null;
         var started = _utcNow();
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
-        if (_selfRelaunchEnabled && _selfRelaunch is not null)
+        if ((_selfRelaunchEnabled && _selfRelaunch is not null) ||
+            _postLandingCanary is not null)
         {
             driver.SuccessfulLandingSink = receipt =>
             {
-                var changes = RepositoryChangeClassifier.Classify(receipt.ChangedFiles);
-                if (changes.RequiresConductorRelaunch)
+                if (_selfRelaunchEnabled && _selfRelaunch is not null)
                 {
-                    pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, totalTicks);
-                    deferredSelfRelaunch = null;
-                    selfRelaunchRetryAfterTick = null;
-                    selfRelaunchDrainStartedAt ??= _utcNow();
-                    EmitProgress(
-                        $"LOOP_RELAUNCH_SCHEDULED tick={totalTicks} goal={receipt.GoalId} " +
-                        $"changedFiles={receipt.ChangedFiles.Count} coalesced=true");
+                    var changes = RepositoryChangeClassifier.Classify(receipt.ChangedFiles);
+                    if (changes.RequiresConductorRelaunch)
+                    {
+                        pendingSelfRelaunch = new ConductorSelfRelaunchRequest(receipt.GoalId, totalTicks);
+                        deferredSelfRelaunch = null;
+                        selfRelaunchRetryAfterTick = null;
+                        selfRelaunchDrainStartedAt ??= _utcNow();
+                        EmitProgress(
+                            $"LOOP_RELAUNCH_SCHEDULED tick={totalTicks} goal={receipt.GoalId} " +
+                            $"changedFiles={receipt.ChangedFiles.Count} coalesced=true");
+                    }
+                }
+
+                if (_postLandingCanary is not null)
+                {
+                    var canaryTask = _postLandingCanary.LaunchLandingAsync(receipt);
+                    lock (canaryTasksGate)
+                    {
+                        canaryTasks.Add(canaryTask);
+                    }
                 }
 
                 previousSuccessfulLandingSink?.Invoke(receipt);
@@ -263,6 +299,7 @@ internal sealed class ConductorBatchLoop
 
                 if (pendingSelfRelaunch is not null)
                 {
+                    AwaitCanaryTasks(canaryTasks, canaryTasksGate);
                     EmitProgress(
                         $"LOOP_RELAUNCH_REBUILD tick={totalTicks} goal={pendingSelfRelaunch.GoalId} active=0 admitting=false");
                     ConductorSelfRelaunchResult relaunchResult;
@@ -753,7 +790,13 @@ internal sealed class ConductorBatchLoop
                             changedGoalIds.Add(goal.Id);
                         }
 
-                        result = driver.AdvanceOnce(goal, policy);
+                        var engineHealth = _acceptanceEngineCircuit?.Read();
+                        result = IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth)
+                            ? ParallelAcceptanceHeld(
+                                goal,
+                                policy,
+                                BuildAcceptanceEngineHoldReason(engineHealth!))
+                            : driver.AdvanceOnce(goal, policy);
                     }
                     catch (Exception ex)
                     {
@@ -976,6 +1019,7 @@ internal sealed class ConductorBatchLoop
             onTick?.Invoke(tickSummary);
         }
 
+        AwaitCanaryTasks(canaryTasks, canaryTasksGate);
         ConductorLoopHandoffResult? handoff = selfRelaunchHandoff;
         if (maxDurationReached && _handoffOnMaxDuration is not null)
         {
@@ -989,8 +1033,38 @@ internal sealed class ConductorBatchLoop
         }
         finally
         {
+            DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
+            driver.LandingMutationBlocker = previousLandingMutationBlocker;
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
+        }
+    }
+
+    private static void AwaitCanaryTasks(
+        List<Task<PostLandingCanaryDisposition>> tasks,
+        object gate)
+    {
+        Task<PostLandingCanaryDisposition>[] snapshot;
+        lock (gate)
+        {
+            snapshot = tasks.ToArray();
+        }
+
+        Task.WhenAll(snapshot).GetAwaiter().GetResult();
+    }
+
+    private static void DrainCanaryTasks(
+        List<Task<PostLandingCanaryDisposition>> tasks,
+        object gate)
+    {
+        try
+        {
+            AwaitCanaryTasks(tasks, gate);
+        }
+        catch
+        {
+            // Preserve the primary loop exception. AwaitCanaryTasks already observed every
+            // worker and therefore still guarantees no canary process escapes this loop.
         }
     }
 
@@ -1469,7 +1543,7 @@ internal sealed class ConductorBatchLoop
     private static string SanitizeHandoffDetail(string value) =>
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
-    private static IReadOnlyDictionary<string, ParallelLandingOutcome> RunParallelAcceptanceBatch(
+    private IReadOnlyDictionary<string, ParallelLandingOutcome> RunParallelAcceptanceBatch(
         IReadOnlyList<Goal> eligible,
         AgentOrchestratorKernel kernel,
         ConductorDriver driver,
@@ -1501,6 +1575,21 @@ internal sealed class ConductorBatchLoop
         var oldestServedThisTick = false;
         foreach (var goal in orderedEligible)
         {
+            var engineHealth = _acceptanceEngineCircuit?.Read();
+            if (IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth))
+            {
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(
+                        goal,
+                        policy,
+                        BuildAcceptanceEngineHoldReason(engineHealth!)),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=held reason=acceptance-engine-circuit goal={goal.Id.Value[..8]} health={engineHealth.Health}",
+                    changedGoalLines);
+                continue;
+            }
+
             int acceptanceSlotCount;
             try
             {
@@ -2140,6 +2229,18 @@ internal sealed class ConductorBatchLoop
             goal.Id.Value[..8],
             policy.Name,
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason));
+
+    private static string BuildAcceptanceEngineHoldReason(AcceptanceEngineHealthSnapshot snapshot) =>
+        $"Acceptance engine circuit is {snapshot.Health.ToString().ToLowerInvariant()}" +
+        (string.IsNullOrWhiteSpace(snapshot.LandingSha) ? string.Empty : $" for landing {snapshot.LandingSha}") +
+        (string.IsNullOrWhiteSpace(snapshot.FailureReason) ? string.Empty : $" ({snapshot.FailureReason})") +
+        "; acceptance and landing are blocked until the canary passes or an operator runs acceptance-engine clear.";
+
+    internal static bool IsAcceptanceEngineCircuitHoldRequired(
+        GoalStatus goalStatus,
+        AcceptanceEngineHealthSnapshot? snapshot) =>
+        goalStatus == GoalStatus.Verified &&
+        snapshot is { AllowsAcceptance: false };
 
     private static ConductorAdvanceResult ParallelAcceptanceTerminal(
         ConductorDriver driver,

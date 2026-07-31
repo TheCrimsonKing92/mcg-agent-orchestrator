@@ -895,16 +895,39 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
         case "land":
             CliArgumentParser.RequirePartCount(parts, 2, "land <goal-id-prefix>");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            var landEngineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
+            if (!landEngineHealth.AllowsAcceptance)
+            {
+                Console.WriteLine(
+                    $"Land blocked: acceptance engine circuit is {landEngineHealth.Health}. " +
+                    "Repair it, then run acceptance-engine clear <note>.");
+                return false;
+            }
+
             var landResult = LandingExecutor.Execute(
                 context.Kernel,
                 context.CurrentGoal,
                 context.Workspace,
                 context.Channel,
-                eventWriter: context.EventWriter);
+                eventWriter: context.EventWriter,
+                mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
             Console.WriteLine($"Land {landResult.GoalPrefix}: {landResult.Message}");
             Console.WriteLine($"  decision: {(landResult.Decision is LandingDecision.Promote ? "Promote" : $"Escalate({((LandingDecision.Escalate)landResult.Decision).Reason})")}");
             Console.WriteLine($"  integration-branch: {landResult.IntegrationBranch}");
             Console.WriteLine($"  main-advanced: {landResult.MainAdvanced}");
+            if (landResult.MainAdvanced)
+            {
+                var landChangedFiles = landResult.ChangedFiles
+                    ?? throw new InvalidOperationException(
+                        "Landing advanced main without an authoritative changed-file receipt.");
+                PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(
+                    context.Workspace,
+                    new ConductorLandingReceipt(
+                        context.CurrentGoal.Id.Value,
+                        landChangedFiles,
+                        landResult.MergeCommitSha),
+                    Console.WriteLine);
+            }
             return landResult.MainAdvanced;
 
         case "goals-prune":
@@ -984,6 +1007,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.Channel,
                     context.Providers,
                     context.PersistGoalCheckpoint);
+                var postLandingCanary = PostLandingCanaryFactory.CreateDefault(
+                    context.Workspace,
+                    line =>
+                    {
+                        Console.WriteLine(line);
+                        new ConductEventLogWriter(context.Workspace.ConductEventsLogPath)
+                            .Append("canary-gate", null, line);
+                    });
                 var stopFilePath = Path.Combine(context.Workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
                 var handoffOptions = new ConductLoopHandoffOptions(
                     Args: parts.ToArray(),
@@ -1114,7 +1145,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
                     selfRelaunch: selfRelaunch,
                     selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
-                        Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable))).Run(
+                        Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable)),
+                    postLandingCanary: postLandingCanary).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -1180,7 +1212,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
-                    progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers)).Run(
+                    progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
+                    postLandingCanary: PostLandingCanaryFactory.CreateDefault(context.Workspace)).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
                     onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),

@@ -23,6 +23,12 @@ public sealed class ConductLoopLockTests
                 Assert.Equal(
                     Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
                     ReadLockLines(lockPath)[0]);
+                Assert.True(DateTimeOffset.TryParseExact(
+                    ReadLockLines(lockPath)[2],
+                    "O",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind,
+                    out _));
             }
 
             Assert.False(File.Exists(lockPath));
@@ -69,14 +75,19 @@ public sealed class ConductLoopLockTests
             var now = writtenAt.AddMinutes(90);
             File.WriteAllLines(
                 lockPath,
-                ["424242", writtenAt.ToString("O", CultureInfo.InvariantCulture)]);
+                [
+                    "424242",
+                    writtenAt.ToString("O", CultureInfo.InvariantCulture),
+                    writtenAt.AddHours(-1).ToString("O", CultureInfo.InvariantCulture)
+                ]);
 
+            var probe = new StubPidProbe(isRunning: false, isSameProcess: false);
             ConductorLoopLease? lease = null;
             var output = AsyncLocalConsoleRouter.Capture(() =>
             {
                 lease = ConductorLoopLease.Acquire(
                     orchestratorDirectory,
-                    new StubPidProbe(isRunning: false),
+                    probe,
                     () => now);
             });
             using (lease)
@@ -89,6 +100,7 @@ public sealed class ConductLoopLockTests
             const string expected =
                 "conduct-loop.lock held by pid 424242 (not running), written 1h 30m ago — stale lock removed, proceeding";
             Assert.Contains(expected, output, StringComparison.Ordinal);
+            Assert.Equal(0, probe.IdentityMatchCount);
             var eventLogPath = Path.Combine(
                 orchestratorDirectory,
                 "logs",
@@ -100,6 +112,49 @@ public sealed class ConductLoopLockTests
                 .Single(record => record.EventKind == "conduct-lock-stale-takeover");
             Assert.Equal(expected, staleTakeover.Detail);
             Assert.False(File.Exists(lockPath));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact(DisplayName = "ConductLoopLock_recycled_pid_is_logged_and_replaced")]
+    public void RecycledPidIsLoggedAndReplaced()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var lockPath = Path.Combine(orchestratorDirectory, "conduct-loop.lock");
+            var writtenAt = new DateTimeOffset(2026, 7, 25, 12, 0, 0, TimeSpan.Zero);
+            var recordedProcessStartedAt = writtenAt.AddHours(-2);
+            File.WriteAllLines(
+                lockPath,
+                [
+                    "31337",
+                    writtenAt.ToString("O", CultureInfo.InvariantCulture),
+                    recordedProcessStartedAt.ToString("O", CultureInfo.InvariantCulture)
+                ]);
+            var probe = new StubPidProbe(isRunning: true, isSameProcess: false);
+
+            ConductorLoopLease? lease = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                lease = ConductorLoopLease.Acquire(
+                    orchestratorDirectory,
+                    probe,
+                    () => writtenAt.AddMinutes(5));
+            });
+            lease!.Dispose();
+
+            Assert.Contains(
+                "conduct-loop.lock held by pid 31337 (dead-or-recycled), written 5m ago — stale lock removed, proceeding",
+                output,
+                StringComparison.Ordinal);
+            Assert.Equal(1, probe.IdentityMatchCount);
+            Assert.Equal(recordedProcessStartedAt, probe.LastExpectedStartTime);
         }
         finally
         {
@@ -119,18 +174,83 @@ public sealed class ConductLoopLockTests
             var writtenAt = new DateTimeOffset(2026, 7, 25, 12, 0, 0, TimeSpan.Zero);
             File.WriteAllLines(
                 lockPath,
-                ["31337", writtenAt.ToString("O", CultureInfo.InvariantCulture)]);
+                [
+                    "31337",
+                    writtenAt.ToString("O", CultureInfo.InvariantCulture),
+                    writtenAt.AddHours(-1).ToString("O", CultureInfo.InvariantCulture)
+                ]);
 
+            var probe = new StubPidProbe(isRunning: true, isSameProcess: true);
             var exception = Assert.Throws<InvalidOperationException>(() =>
                 ConductorLoopLease.Acquire(
                     orchestratorDirectory,
-                    new StubPidProbe(isRunning: true),
+                    probe,
                     () => writtenAt.AddMinutes(5)));
 
             Assert.Equal(
                 "Refused: conduct-loop.lock held by pid 31337, running, written 5m ago — delete to proceed",
                 exception.Message);
             Assert.True(File.Exists(lockPath));
+            Assert.Equal(1, probe.IdentityMatchCount);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact(DisplayName = "ConductLoopLock_legacy_lock_degrades_to_pid_only_liveness")]
+    public void LegacyLockDegradesToPidOnlyLiveness()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var lockPath = Path.Combine(orchestratorDirectory, "conduct-loop.lock");
+            var writtenAt = new DateTimeOffset(2026, 7, 25, 12, 0, 0, TimeSpan.Zero);
+            File.WriteAllLines(
+                lockPath,
+                ["31337", writtenAt.ToString("O", CultureInfo.InvariantCulture)]);
+            var probe = new StubPidProbe(isRunning: true, isSameProcess: false);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                ConductorLoopLease.Acquire(orchestratorDirectory, probe, () => writtenAt));
+
+            Assert.Equal(0, probe.IdentityMatchCount);
+            Assert.True(File.Exists(lockPath));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Theory(DisplayName = "ConductLoopLock_is_active_revalidates_recorded_identity")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void IsActiveRevalidatesRecordedIdentity(bool isSameProcess)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var lockPath = Path.Combine(orchestratorDirectory, "conduct-loop.lock");
+            var writtenAt = new DateTimeOffset(2026, 7, 25, 12, 0, 0, TimeSpan.Zero);
+            var recordedProcessStartedAt = writtenAt.AddHours(-1);
+            File.WriteAllLines(
+                lockPath,
+                [
+                    "31337",
+                    writtenAt.ToString("O", CultureInfo.InvariantCulture),
+                    recordedProcessStartedAt.ToString("O", CultureInfo.InvariantCulture)
+                ]);
+            var probe = new StubPidProbe(isRunning: true, isSameProcess);
+
+            Assert.Equal(isSameProcess, ConductorLoopLease.IsActive(orchestratorDirectory, probe));
+            Assert.Equal(1, probe.IdentityMatchCount);
+            Assert.Equal(recordedProcessStartedAt, probe.LastExpectedStartTime);
         }
         finally
         {
@@ -217,9 +337,20 @@ public sealed class ConductLoopLockTests
         }
     }
 
-    private sealed class StubPidProbe(bool isRunning) : IConductLockPidProbe
+    private sealed class StubPidProbe(bool isRunning, bool isSameProcess = true) : IConductLockPidProbe
     {
+        public int IdentityMatchCount { get; private set; }
+
+        public DateTimeOffset? LastExpectedStartTime { get; private set; }
+
         public bool IsRunning(int processId) => isRunning;
+
+        public bool IsSameProcess(int processId, DateTimeOffset processStartedAt)
+        {
+            IdentityMatchCount++;
+            LastExpectedStartTime = processStartedAt;
+            return isSameProcess;
+        }
     }
 
     private static string CreateTempDirectory()

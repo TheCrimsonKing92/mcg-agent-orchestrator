@@ -89,6 +89,23 @@ internal sealed class AcceptanceGateEngineSettings
                 throw new InvalidDataException(
                     $"Acceptance manifest test lane '{lane.Name}' estimatedSerialSeconds must be a finite non-negative number.");
             }
+
+            if (lane.ExclusiveResourceKeys is null ||
+                lane.ExclusiveResourceKeys.Any(string.IsNullOrWhiteSpace))
+            {
+                throw new InvalidDataException(
+                    $"Acceptance manifest test lane '{lane.Name}' exclusiveResourceKeys must contain only non-empty keys.");
+            }
+
+            var duplicateResourceKey = lane.ExclusiveResourceKeys
+                .Select(key => key.Trim())
+                .GroupBy(key => key, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault(group => group.Count() > 1);
+            if (duplicateResourceKey is not null)
+            {
+                throw new InvalidDataException(
+                    $"Acceptance manifest test lane '{lane.Name}' exclusive resource key '{duplicateResourceKey.Key}' is duplicated.");
+            }
         }
 
         foreach (var invocation in MtpInvocations)
@@ -118,7 +135,10 @@ internal sealed class AcceptanceGateTimeoutSettings
 internal sealed record AcceptanceTestLane(
     string Name,
     string Filter,
-    double EstimatedSerialSeconds = 0);
+    double EstimatedSerialSeconds = 0)
+{
+    public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
+}
 
 internal sealed class AcceptanceMtpInvocation
 {

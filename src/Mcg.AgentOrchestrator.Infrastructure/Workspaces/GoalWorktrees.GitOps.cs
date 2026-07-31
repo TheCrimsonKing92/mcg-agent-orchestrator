@@ -77,12 +77,36 @@ public static partial class GoalWorktrees
     private static bool IsBranchAncestorOfHead(string executionDirectory, string branch, int timeoutMilliseconds) =>
         GitCli.Run(executionDirectory, timeoutMilliseconds, "merge-base", "--is-ancestor", branch, "HEAD").ExitCode == 0;
 
-    public static GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId)
+    public static GoalWorktreeMergeResult? TryFastForwardMerge(
+        string executionDirectory,
+        GoalId goalId,
+        Func<string?>? mutationBlocker = null)
     {
         var branch = BranchName(goalId);
         if (!BranchExists(executionDirectory, branch))
         {
             return null;
+        }
+
+        var changedFiles = ResolveChangedFilesAgainstHead(executionDirectory, goalId);
+        if (!changedFiles.Succeeded)
+        {
+            return new GoalWorktreeMergeResult(
+                false,
+                branch,
+                $"Fast-forward blocked: changed-file determination failed: {changedFiles.FailureReason}",
+                null);
+        }
+
+        var blockReason = mutationBlocker?.Invoke();
+        if (!string.IsNullOrWhiteSpace(blockReason))
+        {
+            return new GoalWorktreeMergeResult(
+                false,
+                branch,
+                $"Fast-forward blocked before merge: {blockReason}",
+                null,
+                changedFiles.Files);
         }
 
         var merge = GitCli.Run(executionDirectory, "merge", "--ff-only", branch);
@@ -92,14 +116,67 @@ public static partial class GoalWorktrees
                 true,
                 branch,
                 $"Fast-forwarded to {branch}.",
-                null);
+                null,
+                changedFiles.Files);
         }
 
         return new GoalWorktreeMergeResult(
             false,
             branch,
             $"Branch {branch} cannot fast-forward; merge it explicitly after review.",
-            $"git merge {branch}");
+            $"git merge {branch}",
+            changedFiles.Files);
+    }
+
+    public static GoalWorktreeChangedFilesResult ResolveChangedFilesAgainstHead(
+        string executionDirectory,
+        GoalId goalId) =>
+        ResolveChangedFilesAgainstHead(
+            executionDirectory,
+            goalId,
+            static (workingDirectory, args) => GitCli.Run(workingDirectory, args));
+
+    internal static GoalWorktreeChangedFilesResult ResolveChangedFilesAgainstHead(
+        string executionDirectory,
+        GoalId goalId,
+        Func<string, string[], GitCli.GitResult> gitRunner)
+    {
+        ArgumentNullException.ThrowIfNull(gitRunner);
+        RequireGitWorkTree(executionDirectory);
+        var branch = BranchName(goalId);
+        if (!BranchExists(executionDirectory, branch))
+        {
+            return new GoalWorktreeChangedFilesResult(
+                false,
+                [],
+                $"goal branch '{branch}' does not exist");
+        }
+
+        var diff = gitRunner(executionDirectory, ["diff", "--name-only", $"HEAD...{branch}"]);
+        if (diff.DrainTimedOut)
+        {
+            return new GoalWorktreeChangedFilesResult(
+                false,
+                [],
+                "git diff output drain timed out");
+        }
+
+        if (!diff.Succeeded)
+        {
+            return new GoalWorktreeChangedFilesResult(
+                false,
+                [],
+                string.IsNullOrWhiteSpace(diff.Error)
+                    ? $"git diff exited {diff.ExitCode}"
+                    : diff.Error.Trim());
+        }
+
+        var files = diff.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return new GoalWorktreeChangedFilesResult(true, files, null);
     }
 
     public static GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId)

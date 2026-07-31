@@ -52,10 +52,36 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             return false;
 
         case "merge":
-            var merge = context.Worktrees.TryFastForwardMerge(executionDirectory, goal.Id);
+            var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
+            if (!engineHealth.AllowsAcceptance)
+            {
+                Console.WriteLine(
+                    $"Workspace merge blocked: acceptance engine circuit is {engineHealth.Health}. " +
+                    "Repair it, then run acceptance-engine clear <note>.");
+                return false;
+            }
+
+            var merge = context.Worktrees.TryFastForwardMerge(
+                executionDirectory,
+                goal.Id,
+                () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
             Console.WriteLine(merge is null
                 ? "Goal has no workspace branch to merge."
                 : FormatWorkspaceMerge(merge));
+            if (merge?.FastForwarded == true)
+            {
+                var mergeChangedFiles = merge.ChangedFiles
+                    ?? throw new InvalidOperationException(
+                        "Workspace merge advanced main without an authoritative changed-file receipt.");
+                var landingSha = GitCli.Run(executionDirectory, "rev-parse", "HEAD");
+                PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(
+                    context.Workspace,
+                    new ConductorLandingReceipt(
+                        goal.Id.Value,
+                        mergeChangedFiles,
+                        landingSha.Succeeded ? landingSha.Output.Trim() : null),
+                    Console.WriteLine);
+            }
             return false;
 
         case "rebase":

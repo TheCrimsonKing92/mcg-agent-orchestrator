@@ -173,6 +173,21 @@ internal interface ICliGoalWorktreeService
 
     GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId);
 
+    GoalWorktreeMergeResult? TryFastForwardMerge(
+        string executionDirectory,
+        GoalId goalId,
+        Func<string?> mutationBlocker)
+    {
+        var blockReason = mutationBlocker();
+        return !string.IsNullOrWhiteSpace(blockReason)
+            ? new GoalWorktreeMergeResult(
+                false,
+                BranchName(goalId),
+                $"Fast-forward blocked before merge: {blockReason}",
+                null)
+            : TryFastForwardMerge(executionDirectory, goalId);
+    }
+
     GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId);
 
     bool NeedsRebaseOntoMain(string executionDirectory, GoalId goalId);
@@ -225,6 +240,12 @@ internal sealed class DefaultCliGoalWorktreeService : ICliGoalWorktreeService
 
     public GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId) =>
         GoalWorktrees.TryFastForwardMerge(executionDirectory, goalId);
+
+    public GoalWorktreeMergeResult? TryFastForwardMerge(
+        string executionDirectory,
+        GoalId goalId,
+        Func<string?> mutationBlocker) =>
+        GoalWorktrees.TryFastForwardMerge(executionDirectory, goalId, mutationBlocker);
 
     public GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId) =>
         GoalWorktrees.TryRebaseOntoMain(executionDirectory, goalId);

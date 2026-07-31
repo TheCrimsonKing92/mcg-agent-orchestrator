@@ -94,6 +94,7 @@ internal sealed class ConductorDriver
 
     internal Action<string>? PhaseTimingSink { get; set; }
     internal Action<ConductorLandingReceipt>? SuccessfulLandingSink { get; set; }
+    internal Func<string?>? LandingMutationBlocker { get; set; }
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -536,7 +537,8 @@ internal sealed class ConductorDriver
                 workspace,
                 channel,
                 policy,
-                eventWriter);
+                eventWriter,
+                LandingMutationBlocker);
             if (result.MainAdvanced)
                 GoalOperationJournal.Completed(dir, goal, "conductor:land", result.Message);
             else
@@ -2902,9 +2904,30 @@ internal sealed class ConductorDriver
 
         // Gate 3: land via integration branch (the branch is already rebased onto main by Gate 1).
         var landingFileScopes = _getLandingFileScopes(goal);
+        var mutationBlockReason = LandingMutationBlocker?.Invoke();
+        if (!string.IsNullOrWhiteSpace(mutationBlockReason))
+        {
+            return MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Landing held at mutation boundary: {mutationBlockReason}"));
+        }
+
         var landResult = _land(goal, policy);
         if (landResult.Decision is LandingDecision.Escalate escalate)
         {
+            if (LandingExecutor.IsMutationHoldEscalation(escalate.Reason))
+            {
+                return MakeResult(
+                    goal.Id.Value,
+                    goalPrefix,
+                    policy,
+                    new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, escalate.Reason));
+            }
+
             if (LandingExecutor.IsOwnershipHoldEscalation(escalate.Reason))
             {
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
@@ -2922,7 +2945,8 @@ internal sealed class ConductorDriver
             // Main has already advanced, so losing this receipt would permanently miss the relaunch.
             SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
                 goal.Id.Value,
-                landingFileScopes));
+                landResult.ChangedFiles ?? landingFileScopes,
+                landResult.MergeCommitSha));
 
             // Gate 4: advisory semantic acceptance runs only after deterministic acceptance and
             // successful landing. It records judge receipts for observability but never gates landing.
@@ -3148,4 +3172,5 @@ internal sealed class ConductorDriver
 
 internal sealed record ConductorLandingReceipt(
     string GoalId,
-    IReadOnlyList<string> ChangedFiles);
+    IReadOnlyList<string> ChangedFiles,
+    string? LandingSha = null);

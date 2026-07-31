@@ -8,6 +8,49 @@ using System.Text.Json.Nodes;
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_scrubs_launch_context_env_so_the_gate_verdict_is_hermetic")]
+    public void GoalAcceptanceVerifierScrubsLaunchContextEnvSoTheGateVerdictIsHermetic()
+    {
+        var environment = new System.Collections.Specialized.StringDictionary
+        {
+            // Handoff vars leak in from a handoff-spawned conductor and make CLI grandchildren skip
+            // startup cleanup, which silently greened a real backlog-list regression on some runs.
+            ["MCG_ORCHESTRATOR_HANDOFF_READY_PATH"] = @"C:\ready.txt",
+            ["MCG_ORCHESTRATOR_HANDOFF_TOKEN"] = "token-1",
+            ["mcg_orchestrator_handoff_incumbent_pid"] = "4242",
+            [WorkerSandboxOptions.EnabledVariable] = "1",
+            [WorkerSandboxOptions.AccountVariable] = "worker",
+            // Outer-attempt identity: inheriting these lets a child overwrite genuine receipts and pass
+            // as the SAME custodian, skipping the live-owner check that guards a recursive artifact delete.
+            [GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable] = @"C:\outer\attempt-1",
+            [AcceptanceAttemptArtifactCustody.AttemptIdVariable] = "attempt-1",
+            [AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable] = @"C:\outer\meta.json",
+            // One-shot operator escape hatch that would otherwise wipe intact artifacts in every child.
+            [DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable] = "1",
+            // Unrelated inputs the suite legitimately needs must survive.
+            ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = @"C:\repo",
+            ["PATH"] = @"C:\windows"
+        };
+
+        GoalAcceptanceVerifier.ScrubNonHermeticEnvironment(environment);
+
+        Assert.False(environment.ContainsKey(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable));
+        Assert.False(environment.ContainsKey(AcceptanceAttemptArtifactCustody.AttemptIdVariable));
+        Assert.False(environment.ContainsKey(AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable));
+        Assert.False(environment.ContainsKey(
+            DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable));
+
+        Assert.Empty(environment.Keys
+            .Cast<string>()
+            .Where(name => name.StartsWith(
+                GoalAcceptanceVerifier.HandoffEnvironmentVariablePrefix,
+                StringComparison.OrdinalIgnoreCase)));
+        Assert.False(environment.ContainsKey(WorkerSandboxOptions.EnabledVariable));
+        Assert.False(environment.ContainsKey(WorkerSandboxOptions.AccountVariable));
+        Assert.Equal(@"C:\repo", environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"]);
+        Assert.Equal(@"C:\windows", environment["PATH"]);
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_pre_review_attempt_namespace_cannot_collide_with_acceptance")]
     public void GoalAcceptanceVerifierPreReviewAttemptNamespaceCannotCollideWithAcceptance()
     {
@@ -2363,6 +2406,490 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_exclusive_resource_key_order_is_exact_and_declaration_independent")]
+    public void GoalAcceptanceVerifierExclusiveResourceKeyOrderIsExactAndDeclarationIndependent()
+    {
+        string[] expected = ["alpha-only", "Beta-only", "shared-a"];
+
+        Assert.Equal(
+            expected,
+            GoalAcceptanceVerifier.OrderExclusiveResourceKeys(
+                [" shared-a ", "Beta-only", "alpha-only"]));
+        Assert.Equal(
+            expected,
+            GoalAcceptanceVerifier.OrderExclusiveResourceKeys(
+                ["alpha-only", "Beta-only", " shared-a "]));
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_exclusive_resource_waiters_do_not_block_disjoint_shards")]
+    public async Task GoalAcceptanceVerifierExclusiveResourceWaitersDoNotBlockDisjointShards()
+    {
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        SetPartitionVerdictKeyHooks("tree-resources", "main-resources", "commit-resources");
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 2,
+                "infrastructureTestLanes": [
+                  {
+                    "name": "Conflict alpha",
+                    "filter": "FullyQualifiedName~ConflictAlphaTests",
+                    "estimatedSerialSeconds": 100,
+                    "exclusiveResourceKeys": [ "shared-a", "alpha-only" ]
+                  },
+                  {
+                    "name": "Conflict beta",
+                    "filter": "FullyQualifiedName~ConflictBetaTests",
+                    "estimatedSerialSeconds": 90,
+                    "exclusiveResourceKeys": [ "shared-a", "beta-only" ]
+                  },
+                  {
+                    "name": "Disjoint",
+                    "filter": "FullyQualifiedName~DisjointTests",
+                    "estimatedSerialSeconds": 80,
+                    "exclusiveResourceKeys": [ "disjoint" ]
+                  }
+                ],
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [
+                      "{executable}",
+                      "--results-directory",
+                      "{resultsDirectory}",
+                      "--report-trx-filename",
+                      "{trxFileName}"
+                    ]
+                  }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests",
+                  "type": "dotnet-test",
+                  "runner": "mtp",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var firstConflictStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disjointStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstConflictFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var activeExecutions = 0;
+        var peakExecutions = 0;
+        var activeConflicts = 0;
+        var peakConflicts = 0;
+        var conflictEntries = 0;
+        var disjointOverlappedConflict = 0;
+        try
+        {
+            static void RecordPeak(ref int peak, int active)
+            {
+                int observed;
+                do
+                {
+                    observed = Volatile.Read(ref peak);
+                }
+                while (active > observed &&
+                       Interlocked.CompareExchange(ref peak, active, observed) != observed);
+            }
+
+            async Task<GoalAcceptanceVerifier.CommandResult> RunShardAsync(
+                string[] args,
+                string _,
+                CancellationToken _cancellationToken)
+            {
+                if (args.Length > 0 && args[0] == "dotnet")
+                {
+                    if (args.Length >= 2 && args[1] == "build")
+                    {
+                        var executable = Path.Combine(
+                            GetArtifactsPath(args),
+                            "bin",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                            "debug",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+                        File.WriteAllText(executable, "deterministic shard fixture");
+                    }
+
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
+                }
+
+                WriteMtpTrx(args);
+                var filterIndex = Array.IndexOf(args, "--filter-class");
+                Assert.True(filterIndex >= 0 && filterIndex + 1 < args.Length);
+                var filter = args[filterIndex + 1];
+                var isConflict = filter.Contains("Conflict", StringComparison.Ordinal);
+                var active = Interlocked.Increment(ref activeExecutions);
+                RecordPeak(ref peakExecutions, active);
+                var conflictOrdinal = 0;
+                if (isConflict)
+                {
+                    var activeConflictCount = Interlocked.Increment(ref activeConflicts);
+                    RecordPeak(ref peakConflicts, activeConflictCount);
+                    conflictOrdinal = Interlocked.Increment(ref conflictEntries);
+                }
+
+                try
+                {
+                    if (conflictOrdinal == 1)
+                    {
+                        firstConflictStarted.TrySetResult();
+                        await disjointStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                    else if (conflictOrdinal == 2)
+                    {
+                        Assert.True(
+                            firstConflictFinished.Task.IsCompleted,
+                            "The second conflicting shard entered before the first released its resource keys.");
+                    }
+                    else
+                    {
+                        await firstConflictStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        if (!firstConflictFinished.Task.IsCompleted)
+                        {
+                            Interlocked.Exchange(ref disjointOverlappedConflict, 1);
+                        }
+
+                        disjointStarted.TrySetResult();
+                        await firstConflictFinished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+                }
+                finally
+                {
+                    if (isConflict)
+                    {
+                        Interlocked.Decrement(ref activeConflicts);
+                        if (conflictOrdinal == 1)
+                        {
+                            firstConflictFinished.TrySetResult();
+                        }
+                    }
+
+                    Interlocked.Decrement(ref activeExecutions);
+                }
+            }
+
+            var verifier = new GoalAcceptanceVerifier(RunShardAsync);
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("44444444444444444444444444444444"),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotLease: lease);
+
+            Assert.True(result.Passed);
+            Assert.Equal(2, conflictEntries);
+            Assert.Equal(1, peakConflicts);
+            Assert.Equal(2, peakExecutions);
+            Assert.Equal(1, disjointOverlappedConflict);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_cancellation_while_waiting_for_execution_slot_does_not_over_release")]
+    public async Task GoalAcceptanceVerifierCancellationWhileWaitingForExecutionSlotDoesNotOverRelease()
+    {
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        SetPartitionVerdictKeyHooks(
+            "tree-execution-wait-cancel",
+            "main-execution-wait-cancel",
+            "commit-execution-wait-cancel");
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 2,
+                "infrastructureTestLanes": [
+                  {
+                    "name": "Holder alpha",
+                    "filter": "FullyQualifiedName~HolderAlphaTests",
+                    "estimatedSerialSeconds": 100
+                  },
+                  {
+                    "name": "Holder beta",
+                    "filter": "FullyQualifiedName~HolderBetaTests",
+                    "estimatedSerialSeconds": 90
+                  },
+                  {
+                    "name": "Resource waiter",
+                    "filter": "FullyQualifiedName~ResourceWaiterTests",
+                    "estimatedSerialSeconds": 80,
+                    "exclusiveResourceKeys": [ "shared" ]
+                  }
+                ],
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [
+                      "{executable}",
+                      "--results-directory",
+                      "{resultsDirectory}",
+                      "--report-trx-filename",
+                      "{trxFileName}"
+                    ]
+                  }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests",
+                  "type": "dotnet-test",
+                  "runner": "mtp",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var bothHoldersStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waiterParked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseHolders = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var holderCount = 0;
+        var waiterRan = 0;
+        using var cancellation = new CancellationTokenSource();
+        GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = checkName =>
+        {
+            if (checkName.EndsWith(": Resource waiter", StringComparison.Ordinal))
+            {
+                waiterParked.TrySetResult();
+            }
+        };
+        try
+        {
+            async Task<GoalAcceptanceVerifier.CommandResult> RunShardAsync(
+                string[] args,
+                string _,
+                CancellationToken _cancellationToken)
+            {
+                if (args.Length > 0 && args[0] == "dotnet")
+                {
+                    if (args.Length >= 2 && args[1] == "build")
+                    {
+                        var executable = Path.Combine(
+                            GetArtifactsPath(args),
+                            "bin",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                            "debug",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+                        File.WriteAllText(executable, "deterministic shard fixture");
+                    }
+
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
+                }
+
+                var filterIndex = Array.IndexOf(args, "--filter-class");
+                Assert.True(filterIndex >= 0 && filterIndex + 1 < args.Length);
+                if (args[filterIndex + 1].Contains("Holder", StringComparison.Ordinal))
+                {
+                    if (Interlocked.Increment(ref holderCount) == 2)
+                    {
+                        bothHoldersStarted.TrySetResult();
+                    }
+
+                    WriteMtpTrx(args);
+                    await releaseHolders.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+                }
+
+                Interlocked.Exchange(ref waiterRan, 1);
+                WriteMtpTrx(args);
+                return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+            }
+
+            var verifier = new GoalAcceptanceVerifier(RunShardAsync);
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var verification = verifier.RunAsync(
+                root,
+                new GoalId("77777777777777777777777777777777"),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotLease: lease,
+                cancellationToken: cancellation.Token);
+
+            await bothHoldersStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await waiterParked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+            releaseHolders.TrySetResult();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => verification.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(0, Volatile.Read(ref waiterRan));
+            Assert.False(
+                verification.Exception?.Flatten().InnerExceptions
+                    .Any(exception => exception is SemaphoreFullException) ?? false,
+                "Cancellation over-released the execution-slot semaphore.");
+        }
+        finally
+        {
+            releaseHolders.TrySetResult();
+            GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = null;
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_releases_exclusive_resources_after_shard_fault_or_cancellation")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task GoalAcceptanceVerifierReleasesExclusiveResourcesAfterShardFaultOrCancellation(
+        bool cancelFirstShard)
+    {
+        GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        SetPartitionVerdictKeyHooks(
+            $"tree-release-{cancelFirstShard}",
+            $"main-release-{cancelFirstShard}",
+            $"commit-release-{cancelFirstShard}");
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 2,
+                "infrastructureTestLanes": [
+                  {
+                    "name": "Faulting",
+                    "filter": "FullyQualifiedName~FaultingTests",
+                    "estimatedSerialSeconds": 100,
+                    "exclusiveResourceKeys": [ "shared" ]
+                  },
+                  {
+                    "name": "Waiting",
+                    "filter": "FullyQualifiedName~WaitingTests",
+                    "estimatedSerialSeconds": 90,
+                    "exclusiveResourceKeys": [ "shared" ]
+                  }
+                ],
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [
+                      "{executable}",
+                      "--results-directory",
+                      "{resultsDirectory}",
+                      "--report-trx-filename",
+                      "{trxFileName}"
+                    ]
+                  }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests",
+                  "type": "dotnet-test",
+                  "runner": "mtp",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var faultingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFaulting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waitingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            async Task<GoalAcceptanceVerifier.CommandResult> RunShardAsync(
+                string[] args,
+                string _,
+                CancellationToken _cancellationToken)
+            {
+                if (args.Length > 0 && args[0] == "dotnet")
+                {
+                    if (args.Length >= 2 && args[1] == "build")
+                    {
+                        var executable = Path.Combine(
+                            GetArtifactsPath(args),
+                            "bin",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                            "debug",
+                            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+                        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+                        File.WriteAllText(executable, "deterministic shard fixture");
+                    }
+
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded.");
+                }
+
+                var filterIndex = Array.IndexOf(args, "--filter-class");
+                Assert.True(filterIndex >= 0 && filterIndex + 1 < args.Length);
+                var faulting = args[filterIndex + 1].Contains("FaultingTests", StringComparison.Ordinal);
+                if (faulting)
+                {
+                    faultingStarted.TrySetResult();
+                    await releaseFaulting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    if (cancelFirstShard)
+                    {
+                        throw new OperationCanceledException("Synthetic shard cancellation.");
+                    }
+
+                    throw new InvalidOperationException("Synthetic shard fault.");
+                }
+
+                waitingStarted.TrySetResult();
+                WriteMtpTrx(args);
+                return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+            }
+
+            var verifier = new GoalAcceptanceVerifier(RunShardAsync);
+            using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+                TimeSpan.FromSeconds(2));
+            var verification = verifier.RunAsync(
+                root,
+                new GoalId(cancelFirstShard
+                    ? "55555555555555555555555555555555"
+                    : "66666666666666666666666666666666"),
+                stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
+                stableSlotLease: lease);
+
+            await faultingStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            releaseFaulting.TrySetResult();
+            if (cancelFirstShard)
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => verification);
+            }
+            else
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(() => verification);
+            }
+
+            Assert.True(
+                waitingStarted.Task.IsCompleted,
+                "The waiting shard did not acquire the resource released by the faulted shard.");
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
         }
     }
 

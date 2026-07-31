@@ -189,6 +189,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static Func<string, string?>? ResolveMainWorktreePathForTests { get; set; }
     internal static Func<string, string[]>? ResolveDeletedTestFilesForTests { get; set; }
     internal static Func<int>? ResolveShardCoreBudgetForTests { get; set; }
+    internal static Action<string>? OnInfrastructureShardResourcesAcquiredForTests { get; set; }
     internal static int PartitionVerdictFullRerunEveryN { get; set; } = DefaultPartitionVerdictFullRerunEveryN;
     // When true (default), a failed infrastructure-test PARTITION is re-run ONCE within the same
     // acceptance attempt; if the re-run passes, the failure was an intermittent flake and the partition
@@ -713,80 +714,113 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var wallClock = Stopwatch.StartNew();
-        var queue = new ConcurrentQueue<IndexedShard>(
-            shardChecks
-                .Select((check, index) => new IndexedShard(index, check))
-                .OrderByDescending(shard => shard.Check.EstimatedSerialSeconds)
-                .ThenBy(shard => shard.Index));
+        var orderedShards = shardChecks
+            .Select((check, index) => new IndexedShard(index, check))
+            .OrderByDescending(shard => shard.Check.EstimatedSerialSeconds)
+            .ThenBy(shard => shard.Index)
+            .ToArray();
         var outcomes = new ShardRunOutcome?[shardChecks.Count];
-        var workerCount = allShardsUseMtp
+        var maxConcurrentExecutions = allShardsUseMtp
             ? Math.Min(maxConcurrentShards, shardChecks.Count)
             : 1;
+        using var executionSlots = new SemaphoreSlim(
+            maxConcurrentExecutions,
+            maxConcurrentExecutions);
+        var exclusiveResourceLocks = shardChecks
+            .SelectMany(shard => shard.ExclusiveResourceKeys)
+            .Select(key => key.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                key => key,
+                _ => new SemaphoreSlim(1, 1),
+                StringComparer.OrdinalIgnoreCase);
 
-        async Task RunShardAsync(IndexedShard shard, ShardWorkerLease worker)
+        async Task RunShardAsync(IndexedShard shard)
         {
-            var shardClock = Stopwatch.StartNew();
-            var shardResultsDirectory = ResolveInfrastructureShardResultsDirectory(
-                worker.Lease.Environment);
-            var run = await RunCheckWithPartitionVerdictCacheAsync(
-                shard.Check,
-                cacheContext,
-                worktreePath,
-                goalId,
-                worker.SlotIndex,
-                worker.Lease,
-                worker.BuildPhase,
-                cancellationToken,
-                shardResultsDirectory).ConfigureAwait(false);
-            shardClock.Stop();
-            outcomes[shard.Index] = new ShardRunOutcome(run.Result, run.Retried);
-            EmitShardTimingProgress(
-                goalId,
-                "shard-complete",
-                shard.Check.Name,
-                worker.SlotIndex,
-                shardClock.Elapsed);
-        }
-
-        async Task RunWorkerAsync(int workerIndex)
-        {
-            var worker = new ShardWorkerLease(
-                primarySlotIndex,
-                primaryLease,
-                primaryBuildPhase);
-            while (queue.TryDequeue(out var shard))
+            var acquiredResourceLocks = new List<SemaphoreSlim>();
+            var acquiredExecutionSlot = false;
+            try
             {
-                await RunShardAsync(shard, worker).ConfigureAwait(false);
+                foreach (var resourceKey in OrderExclusiveResourceKeys(
+                             shard.Check.ExclusiveResourceKeys))
+                {
+                    var resourceLock = exclusiveResourceLocks[resourceKey];
+                    await resourceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    acquiredResourceLocks.Add(resourceLock);
+                }
+
+                OnInfrastructureShardResourcesAcquiredForTests?.Invoke(shard.Check.Name);
+                await executionSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
+                acquiredExecutionSlot = true;
+                var shardClock = Stopwatch.StartNew();
+                var worker = new ShardWorkerLease(
+                    primarySlotIndex,
+                    primaryLease,
+                    primaryBuildPhase);
+                var shardResultsDirectory = ResolveInfrastructureShardResultsDirectory(
+                    worker.Lease.Environment);
+                var run = await RunCheckWithPartitionVerdictCacheAsync(
+                    shard.Check,
+                    cacheContext,
+                    worktreePath,
+                    goalId,
+                    worker.SlotIndex,
+                    worker.Lease,
+                    worker.BuildPhase,
+                    cancellationToken,
+                    shardResultsDirectory).ConfigureAwait(false);
+                shardClock.Stop();
+                outcomes[shard.Index] = new ShardRunOutcome(run.Result, run.Retried);
+                EmitShardTimingProgress(
+                    goalId,
+                    "shard-complete",
+                    shard.Check.Name,
+                    worker.SlotIndex,
+                    shardClock.Elapsed);
+            }
+            finally
+            {
+                if (acquiredExecutionSlot)
+                {
+                    executionSlots.Release();
+                }
+
+                for (var index = acquiredResourceLocks.Count - 1; index >= 0; index--)
+                {
+                    acquiredResourceLocks[index].Release();
+                }
             }
         }
 
-        await Task.WhenAll(
-            Enumerable.Range(0, workerCount).Select(RunWorkerAsync)).ConfigureAwait(false);
-        var fallbackWorker = new ShardWorkerLease(
-            primarySlotIndex,
-            primaryLease,
-            primaryBuildPhase);
-        while (queue.TryDequeue(out var fallbackShard))
+        try
         {
-            await RunShardAsync(fallbackShard, fallbackWorker).ConfigureAwait(false);
-        }
-        wallClock.Stop();
-        if (outcomes.Any(outcome => outcome is null))
-        {
-            throw new InvalidOperationException(
-                "Concurrent infrastructure shard execution completed without a verdict for every shard.");
-        }
+            await Task.WhenAll(
+                orderedShards.Select(RunShardAsync)).ConfigureAwait(false);
+            wallClock.Stop();
+            if (outcomes.Any(outcome => outcome is null))
+            {
+                throw new InvalidOperationException(
+                    "Concurrent infrastructure shard execution completed without a verdict for every shard.");
+            }
 
-        EmitShardTimingProgress(
-            goalId,
-            "shards-complete",
-            $"{shardChecks.Count}-infrastructure-shards",
-            primarySlotIndex,
-            wallClock.Elapsed);
-        var completed = outcomes.Select(outcome => outcome!).ToArray();
-        return new CheckBatchResult(
-            completed.Select(outcome => outcome.Result).ToArray(),
-            completed.Any(outcome => outcome.Retried));
+            EmitShardTimingProgress(
+                goalId,
+                "shards-complete",
+                $"{shardChecks.Count}-infrastructure-shards",
+                primarySlotIndex,
+                wallClock.Elapsed);
+            var completed = outcomes.Select(outcome => outcome!).ToArray();
+            return new CheckBatchResult(
+                completed.Select(outcome => outcome.Result).ToArray(),
+                completed.Any(outcome => outcome.Retried));
+        }
+        finally
+        {
+            foreach (var resourceLock in exclusiveResourceLocks.Values)
+            {
+                resourceLock.Dispose();
+            }
+        }
     }
 
     internal static string ResolveInfrastructureShardResultsDirectory(
@@ -800,6 +834,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? Path.Combine(environment.ArtifactsPath, "TestResults")
             : attemptDirectory;
     }
+
+    internal static IReadOnlyList<string> OrderExclusiveResourceKeys(
+        IEnumerable<string> resourceKeys) =>
+        resourceKeys
+            .Select(key => key.Trim())
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ThenBy(key => key, StringComparer.Ordinal)
+            .ToArray();
 
     private void VerifyPrebuiltMtpExecutables(
         IReadOnlyList<AcceptanceManifestCheck> shardChecks,
@@ -1511,7 +1553,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             TimeoutMinutes = check.TimeoutMinutes,
             Advisory = check.Advisory,
             Runner = check.Runner,
-            EstimatedSerialSeconds = lane.EstimatedSerialSeconds
+            EstimatedSerialSeconds = lane.EstimatedSerialSeconds,
+            ExclusiveResourceKeys = lane.ExclusiveResourceKeys
         };
 
     private static bool IsBroadInfrastructureTestCheck(AcceptanceManifestCheck check) =>
@@ -2505,27 +2548,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? testResultsDirectoryOverride = null)
     {
         var attemptName = $"acceptance-{Slug(check.Name)}";
-        var buildRun = dotnetTestBuildPhase is null
-            ? new DotnetTestBuildPhaseResult(
-                await RunManagedDotnetCheckAsync(
-                    check,
-                    BuildDotnetTestBuildArguments(check),
-                    worktreePath,
-                    goalId,
-                    stableSlotIndex,
-                    stableSlotLease,
-                    $"{attemptName}-build",
-                    cancellationToken).ConfigureAwait(false),
-                ContributesToCheck: true)
-            : await EnsureDotnetTestBuildPhaseAsync(
-                dotnetTestBuildPhase,
-                check,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                attemptName,
-                cancellationToken).ConfigureAwait(false);
+        var effectiveBuildPhase = dotnetTestBuildPhase ??
+            new DotnetTestBuildPhase(BuildDotnetTestBuildArguments(check), cachePlan: null);
+        var buildRun = await EnsureDotnetTestBuildPhaseAsync(
+            effectiveBuildPhase,
+            check,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            attemptName,
+            cancellationToken).ConfigureAwait(false);
         if (!buildRun.Run.Result.Passed)
         {
             return (buildRun.Run.Result with
@@ -2541,7 +2574,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId,
             stableSlotIndex,
             stableSlotLease,
-            dotnetTestBuildPhase?.BuildEnvironment,
+            effectiveBuildPhase.BuildEnvironment,
             attemptName,
             cancellationToken,
             testResultsDirectoryOverride).ConfigureAwait(false);
@@ -2734,7 +2767,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             stableSlotLease,
             $"{attemptName}-build",
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            executionEnvironment: phase.BuildEnvironment).ConfigureAwait(false);
         return new DotnetTestBuildPhaseResult(phase.Run.Value, ContributesToCheck: true);
     }
 
@@ -2918,10 +2952,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         DotnetBuildEnvironmentLease? stableSlotLease,
         string attemptName,
         CancellationToken cancellationToken,
-        Action<DotnetBuildEnvironment>? afterLeasePrepared = null)
+        Action<DotnetBuildEnvironment>? afterLeasePrepared = null,
+        DotnetBuildEnvironment? executionEnvironment = null)
     {
         var elapsed = Stopwatch.StartNew();
-        var environment = ResolveExecutionEnvironment(
+        var environment = executionEnvironment ?? ResolveExecutionEnvironment(
             goalId,
             attemptName,
             stableSlotIndex,
@@ -5110,7 +5145,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return filter;
     }
 
-    private static IEnumerable<string> TranslateMtpFilter(string filter)
+    internal static IEnumerable<string> TranslateMtpFilter(string filter)
     {
         foreach (var rawToken in Regex.Split(filter, @"[&|]"))
         {
@@ -5746,6 +5781,53 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return (context.HeartbeatPath, context.StableSlotHeartbeatPath);
     }
 
+    internal const string HandoffEnvironmentVariablePrefix = "MCG_ORCHESTRATOR_HANDOFF_";
+
+    // The acceptance suite verifies the CODE and must run hermetically — NOT under whatever runtime config
+    // the operator's conductor happened to be launched with. Anything surviving here is an ambient input the
+    // gate silently depends on, which makes its verdict a statement about the launcher. Two proven leaks:
+    //
+    // 1. Worker-dispatch vars (MCG_WORKER_SANDBOX and friends) control how real workers launch (low
+    //    integrity). Several tests read WorkerSandboxOptions.FromEnvironment(), so running `conduct` with
+    //    MCG_WORKER_SANDBOX=1 flipped those tests' expected sandbox mode — failing acceptance INSIDE the
+    //    watch while the same suite passed when `acceptance` ran standalone.
+    // 2. Handoff coordination vars: a handoff-spawned conductor carries MCG_ORCHESTRATOR_HANDOFF_*, the gate
+    //    child inherits them, and CLI grandchildren then see authority-transfer-requested and SKIP startup
+    //    cleanup. That masked a real backlog-list regression — identical code failed one run and passed the
+    //    next purely on how the conductor had been launched. Stripped by prefix rather than by name because
+    //    those constants live in the App layer.
+    internal static void ScrubNonHermeticEnvironment(
+        System.Collections.Specialized.StringDictionary environment)
+    {
+        environment.Remove(WorkerSandboxOptions.EnabledVariable);
+        environment.Remove(WorkerSandboxOptions.AccountVariable);
+        environment.Remove(WorkerSandboxOptions.CredentialTargetVariable);
+        environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+
+        // 3. Outer acceptance-attempt identity. A child inheriting these can resolve the OUTER attempt's
+        //    receipt prefix (overwriting genuine receipts) and be accepted as the SAME custodian, which
+        //    skips the live-owner rejection guarding a recursive artifact delete. Safe to strip: the gate
+        //    passes receipt paths to children as explicit argv, so no child needs the inherited values.
+        environment.Remove(AcceptanceAttemptTrxPrefixVariable);
+        environment.Remove(AcceptanceAttemptArtifactCustody.AttemptIdVariable);
+        environment.Remove(AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
+
+        // 4. One-shot operator escape hatches must never be inherited into a verification child. This one
+        //    turns stale-lease recovery into an unconditional recursive wipe of artifacts that would
+        //    otherwise have passed their integrity probe.
+        environment.Remove(DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable);
+
+        foreach (var handoffVariable in environment.Keys
+                     .Cast<string>()
+                     .Where(name => name.StartsWith(
+                         HandoffEnvironmentVariablePrefix,
+                         StringComparison.OrdinalIgnoreCase))
+                     .ToArray())
+        {
+            environment.Remove(handoffVariable);
+        }
+    }
+
     private static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
         string workingDirectory,
@@ -5792,18 +5874,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
-
-        // The acceptance suite verifies the CODE and must run hermetically — NOT under the operator's
-        // live worker-dispatch runtime config. MCG_WORKER_SANDBOX (and friends) control how real
-        // workers are launched (low integrity); several tests read WorkerSandboxOptions.FromEnvironment(),
-        // so when the operator runs `conduct` with MCG_WORKER_SANDBOX=1 that var is inherited by this
-        // child process and flips those tests' expected sandbox mode — failing acceptance INSIDE the
-        // watch while the same suite passes when `acceptance` is run standalone (without the var). Strip
-        // the worker-dispatch vars so the suite always runs against the default configuration.
-        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.EnabledVariable);
-        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.AccountVariable);
-        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.CredentialTargetVariable);
-        startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+        ScrubNonHermeticEnvironment(startInfo.EnvironmentVariables);
 
         int? startedProcessId = null;
         try
@@ -6226,6 +6297,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public bool Advisory { get; init; }
         public string? Runner { get; init; } = "vstest";
         public double EstimatedSerialSeconds { get; init; }
+        public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
     }
 
     private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);

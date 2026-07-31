@@ -166,6 +166,32 @@ internal static partial class CliCommandHandlers
     {
         switch (command)
         {
+            case "acceptance-engine":
+            {
+                var circuit = PostLandingCanaryFactory.CreateCircuit(context.Workspace);
+                if (parts.Count == 1 ||
+                    (parts.Count == 2 && parts[1].Equals("status", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var health = circuit.Read();
+                    Console.WriteLine(
+                        $"Acceptance engine: {health.Health}; landing={health.LandingSha ?? "none"}; " +
+                        $"reason={health.FailureReason ?? "none"}; receipt={health.ReceiptReference ?? "none"}");
+                    return false;
+                }
+
+                if (parts.Count >= 3 && parts[1].Equals("clear", StringComparison.OrdinalIgnoreCase))
+                {
+                    var note = string.Join(' ', parts.Skip(2));
+                    var health = circuit.Clear(note);
+                    Console.WriteLine(
+                        $"Acceptance engine circuit cleared at {health.UpdatedAt:O}. Acceptance and landing may resume.");
+                    return false;
+                }
+
+                throw new ArgumentException(
+                    "Usage: acceptance-engine status | acceptance-engine clear <repair-or-operator-note>");
+            }
+
             case "gate-status":
                 ConsoleViews.PrintGateStatus(GateHeartbeatArtifacts.ReadStableSlots());
                 return false;

@@ -12,6 +12,8 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal interface IConductLockPidProbe
 {
     bool IsRunning(int processId);
+
+    bool IsSameProcess(int processId, DateTimeOffset processStartedAt);
 }
 
 internal sealed class ConductLockPidProbe : IConductLockPidProbe
@@ -21,9 +23,27 @@ internal sealed class ConductLockPidProbe : IConductLockPidProbe
         try
         {
             using var process = Process.GetProcessById(processId);
-            return true;
+            return !process.HasExited;
         }
-        catch (ArgumentException)
+        catch (Exception ex) when (
+            ex is ArgumentException or InvalidOperationException or Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    public bool IsSameProcess(int processId, DateTimeOffset processStartedAt)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            var liveProcessStartedAt = new DateTimeOffset(
+                process.StartTime.ToUniversalTime(),
+                TimeSpan.Zero);
+            return !process.HasExited && liveProcessStartedAt == processStartedAt.ToUniversalTime();
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or InvalidOperationException or Win32Exception)
         {
             return false;
         }
@@ -55,21 +75,31 @@ internal sealed class ConductorLoopLease : IDisposable
         var now = (utcNow ?? (() => DateTimeOffset.UtcNow))();
         if (File.Exists(path))
         {
-            var (ownerPid, writtenAt) = ReadOwner(path);
+            var (ownerPid, writtenAt, ownerProcessStartedAt) = ReadOwner(path);
             var age = FormatAge(now - writtenAt);
-            if ((pidProbe ?? new ConductLockPidProbe()).IsRunning(ownerPid))
+            var probe = pidProbe ?? new ConductLockPidProbe();
+            var ownerIsRunning = probe.IsRunning(ownerPid);
+            var ownerIsSameProcess = ownerIsRunning &&
+                (ownerProcessStartedAt is null || probe.IsSameProcess(ownerPid, ownerProcessStartedAt.Value));
+            if (ownerIsSameProcess)
             {
                 throw new InvalidOperationException(
                     $"Refused: conduct-loop.lock held by pid {ownerPid}, running, written {age} ago — delete to proceed");
             }
 
+            var staleReason = ownerIsRunning ? "dead-or-recycled" : "not running";
             var staleTakeoverMessage =
-                $"conduct-loop.lock held by pid {ownerPid} (not running), written {age} ago — stale lock removed, proceeding";
+                $"conduct-loop.lock held by pid {ownerPid} ({staleReason}), written {age} ago — stale lock removed, proceeding";
             Console.WriteLine(staleTakeoverMessage);
             Console.Out.Flush();
             TryLogStaleTakeover(orchestratorDirectory, staleTakeoverMessage);
             File.Delete(path);
         }
+
+        using var currentProcess = Process.GetCurrentProcess();
+        var processStartedAt = new DateTimeOffset(
+            currentProcess.StartTime.ToUniversalTime(),
+            TimeSpan.Zero);
 
         try
         {
@@ -77,6 +107,7 @@ internal sealed class ConductorLoopLease : IDisposable
             using var writer = new StreamWriter(stream, leaveOpen: true);
             writer.WriteLine(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
             writer.WriteLine(now.ToString("O", CultureInfo.InvariantCulture));
+            writer.WriteLine(processStartedAt.ToString("O", CultureInfo.InvariantCulture));
             writer.Flush();
             stream.Flush();
             stream.Position = 0;
@@ -102,8 +133,11 @@ internal sealed class ConductorLoopLease : IDisposable
 
         try
         {
-            var (ownerPid, _) = ReadOwner(path);
-            return (pidProbe ?? new ConductLockPidProbe()).IsRunning(ownerPid);
+            var (ownerPid, _, ownerProcessStartedAt) = ReadOwner(path);
+            var probe = pidProbe ?? new ConductLockPidProbe();
+            return ownerProcessStartedAt is null
+                ? probe.IsRunning(ownerPid)
+                : probe.IsSameProcess(ownerPid, ownerProcessStartedAt.Value);
         }
         catch (IOException)
         {
@@ -115,7 +149,7 @@ internal sealed class ConductorLoopLease : IDisposable
         }
     }
 
-    private static (int ProcessId, DateTimeOffset WrittenAt) ReadOwner(string path)
+    private static (int ProcessId, DateTimeOffset WrittenAt, DateTimeOffset? ProcessStartedAt) ReadOwner(string path)
     {
         using var stream = new FileStream(
             path,
@@ -125,6 +159,7 @@ internal sealed class ConductorLoopLease : IDisposable
         using var reader = new StreamReader(stream);
         var processIdText = reader.ReadLine();
         var writtenAtText = reader.ReadLine();
+        var processStartedAtText = reader.ReadLine();
         if (!int.TryParse(processIdText, NumberStyles.None, CultureInfo.InvariantCulture, out var processId) ||
             !DateTimeOffset.TryParseExact(
                 writtenAtText,
@@ -137,7 +172,16 @@ internal sealed class ConductorLoopLease : IDisposable
                 $"Refused: conduct-loop.lock has invalid contents: {path} — delete to proceed");
         }
 
-        return (processId, writtenAt);
+        DateTimeOffset? processStartedAt = DateTimeOffset.TryParseExact(
+            processStartedAtText,
+            "O",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.RoundtripKind,
+            out var parsedProcessStartedAt)
+            ? parsedProcessStartedAt.ToUniversalTime()
+            : null;
+
+        return (processId, writtenAt, processStartedAt);
     }
 
     private static string FormatAge(TimeSpan age)

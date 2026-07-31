@@ -109,6 +109,77 @@ public sealed class LandingExecutorTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "LandingExecutor rereads circuit at integration merge mutation boundary")]
+    public void LandingExecutorBlocksWhenCircuitOpensAfterAdmission()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            RunGit(repo, "checkout", "-b", goalBranch);
+            File.WriteAllText(Path.Combine(repo, "must-not-land.txt"), "blocked");
+            RunGit(repo, "add", "must-not-land.txt");
+            RunGit(repo, "commit", "-m", "Candidate goal work");
+            RunGit(repo, "checkout", "main");
+            var mainBefore = GoalAcceptanceVerifier.ResolveGitText(repo, "rev-parse", "HEAD")!.Trim();
+            var checks = 0;
+
+            var result = LandingExecutor.Execute(
+                kernel,
+                goal,
+                workspace,
+                mutationBlocker: () =>
+                    Interlocked.Increment(ref checks) == 1
+                        ? null
+                        : "acceptance circuit became Pending");
+
+            Assert.False(result.MainAdvanced);
+            Assert.IsType<LandingDecision.Escalate>(result.Decision);
+            Assert.Contains("held before merge", result.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(2, checks);
+            Assert.Equal(mainBefore, GoalAcceptanceVerifier.ResolveGitText(repo, "rev-parse", "HEAD")!.Trim());
+            Assert.Equal(
+                mainBefore,
+                GoalAcceptanceVerifier.ResolveGitText(
+                    repo,
+                    "rev-parse",
+                    LandingExecutor.IntegrationBranchName)!.Trim());
+            Assert.False(File.Exists(Path.Combine(repo, "must-not-land.txt")));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "CLI land result carries authoritative changed paths without a goal worktree")]
+    public void LandingResultCarriesChangedPathsFromBranchWithoutWorktree()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            const string enginePath =
+                "tests/canary-fixture/branch-only.txt";
+            AddGoalBranchCommit(repo, goalBranch, enginePath, "namespace BranchOnly;");
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(result.MainAdvanced, result.Message);
+            Assert.Equal([enginePath], result.ChangedFiles);
+            Assert.True(File.Exists(Path.Combine(repo, enginePath)));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_non_approval_diff_auto_promotes_without_ownership_hold")]
     public void LandingExecutorGreenGateNonApprovalDiffAutoPromotesWithoutOwnershipHold()
     {

@@ -51,6 +51,7 @@ internal static class CliCommandHelp
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
     public const string OperatorCommandsUsage = "Usage: operator-commands [--help]";
     public const string GateStatusUsage = "Usage: gate-status";
+    public const string AcceptanceEngineUsage = "Usage: acceptance-engine status | acceptance-engine clear <repair-or-operator-note>";
     public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--payload-max-bytes <bytes>] [--batch-size <rows>] [--legacy-purge-oversized-ticks] [--vacuum]";
 
     private static readonly CommandHelpEntry Conduct = new(
@@ -320,6 +321,11 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry GateStatus = new(
         GateStatusUsage,
         "List acceptance gate heartbeat status for stable build slots.",
+        ["--help", "-h"]);
+
+    private static readonly CommandHelpEntry AcceptanceEngine = new(
+        AcceptanceEngineUsage,
+        "Show or explicitly clear the post-landing canary circuit breaker.",
         ["--help", "-h"]);
 
     private static readonly CommandHelpEntry RunEventsMaintenance = new(
@@ -661,6 +667,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("gate-status", StringComparison.OrdinalIgnoreCase))
         {
             entry = GateStatus;
+            return true;
+        }
+
+        if (args[0].Equals("acceptance-engine", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = AcceptanceEngine;
             return true;
         }
 

@@ -35,8 +35,19 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         return false;
     }
 
+    var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
+    if (!engineHealth.AllowsAcceptance)
+    {
+        Console.WriteLine(
+            $"BLOCKER step=acceptance-engine reason={engineHealth.Health.ToString().ToLowerInvariant()} " +
+            $"landing={engineHealth.LandingSha ?? "unknown"} failure={engineHealth.FailureReason ?? "pending"} " +
+            "action=\"Repair the acceptance engine, then run acceptance-engine clear <note>.\"");
+        return false;
+    }
+
     var worktreePath = context.Worktrees.TryResolve(context.Workspace.ExecutionDirectory, goal.Id);
     AcceptanceVerificationResult? verification = null;
+    IReadOnlyList<string> landingChangedFiles = [];
     string? testedWorktreeHead = null;
     DateTimeOffset? acceptanceAttemptStartedAt = null;
     var testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
@@ -103,6 +114,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         }
 
         var changedFiles = context.Worktrees.GetChangedFiles(worktreePath);
+        landingChangedFiles = changedFiles;
         acceptanceAttemptStartedAt = DateTimeOffset.UtcNow;
         if (skipVerify)
         {
@@ -374,7 +386,10 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             Merge: () =>
             {
                 var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
-                var merge = context.Worktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+                var merge = context.Worktrees.TryFastForwardMerge(
+                    context.Workspace.ExecutionDirectory,
+                    goal.Id,
+                    () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
 
                 if (merge is null)
                 {
@@ -384,6 +399,11 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                 if (merge.FastForwarded && pendingRollback is not null)
                 {
                     GoalRollbackPlanner.RecordAcceptance(context.Workspace.ExecutionDirectory, pendingRollback);
+                }
+
+                if (merge.FastForwarded && merge.ChangedFiles is not null)
+                {
+                    landingChangedFiles = merge.ChangedFiles;
                 }
 
                 return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge));
@@ -426,6 +446,7 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
         if (mergeCommit.FastForwarded)
         {
             RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
+            RunPostLandingCanary(context, goal, landingChangedFiles);
         }
         else
         {
@@ -448,7 +469,20 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     }
 
     RecordAcceptanceCompleted(context, goal, testedWorktreeHead, testedMainHead, acceptanceAttemptStartedAt, verification);
+    RunPostLandingCanary(context, goal, landingChangedFiles);
     return true;
+}
+
+private static void RunPostLandingCanary(
+    CliExecutionContext context,
+    Goal goal,
+    IReadOnlyList<string> changedFiles)
+{
+    var landingSha = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
+    PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(
+        context.Workspace,
+        new ConductorLandingReceipt(goal.Id.Value, changedFiles, landingSha),
+        Console.WriteLine);
 }
 
 private static DotnetBuildEnvironmentLease SelectGoalBuildPermit(
