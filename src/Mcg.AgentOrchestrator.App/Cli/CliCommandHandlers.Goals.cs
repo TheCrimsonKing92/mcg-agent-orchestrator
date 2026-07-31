@@ -920,11 +920,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var landChangedFiles = landResult.ChangedFiles
                     ?? throw new InvalidOperationException(
                         "Landing advanced main without an authoritative changed-file receipt.");
-                PostLandingCanaryFactory.CreateDefault(context.Workspace)
-                    .HandleLanding(new ConductorLandingReceipt(
+                PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(
+                    context.Workspace,
+                    new ConductorLandingReceipt(
                         context.CurrentGoal.Id.Value,
                         landChangedFiles,
-                        landResult.MergeCommitSha));
+                        landResult.MergeCommitSha),
+                    Console.WriteLine);
             }
             return landResult.MainAdvanced;
 

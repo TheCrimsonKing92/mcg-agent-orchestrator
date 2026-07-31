@@ -55,7 +55,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             var goalId = GoalId.New();
             var branch = GoalWorktrees.BranchName(goalId);
             const string enginePath =
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/canary-fixture/branch-only.txt";
+                "tests/canary-fixture/branch-only.txt";
             var baseBranch = GitCli.Run(repo, "branch", "--show-current").Output.Trim();
             RunGit(repo, "checkout", "-b", branch);
             var fullPath = Path.Combine(repo, enginePath);

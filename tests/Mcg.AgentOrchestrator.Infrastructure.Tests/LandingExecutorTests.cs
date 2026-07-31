@@ -164,7 +164,7 @@ public sealed class LandingExecutorTests
             var (kernel, goal) = CreateVerifiedGoal(repo);
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             const string enginePath =
-                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/canary-fixture/branch-only.txt";
+                "tests/canary-fixture/branch-only.txt";
             AddGoalBranchCommit(repo, goalBranch, enginePath, "namespace BranchOnly;");
             Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
 

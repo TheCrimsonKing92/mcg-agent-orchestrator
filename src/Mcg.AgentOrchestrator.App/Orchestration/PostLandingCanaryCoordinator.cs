@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -44,30 +42,38 @@ internal sealed class PostLandingCanaryCoordinator
 
     internal Task<PostLandingCanaryDisposition> LaunchLandingAsync(ConductorLandingReceipt landing)
     {
-        if (!_configuration.Enabled)
+        try
         {
-            return Task.FromResult(PostLandingCanaryDisposition.NotTriggered);
-        }
+            if (!_configuration.Enabled)
+            {
+                return Task.FromResult(PostLandingCanaryDisposition.NotTriggered);
+            }
 
-        var trigger = PostLandingCanaryTrigger.Evaluate(
-            landing.ChangedFiles,
-            _configuration.AdditionalEnginePathPrefixes);
-        if (!trigger.ShouldRun)
+            var trigger = PostLandingCanaryTrigger.Evaluate(
+                landing.ChangedFiles,
+                _configuration.AdditionalEnginePathPrefixes);
+            if (!trigger.ShouldRun)
+            {
+                return Task.FromResult(PostLandingCanaryDisposition.NotTriggered);
+            }
+
+            if (string.IsNullOrWhiteSpace(landing.LandingSha))
+            {
+                throw new InvalidOperationException(
+                    "An acceptance-engine landing did not provide its landing SHA; refusing to suppress the canary.");
+            }
+
+            var request = new PostLandingCanaryRequest(landing.LandingSha, trigger.TriggeringPaths);
+            var queued = EnsureQueuedAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+            var task = queued.ExistingReceipt is { } existing
+                ? Task.FromResult(ReceiptDisposition(existing))
+                : Task.Run(() => RunQueuedAsync(request, CancellationToken.None));
+            return ObservePostLandingTaskAsync(task, landing);
+        }
+        catch (Exception ex)
         {
-            return Task.FromResult(PostLandingCanaryDisposition.NotTriggered);
+            return Task.FromResult(RecordPostLandingFailure(landing, ex));
         }
-
-        if (string.IsNullOrWhiteSpace(landing.LandingSha))
-        {
-            throw new InvalidOperationException(
-                "An acceptance-engine landing did not provide its landing SHA; refusing to suppress the canary.");
-        }
-
-        var request = new PostLandingCanaryRequest(landing.LandingSha, trigger.TriggeringPaths);
-        var queued = EnsureQueuedAsync(request, CancellationToken.None).GetAwaiter().GetResult();
-        return queued.ExistingReceipt is { } existing
-            ? Task.FromResult(ReceiptDisposition(existing))
-            : Task.Run(() => RunQueuedAsync(request, CancellationToken.None));
     }
 
     internal async Task<PostLandingCanaryDisposition> RunAsync(
@@ -246,6 +252,52 @@ internal sealed class PostLandingCanaryCoordinator
             ? PostLandingCanaryDisposition.AlreadyCompleted
             : PostLandingCanaryDisposition.AlreadyCompleted;
 
+    private async Task<PostLandingCanaryDisposition> ObservePostLandingTaskAsync(
+        Task<PostLandingCanaryDisposition> task,
+        ConductorLandingReceipt landing)
+    {
+        try
+        {
+            return await task.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return RecordPostLandingFailure(landing, ex);
+        }
+    }
+
+    private PostLandingCanaryDisposition RecordPostLandingFailure(
+        ConductorLandingReceipt landing,
+        Exception exception)
+    {
+        AcceptanceEngineHealthSnapshot? snapshot = null;
+        try
+        {
+            snapshot = CircuitBreaker.SignalPostLandingFailure(
+                landing.LandingSha,
+                landing.ChangedFiles,
+                exception);
+        }
+        catch
+        {
+            // This is a post-main safety boundary. Reporting failure must never escape.
+        }
+
+        try
+        {
+            _progress(
+                $"CANARY_GATE sha={landing.LandingSha ?? "unknown"} result=failed " +
+                $"reason=infrastructure-error receipt={snapshot?.ReceiptReference ?? "in-memory-emergency-circuit"} " +
+                $"detail={exception.GetType().Name}");
+        }
+        catch
+        {
+            // Progress sinks are advisory after main has advanced.
+        }
+
+        return PostLandingCanaryDisposition.Failed;
+    }
+
     private static PostLandingCanaryEventPayload Payload(
         PostLandingCanaryRequest request,
         string detail,
@@ -308,10 +360,60 @@ internal static class PostLandingCanaryFactory
             progress: progress);
     }
 
-    internal static AcceptanceEngineCircuitBreaker CreateCircuit(OrchestratorWorkspace workspace) =>
-        new(CreateEventStore(
-            workspace,
-            ensureSchema: !File.Exists(workspace.RunEventStorePath)));
+    internal static AcceptanceEngineCircuitBreaker CreateCircuit(OrchestratorWorkspace workspace)
+    {
+        try
+        {
+            return new AcceptanceEngineCircuitBreaker(CreateEventStore(
+                workspace,
+                ensureSchema: !File.Exists(workspace.RunEventStorePath)));
+        }
+        catch when (PostLandingCanaryEmergencyCircuit.TryRead(workspace.RunEventStorePath) is not null)
+        {
+            // The emergency signal must remain readable even when the durable store cannot
+            // be opened. Defer all SQLite access; the circuit checks emergency state first.
+            return new AcceptanceEngineCircuitBreaker(CreateEventStore(workspace, ensureSchema: false));
+        }
+    }
+
+    internal static PostLandingCanaryDisposition HandleLandingAfterMainAdvanced(
+        OrchestratorWorkspace workspace,
+        ConductorLandingReceipt landing,
+        Action<string>? progress = null)
+    {
+        try
+        {
+            return CreateDefault(workspace, progress).HandleLanding(landing);
+        }
+        catch (Exception ex)
+        {
+            var detail =
+                $"Post-landing canary initialization failed after main advanced: {ex.GetType().Name}: {ex.Message}";
+            try
+            {
+                PostLandingCanaryEmergencyCircuit.Signal(
+                    workspace.RunEventStorePath,
+                    landing.LandingSha,
+                    detail,
+                    DateTimeOffset.UtcNow);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                progress?.Invoke(
+                    $"CANARY_GATE sha={landing.LandingSha ?? "unknown"} result=failed " +
+                    $"reason=infrastructure-error receipt=in-memory-emergency-circuit detail={ex.GetType().Name}");
+            }
+            catch
+            {
+            }
+
+            return PostLandingCanaryDisposition.Failed;
+        }
+    }
 
     internal static string? BuildMutationBlockReason(OrchestratorWorkspace workspace)
     {
@@ -334,36 +436,38 @@ internal static class PostLandingCanaryFactory
 
 internal sealed class PostLandingCanarySerializationLease : IDisposable
 {
-    private readonly Semaphore _semaphore;
+    private readonly FileStream _lockStream;
     private bool _disposed;
 
-    private PostLandingCanarySerializationLease(Semaphore semaphore)
+    private PostLandingCanarySerializationLease(FileStream lockStream)
     {
-        _semaphore = semaphore;
+        _lockStream = lockStream;
     }
 
     internal static async Task<PostLandingCanarySerializationLease> AcquireAsync(
         string identity,
         CancellationToken cancellationToken)
     {
-        var hash = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(identity))))[..24];
-        var name = $"mcg-post-landing-canary-{hash}";
-        var semaphore = new Semaphore(1, 1, name);
-        try
+        var lockPath = Path.GetFullPath(identity) + ".post-landing-canary.lock";
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        while (true)
         {
-            while (!semaphore.WaitOne(TimeSpan.FromMilliseconds(100)))
+            cancellationToken.ThrowIfCancellationRequested();
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                await Task.Yield();
+                var stream = new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.None);
+                return new PostLandingCanarySerializationLease(stream);
             }
-
-            return new PostLandingCanarySerializationLease(semaphore);
-        }
-        catch
-        {
-            semaphore.Dispose();
-            throw;
+            catch (IOException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -375,7 +479,6 @@ internal sealed class PostLandingCanarySerializationLease : IDisposable
         }
 
         _disposed = true;
-        _semaphore.Release();
-        _semaphore.Dispose();
+        _lockStream.Dispose();
     }
 }

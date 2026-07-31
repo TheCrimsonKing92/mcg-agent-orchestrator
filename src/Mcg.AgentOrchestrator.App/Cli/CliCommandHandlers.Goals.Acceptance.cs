@@ -479,13 +479,10 @@ private static void RunPostLandingCanary(
     IReadOnlyList<string> changedFiles)
 {
     var landingSha = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
-    if (string.IsNullOrWhiteSpace(landingSha))
-    {
-        throw new InvalidOperationException("Post-landing canary could not resolve the merged main SHA.");
-    }
-
-    PostLandingCanaryFactory.CreateDefault(context.Workspace)
-        .HandleLanding(new ConductorLandingReceipt(goal.Id.Value, changedFiles, landingSha));
+    PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(
+        context.Workspace,
+        new ConductorLandingReceipt(goal.Id.Value, changedFiles, landingSha),
+        Console.WriteLine);
 }
 
 private static DotnetBuildEnvironmentLease SelectGoalBuildPermit(

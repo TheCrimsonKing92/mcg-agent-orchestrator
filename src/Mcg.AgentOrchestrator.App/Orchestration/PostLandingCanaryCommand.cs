@@ -14,7 +14,10 @@ internal static class PostLandingCanaryCommand
     internal const string SubcommandName = "__post-landing-canary";
     internal const string ResultPrefix = "CANARY_RESULT ";
 
-    internal static int Run(IReadOnlyList<string> args)
+    internal static int Run(
+        IReadOnlyList<string> args,
+        IGoalAcceptanceVerifier? acceptanceVerifier = null,
+        Func<IReadOnlyList<string>, int>? completedTestCounter = null)
     {
         if (args.Count != 2 || !args[0].Equals(SubcommandName, StringComparison.Ordinal))
         {
@@ -25,16 +28,17 @@ internal static class PostLandingCanaryCommand
         PostLandingCanaryProbeResult probe;
         try
         {
-            var verification = new GoalAcceptanceVerifier()
+            var verification = (acceptanceVerifier ?? new GoalAcceptanceVerifier())
                 .RunAsync(
                     args[1],
                     goalId: null,
                     changedFiles: ["tests/Mcg.AgentOrchestrator.Core.Tests/CanaryTests.cs"])
                 .GetAwaiter()
                 .GetResult();
-            var executedTestCount = TestCoverageInvariant
-                .ReadCompletedTests(verification.TestResultPaths ?? [])
-                .Count;
+            var resultPaths = verification.TestResultPaths ?? [];
+            var executedTestCount = completedTestCounter is null
+                ? TestCoverageInvariant.ReadCompletedTests(resultPaths).Count
+                : completedTestCounter(resultPaths);
             probe = verification.Passed && executedTestCount > 0
                 ? new PostLandingCanaryProbeResult(
                     true,
@@ -69,7 +73,7 @@ internal static class PostLandingCanaryCommand
         return probe.Green ? 0 : 1;
     }
 
-    private static PostLandingCanaryFailureReason ClassifyFailure(AcceptanceVerificationResult verification)
+    internal static PostLandingCanaryFailureReason ClassifyFailure(AcceptanceVerificationResult verification)
     {
         if (verification.Checks is null or { Count: 0 } ||
             verification.Checks.Any(check =>

@@ -27,7 +27,7 @@ public static class AcceptanceEngineSurfaceRegistry
         new("post-landing-canary", [
             "src/Mcg.AgentOrchestrator.App/Orchestration/PostLandingCanary",
             "src/Mcg.AgentOrchestrator.Core/Application/PostLandingCanaryTrigger",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/canary-fixture"
+            "tests/canary-fixture"
         ]),
         new("acceptance-manifest", ["config/acceptance-manifest.json"])
     ];

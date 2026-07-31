@@ -74,17 +74,13 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
                     ?? throw new InvalidOperationException(
                         "Workspace merge advanced main without an authoritative changed-file receipt.");
                 var landingSha = GitCli.Run(executionDirectory, "rev-parse", "HEAD");
-                if (!landingSha.Succeeded || string.IsNullOrWhiteSpace(landingSha.Output))
-                {
-                    throw new InvalidOperationException(
-                        $"Post-landing canary could not resolve the merged main SHA: {landingSha.Error}");
-                }
-
-                PostLandingCanaryFactory.CreateDefault(context.Workspace)
-                    .HandleLanding(new ConductorLandingReceipt(
+                PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(
+                    context.Workspace,
+                    new ConductorLandingReceipt(
                         goal.Id.Value,
                         mergeChangedFiles,
-                        landingSha.Output.Trim()));
+                        landingSha.Succeeded ? landingSha.Output.Trim() : null),
+                    Console.WriteLine);
             }
             return false;
 

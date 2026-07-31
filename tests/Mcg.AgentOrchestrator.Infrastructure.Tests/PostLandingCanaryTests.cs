@@ -23,7 +23,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttemptArtifactCustody.cs",
             "src/Mcg.AgentOrchestrator.App/Orchestration/PostLandingCanaryCoordinator.cs",
             "src/Mcg.AgentOrchestrator.Core/Application/PostLandingCanaryTrigger.cs",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/canary-fixture/README.md",
+            "tests/canary-fixture/global.json",
             "config/acceptance-manifest.json"
         };
 
@@ -44,6 +44,11 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             AcceptanceEngineSurfaceRegistry.Surfaces.Select(surface => surface.Name));
         foreach (var path in triggering)
         {
+            if (path.StartsWith("tests/canary-fixture/", StringComparison.Ordinal))
+            {
+                Assert.True(File.Exists(Path.Combine(FindRepoRoot(), path)), $"Missing watched fixture path: {path}");
+            }
+
             var result = PostLandingCanaryTrigger.Evaluate([path]);
             Assert.True(result.ShouldRun, path);
             Assert.Equal(path, Assert.Single(result.TriggeringPaths));
@@ -51,6 +56,101 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
         Assert.False(PostLandingCanaryTrigger.Evaluate(
             ["src/Mcg.AgentOrchestrator.App/Dashboard/DashboardHost.cs"]).ShouldRun);
+    }
+
+    [Xunit.Fact(DisplayName = "Canary command uses injected verifier and rejects an accept verdict with an empty receipt")]
+    public void CanaryCommandRequiresExecutedReceiptFromInjectedVerifier()
+    {
+        var acceptedVerifier = new FakeAcceptanceVerifier(new AcceptanceVerificationResult(
+            Passed: true,
+            Skipped: false,
+            ExitCode: 0,
+            OutputTail: null,
+            TestResultPaths: ["injected.trx"]));
+        var accepted = RunCanaryCommand(acceptedVerifier, executedTestCount: 3);
+
+        Assert.Equal(0, accepted.ExitCode);
+        Assert.True(accepted.Probe.Green);
+        Assert.Null(accepted.Probe.FailureReason);
+        Assert.Equal(3, accepted.Probe.ExecutedTestCount);
+        Assert.Equal("fixture-root", acceptedVerifier.WorktreePath);
+        Assert.Equal(
+            ["tests/Mcg.AgentOrchestrator.Core.Tests/CanaryTests.cs"],
+            acceptedVerifier.ChangedFiles);
+
+        var emptyVerifier = new FakeAcceptanceVerifier(new AcceptanceVerificationResult(
+            Passed: true,
+            Skipped: false,
+            ExitCode: 0,
+            OutputTail: null,
+            TestResultPaths: []));
+        var empty = RunCanaryCommand(emptyVerifier, executedTestCount: 0);
+
+        Assert.Equal(1, empty.ExitCode);
+        Assert.False(empty.Probe.Green);
+        Assert.Equal(PostLandingCanaryFailureReason.EmptyReceipt, empty.Probe.FailureReason);
+        Assert.Equal(0, empty.Probe.ExecutedTestCount);
+    }
+
+    [Xunit.Fact(DisplayName = "Canary command classifies missing and environmental checks as infrastructure failures")]
+    public void CanaryCommandClassifiesRejectAndInfrastructureFailures()
+    {
+        var noChecks = new AcceptanceVerificationResult(false, false, 1, "no checks");
+        var interference = new AcceptanceVerificationResult(
+            false,
+            false,
+            1,
+            "slot interference",
+            Checks:
+            [
+                new AcceptanceCheckResult(
+                    "structural coverage",
+                    false,
+                    1,
+                    "interference",
+                    FailureClassification: AcceptanceFailureClassifications.GateEnvironmentInterference)
+            ]);
+        var productReject = new AcceptanceVerificationResult(
+            false,
+            false,
+            1,
+            "real rejection",
+            Checks: [new AcceptanceCheckResult("core tests", false, 1, "failed")]);
+
+        Assert.Equal(
+            PostLandingCanaryFailureReason.InfrastructureError,
+            PostLandingCanaryCommand.ClassifyFailure(noChecks));
+        Assert.Equal(
+            PostLandingCanaryFailureReason.InfrastructureError,
+            PostLandingCanaryCommand.ClassifyFailure(interference));
+        Assert.Equal(
+            PostLandingCanaryFailureReason.Reject,
+            PostLandingCanaryCommand.ClassifyFailure(productReject));
+    }
+
+    [Xunit.Fact(DisplayName = "Portable file lease serializes canaries without named OS semaphores")]
+    public async Task PortableFileLeaseSerializesConcurrentCanaries()
+    {
+        using var fixture = new CanaryTestFixture();
+        using var first = await PostLandingCanarySerializationLease.AcquireAsync(
+            fixture.DbPath,
+            CancellationToken.None);
+        var secondTask = PostLandingCanarySerializationLease.AcquireAsync(
+            fixture.DbPath,
+            CancellationToken.None);
+
+        await Task.Delay(250);
+        Assert.False(secondTask.IsCompleted);
+
+        first.Dispose();
+        using var second = await secondTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(File.ReadAllText(Path.Combine(
+                FindRepoRoot(),
+                "src",
+                "Mcg.AgentOrchestrator.App",
+                "Orchestration",
+                "PostLandingCanaryCoordinator.cs"))
+            .Contains("new Semaphore(", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "Landing launch persists Pending and returns without waiting for the canary")]
@@ -368,12 +468,46 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("driver.LandingMutationBlocker", conductor, StringComparison.Ordinal);
         Assert.Contains("RunPostLandingCanary(context, goal, landingChangedFiles)", acceptance, StringComparison.Ordinal);
         Assert.Contains("BuildMutationBlockReason(context.Workspace)", acceptance, StringComparison.Ordinal);
-        Assert.Contains("PostLandingCanaryFactory.CreateDefault(context.Workspace)", workspace, StringComparison.Ordinal);
+        Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", workspace, StringComparison.Ordinal);
         Assert.Contains("BuildMutationBlockReason(context.Workspace)", workspace, StringComparison.Ordinal);
         Assert.Contains("var mergeChangedFiles = merge.ChangedFiles", workspace, StringComparison.Ordinal);
-        Assert.Contains(".HandleLanding(new ConductorLandingReceipt(", workspace, StringComparison.Ordinal);
         Assert.Contains("mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason", goals, StringComparison.Ordinal);
         Assert.Contains("var landChangedFiles = landResult.ChangedFiles", goals, StringComparison.Ordinal);
+        Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", goals, StringComparison.Ordinal);
+        Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", acceptance, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Post-main factory failure is nonthrowing and leaves acceptance unhealthy")]
+    public void PostMainFactoryFailureSignalsEmergencyCircuit()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-canary-factory-failure", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        Directory.CreateDirectory(workspace.RunEventStorePath);
+        try
+        {
+            var disposition = PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(
+                workspace,
+                new ConductorLandingReceipt(
+                    "goal-factory-failure",
+                    ["src/Mcg.AgentOrchestrator.App/Orchestration/PostLandingCanaryCoordinator.cs"],
+                    "sha-factory-failure"),
+                _ => throw new InvalidOperationException("progress sink failed"));
+
+            Assert.Equal(PostLandingCanaryDisposition.Failed, disposition);
+            Assert.Equal(
+                AcceptanceEngineHealth.Unhealthy,
+                PostLandingCanaryFactory.CreateCircuit(workspace).Read().Health);
+            Assert.Contains(
+                "acceptance engine circuit is Unhealthy",
+                PostLandingCanaryFactory.BuildMutationBlockReason(workspace),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            PostLandingCanaryEmergencyCircuit.Clear(workspace.RunEventStorePath);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
     }
 
     [Xunit.Fact(DisplayName = "Acceptance-engine CLI reports and explicitly clears the typed circuit")]
@@ -547,6 +681,25 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         transaction.Commit();
     }
 
+    private static (int ExitCode, PostLandingCanaryProbeResult Probe) RunCanaryCommand(
+        FakeAcceptanceVerifier verifier,
+        int executedTestCount)
+    {
+        var exitCode = -1;
+        var output = CaptureConsole(() =>
+            exitCode = PostLandingCanaryCommand.Run(
+                [PostLandingCanaryCommand.SubcommandName, "fixture-root"],
+                verifier,
+                _ => executedTestCount));
+        var resultLine = output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Single(line => line.StartsWith(PostLandingCanaryCommand.ResultPrefix, StringComparison.Ordinal));
+        var probe = JsonSerializer.Deserialize<PostLandingCanaryProbeResult>(
+            resultLine[PostLandingCanaryCommand.ResultPrefix.Length..],
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        return (exitCode, Assert.IsType<PostLandingCanaryProbeResult>(probe));
+    }
+
     private sealed class FakeRunner(
         Func<PostLandingCanaryRequest, CancellationToken, Task<PostLandingCanaryOutcome>> run)
         : IPostLandingCanaryRunner
@@ -555,6 +708,35 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             PostLandingCanaryRequest request,
             CancellationToken cancellationToken) =>
             run(request, cancellationToken);
+    }
+
+    private sealed class FakeAcceptanceVerifier(AcceptanceVerificationResult result)
+        : IGoalAcceptanceVerifier
+    {
+        internal string? WorktreePath { get; private set; }
+        internal IReadOnlyList<string>? ChangedFiles { get; private set; }
+
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default)
+        {
+            WorktreePath = worktreePath;
+            ChangedFiles = changedFiles;
+            return Task.FromResult(result);
+        }
+
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+            string worktreePath,
+            GoalId? goalId,
+            string request,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class CanaryTestFixture : IDisposable

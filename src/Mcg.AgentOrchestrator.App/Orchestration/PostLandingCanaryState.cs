@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -349,6 +350,11 @@ internal sealed class AcceptanceEngineCircuitBreaker
     internal async Task<AcceptanceEngineHealthSnapshot> ReadAsync(
         CancellationToken cancellationToken = default)
     {
+        if (PostLandingCanaryEmergencyCircuit.TryRead(_events.Identity) is { } emergency)
+        {
+            return emergency;
+        }
+
         var events = await _events.ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false);
         var clear = events.FirstOrDefault(item => item.Kind == PostLandingCanaryEventKind.Cleared);
         var receipts = new Dictionary<string, PostLandingCanaryEvent>(StringComparer.OrdinalIgnoreCase);
@@ -410,6 +416,52 @@ internal sealed class AcceptanceEngineCircuitBreaker
             clear?.Payload.OperatorNote);
     }
 
+    internal AcceptanceEngineHealthSnapshot SignalPostLandingFailure(
+        string? landingSha,
+        IReadOnlyList<string> triggeringPaths,
+        Exception exception)
+    {
+        var now = _utcNow();
+        var detail =
+            $"Post-landing canary could not persist or execute after main advanced: {exception.GetType().Name}: {exception.Message}";
+        var snapshot = PostLandingCanaryEmergencyCircuit.Signal(
+            _events.Identity,
+            landingSha,
+            detail,
+            now);
+        try
+        {
+            var durableLandingSha = string.IsNullOrWhiteSpace(landingSha)
+                ? $"missing-sha-{Guid.NewGuid():N}"
+                : landingSha.Trim();
+            var receipt = _events.AppendOnceAsync(
+                    PostLandingCanaryEventKind.Failed,
+                    new PostLandingCanaryEventPayload(
+                        PostLandingCanaryEventPayload.CanaryTag,
+                        durableLandingSha,
+                        triggeringPaths,
+                        FailureReason: "infrastructure-error",
+                        ExecutedTestCount: 0,
+                        Detail: detail,
+                        StartedAt: null,
+                        CompletedAt: now),
+                    PostLandingCanaryEventIds.Receipt(durableLandingSha),
+                    now,
+                    CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            snapshot = snapshot with { ReceiptReference = $"run-event:{receipt.Event.Sequence}" };
+            PostLandingCanaryEmergencyCircuit.Signal(_events.Identity, snapshot);
+        }
+        catch
+        {
+            // SQLite/run-event failure is the condition being reported. The process-local
+            // emergency circuit remains the fail-closed signal for subsequent acceptance.
+        }
+
+        return snapshot;
+    }
+
     internal AcceptanceEngineHealthSnapshot Clear(string operatorNote)
     {
         if (string.IsNullOrWhiteSpace(operatorNote))
@@ -434,6 +486,45 @@ internal sealed class AcceptanceEngineCircuitBreaker
                 now)
             .GetAwaiter()
             .GetResult();
+        PostLandingCanaryEmergencyCircuit.Clear(_events.Identity);
         return Read();
     }
+}
+
+internal static class PostLandingCanaryEmergencyCircuit
+{
+    private static readonly ConcurrentDictionary<string, AcceptanceEngineHealthSnapshot> Failures =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    internal static AcceptanceEngineHealthSnapshot Signal(
+        string identity,
+        string? landingSha,
+        string detail,
+        DateTimeOffset now)
+    {
+        var snapshot = new AcceptanceEngineHealthSnapshot(
+            AcceptanceEngineHealth.Unhealthy,
+            string.IsNullOrWhiteSpace(landingSha) ? null : landingSha.Trim(),
+            "infrastructure-error",
+            null,
+            now,
+            detail);
+        return Signal(identity, snapshot);
+    }
+
+    internal static AcceptanceEngineHealthSnapshot Signal(
+        string identity,
+        AcceptanceEngineHealthSnapshot snapshot)
+    {
+        Failures[Path.GetFullPath(identity)] = snapshot;
+        return snapshot;
+    }
+
+    internal static AcceptanceEngineHealthSnapshot? TryRead(string identity) =>
+        Failures.TryGetValue(Path.GetFullPath(identity), out var snapshot)
+            ? snapshot
+            : null;
+
+    internal static void Clear(string identity) =>
+        Failures.TryRemove(Path.GetFullPath(identity), out _);
 }

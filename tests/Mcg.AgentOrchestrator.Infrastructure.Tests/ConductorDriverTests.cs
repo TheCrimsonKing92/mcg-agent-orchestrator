@@ -1815,6 +1815,65 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.Verified, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
     }
 
+    [Xunit.Theory(DisplayName = "Post-landing canary sink failure cannot skip successful-landing callbacks")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void PostLandingCanaryFailureCannotSkipSuccessfulLandingCallbacks(bool breakSqliteStore)
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var root = CreateTempDirectory();
+        var dbPath = Path.Combine(root, "run-events.db");
+        if (breakSqliteStore)
+        {
+            Directory.CreateDirectory(dbPath);
+        }
+
+        var events = new PostLandingCanaryEventStore(
+            new SqliteRunEventStore(dbPath, ensureSchema: !breakSqliteStore),
+            dbPath);
+        var circuit = new AcceptanceEngineCircuitBreaker(events);
+        var coordinator = new PostLandingCanaryCoordinator(
+            new PostLandingCanaryConfiguration(Enabled: true, TimeoutSeconds: 10, AdditionalEnginePathPrefixes: []),
+            new PostLandingCanaryRunner(
+                root,
+                runOverride: (_, _) => Task.FromResult(PostLandingCanaryOutcome.Passed(1, "unused"))),
+            events,
+            circuit,
+            progress: _ => { });
+        var afterSuccessfulLandingCalled = false;
+        var landingSha = breakSqliteStore ? "sha-broken-sqlite" : null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptance: _ => true,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            land: g => new LandingResult(
+                g.Id.Value,
+                g.Id.Value[..8],
+                new LandingDecision.Promote(),
+                "integration",
+                true,
+                "Landed",
+                landingSha,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/PostLandingCanaryCoordinator.cs"]),
+            afterSuccessfulLanding: (_, _) => afterSuccessfulLandingCalled = true);
+        driver.SuccessfulLandingSink = receipt => coordinator.HandleLanding(receipt);
+
+        try
+        {
+            var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+            Assert.True(afterSuccessfulLandingCalled);
+            Assert.Equal(AcceptanceEngineHealth.Unhealthy, circuit.Read().Health);
+        }
+        finally
+        {
+            PostLandingCanaryEmergencyCircuit.Clear(dbPath);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver rereads circuit before parallel completion can invoke land")]
     public void ConductorDriverHoldsAtLandingMutationBoundary()
     {
