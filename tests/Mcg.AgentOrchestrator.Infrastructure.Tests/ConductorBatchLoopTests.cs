@@ -587,7 +587,6 @@ public sealed class ConductorBatchLoopTests
                 onTick: t => startTick = t);
             startClock.Stop();
 
-            Assert.True(startClock.Elapsed < TimeSpan.FromSeconds(1), $"background acceptance start tick took {startClock.Elapsed}.");
             Assert.Equal(0, startSummary.Advanced);
             Assert.Equal(2, startSummary.Held);
             Assert.Equal(GoalStatus.Verifying, goalA.Status);

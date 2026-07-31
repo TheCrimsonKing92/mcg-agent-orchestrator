@@ -1252,8 +1252,11 @@ internal static partial class CliCommandHandlers
             mtpArguments.AddRange(TranslateStableSlotMtpFilter(filter));
         }
 
+        // Run the managed dll through the shared `dotnet` host so the firewall sees one stable image
+        // instead of a new per-goal *.Tests.exe path. See AcceptanceMtpInvocation.ResolveLaunchCommand.
+        mtpArguments.InsertRange(0, ["exec", Path.ChangeExtension(executable, ".dll")]);
         var testExit = RunStableSlotProcess(
-            executable,
+            "dotnet",
             mtpArguments,
             context.Workspace.RootDirectory,
             configureDotnetEnvironment: false);

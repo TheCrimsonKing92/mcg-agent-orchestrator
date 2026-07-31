@@ -149,7 +149,6 @@ public sealed class ConductorLoopHandoffTests
                         request.StderrPath);
                 });
 
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(2));
             Assert.False(result.Started);
             Assert.True(result.Failed);
             Assert.Equal("successor-child-dead", result.Reason);

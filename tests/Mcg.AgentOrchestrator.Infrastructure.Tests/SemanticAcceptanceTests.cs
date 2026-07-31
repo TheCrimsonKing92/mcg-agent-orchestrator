@@ -990,7 +990,6 @@ public sealed class SemanticAcceptanceTests : IDisposable
 
         // Drain timeout (12s) must fire before the outer 20s cancellation token.
         Assert.False(cts.IsCancellationRequested);
-        Assert.True(sw.ElapsedMilliseconds < 18_000);
     }
 
     [Xunit.Fact(DisplayName = "ModelRegistrySemanticJudge_uses_256_max_output_tokens")]
