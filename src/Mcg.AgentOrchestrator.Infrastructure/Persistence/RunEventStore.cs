@@ -170,6 +170,68 @@ public sealed class SqliteRunEventStore : IRunEventStore
         }, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<RunEventRecord>> ReadByTypeSinceAsync(
+        string eventType,
+        string? operation = null,
+        long afterSequence = 0,
+        int maxCount = 500,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventType);
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = operation is null
+                ? """
+                  SELECT seq, event_id, occurred_at, event_type, goal_id, operation, status, detail, payload_json
+                  FROM run_events
+                  WHERE event_type = $event_type
+                    AND seq > $after_sequence
+                  ORDER BY seq ASC
+                  LIMIT $max_count
+                  """
+                : """
+                  SELECT seq, event_id, occurred_at, event_type, goal_id, operation, status, detail, payload_json
+                  FROM run_events
+                  WHERE event_type = $event_type
+                    AND operation = $operation
+                    AND seq > $after_sequence
+                  ORDER BY seq ASC
+                  LIMIT $max_count
+                  """;
+            cmd.Parameters.AddWithValue("$event_type", eventType);
+            if (operation is not null)
+            {
+                cmd.Parameters.AddWithValue("$operation", operation);
+            }
+            cmd.Parameters.AddWithValue("$after_sequence", Math.Max(0, afterSequence));
+            cmd.Parameters.AddWithValue("$max_count", Math.Clamp(maxCount, 1, 5000));
+            return await ReadRecordsAsync(cmd, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+    }
+
+    public async Task<RunEventRecord?> ReadByEventIdAsync(
+        string eventId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(eventId);
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT seq, event_id, occurred_at, event_type, goal_id, operation, status, detail, payload_json
+                FROM run_events
+                WHERE event_id = $event_id
+                LIMIT 1
+                """;
+            cmd.Parameters.AddWithValue("$event_id", eventId);
+            var records = await ReadRecordsAsync(cmd, cancellationToken).ConfigureAwait(false);
+            return records.Count == 0 ? null : records[0];
+        }, cancellationToken);
+    }
+
     public async Task<RunEventRecord?> ReadLatestAsync(
         string eventType,
         string? operation = null,
@@ -179,32 +241,30 @@ public sealed class SqliteRunEventStore : IRunEventStore
         {
             await using var conn = OpenConnection();
             await using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                SELECT seq, event_id, occurred_at, event_type, goal_id, operation, status, detail, payload_json
-                FROM run_events
-                WHERE event_type = $event_type
-                  AND ($operation IS NULL OR operation = $operation)
-                ORDER BY seq DESC
-                LIMIT 1
-                """;
+            cmd.CommandText = operation is null
+                ? """
+                  SELECT seq, event_id, occurred_at, event_type, goal_id, operation, status, detail, payload_json
+                  FROM run_events
+                  WHERE event_type = $event_type
+                  ORDER BY seq DESC
+                  LIMIT 1
+                  """
+                : """
+                  SELECT seq, event_id, occurred_at, event_type, goal_id, operation, status, detail, payload_json
+                  FROM run_events
+                  WHERE event_type = $event_type
+                    AND operation = $operation
+                  ORDER BY seq DESC
+                  LIMIT 1
+                  """;
             cmd.Parameters.AddWithValue("$event_type", eventType);
-            cmd.Parameters.AddWithValue("$operation", (object?)operation ?? DBNull.Value);
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            if (operation is not null)
             {
-                return null;
+                cmd.Parameters.AddWithValue("$operation", operation);
             }
 
-            return new RunEventRecord(
-                reader.GetInt64(0),
-                reader.GetString(1),
-                DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture),
-                reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetString(4),
-                reader.IsDBNull(5) ? null : reader.GetString(5),
-                reader.IsDBNull(6) ? null : reader.GetString(6),
-                reader.IsDBNull(7) ? null : reader.GetString(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8));
+            var records = await ReadRecordsAsync(cmd, cancellationToken).ConfigureAwait(false);
+            return records.Count == 0 ? null : records[0];
         }, cancellationToken);
     }
 
@@ -311,6 +371,30 @@ public sealed class SqliteRunEventStore : IRunEventStore
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_run_events_goal_seq ON run_events(goal_id, seq)");
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_run_events_type_seq ON run_events(event_type, seq)");
+        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_run_events_type_operation_seq ON run_events(event_type, operation, seq)");
+    }
+
+    private static async Task<IReadOnlyList<RunEventRecord>> ReadRecordsAsync(
+        SqliteCommand cmd,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<RunEventRecord>();
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(new RunEventRecord(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5),
+                reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8)));
+        }
+
+        return results;
     }
 
     private async Task<ConductorTickPruneResult> PruneOversizedConductorTicksAsync(

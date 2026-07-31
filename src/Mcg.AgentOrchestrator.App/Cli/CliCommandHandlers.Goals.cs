@@ -915,7 +915,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.CurrentGoal,
                 context.Workspace,
                 context.Channel,
-                eventWriter: context.EventWriter);
+                eventWriter: context.EventWriter,
+                mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
             Console.WriteLine($"Land {landResult.GoalPrefix}: {landResult.Message}");
             Console.WriteLine($"  decision: {(landResult.Decision is LandingDecision.Promote ? "Promote" : $"Escalate({((LandingDecision.Escalate)landResult.Decision).Reason})")}");
             Console.WriteLine($"  integration-branch: {landResult.IntegrationBranch}");

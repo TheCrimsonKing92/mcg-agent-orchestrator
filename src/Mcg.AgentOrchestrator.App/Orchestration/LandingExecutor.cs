@@ -20,6 +20,7 @@ internal static class LandingExecutor
     public const string IntegrationBranchName = "integration";
     private const string TempWorktreeDirName = ".orchestrator-integration-tmp";
     private const string OwnershipHoldReasonPrefix = "ownership-denylist hold";
+    private const string MutationHoldReasonPrefix = "landing mutation blocked:";
     internal static Func<string, string[], GitCli.GitResult> GitRunner { get; set; } =
         (workingDirectory, args) => GitCli.Run(workingDirectory, args);
 
@@ -29,7 +30,8 @@ internal static class LandingExecutor
         OrchestratorWorkspace workspace,
         IOperatorChannel? channel = null,
         ConductorAutonomyPolicy? policy = null,
-        IGoalLifecycleEventWriter? eventWriter = null)
+        IGoalLifecycleEventWriter? eventWriter = null,
+        Func<string?>? mutationBlocker = null)
     {
         var executionDirectory = workspace.ExecutionDirectory;
         var goalPrefix = goal.Id.Value[..8];
@@ -54,7 +56,22 @@ internal static class LandingExecutor
         bool mergeSucceeded;
         try
         {
-            mergeSucceeded = MergeGoalIntoIntegration(executionDirectory, tempPath, goalBranch);
+            var blockReason = mutationBlocker?.Invoke();
+            if (!string.IsNullOrWhiteSpace(blockReason))
+            {
+                return BuildMutationBlockedResult(goal, goalPrefix, blockReason);
+            }
+
+            mergeSucceeded = MergeGoalIntoIntegration(
+                executionDirectory,
+                tempPath,
+                goalBranch,
+                mutationBlocker,
+                out var integrationBlockReason);
+            if (!string.IsNullOrWhiteSpace(integrationBlockReason))
+            {
+                return BuildMutationBlockedResult(goal, goalPrefix, integrationBlockReason);
+            }
         }
         finally
         {
@@ -133,6 +150,16 @@ internal static class LandingExecutor
                 mergeCommitSha,
                 "LandingExecutor");
 
+            var blockReason = mutationBlocker?.Invoke();
+            if (!string.IsNullOrWhiteSpace(blockReason))
+            {
+                GoalOperationJournal.TombstoneLandingIntent(
+                    executionDirectory,
+                    goal,
+                    $"landing mutation blocked after intent write: {blockReason}");
+                return BuildMutationBlockedResult(goal, goalPrefix, blockReason);
+            }
+
             var merge = RunGit(executionDirectory, "merge", "--ff-only", IntegrationBranchName);
             if (merge.ExitCode != 0)
             {
@@ -180,8 +207,11 @@ internal static class LandingExecutor
     private static bool MergeGoalIntoIntegration(
         string executionDirectory,
         string tempPath,
-        string goalBranch)
+        string goalBranch,
+        Func<string?>? mutationBlocker,
+        out string? blockReason)
     {
+        blockReason = null;
         var add = RunGit(executionDirectory, "worktree", "add", tempPath, IntegrationBranchName);
         if (add.ExitCode != 0)
         {
@@ -189,8 +219,29 @@ internal static class LandingExecutor
                 $"Failed to create integration worktree at '{tempPath}': {add.Error}");
         }
 
+        blockReason = mutationBlocker?.Invoke();
+        if (!string.IsNullOrWhiteSpace(blockReason))
+        {
+            return false;
+        }
+
         var merge = RunGit(tempPath, "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}");
         return merge.ExitCode == 0;
+    }
+
+    private static LandingResult BuildMutationBlockedResult(
+        Goal goal,
+        string goalPrefix,
+        string blockReason)
+    {
+        var reason = $"{MutationHoldReasonPrefix} {blockReason}";
+        return new LandingResult(
+            goal.Id.Value,
+            goalPrefix,
+            new LandingDecision.Escalate(reason),
+            IntegrationBranchName,
+            MainAdvanced: false,
+            $"Landing held before merge: {blockReason}");
     }
 
     private static bool IsIntegrationFastForwardableIntoMain(string executionDirectory)
@@ -257,6 +308,9 @@ internal static class LandingExecutor
 
     internal static bool IsOwnershipHoldEscalation(string reason) =>
         reason.StartsWith(OwnershipHoldReasonPrefix, StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsMutationHoldEscalation(string reason) =>
+        reason.StartsWith(MutationHoldReasonPrefix, StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<OwnershipHoldRequest> BuildOwnershipHoldRequests(
         Goal goal,

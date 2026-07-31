@@ -77,12 +77,25 @@ public static partial class GoalWorktrees
     private static bool IsBranchAncestorOfHead(string executionDirectory, string branch, int timeoutMilliseconds) =>
         GitCli.Run(executionDirectory, timeoutMilliseconds, "merge-base", "--is-ancestor", branch, "HEAD").ExitCode == 0;
 
-    public static GoalWorktreeMergeResult? TryFastForwardMerge(string executionDirectory, GoalId goalId)
+    public static GoalWorktreeMergeResult? TryFastForwardMerge(
+        string executionDirectory,
+        GoalId goalId,
+        Func<string?>? mutationBlocker = null)
     {
         var branch = BranchName(goalId);
         if (!BranchExists(executionDirectory, branch))
         {
             return null;
+        }
+
+        var blockReason = mutationBlocker?.Invoke();
+        if (!string.IsNullOrWhiteSpace(blockReason))
+        {
+            return new GoalWorktreeMergeResult(
+                false,
+                branch,
+                $"Fast-forward blocked before merge: {blockReason}",
+                null);
         }
 
         var merge = GitCli.Run(executionDirectory, "merge", "--ff-only", branch);

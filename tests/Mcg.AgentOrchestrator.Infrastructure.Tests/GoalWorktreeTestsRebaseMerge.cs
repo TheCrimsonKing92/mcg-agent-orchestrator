@@ -46,6 +46,43 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalWorktrees rechecks mutation blocker immediately before fast-forward")]
+    public void GoalWorktreesRechecksMutationBlockerBeforeFastForward()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var path = GoalWorktrees.Ensure(repo, goalId);
+            File.WriteAllText(Path.Combine(path, "blocked-feature.txt"), "must not land");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "Blocked goal work");
+            var mainBefore = GitCli.Run(repo, "rev-parse", "HEAD").Output.Trim();
+            var checks = 0;
+
+            var merge = GoalWorktrees.TryFastForwardMerge(
+                repo,
+                goalId,
+                () =>
+                {
+                    Interlocked.Increment(ref checks);
+                    return "acceptance circuit opened after admission";
+                });
+
+            Assert.NotNull(merge);
+            Assert.False(merge!.FastForwarded);
+            Assert.Null(merge.SuggestedCommand);
+            Assert.Contains("blocked before merge", merge.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(1, checks);
+            Assert.Equal(mainBefore, GitCli.Run(repo, "rev-parse", "HEAD").Output.Trim());
+            Assert.False(File.Exists(Path.Combine(repo, "blocked-feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_suggests_manual_merge_when_branches_diverge")]
     public void GoalWorktreesSuggestsManualMergeWhenBranchesDiverge()
     {

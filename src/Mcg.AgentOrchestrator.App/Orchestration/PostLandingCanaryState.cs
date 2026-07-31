@@ -87,6 +87,17 @@ internal sealed record PostLandingCanaryEvent(
         Kind is PostLandingCanaryEventKind.Passed or PostLandingCanaryEventKind.Failed;
 }
 
+internal static class PostLandingCanaryEventIds
+{
+    internal static string Queued(string landingSha) => Build(landingSha, "queued");
+    internal static string Started(string landingSha) => Build(landingSha, "started");
+    internal static string Receipt(string landingSha) => Build(landingSha, "receipt");
+    internal static string Escalation(string landingSha) => Build(landingSha, "escalation");
+
+    private static string Build(string landingSha, string suffix) =>
+        $"post-landing-canary:{landingSha.ToLowerInvariant()}:{suffix}";
+}
+
 internal sealed class PostLandingCanaryEventStore
 {
     private const int ReadPageSize = 5000;
@@ -96,9 +107,9 @@ internal sealed class PostLandingCanaryEventStore
         PropertyNameCaseInsensitive = true
     };
 
-    private readonly IRunEventStore _store;
+    private readonly SqliteRunEventStore _store;
 
-    internal PostLandingCanaryEventStore(IRunEventStore store, string identity)
+    internal PostLandingCanaryEventStore(SqliteRunEventStore store, string identity)
     {
         _store = store;
         Identity = Path.GetFullPath(identity);
@@ -130,11 +141,11 @@ internal sealed class PostLandingCanaryEventStore
         }
         catch
         {
-            var existing = (await ReadAllAsync(cancellationToken).ConfigureAwait(false))
-                .SingleOrDefault(item => item.EventId.Equals(eventId, StringComparison.Ordinal));
-            if (existing is not null)
+            var existing = await _store.ReadByEventIdAsync(eventId, cancellationToken).ConfigureAwait(false);
+            if (existing is not null &&
+                existing.EventType.Equals(RunEventTypes.PostLandingCanary, StringComparison.Ordinal))
             {
-                return (existing, false);
+                return (Parse(existing), false);
             }
 
             throw;
@@ -148,17 +159,14 @@ internal sealed class PostLandingCanaryEventStore
         var events = new List<PostLandingCanaryEvent>();
         while (true)
         {
-            var page = await _store.ReadSinceAsync(
-                afterSequence,
-                goalId: null,
+            var page = await _store.ReadByTypeSinceAsync(
+                RunEventTypes.PostLandingCanary,
+                afterSequence: afterSequence,
                 maxCount: ReadPageSize,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
             foreach (var record in page)
             {
-                if (record.EventType.Equals(RunEventTypes.PostLandingCanary, StringComparison.Ordinal))
-                {
-                    events.Add(Parse(record));
-                }
+                events.Add(Parse(record));
             }
 
             if (page.Count < ReadPageSize)
@@ -172,23 +180,55 @@ internal sealed class PostLandingCanaryEventStore
 
     internal async Task<PostLandingCanaryEvent?> FindReceiptAsync(
         string landingSha,
-        CancellationToken cancellationToken = default) =>
-        (await ReadAllAsync(cancellationToken).ConfigureAwait(false))
-            .Where(item =>
-                item.IsReceipt &&
-                string.Equals(item.Payload.LandingSha, landingSha, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(item => item.Sequence)
-            .FirstOrDefault();
+        CancellationToken cancellationToken = default)
+    {
+        var record = await _store
+            .ReadByEventIdAsync(PostLandingCanaryEventIds.Receipt(landingSha), cancellationToken)
+            .ConfigureAwait(false);
+        return record is null ? null : Parse(record);
+    }
+
+    internal async Task<IReadOnlyList<PostLandingCanaryEvent>> ReadProjectionEventsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var clearRecord = await _store
+            .ReadLatestAsync(RunEventTypes.PostLandingCanary, "clear", cancellationToken)
+            .ConfigureAwait(false);
+        var afterSequence = clearRecord?.Sequence ?? 0L;
+        var events = new List<PostLandingCanaryEvent>();
+        if (clearRecord is not null)
+        {
+            events.Add(Parse(clearRecord));
+        }
+
+        while (true)
+        {
+            var page = await _store.ReadByTypeSinceAsync(
+                RunEventTypes.PostLandingCanary,
+                afterSequence: afterSequence,
+                maxCount: ReadPageSize,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            events.AddRange(page.Select(Parse));
+            if (page.Count < ReadPageSize)
+            {
+                var latestClearSequence = events
+                    .Where(item => item.Kind == PostLandingCanaryEventKind.Cleared)
+                    .Select(item => item.Sequence)
+                    .DefaultIfEmpty(0)
+                    .Max();
+                return events
+                    .Where(item => item.Sequence >= latestClearSequence)
+                    .ToArray();
+            }
+
+            afterSequence = page[^1].Sequence;
+        }
+    }
 
     internal async Task<PostLandingCanaryEvent?> FindEarliestUnreceiptedQueueAsync(
         CancellationToken cancellationToken = default)
     {
-        var events = await ReadAllAsync(cancellationToken).ConfigureAwait(false);
-        var lastClearSequence = events
-            .Where(item => item.Kind == PostLandingCanaryEventKind.Cleared)
-            .Select(item => item.Sequence)
-            .DefaultIfEmpty(0)
-            .Max();
+        var events = await ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false);
         var receipted = events
             .Where(item => item.IsReceipt && !string.IsNullOrWhiteSpace(item.Payload.LandingSha))
             .Select(item => item.Payload.LandingSha!)
@@ -196,7 +236,6 @@ internal sealed class PostLandingCanaryEventStore
         return events
             .Where(item =>
                 item.Kind == PostLandingCanaryEventKind.Queued &&
-                item.Sequence > lastClearSequence &&
                 !string.IsNullOrWhiteSpace(item.Payload.LandingSha) &&
                 !receipted.Contains(item.Payload.LandingSha!))
             .OrderBy(item => item.Sequence)
@@ -310,57 +349,65 @@ internal sealed class AcceptanceEngineCircuitBreaker
     internal async Task<AcceptanceEngineHealthSnapshot> ReadAsync(
         CancellationToken cancellationToken = default)
     {
-        var health = AcceptanceEngineHealthSnapshot.Healthy(_utcNow());
-        foreach (var evt in await _events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        var events = await _events.ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false);
+        var clear = events.FirstOrDefault(item => item.Kind == PostLandingCanaryEventKind.Cleared);
+        var receipts = new Dictionary<string, PostLandingCanaryEvent>(StringComparer.OrdinalIgnoreCase);
+        PostLandingCanaryEvent? failed = null;
+        foreach (var evt in events)
         {
-            switch (evt.Kind)
+            if (!evt.IsReceipt || string.IsNullOrWhiteSpace(evt.Payload.LandingSha))
             {
-                case PostLandingCanaryEventKind.Queued:
-                case PostLandingCanaryEventKind.Started:
-                    if (health.Health != AcceptanceEngineHealth.Unhealthy)
-                    {
-                        health = new AcceptanceEngineHealthSnapshot(
-                            AcceptanceEngineHealth.Pending,
-                            evt.Payload.LandingSha,
-                            null,
-                            null,
-                            evt.OccurredAt);
-                    }
-                    break;
+                continue;
+            }
 
-                case PostLandingCanaryEventKind.Passed:
-                    if (health.Health != AcceptanceEngineHealth.Unhealthy)
-                    {
-                        health = AcceptanceEngineHealthSnapshot.Healthy(
-                            evt.OccurredAt,
-                            $"canary passed for {evt.Payload.LandingSha}; receipt=run-event:{evt.Sequence}");
-                    }
-                    break;
-
-                case PostLandingCanaryEventKind.Failed:
-                    health = new AcceptanceEngineHealthSnapshot(
-                        AcceptanceEngineHealth.Unhealthy,
-                        evt.Payload.LandingSha,
-                        evt.Payload.FailureReason ?? "infrastructure-error",
-                        $"run-event:{evt.Sequence}",
-                        evt.OccurredAt);
-                    break;
-
-                case PostLandingCanaryEventKind.Cleared:
-                    health = AcceptanceEngineHealthSnapshot.Healthy(
-                        evt.OccurredAt,
-                        evt.Payload.OperatorNote);
-                    break;
-
-                case PostLandingCanaryEventKind.Escalated:
-                    break;
-
-                default:
-                    throw new ArgumentOutOfRangeException();
+            receipts[evt.Payload.LandingSha] = evt;
+            if (evt.Kind == PostLandingCanaryEventKind.Failed)
+            {
+                failed = evt;
             }
         }
 
-        return health;
+        if (failed is not null)
+        {
+            return new AcceptanceEngineHealthSnapshot(
+                AcceptanceEngineHealth.Unhealthy,
+                failed.Payload.LandingSha,
+                failed.Payload.FailureReason ?? "infrastructure-error",
+                $"run-event:{failed.Sequence}",
+                failed.OccurredAt);
+        }
+
+        var pending = events
+            .Where(item =>
+                item.Kind is PostLandingCanaryEventKind.Queued or PostLandingCanaryEventKind.Started &&
+                !string.IsNullOrWhiteSpace(item.Payload.LandingSha) &&
+                !receipts.ContainsKey(item.Payload.LandingSha!))
+            .OrderBy(item => item.Sequence)
+            .FirstOrDefault();
+        if (pending is not null)
+        {
+            return new AcceptanceEngineHealthSnapshot(
+                AcceptanceEngineHealth.Pending,
+                pending.Payload.LandingSha,
+                null,
+                null,
+                pending.OccurredAt);
+        }
+
+        var latestPass = receipts.Values
+            .Where(item => item.Kind == PostLandingCanaryEventKind.Passed)
+            .OrderByDescending(item => item.Sequence)
+            .FirstOrDefault();
+        if (latestPass is not null)
+        {
+            return AcceptanceEngineHealthSnapshot.Healthy(
+                latestPass.OccurredAt,
+                $"canary passed for {latestPass.Payload.LandingSha}; receipt=run-event:{latestPass.Sequence}");
+        }
+
+        return AcceptanceEngineHealthSnapshot.Healthy(
+            clear?.OccurredAt ?? _utcNow(),
+            clear?.Payload.OperatorNote);
     }
 
     internal AcceptanceEngineHealthSnapshot Clear(string operatorNote)

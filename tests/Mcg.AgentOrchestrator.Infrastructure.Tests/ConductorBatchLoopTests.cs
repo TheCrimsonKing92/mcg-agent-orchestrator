@@ -155,6 +155,99 @@ public sealed class ConductorBatchLoopTests
         Assert.DoesNotContain("LOOP_RELAUNCH_SCHEDULED", output, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop keeps early-stage goals schedulable while post-landing canary is Pending")]
+    public async Task BatchLoopSchedulesEarlyGoalsWhileCanaryRunsInBackground()
+    {
+        var root = CreateTempDirectory("mcg-conductor-canary-background");
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var engineGoal = CreateVerifiedSimpleGoal(kernel, "Change acceptance engine");
+            var earlyGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                DefaultAgents(),
+                "Independent early-stage work");
+            var landed = false;
+            var earlyWorkspaceCreated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var canaryStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var releaseCanary = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var dbPath = Path.Combine(root, "run-events.db");
+            var rawStore = new SqliteRunEventStore(dbPath);
+            var events = new PostLandingCanaryEventStore(rawStore, dbPath);
+            var circuit = new AcceptanceEngineCircuitBreaker(events);
+            var coordinator = new PostLandingCanaryCoordinator(
+                new PostLandingCanaryConfiguration(true, 10, []),
+                new PostLandingCanaryRunner(
+                    root,
+                    runOverride: async (_, cancellationToken) =>
+                    {
+                        canaryStarted.TrySetResult();
+                        await releaseCanary.Task.WaitAsync(cancellationToken);
+                        return PostLandingCanaryOutcome.Passed(1, "background pass");
+                    }),
+                events,
+                circuit);
+            var driver = MakeDriver(
+                getFacts: goal =>
+                    goal.Id == engineGoal.Id
+                        ? landed
+                            ? new GoalLifecycleFacts(
+                                WorkspaceExists: true,
+                                IsMerged: true,
+                                IsRecorded: true,
+                                IsCleanedUp: true)
+                            : new GoalLifecycleFacts(WorkspaceExists: true)
+                        : GoalLifecycleFacts.None,
+                createWorkspace: goal =>
+                {
+                    if (goal.Id == earlyGoal.Id)
+                    {
+                        earlyWorkspaceCreated.TrySetResult();
+                    }
+
+                    return "/tmp/workspace";
+                },
+                land: candidate =>
+                {
+                    landed = true;
+                    return new LandingResult(
+                        candidate.Id.Value,
+                        candidate.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        "integration",
+                        true,
+                        "Landed",
+                        "sha-background-loop");
+                },
+                getLandingFileScopes: goal =>
+                    goal.Id == engineGoal.Id
+                        ? ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TestCoverageInvariant.cs"]
+                        : []);
+            var loop = new ConductorBatchLoop(postLandingCanary: coordinator);
+
+            var run = Task.Run(() => loop.Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1));
+
+            await canaryStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await earlyWorkspaceCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(run.IsCompleted);
+            Assert.Equal(AcceptanceEngineHealth.Pending, circuit.Read().Health);
+
+            releaseCanary.TrySetResult();
+            var summary = await run.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(2, summary.Advanced);
+            Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_infrastructure_landing_drains_before_self_handoff")]
     public void BatchLoopInfrastructureLandingDrainsBeforeSelfHandoff()
     {

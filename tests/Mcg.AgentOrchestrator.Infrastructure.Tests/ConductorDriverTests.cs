@@ -1815,6 +1815,66 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.Verified, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver rereads circuit before parallel completion can invoke land")]
+    public void ConductorDriverHoldsAtLandingMutationBoundary()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var landCalled = false;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptance: _ => true,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(
+                    g.Id.Value,
+                    g.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed");
+            });
+        driver.LandingMutationBlocker = () => "acceptance engine circuit is Pending";
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.False(landCalled);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Verified, held.State);
+        Assert.Contains("mutation boundary", held.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver treats a circuit race inside landing as a retryable hold")]
+    public void ConductorDriverHoldsWhenCircuitOpensInsideLanding()
+    {
+        var (kernel, goal) = SimpleGoal();
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var escalationWritten = false;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptance: _ => true,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            land: g => new LandingResult(
+                g.Id.Value,
+                g.Id.Value[..8],
+                new LandingDecision.Escalate(
+                    "landing mutation blocked: acceptance engine circuit is Pending"),
+                "integration",
+                false,
+                "Landing held before merge"),
+            writeEscalation: (_, _, _) => escalationWritten = true);
+        driver.LandingMutationBlocker = () => null;
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.False(escalationWritten);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Verified, held.State);
+        Assert.Contains("circuit is Pending", held.Reason, StringComparison.Ordinal);
+    }
+
     // ── Merged state ──────────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Merged_records_and_returns_Executed")]

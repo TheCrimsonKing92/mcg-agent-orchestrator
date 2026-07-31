@@ -65,7 +65,10 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
             var mergeChangedFiles = mergeWorktreePath is null
                 ? Array.Empty<string>()
                 : context.Worktrees.GetChangedFiles(mergeWorktreePath);
-            var merge = context.Worktrees.TryFastForwardMerge(executionDirectory, goal.Id);
+            var merge = context.Worktrees.TryFastForwardMerge(
+                executionDirectory,
+                goal.Id,
+                () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
             Console.WriteLine(merge is null
                 ? "Goal has no workspace branch to merge."
                 : FormatWorkspaceMerge(merge));

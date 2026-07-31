@@ -225,8 +225,10 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         WorkerProcessJobs.TryRegister(process, $"post-landing-canary:{workingDirectory}");
         try
         {
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            // Do not cancel pipe drains before the killed process tree closes its handles.
+            // Completion of this method is the coordinator's termination confirmation.
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
             try
             {
                 await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
@@ -237,8 +239,21 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             }
             catch (OperationCanceledException)
             {
-                try { WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { }
-                try { process.Kill(entireProcessTree: true); } catch { }
+                var killed = false;
+                try { killed = WorkerProcessJobs.TryKillOrFallback(process.Id); } catch { }
+                if (!killed)
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+                }
+
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                if (!process.HasExited)
+                {
+                    throw new InvalidOperationException(
+                        $"Post-landing canary process tree rooted at pid {process.Id} did not terminate.");
+                }
+
                 throw;
             }
         }

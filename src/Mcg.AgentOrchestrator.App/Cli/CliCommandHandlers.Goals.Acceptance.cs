@@ -386,7 +386,10 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
             Merge: () =>
             {
                 var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
-                var merge = context.Worktrees.TryFastForwardMerge(context.Workspace.ExecutionDirectory, goal.Id);
+                var merge = context.Worktrees.TryFastForwardMerge(
+                    context.Workspace.ExecutionDirectory,
+                    goal.Id,
+                    () => PostLandingCanaryFactory.BuildMutationBlockReason(context.Workspace));
 
                 if (merge is null)
                 {

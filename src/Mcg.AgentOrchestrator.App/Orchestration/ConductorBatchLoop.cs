@@ -116,7 +116,24 @@ internal sealed class ConductorBatchLoop
     {
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
         var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
+        var previousLandingMutationBlocker = driver.LandingMutationBlocker;
+        var canaryTasks = new List<Task<PostLandingCanaryDisposition>>();
+        var canaryTasksGate = new object();
         CurrentConductEventLogWriter.Value = _conductEventLogWriter;
+        driver.LandingMutationBlocker = () =>
+        {
+            var existingBlock = previousLandingMutationBlocker?.Invoke();
+            if (!string.IsNullOrWhiteSpace(existingBlock))
+            {
+                return existingBlock;
+            }
+
+            var snapshot = (_acceptanceEngineCircuit ?? _postLandingCanary?.CircuitBreaker)?.Read();
+            return snapshot is { AllowsAcceptance: false }
+                ? $"acceptance engine circuit is {snapshot.Health} for {snapshot.LandingSha ?? "unknown-sha"}; " +
+                  $"reason={snapshot.FailureReason ?? "canary-pending"}"
+                : null;
+        };
         try
         {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -163,7 +180,15 @@ internal sealed class ConductorBatchLoop
                     }
                 }
 
-                _postLandingCanary?.HandleLanding(receipt);
+                if (_postLandingCanary is not null)
+                {
+                    var canaryTask = _postLandingCanary.LaunchLandingAsync(receipt);
+                    lock (canaryTasksGate)
+                    {
+                        canaryTasks.Add(canaryTask);
+                    }
+                }
+
                 previousSuccessfulLandingSink?.Invoke(receipt);
             };
         }
@@ -274,6 +299,7 @@ internal sealed class ConductorBatchLoop
 
                 if (pendingSelfRelaunch is not null)
                 {
+                    AwaitCanaryTasks(canaryTasks, canaryTasksGate);
                     EmitProgress(
                         $"LOOP_RELAUNCH_REBUILD tick={totalTicks} goal={pendingSelfRelaunch.GoalId} active=0 admitting=false");
                     ConductorSelfRelaunchResult relaunchResult;
@@ -993,6 +1019,7 @@ internal sealed class ConductorBatchLoop
             onTick?.Invoke(tickSummary);
         }
 
+        AwaitCanaryTasks(canaryTasks, canaryTasksGate);
         ConductorLoopHandoffResult? handoff = selfRelaunchHandoff;
         if (maxDurationReached && _handoffOnMaxDuration is not null)
         {
@@ -1006,8 +1033,38 @@ internal sealed class ConductorBatchLoop
         }
         finally
         {
+            DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
+            driver.LandingMutationBlocker = previousLandingMutationBlocker;
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
+        }
+    }
+
+    private static void AwaitCanaryTasks(
+        List<Task<PostLandingCanaryDisposition>> tasks,
+        object gate)
+    {
+        Task<PostLandingCanaryDisposition>[] snapshot;
+        lock (gate)
+        {
+            snapshot = tasks.ToArray();
+        }
+
+        Task.WhenAll(snapshot).GetAwaiter().GetResult();
+    }
+
+    private static void DrainCanaryTasks(
+        List<Task<PostLandingCanaryDisposition>> tasks,
+        object gate)
+    {
+        try
+        {
+            AwaitCanaryTasks(tasks, gate);
+        }
+        catch
+        {
+            // Preserve the primary loop exception. AwaitCanaryTasks already observed every
+            // worker and therefore still guarantees no canary process escapes this loop.
         }
     }
 

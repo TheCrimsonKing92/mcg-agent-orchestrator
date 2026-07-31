@@ -5,19 +5,42 @@ public sealed record PostLandingCanaryTriggerResult(IReadOnlyList<string> Trigge
     public bool ShouldRun => TriggeringPaths.Count > 0;
 }
 
+public sealed record AcceptanceEngineOwnedSurface(
+    string Name,
+    IReadOnlyList<string> PathPrefixes);
+
+public static class AcceptanceEngineSurfaceRegistry
+{
+    // This is the ownership contract for the acceptance engine. Adding a collaborator
+    // requires extending this registry, which also makes it canary-triggering.
+    public static IReadOnlyList<AcceptanceEngineOwnedSurface> Surfaces { get; } =
+    [
+        new("acceptance-verifier", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier"]),
+        new("test-impact-planner", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner"]),
+        new("build-environment", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager"]),
+        new("change-classifier", ["src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier"]),
+        new("gate-settings", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings"]),
+        new("test-coverage-invariant", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/TestCoverageInvariant"]),
+        new("base-build-cache", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBaseBuildCache"]),
+        new("gate-heartbeats", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GateHeartbeatArtifacts"]),
+        new("attempt-artifact-custody", ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceAttemptArtifactCustody"]),
+        new("post-landing-canary", [
+            "src/Mcg.AgentOrchestrator.App/Orchestration/PostLandingCanary",
+            "src/Mcg.AgentOrchestrator.Core/Application/PostLandingCanaryTrigger",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/canary-fixture"
+        ]),
+        new("acceptance-manifest", ["config/acceptance-manifest.json"])
+    ];
+}
+
 public static class PostLandingCanaryTrigger
 {
     // Built-ins are intentionally not replaceable by configuration. The canary must still
     // notice a change that breaks the classifier or the configuration used by the gate.
     public static IReadOnlyList<string> EnginePathPrefixes { get; } =
-    [
-        "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
-        "src/Mcg.AgentOrchestrator.Core/Application/RepositoryTestImpactPlanner",
-        "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager",
-        "src/Mcg.AgentOrchestrator.Core/Application/RepositoryChangeClassifier",
-        "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/AcceptanceGateEngineSettings",
-        "config/acceptance-manifest.json"
-    ];
+        AcceptanceEngineSurfaceRegistry.Surfaces
+            .SelectMany(surface => surface.PathPrefixes)
+            .ToArray();
 
     public static PostLandingCanaryTriggerResult Evaluate(
         IEnumerable<string> changedFiles,

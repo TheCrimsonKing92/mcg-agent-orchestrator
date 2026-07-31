@@ -40,10 +40,13 @@ internal sealed class PostLandingCanaryCoordinator
     internal AcceptanceEngineCircuitBreaker CircuitBreaker { get; }
 
     internal PostLandingCanaryDisposition HandleLanding(ConductorLandingReceipt landing)
+        => LaunchLandingAsync(landing).GetAwaiter().GetResult();
+
+    internal Task<PostLandingCanaryDisposition> LaunchLandingAsync(ConductorLandingReceipt landing)
     {
         if (!_configuration.Enabled)
         {
-            return PostLandingCanaryDisposition.NotTriggered;
+            return Task.FromResult(PostLandingCanaryDisposition.NotTriggered);
         }
 
         var trigger = PostLandingCanaryTrigger.Evaluate(
@@ -51,7 +54,7 @@ internal sealed class PostLandingCanaryCoordinator
             _configuration.AdditionalEnginePathPrefixes);
         if (!trigger.ShouldRun)
         {
-            return PostLandingCanaryDisposition.NotTriggered;
+            return Task.FromResult(PostLandingCanaryDisposition.NotTriggered);
         }
 
         if (string.IsNullOrWhiteSpace(landing.LandingSha))
@@ -60,11 +63,11 @@ internal sealed class PostLandingCanaryCoordinator
                 "An acceptance-engine landing did not provide its landing SHA; refusing to suppress the canary.");
         }
 
-        return RunAsync(
-                new PostLandingCanaryRequest(landing.LandingSha, trigger.TriggeringPaths),
-                CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
+        var request = new PostLandingCanaryRequest(landing.LandingSha, trigger.TriggeringPaths);
+        var queued = EnsureQueuedAsync(request, CancellationToken.None).GetAwaiter().GetResult();
+        return queued.ExistingReceipt is { } existing
+            ? Task.FromResult(ReceiptDisposition(existing))
+            : Task.Run(() => RunQueuedAsync(request, CancellationToken.None));
     }
 
     internal async Task<PostLandingCanaryDisposition> RunAsync(
@@ -72,9 +75,19 @@ internal sealed class PostLandingCanaryCoordinator
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(request.LandingSha);
+        var queued = await EnsureQueuedAsync(request, cancellationToken).ConfigureAwait(false);
+        return queued.ExistingReceipt is { } existing
+            ? ReceiptDisposition(existing)
+            : await RunQueuedAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<(PostLandingCanaryEvent? ExistingReceipt, bool Appended)> EnsureQueuedAsync(
+        PostLandingCanaryRequest request,
+        CancellationToken cancellationToken)
+    {
         if (await _events.FindReceiptAsync(request.LandingSha, cancellationToken).ConfigureAwait(false) is { } existing)
         {
-            return ReceiptDisposition(existing);
+            return (existing, false);
         }
 
         var queuedAt = _utcNow();
@@ -84,7 +97,7 @@ internal sealed class PostLandingCanaryCoordinator
         var queued = await _events.AppendOnceAsync(
             PostLandingCanaryEventKind.Queued,
             queuedPayload,
-            EventId(request.LandingSha, "queued"),
+            PostLandingCanaryEventIds.Queued(request.LandingSha),
             queuedAt,
             cancellationToken).ConfigureAwait(false);
         if (queued.Appended)
@@ -93,6 +106,13 @@ internal sealed class PostLandingCanaryCoordinator
                 $"CANARY_GATE sha={request.LandingSha} result=queued paths={string.Join(",", request.TriggeringPaths)}");
         }
 
+        return (null, queued.Appended);
+    }
+
+    private async Task<PostLandingCanaryDisposition> RunQueuedAsync(
+        PostLandingCanaryRequest request,
+        CancellationToken cancellationToken)
+    {
         while (true)
         {
             using (await PostLandingCanarySerializationLease
@@ -129,7 +149,7 @@ internal sealed class PostLandingCanaryCoordinator
         await _events.AppendOnceAsync(
             PostLandingCanaryEventKind.Started,
             Payload(request, "Post-landing canary process started.", startedAt: startedAt),
-            EventId(request.LandingSha, "started"),
+            PostLandingCanaryEventIds.Started(request.LandingSha),
             startedAt,
             cancellationToken).ConfigureAwait(false);
         _progress(
@@ -148,7 +168,7 @@ internal sealed class PostLandingCanaryCoordinator
             catch (TimeoutException)
             {
                 timeoutCts.Cancel();
-                ObserveLateCompletion(runTask);
+                await ConfirmRunnerTerminatedAsync(runTask).ConfigureAwait(false);
                 outcome = PostLandingCanaryOutcome.Failed(
                     PostLandingCanaryFailureReason.Timeout,
                     $"canary exceeded hard timeout of {_configuration.TimeoutSeconds} seconds");
@@ -156,7 +176,7 @@ internal sealed class PostLandingCanaryCoordinator
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 timeoutCts.Cancel();
-                ObserveLateCompletion(runTask);
+                await ConfirmRunnerTerminatedAsync(runTask).ConfigureAwait(false);
                 outcome = PostLandingCanaryOutcome.Failed(
                     PostLandingCanaryFailureReason.Timeout,
                     $"canary exceeded hard timeout of {_configuration.TimeoutSeconds} seconds");
@@ -166,6 +186,14 @@ internal sealed class PostLandingCanaryCoordinator
                 outcome = PostLandingCanaryOutcome.Failed(
                     PostLandingCanaryFailureReason.InfrastructureError,
                     $"{ex.GetType().Name}: {ex.Message}");
+            }
+            finally
+            {
+                if (cancellationToken.IsCancellationRequested && !runTask.IsCompleted)
+                {
+                    timeoutCts.Cancel();
+                    await ConfirmRunnerTerminatedAsync(runTask).ConfigureAwait(false);
+                }
             }
         }
 
@@ -183,7 +211,7 @@ internal sealed class PostLandingCanaryCoordinator
                 outcome.ExecutedTestCount,
                 startedAt,
                 completedAt),
-            EventId(request.LandingSha, "receipt"),
+            PostLandingCanaryEventIds.Receipt(request.LandingSha),
             completedAt,
             CancellationToken.None).ConfigureAwait(false);
         var receiptReference = $"run-event:{receipt.Event.Sequence}";
@@ -205,7 +233,7 @@ internal sealed class PostLandingCanaryCoordinator
         await _events.AppendOnceAsync(
             PostLandingCanaryEventKind.Escalated,
             escalationPayload,
-            EventId(request.LandingSha, "escalation"),
+            PostLandingCanaryEventIds.Escalation(request.LandingSha),
             completedAt,
             CancellationToken.None).ConfigureAwait(false);
         _progress(
@@ -235,9 +263,6 @@ internal sealed class PostLandingCanaryCoordinator
             startedAt,
             completedAt);
 
-    private static string EventId(string landingSha, string suffix) =>
-        $"post-landing-canary:{landingSha.ToLowerInvariant()}:{suffix}";
-
     private static string? FailureToken(PostLandingCanaryFailureReason? reason) => reason switch
     {
         null => null,
@@ -248,12 +273,21 @@ internal sealed class PostLandingCanaryCoordinator
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown canary failure reason.")
     };
 
-    private static void ObserveLateCompletion(Task task) =>
-        _ = task.ContinueWith(
-            static completed => _ = completed.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+    private static async Task ConfirmRunnerTerminatedAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch
+        {
+            // The timeout receipt is authoritative, but serialization is held until the
+            // runner has completed its kill-and-wait path.
+        }
+    }
 }
 
 internal static class PostLandingCanaryFactory
@@ -262,7 +296,7 @@ internal static class PostLandingCanaryFactory
         OrchestratorWorkspace workspace,
         Action<string>? progress = null)
     {
-        var events = CreateEventStore(workspace);
+        var events = CreateEventStore(workspace, ensureSchema: true);
         var circuit = new AcceptanceEngineCircuitBreaker(events);
         return new PostLandingCanaryCoordinator(
             PostLandingCanaryConfiguration.Load(AppContext.BaseDirectory),
@@ -275,13 +309,26 @@ internal static class PostLandingCanaryFactory
     }
 
     internal static AcceptanceEngineCircuitBreaker CreateCircuit(OrchestratorWorkspace workspace) =>
-        new(CreateEventStore(workspace));
+        new(CreateEventStore(
+            workspace,
+            ensureSchema: !File.Exists(workspace.RunEventStorePath)));
 
-    private static PostLandingCanaryEventStore CreateEventStore(OrchestratorWorkspace workspace) =>
+    internal static string? BuildMutationBlockReason(OrchestratorWorkspace workspace)
+    {
+        var snapshot = CreateCircuit(workspace).Read();
+        return snapshot.AllowsAcceptance
+            ? null
+            : $"acceptance engine circuit is {snapshot.Health} for {snapshot.LandingSha ?? "unknown-sha"}; " +
+              $"reason={snapshot.FailureReason ?? "canary-pending"}";
+    }
+
+    private static PostLandingCanaryEventStore CreateEventStore(
+        OrchestratorWorkspace workspace,
+        bool ensureSchema) =>
         new(
             new SqliteRunEventStore(
                 workspace.RunEventStorePath,
-                ensureSchema: !File.Exists(workspace.RunEventStorePath)),
+                ensureSchema),
             workspace.RunEventStorePath);
 }
 
