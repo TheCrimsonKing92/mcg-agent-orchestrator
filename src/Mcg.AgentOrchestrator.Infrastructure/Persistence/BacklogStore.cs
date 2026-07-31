@@ -227,7 +227,8 @@ public sealed class BacklogStore
         string body,
         IReadOnlyList<BacklogDependencyTarget> dependencies,
         string? sourceGoalId = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<string, bool>? goalExists = null)
     {
         var distinctDependencies = dependencies
             .DistinctBy(dependency => dependency.Id, StringComparer.Ordinal)
@@ -245,7 +246,13 @@ public sealed class BacklogStore
                 await InsertItemAsync(conn, item, cancellationToken);
                 foreach (var dependency in distinctDependencies)
                 {
-                    await ValidateAndInsertDependencyAsync(conn, id, dependency, allowExisting: true, cancellationToken);
+                    await ValidateAndInsertDependencyAsync(
+                        conn,
+                        id,
+                        dependency,
+                        allowExisting: true,
+                        goalExists,
+                        cancellationToken);
                 }
                 var result = (await LoadItemByIdAsync(conn, id, cancellationToken))!;
                 await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
@@ -335,7 +342,8 @@ public sealed class BacklogStore
     public async Task<BacklogDependency> AddDependencyAsync(
         string dependentId,
         BacklogDependencyTarget prerequisite,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<string, bool>? goalExists = null)
     {
         return await WithBusyRetryAsync(async () =>
         {
@@ -349,6 +357,7 @@ public sealed class BacklogStore
                     dependentId,
                     prerequisite,
                     allowExisting: true,
+                    goalExists,
                     cancellationToken);
                 await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
                 return dependency;
@@ -1141,6 +1150,7 @@ public sealed class BacklogStore
         string dependentId,
         BacklogDependencyTarget prerequisite,
         bool allowExisting,
+        Func<string, bool>? goalExists,
         CancellationToken cancellationToken)
     {
         if (await LoadItemByIdAsync(conn, dependentId, cancellationToken, includeNotes: false) is null)
@@ -1151,6 +1161,11 @@ public sealed class BacklogStore
             await LoadItemByIdAsync(conn, prerequisite.Id, cancellationToken, includeNotes: false) is null)
         {
             throw new InvalidOperationException($"No backlog prerequisite found with id '{prerequisite.Id}'.");
+        }
+        if (prerequisite.Kind == BacklogDependencyTargetKind.Goal &&
+            (goalExists is null || !goalExists(prerequisite.Id)))
+        {
+            throw new InvalidOperationException($"No goal prerequisite found with id '{prerequisite.Id}'.");
         }
 
         if (prerequisite.Kind == BacklogDependencyTargetKind.Backlog &&

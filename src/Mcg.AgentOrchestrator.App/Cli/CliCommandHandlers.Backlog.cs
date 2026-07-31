@@ -51,7 +51,13 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 .ToArray();
             var item = dependencies.Length == 0
                 ? store.AddAsync(title, body).GetAwaiter().GetResult()
-                : store.AddWithDependenciesAsync(title, body, dependencies).GetAwaiter().GetResult();
+                : store.AddWithDependenciesAsync(
+                    title,
+                    body,
+                    dependencies,
+                    goalExists: id => context.Kernel.Goals.Any(goal => goal.Id.Value == id))
+                    .GetAwaiter()
+                    .GetResult();
             Console.WriteLine($"Added: [{item.Id}] {item.Title}");
             return false;
         }
@@ -206,7 +212,12 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var target = ResolveBacklogDependencyTarget(context, store, prefix);
             if (on is not null)
             {
-                store.AddDependencyAsync(item.Id, target).GetAwaiter().GetResult();
+                store.AddDependencyAsync(
+                    item.Id,
+                    target,
+                    goalExists: id => context.Kernel.Goals.Any(goal => goal.Id.Value == id))
+                    .GetAwaiter()
+                    .GetResult();
                 Console.WriteLine($"Dependency set: {ShortBacklogId(item.Id)} depends on {ShortBacklogId(target.Id)}");
             }
             else

@@ -629,8 +629,8 @@ internal sealed class ConductorBatchLoop
                     goalWalkTimings.Add(new GoalWalkTiming(label, result, singleGoalClock.Elapsed));
                 }
 
-                // Dependency ordering is a goal-start gate. Once any task has dispatched, preserve
-                // the in-flight goal across later task boundaries instead of retroactively holding it.
+                // Dependency ordering is a dispatch-start gate. Do not interrupt a worker that is
+                // currently in flight, but re-evaluate the edge before any later dispatch starts.
                 var depHoldReason = HasStartedGoalWork(goal)
                     ? null
                     : GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel);
@@ -2305,7 +2305,9 @@ internal sealed class ConductorBatchLoop
     }
 
     private static bool HasStartedGoalWork(Goal goal) =>
-        goal.Tasks.Any(task => task.LastProcess is not null);
+        goal.Tasks.Any(task =>
+            task.Status == WorkTaskStatus.Running ||
+            task.LastProcess is { IsRunning: true });
 
     private static bool IsMetadataSatisfiedDependencyStatus(string status) =>
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);

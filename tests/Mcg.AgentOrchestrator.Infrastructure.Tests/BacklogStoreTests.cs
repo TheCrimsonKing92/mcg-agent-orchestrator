@@ -456,6 +456,28 @@ public sealed class BacklogStoreTests
         Assert.Empty((await store.GetByExactIdAsync(c.Id))!.Dependencies);
     }
 
+    [Xunit.Fact(DisplayName = "BacklogStore_goal_dependency_requires_resolved_goal_identity")]
+    public async Task GoalDependencyRequiresResolvedGoalIdentity()
+    {
+        var store = new BacklogStore(TempDb());
+        var dependent = await store.AddAsync("Dependent");
+        var goalId = Guid.NewGuid().ToString("n");
+        var target = new BacklogDependencyTarget(goalId, BacklogDependencyTargetKind.Goal);
+
+        var unresolved = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => store.AddDependencyAsync(dependent.Id, target));
+        Assert.Contains(goalId, unresolved.Message, StringComparison.Ordinal);
+        Assert.Empty((await store.GetByExactIdAsync(dependent.Id))!.Dependencies);
+
+        await store.AddDependencyAsync(
+            dependent.Id,
+            target,
+            goalExists: candidate => candidate == goalId);
+        Assert.Equal(
+            goalId,
+            Assert.Single((await store.GetByExactIdAsync(dependent.Id))!.Dependencies).PrerequisiteId);
+    }
+
     // ── View rendering ────────────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "BacklogStore_view_renders_open_and_done_sections")]

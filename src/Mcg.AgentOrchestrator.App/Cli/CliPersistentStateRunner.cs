@@ -65,6 +65,22 @@ internal static class CliPersistentStateRunner
                 channel);
         }
 
+        // Dependency-aware backlog commands read goal identities and landing state but mutate only
+        // BacklogStore. Hydrate state outside the generic write transaction so they can resolve goal
+        // prerequisites without taking a state.db writer lock or persisting an unchanged kernel.
+        if (RequiresKernelBacklogState(args))
+        {
+            return ExecuteCommandWithoutTransaction(
+                args,
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                ref currentGoal,
+                channel);
+        }
+
         if (IsMetadataOnlyListing(args))
         {
             var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
@@ -410,9 +426,10 @@ internal static class CliPersistentStateRunner
             // These backlog commands operate solely on the independent BacklogStore, never the
             // orchestrator kernel/state.db. Running them with an empty kernel — no state load, no
             // write lock, no process sweep — keeps them fully concurrent with a running conductor
-            // instead of contending on the per-tick write transaction. backlog-show intentionally
-            // is not listed because it renders linked goals from kernel state.
-            "backlog-list" or "backlog-add" or "backlog-update" or "backlog-annotate" or "backlog-close" or
+            // instead of contending on the per-tick write transaction. Dependency-aware add/list/show
+            // commands intentionally hydrate state through RequiresKernelBacklogState.
+            "backlog-add" when !HasFlag(args, "--depends-on") => true,
+            "backlog-update" or "backlog-annotate" or "backlog-close" or
             "backlog-supersede" or "backlog-unsupersede" or "backlog-link" or "backlog-reopen" or "backlog-view" or
             "cleanup-status" or
             "firewall-setup" or "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
@@ -421,6 +438,22 @@ internal static class CliPersistentStateRunner
             _ => false,
         };
     }
+
+    internal static bool RequiresKernelBacklogState(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0)
+            return false;
+
+        return args[0].ToLowerInvariant() switch
+        {
+            "backlog-list" or "backlog-show" or "backlog-depends" => true,
+            "backlog-add" => HasFlag(args, "--depends-on"),
+            _ => false
+        };
+    }
+
+    private static bool HasFlag(IReadOnlyList<string> args, string flag) =>
+        args.Any(arg => arg.Equals(flag, StringComparison.OrdinalIgnoreCase));
 
     private static bool ShouldRunInStateTransaction(string command)
     {
