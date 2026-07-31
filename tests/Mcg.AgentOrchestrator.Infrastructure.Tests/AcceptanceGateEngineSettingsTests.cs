@@ -1,3 +1,4 @@
+using System.Reflection;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
@@ -70,6 +71,73 @@ public sealed class AcceptanceGateEngineSettingsTests
             ]);
     }
 
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_disabled_collections_spanning_lanes_share_an_exclusive_resource")]
+    public void AcceptanceGateEngineDisabledCollectionsSpanningLanesShareAnExclusiveResource()
+    {
+        var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
+        var testAssembly = typeof(AcceptanceGateEngineSettingsTests).Assembly;
+        var disabledCollections = testAssembly
+            .GetTypes()
+            .Select(type => type.GetCustomAttribute<Xunit.CollectionDefinitionAttribute>())
+            .Where(attribute => attribute is { DisableParallelization: true })
+            .Select(attribute => attribute!.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var mappedTestClasses = testAssembly
+            .GetTypes()
+            .Where(IsRunnableTestClass)
+            .Select(type => (
+                Type: type,
+                Collection: type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name))
+            .Where(entry =>
+                entry.Collection is not null &&
+                disabledCollections.Contains(entry.Collection))
+            .Select(entry =>
+            {
+                var lanes = settings.InfrastructureTestLanes
+                    .Where(lane => LaneIncludesClass(lane, entry.Type))
+                    .ToArray();
+                Xunit.Assert.True(
+                    lanes.Length == 1,
+                    $"Disabled-collection test class '{entry.Type.FullName}' mapped to " +
+                    $"{lanes.Length} acceptance lanes: [{string.Join(", ", lanes.Select(lane => lane.Name))}].");
+                return (
+                    Collection: entry.Collection!,
+                    ClassName: entry.Type.FullName ?? entry.Type.Name,
+                    Lane: lanes[0]);
+            })
+            .ToArray();
+
+        Xunit.Assert.Equal(
+            disabledCollections.Order(StringComparer.Ordinal),
+            mappedTestClasses
+                .Select(entry => entry.Collection)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal));
+        foreach (var collection in mappedTestClasses.GroupBy(
+                     entry => entry.Collection,
+                     StringComparer.Ordinal))
+        {
+            var lanes = collection
+                .Select(entry => entry.Lane)
+                .DistinctBy(lane => lane.Name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (lanes.Length < 2)
+            {
+                continue;
+            }
+
+            var sharedKeys = lanes
+                .Select(lane => lane.ExclusiveResourceKeys.Select(key => key.Trim()))
+                .Aggregate((left, right) => left.Intersect(right, StringComparer.OrdinalIgnoreCase))
+                .ToArray();
+            Xunit.Assert.True(
+                sharedKeys.Length > 0,
+                $"Disabled collection '{collection.Key}' spans acceptance lanes " +
+                $"[{string.Join(", ", lanes.Select(lane => lane.Name))}] without a shared exclusive resource key. " +
+                $"Mapped classes: [{string.Join(", ", collection.Select(entry => $"{entry.ClassName} -> {entry.Lane.Name}"))}].");
+        }
+    }
+
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_candidate_lane_and_timeout_change_apply_without_engine_recompile")]
     public async Task AcceptanceGateEngineCandidateLaneAndTimeoutChangeApplyWithoutEngineRecompile()
     {
@@ -81,9 +149,10 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "timeouts": { "defaultMinutes": 3, "buildServerShutdownMinutes": 1 },
                 "infrastructureTestLanes": [
                   {
-                    "name": "candidate lane",
-                    "filter": "FullyQualifiedName~CandidateLaneTests",
-                    "estimatedSerialSeconds": 123.5
+                     "name": "candidate lane",
+                     "filter": "FullyQualifiedName~CandidateLaneTests",
+                     "estimatedSerialSeconds": 123.5,
+                     "exclusiveResourceKeys": [ "candidate-resource" ]
                   }
                 ]
               },
@@ -113,11 +182,45 @@ public sealed class AcceptanceGateEngineSettingsTests
 
             Xunit.Assert.True(result.Passed);
             Xunit.Assert.Equal(2, settings.MaxConcurrentShards);
-            Xunit.Assert.Equal(123.5, Xunit.Assert.Single(settings.InfrastructureTestLanes).EstimatedSerialSeconds);
+            var lane = Xunit.Assert.Single(settings.InfrastructureTestLanes);
+            Xunit.Assert.Equal(123.5, lane.EstimatedSerialSeconds);
+            Xunit.Assert.Equal(["candidate-resource"], lane.ExclusiveResourceKeys);
             Xunit.Assert.Equal(TimeSpan.FromMinutes(1), calls[0].Timeout);
             var testCall = Xunit.Assert.Single(calls.Skip(1));
             Xunit.Assert.Contains("FullyQualifiedName~CandidateLaneTests", testCall.Arguments);
             Xunit.Assert.Equal(TimeSpan.FromMinutes(3), testCall.Timeout);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "AcceptanceGateEngine_rejects_blank_or_duplicate_exclusive_resource_keys")]
+    [Xunit.InlineData("""[ "" ]""", "non-empty")]
+    [Xunit.InlineData("""[ "shared", " SHARED " ]""", "duplicated")]
+    public void AcceptanceGateEngineRejectsInvalidExclusiveResourceKeys(
+        string exclusiveResourceKeys,
+        string expectedMessage)
+    {
+        var root = CreateWorkspace($$"""
+            {
+              "version": 1,
+              "engine": {
+                "infrastructureTestLanes": [{
+                  "name": "candidate",
+                  "filter": "FullyQualifiedName~CandidateTests",
+                  "exclusiveResourceKeys": {{exclusiveResourceKeys}}
+                }]
+              }
+            }
+            """);
+        try
+        {
+            var error = Xunit.Assert.Throws<InvalidDataException>(
+                () => AcceptanceGateEngineSettings.Load(root));
+
+            Xunit.Assert.Contains(expectedMessage, error.Message, StringComparison.Ordinal);
         }
         finally
         {
@@ -592,6 +695,49 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(
             expectedClasses.Order(StringComparer.Ordinal),
             firstClasses.Concat(secondClasses).Order(StringComparer.Ordinal));
+    }
+
+    private static bool IsRunnableTestClass(Type type) =>
+        type is { IsClass: true, IsAbstract: false } &&
+        type.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Any(method => method.GetCustomAttributes(inherit: true).Any(attribute => attribute is Xunit.FactAttribute));
+
+    private static bool LaneIncludesClass(AcceptanceTestLane lane, Type type)
+    {
+        var className = type.FullName ?? type.Name;
+        var translated = GoalAcceptanceVerifier.TranslateMtpFilter(lane.Filter).ToArray();
+        var included = new List<string>();
+        var excluded = new List<string>();
+        for (var index = 0; index < translated.Length; index += 2)
+        {
+            Xunit.Assert.True(
+                index + 1 < translated.Length,
+                $"Lane '{lane.Name}' translated to an incomplete MTP filter.");
+            switch (translated[index])
+            {
+                case "--filter-class":
+                    included.Add(translated[index + 1]);
+                    break;
+                case "--filter-not-class":
+                    excluded.Add(translated[index + 1]);
+                    break;
+                case "--filter-not-trait":
+                    break;
+                default:
+                    throw new Xunit.Sdk.XunitException(
+                        $"Lane '{lane.Name}' translated to unsupported MTP argument '{translated[index]}'.");
+            }
+        }
+
+        return (included.Count == 0 || included.Any(pattern => ClassPatternMatches(className, pattern))) &&
+               excluded.All(pattern => !ClassPatternMatches(className, pattern));
+    }
+
+    private static bool ClassPatternMatches(string className, string pattern)
+    {
+        Xunit.Assert.StartsWith("*", pattern, StringComparison.Ordinal);
+        Xunit.Assert.EndsWith("*", pattern, StringComparison.Ordinal);
+        return className.Contains(pattern.Trim('*'), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string[] FilterClasses(string filter) =>
