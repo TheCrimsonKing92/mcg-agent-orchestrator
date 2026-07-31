@@ -75,6 +75,8 @@ public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAccep
 
 public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktreeService.Instance;
 
+public GoalWorktreeCleanupHooks CleanupHooks { get; init; } = GoalWorktreeCleanupHooks.Default;
+
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
 
 public Func<long>? GoalMarkLandedElapsedMilliseconds { get; init; }

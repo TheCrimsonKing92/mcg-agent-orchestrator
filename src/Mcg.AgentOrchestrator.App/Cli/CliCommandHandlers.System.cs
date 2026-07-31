@@ -201,7 +201,7 @@ internal static partial class CliCommandHandlers
                 return false;
 
             case "cleanup-status":
-                PrintCleanupStatus(context.Workspace.ExecutionDirectory);
+                PrintCleanupStatus(context.Workspace.ExecutionDirectory, context.CleanupHooks);
                 return false;
 
             case "attention":
@@ -1355,9 +1355,11 @@ internal static partial class CliCommandHandlers
         return process.ExitCode;
     }
 
-    private static void PrintCleanupStatus(string executionDirectory)
+    private static void PrintCleanupStatus(
+        string executionDirectory,
+        GoalWorktreeCleanupHooks hooks)
     {
-        var debts = GoalWorktrees.ListCleanupDebt(executionDirectory);
+        var debts = GoalWorktrees.ListCleanupDebt(executionDirectory, hooks);
         if (debts.Count == 0)
         {
             Console.WriteLine("Cleanup status: no pending cleanup debt.");

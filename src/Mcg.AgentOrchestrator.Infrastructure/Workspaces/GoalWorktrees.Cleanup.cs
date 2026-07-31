@@ -5,7 +5,11 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public static partial class GoalWorktrees
 {
-    public static GoalWorktreeRemoveResult Remove(string executionDirectory, GoalId goalId, AgentOrchestratorKernel? kernel = null) =>
+    public static GoalWorktreeRemoveResult Remove(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel? kernel = null,
+        GoalWorktreeCleanupHooks? hooks = null) =>
         Remove(
             executionDirectory,
             goalId,
@@ -14,12 +18,14 @@ public static partial class GoalWorktrees
             precomputedHasRegisteredWorktree: null,
             precomputedHasBranch: null,
             forceTerminalCleanup: false,
-            bypassCleanupBackoff: false);
+            bypassCleanupBackoff: false,
+            hooks ?? GoalWorktreeCleanupHooks.Default);
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
         GoalId goalId,
-        AgentOrchestratorKernel kernel) =>
+        AgentOrchestratorKernel kernel,
+        GoalWorktreeCleanupHooks? hooks = null) =>
         Remove(
             executionDirectory,
             goalId,
@@ -28,12 +34,14 @@ public static partial class GoalWorktrees
             precomputedHasRegisteredWorktree: null,
             precomputedHasBranch: null,
             forceTerminalCleanup: true,
-            bypassCleanupBackoff: false);
+            bypassCleanupBackoff: false,
+            hooks ?? GoalWorktreeCleanupHooks.Default);
 
     public static GoalWorktreeRemoveResult RemoveTerminalNow(
         string executionDirectory,
         GoalId goalId,
-        AgentOrchestratorKernel kernel) =>
+        AgentOrchestratorKernel kernel,
+        GoalWorktreeCleanupHooks? hooks = null) =>
         Remove(
             executionDirectory,
             goalId,
@@ -42,14 +50,16 @@ public static partial class GoalWorktrees
             precomputedHasRegisteredWorktree: null,
             precomputedHasBranch: null,
             forceTerminalCleanup: true,
-            bypassCleanupBackoff: true);
+            bypassCleanupBackoff: true,
+            hooks ?? GoalWorktreeCleanupHooks.Default);
 
     public static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel? kernel,
         bool hasRegisteredWorktree,
-        bool hasBranch) =>
+        bool hasBranch,
+        GoalWorktreeCleanupHooks? hooks = null) =>
         Remove(
             executionDirectory,
             goalId,
@@ -58,14 +68,16 @@ public static partial class GoalWorktrees
             hasRegisteredWorktree,
             hasBranch,
             forceTerminalCleanup: false,
-            bypassCleanupBackoff: false);
+            bypassCleanupBackoff: false,
+            hooks ?? GoalWorktreeCleanupHooks.Default);
 
     public static GoalWorktreeRemoveResult RemoveTerminal(
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel kernel,
         bool hasRegisteredWorktree,
-        bool hasBranch) =>
+        bool hasBranch,
+        GoalWorktreeCleanupHooks? hooks = null) =>
         Remove(
             executionDirectory,
             goalId,
@@ -74,14 +86,16 @@ public static partial class GoalWorktrees
             hasRegisteredWorktree,
             hasBranch,
             forceTerminalCleanup: true,
-            bypassCleanupBackoff: false);
+            bypassCleanupBackoff: false,
+            hooks ?? GoalWorktreeCleanupHooks.Default);
 
     public static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
         GoalId goalId,
         AgentOrchestratorKernel? kernel,
         int gitTimeoutMilliseconds,
-        bool forceTerminalCleanup = false) =>
+        bool forceTerminalCleanup = false,
+        GoalWorktreeCleanupHooks? hooks = null) =>
         Remove(
             executionDirectory,
             goalId,
@@ -90,7 +104,8 @@ public static partial class GoalWorktrees
             precomputedHasRegisteredWorktree: null,
             precomputedHasBranch: null,
             forceTerminalCleanup,
-            bypassCleanupBackoff: false);
+            bypassCleanupBackoff: false,
+            hooks ?? GoalWorktreeCleanupHooks.Default);
 
     private static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
@@ -100,9 +115,10 @@ public static partial class GoalWorktrees
         bool? precomputedHasRegisteredWorktree,
         bool? precomputedHasBranch,
         bool forceTerminalCleanup,
-        bool bypassCleanupBackoff)
+        bool bypassCleanupBackoff,
+        GoalWorktreeCleanupHooks hooks)
     {
-        var cleanupBudget = GoalWorktreeCleanupBudget.Start(gitTimeoutMilliseconds, CleanupElapsedMilliseconds);
+        var cleanupBudget = GoalWorktreeCleanupBudget.Start(gitTimeoutMilliseconds, hooks.CleanupElapsedMilliseconds());
         var path = WorktreePath(executionDirectory, goalId);
         if (forceTerminalCleanup &&
             !CanDirectDeleteTerminalWorktree(executionDirectory, path, kernel, out var terminalSafetyFailure))
@@ -110,7 +126,7 @@ public static partial class GoalWorktrees
             return new GoalWorktreeRemoveResult(
                 $"Terminal worktree cleanup refused unsafe target '{path}': {terminalSafetyFailure}.",
                 path,
-                Directory.Exists(path) ? FindLockHoldersForCleanup(path) : [],
+                Directory.Exists(path) ? hooks.FindLockHoldersForCleanup(path) : [],
                 ConductorRetryCommand(goalId));
         }
 
@@ -133,32 +149,34 @@ public static partial class GoalWorktrees
 
         if (!hasRegisteredWorktree && !hasLeftoverDirectory && !hasBranch)
         {
-            var earlyOwnedEphemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
-            earlyOwnedEphemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, earlyOwnedEphemeralCleanup);
+            var earlyOwnedEphemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel, hooks);
+            earlyOwnedEphemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, earlyOwnedEphemeralCleanup, hooks);
             return CompleteOrDeferredRemoveResult(
                 path,
                 goalId,
                 "Workspace already clean; nothing to remove.",
                 "Workspace already clean, but leftover cleanup is incomplete.",
-                earlyOwnedEphemeralCleanup);
+                earlyOwnedEphemeralCleanup,
+                hooks);
         }
 
         var wasAlreadyUnregistered = !hasRegisteredWorktree;
 
         if (!bypassCleanupBackoff &&
             hasLeftoverDirectory &&
-            IsCleanupBackedOff(path, "remove", out var backoff))
+            IsCleanupBackedOff(path, "remove", out var backoff, hooks: hooks))
         {
-            var lockHolders = FindLockHoldersForCleanup(path);
+            var lockHolders = hooks.FindLockHoldersForCleanup(path);
             if ((!IsLockHeldCleanupNeededReason(backoff.Reason) &&
                     !IsBudgetExhaustedCleanupNeededReason(backoff.Reason)) ||
                 lockHolders.Count > 0)
             {
-                var detail = ToCleanupBackoff(backoff);
+                var detail = ToCleanupBackoff(backoff, hooks);
                 WarnCleanupFailure(
                     path,
                     "remove:skip-backoff",
-                    new IOException(BuildCleanupRetryMessage(path, backoff.Reason, detail)));
+                    new IOException(BuildCleanupRetryMessage(path, backoff.Reason, detail)),
+                    hooks);
                 return new GoalWorktreeRemoveResult(
                     $"Workspace cleanup deferred by cleanup-needed backoff for {path}. {FormatCleanupBackoff(detail)}",
                     path,
@@ -170,13 +188,14 @@ public static partial class GoalWorktrees
         else if (!bypassCleanupBackoff &&
             !hasLeftoverDirectory &&
             hasBranch &&
-            IsCleanupBackedOff(path, "remove", out var branchBackoff))
+            IsCleanupBackedOff(path, "remove", out var branchBackoff, hooks: hooks))
         {
-            var detail = ToCleanupBackoff(branchBackoff);
+            var detail = ToCleanupBackoff(branchBackoff, hooks);
             WarnCleanupFailure(
                 path,
                 "remove:skip-backoff",
-                new IOException(BuildCleanupRetryMessage(path, branchBackoff.Reason, detail)));
+                new IOException(BuildCleanupRetryMessage(path, branchBackoff.Reason, detail)),
+                hooks);
             return new GoalWorktreeRemoveResult(
                 $"Workspace cleanup deferred by cleanup-needed backoff for branch {branch}. {FormatCleanupBackoff(detail)}",
                 path,
@@ -187,8 +206,8 @@ public static partial class GoalWorktrees
 
         if (hasRegisteredWorktree)
         {
-            DeleteUntrackedOrchestratorInternalArtifacts(path);
-            var removal = RunWorktreeRemove(
+            DeleteUntrackedOrchestratorInternalArtifacts(path, hooks);
+            var removal = hooks.RunWorktreeRemove(
                 executionDirectory,
                 cleanupBudget.RemainingMilliseconds,
                 forceTerminalCleanup ? ToExtendedLengthPath(path) : path,
@@ -202,8 +221,8 @@ public static partial class GoalWorktrees
                     var failureReason = forceTerminalCleanup
                         ? "remove:unsafe-direct-delete-blocked"
                         : "remove:worktree-remove-failed";
-                    RecordCleanupNeeded(path, failureReason, goalId: goalId);
-                    var detail = TryGetCleanupBackoff(path);
+                    RecordCleanupNeeded(path, failureReason, goalId: goalId, hooks: hooks);
+                    var detail = TryGetCleanupBackoff(path, hooks);
                     return new GoalWorktreeRemoveResult(
                         forceTerminalCleanup
                             ? $"Workspace cleanup blocked after git worktree remove failed because direct deletion was unsafe: {safetyFailure}." +
@@ -211,35 +230,35 @@ public static partial class GoalWorktrees
                             : $"Workspace cleanup deferred because git worktree remove failed for {path}: {removal.Error.Trim()} Commit, discard, or recover its changes; conductor cleanup will retry after the worktree is clean." +
                                 (detail is null ? string.Empty : $" {FormatCleanupBackoff(detail)}"),
                         path,
-                        FindLockHoldersForCleanup(path),
+                        hooks.FindLockHoldersForCleanup(path),
                         ConductorRetryCommand(goalId),
                         CleanupBackoff: detail);
                 }
 
-                ReapRecordedWorkerProcesses(kernel, path);
-                if (!RunBoundedCleanupStep(path, "remove:fallback-build-server-shutdown", cleanupBudget, timeout => BuildServerShutdown(path, timeout)) ||
-                    !RunBoundedCleanupStep(path, "remove:fallback-acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, "remove:fallback", timeout)) ||
-                    !DeleteDirectory(path))
+                ReapRecordedWorkerProcesses(kernel, path, hooks);
+                if (!RunBoundedCleanupStep(path, "remove:fallback-build-server-shutdown", cleanupBudget, timeout => hooks.BuildServerShutdown(path, timeout), hooks) ||
+                    !RunBoundedCleanupStep(path, "remove:fallback-acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, "remove:fallback", timeout, hooks), hooks) ||
+                    !hooks.DeleteDirectory(path))
                 {
-                    RecordCleanupNeeded(path, "remove:direct-delete-failed", goalId: goalId);
-                    var detail = TryGetCleanupBackoff(path);
+                    RecordCleanupNeeded(path, "remove:direct-delete-failed", goalId: goalId, hooks: hooks);
+                    var detail = TryGetCleanupBackoff(path, hooks);
                     return new GoalWorktreeRemoveResult(
                         $"Workspace cleanup deferred because git removal and long-path filesystem fallback both failed for {path}." +
                             (detail is null ? string.Empty : $" {FormatCleanupBackoff(detail)}"),
                         path,
-                        FindLockHoldersForCleanup(path),
+                        hooks.FindLockHoldersForCleanup(path),
                         ConductorRetryCommand(goalId),
                         CleanupBackoff: detail);
                 }
 
-                _ = RunWorktreePrune(
+                _ = hooks.RunWorktreePrune(
                     executionDirectory,
                     cleanupBudget.RemainingMilliseconds,
                     true);
                 if (IsRegisteredWorktree(executionDirectory, path, cleanupBudget.RemainingMilliseconds))
                 {
-                    RecordCleanupNeeded(path, "remove:worktree-prune-failed", goalId: goalId);
-                    var detail = TryGetCleanupBackoff(path);
+                    RecordCleanupNeeded(path, "remove:worktree-prune-failed", goalId: goalId, hooks: hooks);
+                    var detail = TryGetCleanupBackoff(path, hooks);
                     return new GoalWorktreeRemoveResult(
                         $"Workspace directory was removed, but git still registers worktree {path} after prune." +
                             (detail is null ? string.Empty : $" {FormatCleanupBackoff(detail)}"),
@@ -251,7 +270,7 @@ public static partial class GoalWorktrees
             }
             else if (removal.ExitCode != 0)
             {
-                _ = RunWorktreePrune(
+                _ = hooks.RunWorktreePrune(
                     executionDirectory,
                     cleanupBudget.RemainingMilliseconds,
                     true);
@@ -261,7 +280,7 @@ public static partial class GoalWorktrees
         {
             // Worktree already unregistered; prune any stale tracking entries left by a prior
             // partial removal so git's internal state is consistent before we finish cleanup.
-            RunWorktreePrune(executionDirectory, cleanupBudget.RemainingMilliseconds, false);
+            hooks.RunWorktreePrune(executionDirectory, cleanupBudget.RemainingMilliseconds, false);
         }
 
         GitCli.GitResult? branchRemoval = null;
@@ -273,7 +292,7 @@ public static partial class GoalWorktrees
                 return new GoalWorktreeRemoveResult(
                     $"Workspace cleanup aborted; branch {branch} kept because it has unmerged commits at deletion time.",
                     path,
-                    Directory.Exists(path) ? FindLockHoldersForCleanup(path) : [],
+                    Directory.Exists(path) ? hooks.FindLockHoldersForCleanup(path) : [],
                     ConductorRetryCommand(goalId));
             }
 
@@ -287,25 +306,25 @@ public static partial class GoalWorktrees
 
         if (Directory.Exists(path))
         {
-            ReapRecordedWorkerProcesses(kernel, path);
-            if (!RunBoundedCleanupStep(path, "remove:build-server-shutdown", cleanupBudget, timeout => BuildServerShutdown(path, timeout)) ||
-                !RunBoundedCleanupStep(path, "remove:acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, "remove", timeout)))
+            ReapRecordedWorkerProcesses(kernel, path, hooks);
+            if (!RunBoundedCleanupStep(path, "remove:build-server-shutdown", cleanupBudget, timeout => hooks.BuildServerShutdown(path, timeout), hooks) ||
+                !RunBoundedCleanupStep(path, "remove:acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, "remove", timeout, hooks), hooks))
             {
-                RecordCleanupNeeded(path, "remove:cleanup-budget-exhausted", goalId: goalId);
-                var detail = TryGetCleanupBackoff(path);
+                RecordCleanupNeeded(path, "remove:cleanup-budget-exhausted", goalId: goalId, hooks: hooks);
+                var detail = TryGetCleanupBackoff(path, hooks);
                 return new GoalWorktreeRemoveResult(
                     $"Workspace cleanup deferred because cleanup budget was exhausted before deleting {path}." +
                         (detail is null ? string.Empty : $" {FormatCleanupBackoff(detail)}"),
                     path,
-                    FindLockHoldersForCleanup(path),
+                    hooks.FindLockHoldersForCleanup(path),
                     ConductorRetryCommand(goalId),
                     CleanupBackoff: detail);
             }
         }
 
-        if (Directory.Exists(path) && !DeleteDirectory(path))
+        if (Directory.Exists(path) && !hooks.DeleteDirectory(path))
         {
-            WarnCleanupFailure(path, "remove", new IOException("Directory deletion failed after ACL reset."));
+            WarnCleanupFailure(path, "remove", new IOException("Directory deletion failed after ACL reset."), hooks);
         }
 
         if (!hasBranch || branchRemoval is { ExitCode: 0 })
@@ -316,20 +335,21 @@ public static partial class GoalWorktrees
             var incompleteMessage = branchRemoval is { ExitCode: 0 }
                 ? $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete."
                 : "Removed workspace, but leftover directory cleanup is incomplete.";
-            var ephemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
-            ephemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ephemeralCleanup);
+            var ephemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel, hooks);
+            ephemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ephemeralCleanup, hooks);
             return CompleteOrDeferredRemoveResult(
                 path,
                 goalId,
                 completeMessage,
                 incompleteMessage,
-                ephemeralCleanup);
+                ephemeralCleanup,
+                hooks);
         }
 
-        var ownedEphemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel);
-        ownedEphemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ownedEphemeralCleanup);
-        RecordCleanupNeeded(path, "remove:branch-delete-failed", goalId: goalId);
-        var branchCleanupBackoff = TryGetCleanupBackoff(path);
+        var ownedEphemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel, hooks);
+        ownedEphemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ownedEphemeralCleanup, hooks);
+        RecordCleanupNeeded(path, "remove:branch-delete-failed", goalId: goalId, hooks: hooks);
+        var branchCleanupBackoff = TryGetCleanupBackoff(path, hooks);
         return new GoalWorktreeRemoveResult(
             $"Removed workspace; branch {branch} kept because branch deletion failed. Conductor retry: {ConductorRetryCommand(goalId)}" +
                 (branchCleanupBackoff is null ? string.Empty : $" {FormatCleanupBackoff(branchCleanupBackoff)}"),
@@ -340,8 +360,12 @@ public static partial class GoalWorktrees
             branchCleanupBackoff);
     }
 
-    public static GoalWorktreeSweepResult SweepOrphanedWorktrees(string executionDirectory, AgentOrchestratorKernel? kernel = null)
+    public static GoalWorktreeSweepResult SweepOrphanedWorktrees(
+        string executionDirectory,
+        AgentOrchestratorKernel? kernel = null,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
         if (!IsGitWorkTree(executionDirectory))
         {
             return new GoalWorktreeSweepResult(0, []);
@@ -365,7 +389,7 @@ public static partial class GoalWorktrees
                 continue;
             }
 
-            if (ClearOrphanDirectory(directory, kernel, "orphan-sweep"))
+            if (ClearOrphanDirectory(directory, kernel, "orphan-sweep", hooks))
             {
                 removed++;
             }
@@ -381,15 +405,17 @@ public static partial class GoalWorktrees
     public static GoalOwnedEphemeralSweepResult SweepOwnedEphemeralDirectories(
         string executionDirectory,
         GoalId goalId,
-        AgentOrchestratorKernel? kernel = null)
+        AgentOrchestratorKernel? kernel = null,
+        GoalWorktreeCleanupHooks? hooks = null)
     {
+        hooks ??= GoalWorktreeCleanupHooks.Default;
         var root = Path.GetFullPath(executionDirectory);
         var removed = 0;
         var leftovers = new List<string>();
 
         foreach (var path in EnumerateOwnedEphemeralDirectories(root, goalId))
         {
-            if (ClearOrphanDirectory(path, kernel, "owned-ephemeral-sweep"))
+            if (ClearOrphanDirectory(path, kernel, "owned-ephemeral-sweep", hooks))
             {
                 removed++;
             }
@@ -399,8 +425,8 @@ public static partial class GoalWorktrees
             }
         }
 
-        TryDeleteEmptyDirectory(Path.Combine(root, ".t"));
-        TryDeleteEmptyDirectory(Path.Combine(root, ".scratch"));
+        TryDeleteEmptyDirectory(Path.Combine(root, ".t"), hooks);
+        TryDeleteEmptyDirectory(Path.Combine(root, ".scratch"), hooks);
 
         return new GoalOwnedEphemeralSweepResult(removed, leftovers);
     }
@@ -408,46 +434,49 @@ public static partial class GoalWorktrees
     private static GoalOwnedEphemeralSweepResult SweepGoalBuildArtifacts(
         string executionDirectory,
         GoalId goalId,
-        GoalOwnedEphemeralSweepResult ownedEphemeralCleanup)
+        GoalOwnedEphemeralSweepResult ownedEphemeralCleanup,
+        GoalWorktreeCleanupHooks hooks)
     {
         var root = DotnetBuildEnvironmentManager.GoalRoot(goalId);
         if (!Directory.Exists(root))
         {
-            ClearCleanupNeeded(root, executionDirectory);
+            ClearCleanupNeeded(root, executionDirectory, hooks);
             return ownedEphemeralCleanup;
         }
 
         var leftovers = ownedEphemeralCleanup.LeftoverPaths.ToList();
-        if (IsCleanupBackedOff(root, "remove", out var backoff, executionDirectory))
+        if (IsCleanupBackedOff(root, "remove", out var backoff, executionDirectory, hooks))
         {
-            var lockHolders = FindLockHoldersForCleanup(root);
+            var lockHolders = hooks.FindLockHoldersForCleanup(root);
             if (!IsLockHeldCleanupNeededReason(backoff.Reason) || lockHolders.Count > 0)
             {
                 WarnCleanupFailure(
                     root,
                     "remove:goal-artifacts:skip-backoff",
-                    new IOException(BuildCleanupRetryMessage(root, backoff.Reason)));
+                    new IOException(BuildCleanupRetryMessage(root, backoff.Reason)),
+                    hooks);
                 leftovers.Add(root);
                 return new GoalOwnedEphemeralSweepResult(ownedEphemeralCleanup.RemovedCount, leftovers);
             }
 
-            ClearCleanupNeeded(root, executionDirectory);
+            ClearCleanupNeeded(root, executionDirectory, hooks);
         }
 
         if (DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId))
         {
-            ClearCleanupNeeded(root, executionDirectory);
+            ClearCleanupNeeded(root, executionDirectory, hooks);
             return ownedEphemeralCleanup with { RemovedCount = ownedEphemeralCleanup.RemovedCount + 1 };
         }
 
         WarnCleanupFailure(
             root,
             "remove:goal-artifacts",
-            new IOException(BuildCleanupRetryMessage(root, "remove:goal-artifacts")));
-        var failureReason = FindLockHoldersForCleanup(root).Count > 0
+            new IOException(BuildCleanupRetryMessage(root, "remove:goal-artifacts")),
+            hooks);
+        var failureReason = hooks.FindLockHoldersForCleanup(root).Count > 0
             ? "remove:goal-artifacts:lock-held"
             : "remove:goal-artifacts";
-        RecordCleanupNeeded(root, failureReason, executionDirectory);
+        RecordCleanupNeeded(root, failureReason, executionDirectory, hooks: hooks);
         leftovers.Add(root);
         return new GoalOwnedEphemeralSweepResult(ownedEphemeralCleanup.RemovedCount, leftovers);
     }
@@ -462,18 +491,19 @@ public static partial class GoalWorktrees
         GoalId goalId,
         string completeMessage,
         string incompleteMessage,
-        GoalOwnedEphemeralSweepResult? ownedEphemeralCleanup = null)
+        GoalOwnedEphemeralSweepResult? ownedEphemeralCleanup,
+        GoalWorktreeCleanupHooks hooks)
     {
         if (!Directory.Exists(path))
         {
-            ClearCleanupNeeded(path);
+            ClearCleanupNeeded(path, hooks: hooks);
             if (ownedEphemeralCleanup is { IsComplete: false })
             {
                 var leftover = ownedEphemeralCleanup.LeftoverPaths[0];
                 return new GoalWorktreeRemoveResult(
                     $"{completeMessage} Owned ephemeral cleanup is incomplete. Conductor retry: {ConductorRetryCommand(goalId)}",
                     leftover,
-                    FindLockHoldersForCleanup(leftover),
+                    hooks.FindLockHoldersForCleanup(leftover),
                     ConductorRetryCommand(goalId),
                     ownedEphemeralCleanup);
             }
@@ -482,12 +512,13 @@ public static partial class GoalWorktrees
         }
 
         var resumeCommand = ConductorRetryCommand(goalId);
-        var lockHolders = FindLockHoldersForCleanup(path);
+        var lockHolders = hooks.FindLockHoldersForCleanup(path);
         RecordCleanupNeeded(
             path,
             lockHolders.Count > 0 ? "remove:leftover-directory:lock-held" : "remove:leftover-directory",
-            goalId: goalId);
-        var cleanupBackoff = TryGetCleanupBackoff(path);
+            goalId: goalId,
+            hooks: hooks);
+        var cleanupBackoff = TryGetCleanupBackoff(path, hooks);
         return new GoalWorktreeRemoveResult(
             $"{incompleteMessage} Conductor retry: {resumeCommand}" +
                 (cleanupBackoff is null ? string.Empty : $" {FormatCleanupBackoff(cleanupBackoff)}"),
@@ -499,7 +530,7 @@ public static partial class GoalWorktrees
 
     private static string ConductorRetryCommand(GoalId goalId) => $"conduct {Prefix(goalId)} --loop";
 
-    private static GitCli.GitResult DefaultRunWorktreeRemove(
+    internal static GitCli.GitResult DefaultRunWorktreeRemove(
         string executionDirectory,
         int timeoutMilliseconds,
         string path,
@@ -514,7 +545,7 @@ public static partial class GoalWorktrees
                 path)
             : GitCli.Run(executionDirectory, timeoutMilliseconds, "worktree", "remove", path);
 
-    private static GitCli.GitResult DefaultRunWorktreePrune(
+    internal static GitCli.GitResult DefaultRunWorktreePrune(
         string executionDirectory,
         int timeoutMilliseconds,
         bool expireNow) =>
@@ -522,7 +553,9 @@ public static partial class GoalWorktrees
             ? GitCli.Run(executionDirectory, timeoutMilliseconds, "worktree", "prune", "--expire", "now")
             : GitCli.Run(executionDirectory, timeoutMilliseconds, "worktree", "prune");
 
-    private static void DeleteUntrackedOrchestratorInternalArtifacts(string worktreePath)
+    private static void DeleteUntrackedOrchestratorInternalArtifacts(
+        string worktreePath,
+        GoalWorktreeCleanupHooks hooks)
     {
         var status = GitCli.Run(worktreePath, "status", "--porcelain");
         if (status.ExitCode != 0 || string.IsNullOrWhiteSpace(status.Output))
@@ -557,7 +590,7 @@ public static partial class GoalWorktrees
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                WarnCleanupFailure(fullPath, "remove:internal-artifact-delete", ex);
+                WarnCleanupFailure(fullPath, "remove:internal-artifact-delete", ex, hooks);
             }
         }
     }
@@ -588,12 +621,12 @@ public static partial class GoalWorktrees
     }
 
 
-    private static bool DeleteDirectoryWithRetry(string path)
+    internal static bool DeleteDirectoryWithRetry(string path)
     {
         return DeleteDirectoryWithReason(path).Succeeded;
     }
 
-    private static GoalWorktreeDeleteResult DeleteDirectoryWithReason(string path)
+    internal static GoalWorktreeDeleteResult DeleteDirectoryWithReason(string path)
     {
         var deletionPath = ToExtendedLengthPath(path);
         if (!Directory.Exists(deletionPath))
@@ -711,25 +744,29 @@ public static partial class GoalWorktrees
         }
     }
 
-    private static bool ClearOrphanDirectory(string path, AgentOrchestratorKernel? kernel, string operation)
+    private static bool ClearOrphanDirectory(
+        string path,
+        AgentOrchestratorKernel? kernel,
+        string operation,
+        GoalWorktreeCleanupHooks hooks)
     {
         if (!Directory.Exists(path))
         {
-            ClearOrphanCleanupBackoff(path);
+            ClearOrphanCleanupBackoff(path, hooks: hooks);
             return true;
         }
 
-        var cleanupBudget = GoalWorktreeCleanupBudget.Start(GitCli.DefaultTimeoutMilliseconds, CleanupElapsedMilliseconds);
-        if (IsCleanupBackedOff(path, operation, out var backoff))
+        var cleanupBudget = GoalWorktreeCleanupBudget.Start(GitCli.DefaultTimeoutMilliseconds, hooks.CleanupElapsedMilliseconds());
+        if (IsCleanupBackedOff(path, operation, out var backoff, hooks: hooks))
         {
-            JournalCleanupBackoffSkip(path, operation + ":skip-backoff", backoff);
+            JournalCleanupBackoffSkip(path, operation + ":skip-backoff", backoff, hooks);
             return false;
         }
 
-        var firstDelete = DeleteDirectoryForCleanup(path);
+        var firstDelete = hooks.DeleteDirectoryForCleanup(path);
         if (firstDelete.Succeeded)
         {
-            ClearOrphanCleanupBackoff(path);
+            ClearOrphanCleanupBackoff(path, hooks: hooks);
             return true;
         }
 
@@ -738,21 +775,26 @@ public static partial class GoalWorktrees
             WarnCleanupFailure(
                 path,
                 operation,
-                new IOException(BuildCleanupRetryMessage(path, firstDelete.Message ?? "Directory deletion failed.")));
-            return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":delete-failed", operation + ":backoff");
+                new IOException(BuildCleanupRetryMessage(path, firstDelete.Message ?? "Directory deletion failed.")),
+                hooks);
+            return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":delete-failed", operation + ":backoff", hooks);
         }
 
-        ReapRecordedWorkerProcesses(kernel, path);
-        if (!RunBoundedCleanupStep(path, operation + ":acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, operation, timeout)))
+        ReapRecordedWorkerProcesses(kernel, path, hooks);
+        if (!RunBoundedCleanupStep(path, operation + ":acl-reset", cleanupBudget, timeout => ResetSandboxAcl(path, operation, timeout, hooks), hooks))
         {
-            RecordOrphanCleanupBackoff(path, operation + ":acl-reset-timeout", operation + ":backoff");
+            RecordOrphanCleanupBackoff(
+                path,
+                operation + ":acl-reset-timeout",
+                operation + ":backoff",
+                hooks: hooks);
             return false;
         }
 
-        var secondDelete = DeleteDirectoryForCleanup(path);
+        var secondDelete = hooks.DeleteDirectoryForCleanup(path);
         if (secondDelete.Succeeded)
         {
-            ClearOrphanCleanupBackoff(path);
+            ClearOrphanCleanupBackoff(path, hooks: hooks);
             return true;
         }
 
@@ -761,8 +803,9 @@ public static partial class GoalWorktrees
             operation,
             new IOException(BuildCleanupRetryMessage(
                 path,
-                secondDelete.Message ?? "Directory deletion failed after ACL reset.")));
-        return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":post-acl-delete-failed", operation + ":backoff");
+                secondDelete.Message ?? "Directory deletion failed after ACL reset.")),
+            hooks);
+        return RecordOrphanCleanupBackoffWhenLeftover(path, operation + ":post-acl-delete-failed", operation + ":backoff", hooks);
     }
 
     private static IEnumerable<string> EnumerateOwnedEphemeralDirectories(string executionDirectory, GoalId goalId)
@@ -797,15 +840,19 @@ public static partial class GoalWorktrees
         }
     }
 
-    private static bool RecordOrphanCleanupBackoffWhenLeftover(string path, string reason, string warningOperation = "orphan-sweep:backoff")
+    private static bool RecordOrphanCleanupBackoffWhenLeftover(
+        string path,
+        string reason,
+        string warningOperation,
+        GoalWorktreeCleanupHooks hooks)
     {
         if (!Directory.Exists(path))
         {
-            ClearOrphanCleanupBackoff(path);
+            ClearOrphanCleanupBackoff(path, hooks: hooks);
             return true;
         }
 
-        RecordOrphanCleanupBackoff(path, reason, warningOperation);
+        RecordOrphanCleanupBackoff(path, reason, warningOperation, hooks: hooks);
         return false;
     }
 
@@ -813,27 +860,30 @@ public static partial class GoalWorktrees
         string worktreePath,
         string operation,
         GoalWorktreeCleanupBudget cleanupBudget,
-        Action<int> action)
+        Action<int> action,
+        GoalWorktreeCleanupHooks hooks)
     {
         return RunBoundedCleanupStep(worktreePath, operation, cleanupBudget, timeout =>
         {
             action(timeout);
             return true;
-        });
+        }, hooks);
     }
 
     private static bool RunBoundedCleanupStep(
         string worktreePath,
         string operation,
         GoalWorktreeCleanupBudget cleanupBudget,
-        Func<int, bool> action)
+        Func<int, bool> action,
+        GoalWorktreeCleanupHooks hooks)
     {
         if (cleanupBudget.IsExpired)
         {
             WarnCleanupFailure(
                 worktreePath,
                 operation,
-                new TimeoutException($"Cleanup budget exhausted before {operation}."));
+                new TimeoutException($"Cleanup budget exhausted before {operation}."),
+                hooks);
             return false;
         }
 
@@ -846,7 +896,7 @@ public static partial class GoalWorktrees
         }
         catch (Exception ex) when (IsJanitorialCleanupDeferralException(ex))
         {
-            WarnCleanupFailure(worktreePath, operation, ex);
+            WarnCleanupFailure(worktreePath, operation, ex, hooks);
             return false;
         }
 
@@ -858,20 +908,25 @@ public static partial class GoalWorktrees
         WarnCleanupFailure(
             worktreePath,
             operation,
-            new TimeoutException($"Cleanup budget exhausted during {operation}."));
+            new TimeoutException($"Cleanup budget exhausted during {operation}."),
+            hooks);
         return false;
     }
 
-    private static bool ResetSandboxAcl(string worktreePath, string operation, int timeoutMilliseconds)
+    private static bool ResetSandboxAcl(
+        string worktreePath,
+        string operation,
+        int timeoutMilliseconds,
+        GoalWorktreeCleanupHooks hooks)
     {
         try
         {
-            SandboxAclHelper.ResetSandboxAcl(worktreePath, timeoutMilliseconds);
+            hooks.ResetSandboxAcl(worktreePath, timeoutMilliseconds);
             return true;
         }
         catch (Exception ex) when (ex is IOException or InvalidOperationException or System.ComponentModel.Win32Exception or UnauthorizedAccessException)
         {
-            WarnCleanupFailure(worktreePath, operation + ":acl-reset", ex);
+            WarnCleanupFailure(worktreePath, operation + ":acl-reset", ex, hooks);
             return false;
         }
     }
@@ -879,7 +934,10 @@ public static partial class GoalWorktrees
     private static bool IsJanitorialCleanupDeferralException(Exception ex) =>
         ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception;
 
-    private static void ReapRecordedWorkerProcesses(AgentOrchestratorKernel? kernel, string worktreePath)
+    private static void ReapRecordedWorkerProcesses(
+        AgentOrchestratorKernel? kernel,
+        string worktreePath,
+        GoalWorktreeCleanupHooks hooks)
     {
         if (kernel is null)
         {
@@ -897,21 +955,25 @@ public static partial class GoalWorktrees
         {
             foreach (var processId in process.TrackedProcessIds.Distinct())
             {
-                _ = TryKillRecordedProcess(processId);
+                _ = hooks.TryKillRecordedProcess(processId);
             }
         }
     }
 
-    private static bool DefaultTryKillRecordedProcess(int processId)
+    internal static bool DefaultTryKillRecordedProcess(int processId)
     {
         return WorkerProcessJobs.TryKillOrFallback(processId);
     }
 
-    private static void WarnCleanupFailure(string path, string operation, Exception exception)
+    private static void WarnCleanupFailure(
+        string path,
+        string operation,
+        Exception exception,
+        GoalWorktreeCleanupHooks hooks)
     {
         try
         {
-            CleanupWarningSink(new GoalWorktreeCleanupWarning(path, operation, exception));
+            hooks.CleanupWarningSink(new GoalWorktreeCleanupWarning(path, operation, exception));
         }
         catch
         {
@@ -919,7 +981,7 @@ public static partial class GoalWorktrees
         }
     }
 
-    private static void DefaultCleanupWarningSink(GoalWorktreeCleanupWarning warning)
+    internal static void DefaultCleanupWarningSink(GoalWorktreeCleanupWarning warning)
     {
         Console.Error.WriteLine(
             $"warning: worktree-cleanup path=\"{warning.Path}\" operation=\"{warning.Operation}\" exception=\"{warning.Exception.GetType().Name}\" message=\"{warning.Exception.Message}\"");
@@ -942,7 +1004,7 @@ public static partial class GoalWorktrees
     }
 
 
-    private static void DefaultBuildServerShutdown(string worktreePath, int timeoutMilliseconds)
+    internal static void DefaultBuildServerShutdown(string worktreePath, int timeoutMilliseconds)
     {
         try
         {
@@ -972,7 +1034,7 @@ public static partial class GoalWorktrees
         }
     }
 
-    private static List<WorktreeLockHolder> FindLockHolders(string path)
+    internal static List<WorktreeLockHolder> FindLockHolders(string path)
     {
         var normalizedPath = NormalizePath(path);
         var processesByPid = new Dictionary<int, string>();
