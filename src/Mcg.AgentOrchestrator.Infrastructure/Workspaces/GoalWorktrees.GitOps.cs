@@ -130,8 +130,18 @@ public static partial class GoalWorktrees
 
     public static GoalWorktreeChangedFilesResult ResolveChangedFilesAgainstHead(
         string executionDirectory,
-        GoalId goalId)
+        GoalId goalId) =>
+        ResolveChangedFilesAgainstHead(
+            executionDirectory,
+            goalId,
+            static (workingDirectory, args) => GitCli.Run(workingDirectory, args));
+
+    internal static GoalWorktreeChangedFilesResult ResolveChangedFilesAgainstHead(
+        string executionDirectory,
+        GoalId goalId,
+        Func<string, string[], GitCli.GitResult> gitRunner)
     {
+        ArgumentNullException.ThrowIfNull(gitRunner);
         RequireGitWorkTree(executionDirectory);
         var branch = BranchName(goalId);
         if (!BranchExists(executionDirectory, branch))
@@ -142,7 +152,7 @@ public static partial class GoalWorktrees
                 $"goal branch '{branch}' does not exist");
         }
 
-        var diff = GitCli.Run(executionDirectory, "diff", "--name-only", $"HEAD...{branch}");
+        var diff = gitRunner(executionDirectory, ["diff", "--name-only", $"HEAD...{branch}"]);
         if (diff.DrainTimedOut)
         {
             return new GoalWorktreeChangedFilesResult(

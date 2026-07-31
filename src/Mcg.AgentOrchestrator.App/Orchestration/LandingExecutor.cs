@@ -42,7 +42,10 @@ internal static class LandingExecutor
                 $"Goal branch '{goalBranch}' does not exist. Create the workspace first with: workspace create {goalPrefix}");
         }
 
-        var changedFilesResult = GoalWorktrees.ResolveChangedFilesAgainstHead(executionDirectory, goal.Id);
+        var changedFilesResult = GoalWorktrees.ResolveChangedFilesAgainstHead(
+            executionDirectory,
+            goal.Id,
+            GitRunner);
         if (!changedFilesResult.Succeeded)
         {
             var diffDecision = new LandingDecision.Escalate(
