@@ -647,7 +647,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             kernel.CreateGoal("Readable while acceptance holds writer");
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
             using var lockConnection = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadWrite;Pooling=False;");
@@ -656,6 +656,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             lockCommand.CommandText = "BEGIN IMMEDIATE";
             lockCommand.ExecuteNonQuery();
 
+            // The primary helper already migrated this store; this read intentionally opens under a write lock.
             var concurrentRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
             var goals = concurrentRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
 
@@ -677,7 +678,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             kernel.CreateGoal("SQLite helper read-only smoke");
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
             using var lockConnection = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadWrite;Pooling=False;");
@@ -711,7 +712,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             var goal = kernel.CreateGoal("SQLite helper labeled goal");
             kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             await stateRepository.SaveAsync(kernel);
             using (var conn = new SqliteConnection($"Data Source={workspace.SqliteStatePath};Mode=ReadOnly;Pooling=False;"))
             {
@@ -745,7 +746,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("SQLite helper unlabeled goal");
             kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             await stateRepository.SaveAsync(kernel);
 
             var result = RunOrchestratorSqliteTool(repo, repo, "list-goals", "--repo-root", repo, "--status", "Active", "--limit", "10");
@@ -771,7 +772,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var kernel = new AgentOrchestratorKernel();
             kernel.CreateGoal("SQLite helper primary state");
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
             RunGit(repo, "worktree", "add", "-b", "sqlite-tool-test", linkedWorktree);
@@ -779,7 +780,7 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
             var localWorkspace = OrchestratorWorkspace.ForDirectory(linkedWorktree);
             var localKernel = new AgentOrchestratorKernel();
             localKernel.CreateGoal("SQLite helper linked local state");
-            var localStateRepository = new SqliteOrchestratorStateRepository(localWorkspace.SqliteStatePath);
+            var localStateRepository = CreateMigratedStateRepository(localWorkspace.SqliteStatePath);
             localStateRepository.SaveAsync(localKernel).GetAwaiter().GetResult();
 
             var result = RunOrchestratorSqliteTool(linkedWorktree, null, "list-goals", "--limit", "10");

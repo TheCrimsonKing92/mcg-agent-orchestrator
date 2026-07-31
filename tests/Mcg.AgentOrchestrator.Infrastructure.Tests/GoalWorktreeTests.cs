@@ -111,9 +111,14 @@ public abstract class GoalWorktreeTestBase
         RunGit(root, "init");
         RunGit(root, "config", "user.email", "tests@example.com");
         RunGit(root, "config", "user.name", "Worktree Tests");
+        File.AppendAllText(
+            Path.Combine(root, ".git", "info", "exclude"),
+            ".orchestrator/" + Environment.NewLine);
         File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
         RunGit(root, "add", "-A");
         RunGit(root, "commit", "-m", "Seed");
+        _ = CreateMigratedStateRepository(
+            OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
         return root;
     }
 
@@ -1308,7 +1313,7 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var failOutboxCommit = false;
-            var repository = new SqliteOrchestratorStateRepository(
+            var repository = CreateMigratedStateRepository(
                 workspace.SqliteStatePath,
                 statementObserver: null,
                 telemetryOptions: null,
@@ -1443,8 +1448,7 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
-            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             var orphanKernel = new AgentOrchestratorKernel();
             var orphanGoal = orphanKernel.CreateGoal("Orphaned acceptance retry audit");
             var messages = new OrchestratorStateOutboxMessage[]
@@ -1514,7 +1518,7 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             var kernel = new AgentOrchestratorKernel();
             var goal = CreateCompletedGoal(kernel, "Claim acceptance retry audit once", repo);
             var mainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
@@ -1559,6 +1563,7 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
             {
                 secondDrainerStarted.SetResult();
                 return RunPersistentCommand(
+                    // The primary helper already migrated this store; a competing drainer must not run DDL.
                     new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
                     workspace,
                     ["goals"]);

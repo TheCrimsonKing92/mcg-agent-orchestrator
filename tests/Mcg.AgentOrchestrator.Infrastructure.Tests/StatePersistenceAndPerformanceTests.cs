@@ -599,9 +599,6 @@ public sealed class StatePersistenceAndPerformanceTests
     }
 
     private static SqliteOrchestratorStateRepository OpenMigratedStateRepository(string path)
-    {
-        _ = StateDbMigrations.EnsureUpToDate(path);
-        return new SqliteOrchestratorStateRepository(path);
-    }
+        => CreateMigratedStateRepository(path);
 }
 

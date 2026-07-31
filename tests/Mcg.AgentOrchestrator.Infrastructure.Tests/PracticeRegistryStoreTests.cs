@@ -53,7 +53,7 @@ public sealed class PracticeRegistryStoreTests
             ["dispatch"],
             [new EngineeringPracticeProvenance("operator-receipt", "operator promoted finding")],
             Priority: 500));
-        var repository = new SqliteOrchestratorStateRepository(db);
+        var repository = CreateMigratedStateRepository(db);
         await repository.SaveAsync(new AgentOrchestratorKernel());
 
         var kernel = await repository.LoadAsync();

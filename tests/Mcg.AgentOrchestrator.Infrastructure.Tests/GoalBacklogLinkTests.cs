@@ -55,8 +55,8 @@ public sealed class GoalBacklogLinkTests
         Assert.NotNull(currentGoal);
         Assert.Equal(item.Id, currentGoal!.SourceBacklogItemId);
         Assert.Contains($"Source backlog: {item.Id}", output);
-        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
-        var restored = await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).LoadAsync();
+        await CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        var restored = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
         Assert.Equal(item.Id, restored.GetGoal(currentGoal.Id).SourceBacklogItemId);
     }
 
@@ -355,7 +355,7 @@ public sealed class GoalBacklogLinkTests
             .Id;
         Assert.Equal(seededId, currentGoal!.SourceBacklogItemId);
 
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         await repository.SaveAsync(kernel);
 
         await using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.SqliteStatePath}");
@@ -417,7 +417,7 @@ public sealed class GoalBacklogLinkTests
         var root = CreateTempDirectory();
         SeedBacklog(root, "# Backlog\n\n## Persistent Retry Feature\n\nFeature body.\n");
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         IReadOnlyList<AgentDefinition> agents = [];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();

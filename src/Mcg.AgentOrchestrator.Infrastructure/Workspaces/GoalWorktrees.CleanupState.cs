@@ -74,7 +74,7 @@ public static partial class GoalWorktrees
                     escalatedAtUtc));
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
             WarnCleanupFailure(executionDirectory, "cleanup-status:read", ex);
         }
@@ -251,7 +251,7 @@ public static partial class GoalWorktrees
 
             WarnCleanupFailure(path, warningOperation, new TimeoutException(BuildCleanupRetryMessage(path, reason, TryGetCleanupBackoff(path, cleanupStateRoot))));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
             WarnCleanupFailure(path, "orphan-sweep:backoff-write", ex);
         }
@@ -289,7 +289,7 @@ public static partial class GoalWorktrees
             entry = new OrphanCleanupBackoffEntry(skipUntilUtc, reader.GetString(1));
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
             WarnCleanupFailure(path, "orphan-sweep:backoff-read", ex);
             return false;
@@ -322,7 +322,7 @@ public static partial class GoalWorktrees
                     return escalated;
                 });
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
             WarnCleanupFailure(path, "orphan-sweep:backoff-clear", ex);
         }
@@ -354,7 +354,7 @@ public static partial class GoalWorktrees
                     command.ExecuteNonQuery();
                 });
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
             WarnCleanupFailure(path, "orphan-sweep:backoff-delay-clear", ex);
         }
@@ -438,7 +438,7 @@ public static partial class GoalWorktrees
                         incrementFailureCount: false);
                 });
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
             WarnCleanupFailure(path, "orphan-sweep:journal-write", ex);
         }
@@ -546,6 +546,13 @@ public static partial class GoalWorktrees
 
     private sealed record CleanupDebtObservation(GoalWorktreeCleanupDebt Debt, bool EscalatedNow);
 
+    private static bool IsCleanupStateAccessFailure(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException or SqliteException ||
+        exception is InvalidOperationException &&
+        exception.Message.StartsWith(
+            "State database journal mode must be WAL;",
+            StringComparison.Ordinal);
+
     private static void RaiseCleanupDebtAttention(
         string path,
         string reason,
@@ -570,7 +577,7 @@ public static partial class GoalWorktrees
                 .GetAwaiter()
                 .GetResult();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
             WarnCleanupFailure(path, "cleanup-debt-attention-raise", ex);
         }
@@ -585,7 +592,7 @@ public static partial class GoalWorktrees
                 .GetAwaiter()
                 .GetResult();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+        catch (Exception ex) when (IsCleanupStateAccessFailure(ex))
         {
             WarnCleanupFailure(path, "cleanup-debt-attention-resolve", ex);
         }

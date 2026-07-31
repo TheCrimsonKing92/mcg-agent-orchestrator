@@ -34,7 +34,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var workspace = CreateRefinedWorkspace(root);
         var backlogStore = new BacklogStore(workspace.BacklogStorePath);
         var item = await backlogStore.AddAsync("Persistent linked item");
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Persistent backlog-show linked goal", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
@@ -83,7 +83,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Park from persistent runner", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -123,7 +123,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Park from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -168,7 +168,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Unpark from file", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -615,7 +615,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var goalA = kernel.CreateGoal("Concurrent progress A", [new TaskSpec(TaskId.New(), "Do A", AgentRole.Developer)]);
         var goalB = kernel.CreateGoal("Concurrent progress B", [new TaskSpec(TaskId.New(), "Do B", AgentRole.Developer)]);
@@ -629,6 +629,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         async Task RunProgressAsync(GoalId goalId, string message)
         {
             await Task.Yield();
+            // The primary helper already migrated this store; concurrent opens must remain schema-free.
             var localRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
             IReadOnlyList<AgentDefinition> localAgents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
@@ -677,7 +678,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
-        var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var kernel = new AgentOrchestratorKernel();
         var active = kernel.CreateGoal("Active unpark rejection", [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
         var completed = kernel.CreateGoal("Completed unpark rejection", [new TaskSpec(TaskId.New(), "Done work", AgentRole.Developer)]);

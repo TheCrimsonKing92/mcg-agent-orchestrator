@@ -542,7 +542,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             profilesA.GetRequired("machine-global-sibling").CommandTemplate,
             StringComparison.OrdinalIgnoreCase);
 
-        var restoredA = await new SqliteOrchestratorStateRepository(workspaceA.SqliteStatePath).LoadAsync();
+        var restoredA = await CreateMigratedStateRepository(workspaceA.SqliteStatePath).LoadAsync();
         var backlogA = await new BacklogStore(workspaceA.BacklogStorePath).ListAsync(includeAll: true);
         Xunit.Assert.Empty(restoredA.Goals);
         Xunit.Assert.Empty(backlogA);
@@ -638,7 +638,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         AgentCatalogStore.Save(workspace.AgentCatalogPath, customizedAgents);
         var kernel = new AgentOrchestratorKernel();
         kernel.CreateGoal("Preserve this goal");
-        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        await CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
         await new BacklogStore(workspace.BacklogStorePath).UpsertAsync(new BacklogItem(
             "preserve-backlog",
             "Preserve this backlog item",

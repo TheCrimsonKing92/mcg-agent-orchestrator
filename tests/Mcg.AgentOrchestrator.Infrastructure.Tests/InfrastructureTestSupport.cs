@@ -54,10 +54,18 @@ public static OrchestratorWorkspace CreateRefinedWorkspace(string root)
     return workspace;
 }
 
-public static SqliteOrchestratorStateRepository CreateMigratedStateRepository(string databasePath)
+public static SqliteOrchestratorStateRepository CreateMigratedStateRepository(
+    string databasePath,
+    Action<string>? statementObserver = null,
+    SqliteWriteTelemetryOptions? telemetryOptions = null,
+    Action? beforeOutboxCommit = null)
 {
     _ = StateDbMigrations.EnsureUpToDate(databasePath);
-    return new SqliteOrchestratorStateRepository(databasePath);
+    return new SqliteOrchestratorStateRepository(
+        databasePath,
+        statementObserver,
+        telemetryOptions,
+        beforeOutboxCommit);
 }
 
 public static void SeedSpecRefinerBinding(OrchestratorWorkspace workspace)

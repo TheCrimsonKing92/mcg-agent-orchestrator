@@ -100,10 +100,7 @@ public sealed class ConductorBatchLoopTests
         Path.Combine(Path.GetTempPath(), $"conduct-stop-{Guid.NewGuid():N}.txt");
 
     private static SqliteOrchestratorStateRepository OpenStateRepository(string dbPath)
-    {
-        _ = StateDbMigrations.EnsureUpToDate(dbPath);
-        return new SqliteOrchestratorStateRepository(dbPath);
-    }
+        => CreateMigratedStateRepository(dbPath);
 
     private static Goal CreateVerifiedSimpleGoal(AgentOrchestratorKernel kernel, string objective)
     {
