@@ -5,6 +5,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 export MCG_ORCHESTRATOR_REPOSITORY_ROOT="$ROOT/"
 
+# Intentionally inherited by the entire launcher process tree (CLI, builds, gates, and their children) to
+# limit aggregate memory pressure on many-core hosts. The CLI's Workstation/non-concurrent GC mode is scoped
+# to its runtimeconfig by Mcg.AgentOrchestrator.App.csproj, and MSBuild node reuse is disabled repo-wide by
+# Directory.Build.rsp; do not export those settings here because unrelated descendants own their runtimes.
+export DOTNET_GCConserveMemory=7
+
 APP_PROJECT="$ROOT/src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj"
 APP_DLL="$ROOT/src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll"
 LOCK_DIR="$ROOT/.build-lock"
