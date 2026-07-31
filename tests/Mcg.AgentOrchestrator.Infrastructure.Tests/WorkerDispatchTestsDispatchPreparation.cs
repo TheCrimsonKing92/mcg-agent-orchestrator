@@ -347,6 +347,40 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.True(result.Brief.Content.Contains("digest-kept", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_never_trims_durable_research_or_plan_sections")]
+    public void WorkerPromptInputBudgetNeverTrimsDurableResearchOrPlanSections()
+    {
+        var research = "RESEARCH-PIN-" + new string('r', 240);
+        var plan = "PLAN-PIN-" + new string('p', 240);
+        var noise = new string('n', 400);
+        var brief = CreateBudgetBrief(
+            "brief instructions",
+            "## Durable Research Notes",
+            research,
+            "## Durable Planner Plan",
+            plan,
+            "## Prior Task Evidence",
+            noise);
+        var budget = WorkerPromptInputBudget.CountTokens(
+            CreateBudgetBrief(
+                "brief instructions",
+                "## Durable Research Notes",
+                research,
+                "## Durable Planner Plan",
+                plan).Content);
+
+        var result = WorkerPromptInputBudget.Apply(
+            brief,
+            "Anthropic",
+            "claude-sonnet-4-6",
+            budget);
+
+        Assert.Contains("RESEARCH-PIN-", result.Brief.Content, StringComparison.Ordinal);
+        Assert.Contains("PLAN-PIN-", result.Brief.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain(noise, result.Brief.Content, StringComparison.Ordinal);
+        Assert.Equal(["evidence"], result.DroppedSections);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_drops_context_sections_in_fixed_priority_order_until_fit")]
     public void WorkerPromptInputBudgetDropsContextSectionsInFixedPriorityOrderUntilFit()
 {

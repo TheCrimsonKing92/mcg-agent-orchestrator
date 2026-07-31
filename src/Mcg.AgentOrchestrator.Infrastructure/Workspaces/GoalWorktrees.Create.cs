@@ -42,8 +42,12 @@ public static partial class GoalWorktrees
             error);
     }
 
-    public static string Ensure(string executionDirectory, GoalId goalId)
+    public static string Ensure(
+        string executionDirectory,
+        GoalId goalId,
+        GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
+        cleanupHooks ??= GoalWorktreeCleanupHooks.Default;
         var existing = TryResolve(executionDirectory, goalId);
         if (existing is not null)
         {
@@ -60,7 +64,7 @@ public static partial class GoalWorktrees
         var result = AddWorktree(executionDirectory, path, branch, branchExists);
         if (result.ExitCode != 0 && WorktreeAddFailedBecausePathExists(result, path))
         {
-            ClearOrphanDirectory(path, kernel: null, operation: "worktree-add-retry");
+            ClearOrphanDirectory(path, kernel: null, operation: "worktree-add-retry", cleanupHooks);
             result = AddWorktree(executionDirectory, path, branch, BranchExists(executionDirectory, branch));
         }
 

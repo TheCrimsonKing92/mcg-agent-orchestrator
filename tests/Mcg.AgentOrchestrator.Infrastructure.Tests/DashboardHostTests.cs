@@ -46,7 +46,7 @@ public sealed class DashboardHostTests
         var unlinkedGoal = kernel.CreateGoal(
             "Hosted unlinked collision change src/Hosted/Self.cs",
             [new TaskSpec(TaskId.New(), "Implement unlinked hosted change.", AgentRole.Developer)]);
-        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        await CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
         var task = goal.Tasks.Single();
         var port = GetAvailablePort();
         var url = $"http://localhost:{port}/";

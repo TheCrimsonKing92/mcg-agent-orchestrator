@@ -490,6 +490,8 @@ public sealed class VerificationAndProcessLogTests
     var stdoutPath = Path.Combine(root, "out.log");
     var stderrPath = Path.Combine(root, "err.log");
     var exitPath = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdoutPath, WorkerDispatchTestSupport.ResearcherContractFixture());
+    File.WriteAllText(stderrPath, string.Empty);
     File.WriteAllText(exitPath, "0");
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec", workingDirectory, DateTimeOffset.UtcNow));
     var processRecord = new TaskProcessRecord(999999, "codex exec", workingDirectory, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);

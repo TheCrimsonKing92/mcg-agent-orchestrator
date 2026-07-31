@@ -386,7 +386,7 @@ public sealed class LandingExecutorTests
         try
         {
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
-            var innerRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var innerRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             var stateRepository = new CountingStateRepository(innerRepository);
             var (kernel, goal) = CreateVerifiedGoal(repo);
             innerRepository.SaveAsync(kernel).GetAwaiter().GetResult();
@@ -436,7 +436,7 @@ public sealed class LandingExecutorTests
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var store = new BacklogStore(workspace.BacklogStorePath);
             var item = await store.AddAsync("Goal mark landed source");
-            var repository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             var (kernel, goal) = CreateVerifiedGoal(repo);
             kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
             await repository.SaveAsync(kernel);
@@ -1025,10 +1025,15 @@ public sealed class LandingExecutorTests
         RunGit(root, "init", "-b", "main");
         RunGit(root, "config", "user.email", "tests@example.invalid");
         RunGit(root, "config", "user.name", "Tests");
-        File.AppendAllText(Path.Combine(root, ".git", "info", "exclude"), ".orchestrator-test-remotes/" + Environment.NewLine);
+        File.AppendAllText(
+            Path.Combine(root, ".git", "info", "exclude"),
+            ".orchestrator-test-remotes/" + Environment.NewLine +
+            ".orchestrator/" + Environment.NewLine);
         File.WriteAllText(Path.Combine(root, "README.md"), "initial" + Environment.NewLine);
         RunGit(root, "add", "README.md");
         RunGit(root, "commit", "-m", "Initial");
+        _ = CreateMigratedStateRepository(
+            OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
         return root;
     }
 

@@ -297,7 +297,7 @@ public sealed class ConductLoopLockTests
             var output = AsyncLocalConsoleRouter.Capture(() =>
                 CliPersistentStateRunner.ExecuteCommand(
                     args,
-                    new SqliteOrchestratorStateRepository(workspace.SqliteStatePath),
+                    CreateMigratedStateRepository(workspace.SqliteStatePath),
                     workspace,
                     ref agents,
                     providers,

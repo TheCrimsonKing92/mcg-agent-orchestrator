@@ -84,7 +84,7 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     kernel.ActivateGoal(goal.Id, agents);
     var workingDirectory = GoalWorktrees.Ensure(root, goal.Id);
 
-    var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+    var researchResults = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
         kernel,
         goal,
         agents,
@@ -93,6 +93,33 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         workingDirectory,
         dispatchedAt,
         commandExists: RealClaudeLauncherExists);
+    Assert.Single(researchResults);
+    Assert.Equal(AgentRole.Researcher, researchResults.Single().Task.RequiredRole);
+    CompleteResearcherArtifact(kernel, goal);
+
+    var plannerResults = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt.AddMinutes(1),
+        commandExists: RealClaudeLauncherExists);
+    Assert.Single(plannerResults);
+    Assert.Equal(AgentRole.Planner, plannerResults.Single().Task.RequiredRole);
+    CompletePlannerArtifact(kernel, goal);
+
+    var downstreamResults = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
+        kernel,
+        goal,
+        agents,
+        WorkerProfileCatalog.Default(),
+        promptRoot,
+        workingDirectory,
+        dispatchedAt.AddMinutes(2),
+        commandExists: RealClaudeLauncherExists);
+    var results = researchResults.Concat(plannerResults).Concat(downstreamResults).ToList();
 
     Assert.Equal(5, results.Count);
     var developer = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
@@ -135,11 +162,13 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         new WorkerProfile("test-subscription", "worker --model {subscriptionModelName} --reasoning {subscriptionReasoningEffort} --prompt {promptPath} --cd {workingDirectory}")
     ]);
     kernel.ActivateGoal(goal.Id, agents);
-    foreach (var task in goal.Tasks.Where(task =>
-        task.RequiredRole is AgentRole.Planner or AgentRole.Researcher or AgentRole.Developer))
-    {
-        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, $"{task.RequiredRole} completed in persisted state.");
-    }
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
+    var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+    kernel.ReportTaskProgress(
+        goal.Id,
+        developer.Id,
+        WorkTaskStatus.Completed,
+        "Developer completed in persisted state.");
 
     var plan = SubscriptionPlanBuilder.Build(goal, agents, profiles);
     var readiness = DispatchReadinessEvaluator.EvaluateDispatchReadiness(goal, plan, DateTimeOffset.UtcNow);

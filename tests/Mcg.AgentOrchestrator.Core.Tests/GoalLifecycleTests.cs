@@ -129,6 +129,9 @@ public sealed class GoalLifecycleTests
     var tasks = AgentOrchestratorKernel.CreateDefaultSoftwareDevelopmentTasks();
 
     Assert.Equal(5, tasks.Count);
+    Assert.Equal(
+        [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+        tasks.Select(task => task.RequiredRole));
     Assert.True(tasks.All(task => !string.IsNullOrWhiteSpace(task.VerificationPlan)), "Each default SDLC task should include a verification plan.");
     Assert.Contains(tasks, task => task.RequiredRole == AgentRole.Planner && task.VerificationPlan!.Contains("likely files", StringComparison.OrdinalIgnoreCase));
     Assert.Contains(tasks, task => task.RequiredRole == AgentRole.Researcher && task.VerificationPlan!.Contains("commands", StringComparison.OrdinalIgnoreCase));

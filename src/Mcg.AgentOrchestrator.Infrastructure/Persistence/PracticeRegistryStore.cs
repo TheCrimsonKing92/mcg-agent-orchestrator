@@ -9,7 +9,6 @@ public sealed class PracticeRegistryStore
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly string _dbPath;
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
     public PracticeRegistryStore(string dbPath)
     {
@@ -17,30 +16,32 @@ public sealed class PracticeRegistryStore
             throw new ArgumentException("Value cannot be empty.", nameof(dbPath));
 
         _dbPath = dbPath;
-        var directory = Path.GetDirectoryName(_dbPath);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-
-        using var conn = OpenConnection();
-        EnsureSchemaAndSeed(conn);
     }
 
     public IReadOnlyList<EngineeringPractice> ListActive()
     {
-        using var conn = OpenConnection();
-        EnsureSchemaAndSeed(conn);
-        return ListActive(conn);
+        if (!File.Exists(_dbPath))
+            return EngineeringPracticeDefaults.SeedEntries.Where(practice => practice.IsEnabled).ToArray();
+
+        try
+        {
+            using var conn = OpenReadConnection();
+            return ListActive(conn);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
+        {
+            return EngineeringPracticeDefaults.SeedEntries.Where(practice => practice.IsEnabled).ToArray();
+        }
     }
 
     public void Upsert(EngineeringPractice practice)
     {
         ArgumentNullException.ThrowIfNull(practice);
         using var conn = OpenConnection();
-        EnsureSchemaAndSeed(conn);
         Upsert(conn, practice, overwriteExisting: true);
     }
 
-    internal static void EnsureSchemaAndSeed(SqliteConnection conn)
+    internal static void ApplySchemaMigration(SqliteConnection conn)
     {
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS engineering_practices (
@@ -84,14 +85,11 @@ public sealed class PracticeRegistryStore
         return result;
     }
 
-    private SqliteConnection OpenConnection()
-    {
-        var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
-        RunNonQuery(conn, "PRAGMA journal_mode=WAL");
-        return conn;
-    }
+    private SqliteConnection OpenConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.ReadWrite);
+
+    private SqliteConnection OpenReadConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.QueryOnlyRead);
 
     private static void Upsert(SqliteConnection conn, EngineeringPractice practice, bool overwriteExisting)
     {

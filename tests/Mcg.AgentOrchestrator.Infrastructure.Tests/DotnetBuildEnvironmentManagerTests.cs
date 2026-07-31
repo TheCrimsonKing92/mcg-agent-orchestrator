@@ -298,7 +298,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
             DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = null;
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+                AssemblyBuildServerShutdownIsolation.SafeDefault;
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -766,7 +767,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         {
             WorkerProcessJobs.TryKillPidTree = originalKill;
             DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = null;
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = null;
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+                AssemblyBuildServerShutdownIsolation.SafeDefault;
             LockAttribution.AttributeForTests = null;
         }
     }
@@ -1524,7 +1526,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = null;
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+                AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }
 
@@ -1549,7 +1552,8 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
         finally
         {
-            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = null;
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+                AssemblyBuildServerShutdownIsolation.SafeDefault;
         }
     }
 

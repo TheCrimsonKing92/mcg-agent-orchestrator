@@ -261,7 +261,7 @@ public sealed class ConductorSelfRelaunchTests
             var orchestratorDirectory = Path.Combine(root, ".orchestrator");
             Directory.CreateDirectory(orchestratorDirectory);
             var stateStorePath = Path.Combine(orchestratorDirectory, "state.db");
-            _ = new SqliteOrchestratorStateRepository(stateStorePath)
+            _ = CreateMigratedStateRepository(stateStorePath)
                 .LoadAsync()
                 .GetAwaiter()
                 .GetResult();

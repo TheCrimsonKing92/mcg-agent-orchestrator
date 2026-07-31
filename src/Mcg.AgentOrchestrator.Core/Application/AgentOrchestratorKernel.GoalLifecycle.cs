@@ -776,6 +776,32 @@ public sealed partial class AgentOrchestratorKernel
         RefreshGoalStatus(goal);
     }
 
+    public void EscalateTaskFailure(GoalId goalId, TaskId taskId, string message)
+    {
+        var escalationMessage = message?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(escalationMessage))
+        {
+            throw new ArgumentException("Escalation message cannot be empty.", nameof(message));
+        }
+
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        if (task.Status is WorkTaskStatus.Running || task.LastProcess is { IsRunning: true })
+        {
+            throw new InvalidOperationException($"Task '{taskId}' is still running and cannot be escalated.");
+        }
+
+        task.SetStatus(WorkTaskStatus.Failed);
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskFailed, escalationMessage);
+        Append(goal, taskId, ProgressKind.TaskFailed, escalationMessage);
+        goal.SetStatus(GoalStatus.Failed);
+        Append(
+            goal,
+            null,
+            ProgressKind.GoalPolicyDecision,
+            $"Goal failed because task {task.Id.Value[..8]} reached an explicit terminal escalation.");
+    }
+
     private static void ResetTaskForRetry(TaskSpec task, DateTimeOffset retryAt, RetryRoundKind? retryRoundKind = null)
     {
         task.ClearLatestVerification();
@@ -853,9 +879,9 @@ public sealed partial class AgentOrchestratorKernel
 
     private static int SdlcRoleOrder(AgentRole role) => role switch
     {
-        AgentRole.Planner => 0,
-        AgentRole.Ideation => 1,
-        AgentRole.Researcher => 2,
+        AgentRole.Researcher => 0,
+        AgentRole.Planner => 1,
+        AgentRole.Ideation => 2,
         AgentRole.Developer => 3,
         AgentRole.Tester => 4,
         AgentRole.Reviewer => 5,

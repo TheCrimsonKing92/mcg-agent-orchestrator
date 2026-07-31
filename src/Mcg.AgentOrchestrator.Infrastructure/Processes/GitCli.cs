@@ -171,11 +171,13 @@ internal static class GitCli
         }
 
         return normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals(".orchestrator-handoff.md", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals(WorkerSandboxPreparer.MarkerFileName, StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals(WorkerSandboxPreparer.ReceiptFileName, StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals("WORKER_RESULT.md", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals("WORKER_RESULT.txt", StringComparison.OrdinalIgnoreCase) ||
             IsIsolationLeaseArtifactPath(normalized) ||
+            normalized.StartsWith(".orchestrator-context/", StringComparison.OrdinalIgnoreCase) ||
             normalized.StartsWith("bin/", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("/bin/", StringComparison.OrdinalIgnoreCase) ||
             normalized.StartsWith("obj/", StringComparison.OrdinalIgnoreCase) ||

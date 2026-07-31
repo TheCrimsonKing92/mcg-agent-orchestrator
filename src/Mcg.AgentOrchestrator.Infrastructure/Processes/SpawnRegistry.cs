@@ -23,115 +23,108 @@ internal sealed class SpawnRegistry
     public SpawnRegistry(string dbPath)
     {
         _dbPath = dbPath;
-        EnsureSchema();
     }
-
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
     public void Register(string ownerId, SpawnProcessIdentity identity)
     {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            INSERT INTO spawn_registry (
-                owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
-            ) VALUES (
-                $owner_id, $process_id, $process_started_at, $image_path, $registered_at, NULL, NULL
-            )
-            """;
-        cmd.Parameters.AddWithValue("$owner_id", ownerId);
-        cmd.Parameters.AddWithValue("$process_id", identity.ProcessId);
-        cmd.Parameters.AddWithValue("$process_started_at", identity.StartedAt.ToString("O"));
-        cmd.Parameters.AddWithValue("$image_path", identity.ImagePath);
-        cmd.Parameters.AddWithValue("$registered_at", DateTimeOffset.UtcNow.ToString("O"));
-        cmd.ExecuteNonQuery();
+        WithWriteConnection(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO spawn_registry (
+                    owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
+                ) VALUES (
+                    $owner_id, $process_id, $process_started_at, $image_path, $registered_at, NULL, NULL
+                )
+                """;
+            cmd.Parameters.AddWithValue("$owner_id", ownerId);
+            cmd.Parameters.AddWithValue("$process_id", identity.ProcessId);
+            cmd.Parameters.AddWithValue("$process_started_at", identity.StartedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("$image_path", identity.ImagePath);
+            cmd.Parameters.AddWithValue("$registered_at", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.ExecuteNonQuery();
+        });
     }
 
     public IReadOnlyList<SpawnRegistryEntry> ListActive()
     {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT id, owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
-            FROM spawn_registry
-            WHERE released_at IS NULL
-            ORDER BY registered_at ASC
-            """;
-        var result = new List<SpawnRegistryEntry>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            result.Add(ReadEntry(reader));
-        }
+        if (!File.Exists(_dbPath))
+            return [];
 
-        return result;
+        try
+        {
+            using var conn = OpenReadConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT id, owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
+                FROM spawn_registry
+                WHERE released_at IS NULL
+                ORDER BY registered_at ASC
+                """;
+            var result = new List<SpawnRegistryEntry>();
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(ReadEntry(reader));
+            }
+
+            return result;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
+        {
+            return [];
+        }
     }
 
     public void MarkReleased(int processId, string diagnostic)
     {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            UPDATE spawn_registry
-            SET released_at = COALESCE(released_at, $released_at),
-                last_diagnostic = $diagnostic
-            WHERE process_id = $process_id
-              AND released_at IS NULL
-            """;
-        cmd.Parameters.AddWithValue("$released_at", DateTimeOffset.UtcNow.ToString("O"));
-        cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
-        cmd.Parameters.AddWithValue("$process_id", processId);
-        cmd.ExecuteNonQuery();
+        WithWriteConnection(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE spawn_registry
+                SET released_at = COALESCE(released_at, $released_at),
+                    last_diagnostic = $diagnostic
+                WHERE process_id = $process_id
+                  AND released_at IS NULL
+                """;
+            cmd.Parameters.AddWithValue("$released_at", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
+            cmd.Parameters.AddWithValue("$process_id", processId);
+            cmd.ExecuteNonQuery();
+        });
     }
 
     public void RecordDiagnostic(long id, string diagnostic)
     {
-        using var conn = OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            UPDATE spawn_registry
-            SET last_diagnostic = $diagnostic
-            WHERE id = $id
-            """;
-        cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
-        cmd.Parameters.AddWithValue("$id", id);
-        cmd.ExecuteNonQuery();
-    }
-
-    private SqliteConnection OpenConnection()
-    {
-        var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
-        return conn;
-    }
-
-    private void EnsureSchema()
-    {
-        var directory = Path.GetDirectoryName(_dbPath);
-        if (!string.IsNullOrEmpty(directory))
+        WithWriteConnection(conn =>
         {
-            Directory.CreateDirectory(directory);
-        }
-
-        using var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
-        RunNonQuery(conn, "PRAGMA journal_mode=WAL");
-        RunNonQuery(conn, """
-            CREATE TABLE IF NOT EXISTS spawn_registry (
-                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner_id           TEXT NOT NULL,
-                process_id         INTEGER NOT NULL,
-                process_started_at TEXT NOT NULL,
-                image_path         TEXT NOT NULL,
-                registered_at      TEXT NOT NULL,
-                released_at        TEXT NULL,
-                last_diagnostic    TEXT NULL
-            )
-            """);
-        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_spawn_registry_active ON spawn_registry(released_at, process_id)");
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE spawn_registry
+                SET last_diagnostic = $diagnostic
+                WHERE id = $id
+                """;
+            cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.ExecuteNonQuery();
+        });
     }
+
+    private SqliteConnection OpenConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.ReadWrite);
+
+    private void WithWriteConnection(Action<SqliteConnection> action)
+    {
+        if (StateDbWriteSession.TryExecute(_dbPath, action))
+            return;
+
+        using var connection = OpenConnection();
+        action(connection);
+    }
+
+    private SqliteConnection OpenReadConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.QueryOnlyRead);
 
     private static SpawnRegistryEntry ReadEntry(SqliteDataReader reader)
     {
@@ -148,12 +141,6 @@ internal sealed class SpawnRegistry
             reader.IsDBNull(7) ? null : reader.GetString(7));
     }
 
-    private static void RunNonQuery(SqliteConnection conn, string sql)
-    {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
-    }
 }
 
 internal static class SpawnProcessIdentityReader

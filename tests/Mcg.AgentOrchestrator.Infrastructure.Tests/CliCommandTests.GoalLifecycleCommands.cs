@@ -542,7 +542,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             profilesA.GetRequired("machine-global-sibling").CommandTemplate,
             StringComparison.OrdinalIgnoreCase);
 
-        var restoredA = await new SqliteOrchestratorStateRepository(workspaceA.SqliteStatePath).LoadAsync();
+        var restoredA = await CreateMigratedStateRepository(workspaceA.SqliteStatePath).LoadAsync();
         var backlogA = await new BacklogStore(workspaceA.BacklogStorePath).ListAsync(includeAll: true);
         Xunit.Assert.Empty(restoredA.Goals);
         Xunit.Assert.Empty(backlogA);
@@ -638,7 +638,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         AgentCatalogStore.Save(workspace.AgentCatalogPath, customizedAgents);
         var kernel = new AgentOrchestratorKernel();
         kernel.CreateGoal("Preserve this goal");
-        await new SqliteOrchestratorStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
+        await CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
         await new BacklogStore(workspace.BacklogStorePath).UpsertAsync(new BacklogItem(
             "preserve-backlog",
             "Preserve this backlog item",
@@ -2900,6 +2900,44 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             GoalWorktrees.CleanupUtcNow = originalNow;
             GoalWorktrees.CleanupBackoffDuration = originalBackoff;
         }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_cleanup_status_uses_caller_cleanup_clock_and_backoff")]
+    public void CliCleanupStatusUsesCallerCleanupClockAndBackoff()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var now = DateTimeOffset.Parse("2026-07-03T12:00:00Z");
+        var hooks = new GoalWorktreeCleanupHooks
+        {
+            CleanupUtcNow = () => now,
+            CleanupBackoffDuration = static () => TimeSpan.FromMinutes(10),
+            CleanupWarningSink = _ => { }
+        };
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Cleanup debt uses caller hooks");
+        GoalWorktrees.RecordGoalCleanupNeeded(
+            workspace.ExecutionDirectory,
+            goal.Id,
+            "remove:branch-delete-failed",
+            hooks);
+        now = now.AddMinutes(5);
+
+        var context = new CliExecutionContext(
+            kernel,
+            workspace,
+            new InMemoryModelProviderRegistry([]),
+            AgentCatalog.Default().Agents,
+            WorkerProfileCatalog.Default(),
+            goal)
+        {
+            CleanupHooks = hooks
+        };
+
+        var output = CaptureConsole(() => CliCommandHandlers.Execute(["cleanup-status"], context));
+
+        Xunit.Assert.Contains("age=00:05:00", output);
+        Xunit.Assert.Contains("remaining_wait=00:05:00", output);
     }
 
 

@@ -1181,7 +1181,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Goal work");
 
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
             var fakeVerifier = FakeAcceptanceVerifier.Passed(onRun: () =>
@@ -1232,7 +1232,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Tested work");
 
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
 
             var fakeVerifier = FakeAcceptanceVerifier.Passed(onRun: () =>

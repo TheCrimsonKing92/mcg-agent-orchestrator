@@ -12,7 +12,7 @@ internal sealed class ConductorBatchLoop
     internal const int DefaultWatchIntervalSeconds = 15;
     internal const int WatchStopPollIntervalSeconds = 5;
     internal const int QuietSummaryEveryTicks = 20;
-    internal const int DefaultMaxBusyWriteAttempts = 6;
+    internal const int DefaultMaxBusyWriteAttempts = 1;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
     // Parallel-acceptance WIDTH: how many landing-acceptance gates may run concurrently.
@@ -112,7 +112,8 @@ internal sealed class ConductorBatchLoop
         bool quiet = false,
         TimeSpan? stallWarningThreshold = null,
         int unscopedStallTickThreshold = DefaultUnscopedStallTickThreshold,
-        Action<TimeSpan>? busyWriteDelay = null)
+        Action<TimeSpan>? busyWriteDelay = null,
+        string? journalMode = null)
     {
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
         var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
@@ -192,10 +193,14 @@ internal sealed class ConductorBatchLoop
                 previousSuccessfulLandingSink?.Invoke(receipt);
             };
         }
-        EmitProgress($"LOOP_START policy={Sanitize(policy.Name)} maxIterations={maxIterations?.ToString() ?? "none"} maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")}");
+        EmitProgress(
+            $"LOOP_START policy={Sanitize(policy.Name)} maxIterations={maxIterations?.ToString() ?? "none"} " +
+            $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")}" +
+            (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
 
         while (true)
         {
+            using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag("loop:tick");
             if (pendingSelfRelaunch is null &&
                 deferredSelfRelaunch is not null &&
                 totalTicks >= selfRelaunchRetryAfterTick)

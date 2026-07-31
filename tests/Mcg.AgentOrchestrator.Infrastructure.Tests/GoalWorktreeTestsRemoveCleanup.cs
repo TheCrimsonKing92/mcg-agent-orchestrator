@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -14,6 +15,68 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
 {
+    [Xunit.Fact(DisplayName = "GoalWorktrees_cleanup_contexts_are_isolated_through_private_helpers")]
+    public async Task GoalWorktreesCleanupContextsAreIsolatedThroughPrivateHelpers()
+    {
+        var firstRoot = Path.Combine(Path.GetTempPath(), "mcg-cleanup-context-a-" + Guid.NewGuid().ToString("N"));
+        var secondRoot = Path.Combine(Path.GetTempPath(), "mcg-cleanup-context-b-" + Guid.NewGuid().ToString("N"));
+        var firstGoal = GoalId.New();
+        var secondGoal = GoalId.New();
+        var firstPath = Path.Combine(firstRoot, ".orchestrator-context", firstGoal.Value);
+        var secondPath = Path.Combine(secondRoot, ".orchestrator-context", secondGoal.Value);
+        var firstInvocations = new ConcurrentBag<string>();
+        var secondInvocations = new ConcurrentBag<string>();
+        using var rendezvous = new Barrier(2);
+
+        Directory.CreateDirectory(firstPath);
+        Directory.CreateDirectory(secondPath);
+        try
+        {
+            GoalWorktreeDeleteResult DeleteWithRendezvous(string path, ConcurrentBag<string> collector)
+            {
+                if (!rendezvous.SignalAndWait(TimeSpan.FromSeconds(30)))
+                {
+                    throw new TimeoutException("Concurrent cleanup hook rendezvous was not reached.");
+                }
+
+                collector.Add(path);
+                return GoalWorktreeDeleteResult.Success;
+            }
+
+            var firstHooks = new GoalWorktreeCleanupHooks
+            {
+                DeleteDirectoryForCleanup = path => DeleteWithRendezvous(path, firstInvocations),
+                CleanupWarningSink = _ => { }
+            };
+            var secondHooks = new GoalWorktreeCleanupHooks
+            {
+                DeleteDirectoryForCleanup = path => DeleteWithRendezvous(path, secondInvocations),
+                CleanupWarningSink = _ => { }
+            };
+
+            var firstCleanup = Task.Run(() => GoalWorktrees.SweepOwnedEphemeralDirectories(
+                firstRoot,
+                firstGoal,
+                hooks: firstHooks));
+            var secondCleanup = Task.Run(() => GoalWorktrees.SweepOwnedEphemeralDirectories(
+                secondRoot,
+                secondGoal,
+                hooks: secondHooks));
+
+            await Task.WhenAll(firstCleanup, secondCleanup).WaitAsync(TimeSpan.FromSeconds(30));
+
+            Xunit.Assert.Equal([firstPath], firstInvocations);
+            Xunit.Assert.Equal([secondPath], secondInvocations);
+            Xunit.Assert.DoesNotContain(secondPath, firstInvocations);
+            Xunit.Assert.DoesNotContain(firstPath, secondInvocations);
+        }
+        finally
+        {
+            GoalWorktrees.DeleteDirectoryWithRetry(firstRoot);
+            GoalWorktrees.DeleteDirectoryWithRetry(secondRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_terminal_remove_deletes_long_path_and_prunes_registration")]
     public void GoalWorktreesTerminalRemoveDeletesLongPathAndPrunesRegistration()
     {
@@ -716,7 +779,7 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
             Assert.Equal(GoalStatus.Verified, goal.Status);
             GoalOperationJournal.Completed(repo, goal, "acceptance", "Acceptance passed and merge completed.");
 
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             await stateRepository.SaveAsync(kernel);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
             var providers = new InMemoryModelProviderRegistry([]);
@@ -1101,7 +1164,7 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
             RunGit(worktreePath, "add", "-A");
             RunGit(worktreePath, "commit", "-m", "Queued persistence goal");
 
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
+            var stateRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             await stateRepository.SaveAsync(kernel);
 
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;

@@ -92,6 +92,62 @@ internal sealed record GoalWorktreeDeleteResult(
         new(false, failureKind, message);
 }
 
+/// <summary>
+/// Immutable cleanup behavior supplied to a single worktree-cleanup operation.
+/// </summary>
+public sealed record GoalWorktreeCleanupHooks
+{
+    /// <summary>
+    /// A live compatibility view over the legacy process-wide hooks. Each delegate dereferences
+    /// the corresponding static when it is invoked; explicitly constructed hook records remain fixed.
+    /// </summary>
+    public static GoalWorktreeCleanupHooks Default { get; } = new()
+    {
+        BuildServerShutdown = static (path, timeout) => GoalWorktrees.BuildServerShutdown(path, timeout),
+        ResetSandboxAcl = static (path, timeout) => GoalWorktrees.SandboxAclHelper.ResetSandboxAcl(path, timeout),
+        TryKillRecordedProcess = static processId => GoalWorktrees.TryKillRecordedProcess(processId),
+        DeleteDirectory = static path => GoalWorktrees.DeleteDirectory(path),
+        DeleteDirectoryForCleanup = static path => GoalWorktrees.DeleteDirectoryForCleanup(path),
+        RunWorktreeRemove = static (directory, timeout, path, force) =>
+            GoalWorktrees.RunWorktreeRemove(directory, timeout, path, force),
+        RunWorktreePrune = static (directory, timeout, expireNow) =>
+            GoalWorktrees.RunWorktreePrune(directory, timeout, expireNow),
+        FindLockHoldersForCleanup = static path => GoalWorktrees.FindLockHoldersForCleanup(path),
+        CleanupWarningSink = static warning => GoalWorktrees.CleanupWarningSink(warning),
+        CleanupElapsedMilliseconds = static () => GoalWorktrees.CleanupElapsedMilliseconds,
+        CleanupUtcNow = static () => GoalWorktrees.CleanupUtcNow(),
+        CleanupBackoffDuration = static () => GoalWorktrees.CleanupBackoffDuration,
+        CleanupBudgetExhaustedBackoffDuration = static () => GoalWorktrees.CleanupBudgetExhaustedBackoffDuration,
+        CleanupOptions = static () => GoalWorktrees.CleanupOptions,
+        CleanupAttentionStoreDirectory = static () => GoalWorktrees.CleanupAttentionStoreDirectory
+    };
+
+    public Action<string, int> BuildServerShutdown { get; init; } = GoalWorktrees.DefaultBuildServerShutdown;
+    public Action<string, int> ResetSandboxAcl { get; init; } = static (path, timeout) =>
+        (OperatingSystem.IsWindows()
+            ? (ISandboxAclHelper)new WindowsSandboxAclHelper()
+            : new NoOpSandboxAclHelper())
+            .ResetSandboxAcl(path, timeout);
+    public Func<int, bool> TryKillRecordedProcess { get; init; } = GoalWorktrees.DefaultTryKillRecordedProcess;
+    public Func<string, bool> DeleteDirectory { get; init; } = GoalWorktrees.DeleteDirectoryWithRetry;
+    internal Func<string, GoalWorktreeDeleteResult> DeleteDirectoryForCleanup { get; init; } =
+        GoalWorktrees.DeleteDirectoryWithReason;
+    internal Func<string, int, string, bool, GitCli.GitResult> RunWorktreeRemove { get; init; } =
+        GoalWorktrees.DefaultRunWorktreeRemove;
+    internal Func<string, int, bool, GitCli.GitResult> RunWorktreePrune { get; init; } =
+        GoalWorktrees.DefaultRunWorktreePrune;
+    public Func<string, IReadOnlyList<WorktreeLockHolder>> FindLockHoldersForCleanup { get; init; } =
+        GoalWorktrees.FindLockHolders;
+    public Action<GoalWorktreeCleanupWarning> CleanupWarningSink { get; init; } =
+        GoalWorktrees.DefaultCleanupWarningSink;
+    public Func<Func<long>?> CleanupElapsedMilliseconds { get; init; } = static () => null;
+    public Func<DateTimeOffset> CleanupUtcNow { get; init; } = static () => DateTimeOffset.UtcNow;
+    public Func<TimeSpan> CleanupBackoffDuration { get; init; } = static () => TimeSpan.FromMinutes(30);
+    public Func<TimeSpan> CleanupBudgetExhaustedBackoffDuration { get; init; } = static () => TimeSpan.FromMinutes(1);
+    public Func<GoalWorktreeCleanupOptions> CleanupOptions { get; init; } = static () => GoalWorktreeCleanupOptions.Default;
+    public Func<string?> CleanupAttentionStoreDirectory { get; init; } = static () => null;
+}
+
 public sealed record GoalWorktreeSweepResult(int RemovedCount, IReadOnlyList<string> LeftoverPaths);
 
 public sealed record GoalOwnedEphemeralSweepResult(int RemovedCount, IReadOnlyList<string> LeftoverPaths)
@@ -198,25 +254,6 @@ public static partial class GoalWorktrees
     private static readonly string[] LockHolderCandidates =
         ["dotnet", "VBCSCompiler", "MSBuild", "claude", "codex", "node", "powershell", "pwsh"];
     private static readonly TimeSpan BuildServerShutdownTimeout = TimeSpan.FromSeconds(10);
-    private const string CleanupBackoffTableSql = """
-        CREATE TABLE IF NOT EXISTS worktree_cleanup_backoff (
-            path TEXT PRIMARY KEY NOT NULL,
-            skip_until_utc TEXT NOT NULL,
-            reason TEXT NOT NULL
-        );
-        """;
-    private const string CleanupDebtJournalTableSql = """
-        CREATE TABLE IF NOT EXISTS worktree_cleanup_journal (
-            path TEXT PRIMARY KEY NOT NULL,
-            first_seen_utc TEXT NOT NULL,
-            last_seen_utc TEXT NOT NULL,
-            last_operation TEXT NOT NULL,
-            last_reason TEXT NOT NULL,
-            skip_count INTEGER NOT NULL DEFAULT 0,
-            escalated_at_utc TEXT NULL
-        );
-        """;
-
     // Process-wide test seams; tests replacing these hooks must use the
     // GoalWorktreeCleanupHooks collection so replacements cannot overlap.
     // Called best-effort before directory deletion to release any

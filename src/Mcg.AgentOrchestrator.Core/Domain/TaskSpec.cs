@@ -510,6 +510,13 @@ public sealed class TaskSpec
 
         private static bool MustPreserveStructuredOutcome(AgentRole role, TaskVerificationRecord verification)
         {
+            if (role is AgentRole.Planner or AgentRole.Researcher &&
+                verification.Succeeded &&
+                !string.IsNullOrWhiteSpace(verification.StandardOutputPath))
+            {
+                return true;
+            }
+
             if (!verification.WorkerResultPresent)
             {
                 return false;

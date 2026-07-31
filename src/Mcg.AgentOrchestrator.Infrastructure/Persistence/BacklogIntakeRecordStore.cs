@@ -29,9 +29,10 @@ public sealed class BacklogIntakeRecordStore
     public static readonly TimeSpan DefaultStaleAfter = TimeSpan.FromMinutes(30);
 
     private readonly string _dbPath;
-    private string ConnectionString => $"Data Source={_dbPath};Mode=ReadWriteCreate;Pooling=False;";
 
-    private const int MaxBusyRetries = 6;
+    // The connection factory already waits for the full state-store budget. Retrying here would
+    // multiply that wait for the same write.
+    private const int MaxBusyRetries = 1;
 
     public BacklogIntakeRecordStore(string dbPath)
     {
@@ -39,7 +40,6 @@ public sealed class BacklogIntakeRecordStore
             throw new ArgumentException("Value cannot be empty.", nameof(dbPath));
 
         _dbPath = dbPath;
-        EnsureSchema();
     }
 
     public BacklogIntakeReservation Reserve(
@@ -140,44 +140,25 @@ public sealed class BacklogIntakeRecordStore
         if (string.IsNullOrWhiteSpace(sourceBacklogItemId))
             return null;
 
-        using var conn = OpenConnection();
-        return LoadRecord(conn, sourceBacklogItemId);
-    }
+        if (!File.Exists(_dbPath))
+            return null;
 
-    private void EnsureSchema()
-    {
-        var directory = Path.GetDirectoryName(_dbPath);
-        if (!string.IsNullOrEmpty(directory))
-            Directory.CreateDirectory(directory);
-
-        WithBusyRetry(() =>
+        try
         {
-            using var conn = OpenConnection();
-            RunNonQuery(conn, """
-                CREATE TABLE IF NOT EXISTS backlog_intake_records (
-                    source_backlog_item_id TEXT PRIMARY KEY,
-                    heading                TEXT NOT NULL,
-                    status                 TEXT NOT NULL,
-                    goal_id                TEXT NULL,
-                    started_at             TEXT NOT NULL,
-                    last_heartbeat_at      TEXT NOT NULL,
-                    owner_process_id       INTEGER NULL,
-                    stdout_path            TEXT NULL,
-                    stderr_path            TEXT NULL
-                )
-                """);
-            RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_backlog_intake_records_goal_id ON backlog_intake_records(goal_id)");
-            return true;
-        });
+            using var conn = OpenReadConnection();
+            return LoadRecord(conn, sourceBacklogItemId);
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 1)
+        {
+            return null;
+        }
     }
 
-    private SqliteConnection OpenConnection()
-    {
-        var conn = new SqliteConnection(ConnectionString);
-        conn.Open();
-        RunNonQuery(conn, "PRAGMA busy_timeout=30000");
-        return conn;
-    }
+    private SqliteConnection OpenConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.ReadWrite);
+
+    private SqliteConnection OpenReadConnection() =>
+        StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.QueryOnlyRead);
 
     private SqliteConnection BeginWrite()
     {

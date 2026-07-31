@@ -383,8 +383,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 ? attempt.ExecutionDirectory!
                 : OrchestratorWorkspace.ResolveRepoRoot(Environment.CurrentDirectory);
             var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory, executionDirectory);
-            var stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
-            var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+            var stateRepository = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath);
+            var kernel = stateRepository.LoadGoalsAsync([new GoalId(attempt.GoalId)]).GetAwaiter().GetResult();
             var goal = kernel.Goals.FirstOrDefault(g => g.Id.Value == attempt.GoalId)
                 ?? throw new InvalidOperationException($"goal {attempt.GoalPrefix} was not found for acceptance attempt");
             var providers = ProviderRegistryFactory.CreateDefaultProviders();

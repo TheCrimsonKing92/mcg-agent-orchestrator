@@ -271,6 +271,41 @@ public sealed class TaskVerificationTests
         });
     }
 
+    [Xunit.Fact(DisplayName = "TaskSpec_excludes_durable_research_and_plan_receipts_from_history_trimming")]
+    public void TaskSpecExcludesDurableResearchAndPlanReceiptsFromHistoryTrimming()
+    {
+        foreach (var role in new[] { AgentRole.Researcher, AgentRole.Planner })
+        {
+            var task = new TaskSpec(TaskId.New(), $"Produce {role} artifact.", role);
+            var durable = new TaskVerificationRecord(
+                "artifact",
+                "C:\\repo",
+                0,
+                "complete artifact",
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                StandardOutputPath: $"C:\\logs\\{role}.out.log");
+            task.RecordVerification(durable);
+
+            for (var index = 0; index < TaskSpec.VerificationHistoryLimit + 5; index++)
+            {
+                task.RecordVerification(new TaskVerificationRecord(
+                    "retry",
+                    "C:\\repo",
+                    1,
+                    $"retry-noise-{index}",
+                    string.Empty,
+                    DateTimeOffset.UtcNow.AddMinutes(index + 1)));
+            }
+
+            Assert.Contains(durable, task.VerificationHistory);
+            Assert.Equal(TaskSpec.VerificationHistoryLimit, task.VerificationHistory.Count);
+            Assert.DoesNotContain(
+                task.VerificationHistory,
+                verification => verification.StandardOutput == "retry-noise-0");
+        }
+    }
+
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]
     public void RecordTaskVerificationCompletesGoalOnlyWhenAllGatesPass()
 {
@@ -593,6 +628,31 @@ private static void AssertRetainedTextBounded(string text)
     Assert.Equal(VerificationGateStatus.NotReady, kernel.BuildVerificationGate(goal.Id).Tasks.Single(item => item.TaskId == tester.Id).GateStatus);
     Assert.Equal(VerificationGateStatus.NotReady, kernel.BuildVerificationGate(goal.Id).Tasks.Single(item => item.TaskId == reviewer.Id).GateStatus);
 }
+
+    [Xunit.Fact(DisplayName = "RetryTask_developer_retry_preserves_completed_research_and_plan")]
+    public void RetryTaskDeveloperRetryPreservesCompletedResearchAndPlan()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var researcher = new TaskSpec(TaskId.New(), "Research source.", AgentRole.Researcher);
+        var planner = new TaskSpec(TaskId.New(), "Plan from research.", AgentRole.Planner);
+        var developer = new TaskSpec(TaskId.New(), "Implement plan.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Reuse upstream artifacts on Developer retry.", [researcher, planner, developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        CompleteWithVerification(kernel, goal, researcher, "research artifact", clock);
+        CompleteWithVerification(kernel, goal, planner, "plan artifact", clock);
+        CompleteWithVerification(kernel, goal, developer, "implementation", clock);
+        var researchVerification = researcher.LastVerification;
+        var plannerVerification = planner.LastVerification;
+
+        kernel.RetryTask(goal.Id, developer.Id, "Retry implementation without replanning.");
+
+        Assert.Equal(WorkTaskStatus.Completed, researcher.Status);
+        Assert.Equal(WorkTaskStatus.Completed, planner.Status);
+        Assert.Equal(researchVerification, researcher.LastVerification);
+        Assert.Equal(plannerVerification, planner.LastVerification);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
+    }
 
 private static void CompleteWithVerification(
     AgentOrchestratorKernel kernel,

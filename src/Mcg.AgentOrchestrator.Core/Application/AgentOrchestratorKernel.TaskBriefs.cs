@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Core;
@@ -111,6 +113,10 @@ public sealed partial class AgentOrchestratorKernel
             complexity);
 
         var usesFileAccessContext = !string.IsNullOrWhiteSpace(workingDirectory) && !string.IsNullOrWhiteSpace(contextDirectory);
+        var hasDurableResearch = usesFileAccessContext &&
+            task.RequiredRole == AgentRole.Planner &&
+            File.Exists(Path.Combine(contextDirectory!, "research-notes.md")) &&
+            new FileInfo(Path.Combine(contextDirectory!, "research-notes.md")).Length > 0;
         var headerLines = new List<string>
         {
             "# Agent Task Brief",
@@ -164,7 +170,7 @@ public sealed partial class AgentOrchestratorKernel
             string.Empty,
             "## Instructions"
         };
-        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole));
+        instructionLines.AddRange(BuildTaskBriefInstructions(complexity, modelFitTarget, task.RequiredRole, hasDurableResearch));
         var responseBudgetGuidance = PromptContextFormatter.BuildResponseBudgetGuidance(complexity);
         if (!string.IsNullOrWhiteSpace(responseBudgetGuidance))
         {
@@ -200,9 +206,30 @@ public sealed partial class AgentOrchestratorKernel
         roleLines.AddRange(SdlcRolePromptRequirements.Build(
             task.RequiredRole,
             complexity,
-            SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal)));
+            SdlcRolePromptRequirements.HasHighRiskOrComplexIntakeRiskLabel(goal),
+            hasDurableResearch));
         roleLines.Add(string.Empty);
         segments.Add(TaskBriefSegment.Fixed(roleLines));
+
+        if (usesFileAccessContext &&
+            task.RequiredRole is AgentRole.Planner or AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer)
+        {
+            AddDurableArtifactBriefSegment(
+                segments,
+                contextDirectory!,
+                "research-notes.md",
+                "Durable Research Notes");
+        }
+
+        if (usesFileAccessContext &&
+            task.RequiredRole is AgentRole.Developer or AgentRole.Tester or AgentRole.Reviewer)
+        {
+            AddDurableArtifactBriefSegment(
+                segments,
+                contextDirectory!,
+                "planner-plan.md",
+                "Durable Planner Plan");
+        }
 
         var reviewerConvergenceScope = BuildReviewerConvergenceScopeBriefBlock(
             goal,
@@ -442,7 +469,11 @@ public sealed partial class AgentOrchestratorKernel
         return complexity == TaskComplexity.Complex ? 20 : 8;
     }
 
-    private static IReadOnlyList<string> BuildTaskBriefInstructions(TaskComplexity complexity, string? modelFitTarget, AgentRole role)
+    private static IReadOnlyList<string> BuildTaskBriefInstructions(
+        TaskComplexity complexity,
+        string? modelFitTarget,
+        AgentRole role,
+        bool hasDurableResearch)
     {
         var modelFitInstruction = BuildModelFitInstruction(modelFitTarget);
         if (complexity == TaskComplexity.Simple)
@@ -451,9 +482,13 @@ public sealed partial class AgentOrchestratorKernel
             {
                 "Complete this SDLC task. Report only changed files, verification evidence, blockers, or HUMAN_INPUT: <question>.",
                 "Use repository-local verification when practical; do not claim completion without evidence.",
-                "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.",
                 "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs."
             };
+            simpleLines.Insert(
+                2,
+                role == AgentRole.Planner && hasDurableResearch
+                    ? "Use the complete Durable Research Notes supplied below; synthesize from them and do not run another broad repository source survey."
+                    : "When surveying files, start with the dashboard source survey or /api/source-survey?max=8, or use rg excluding **/bin/**, **/obj/**, .scratch, and prototype state.");
             simpleLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
             simpleLines.Add(modelFitInstruction);
             return simpleLines;
@@ -465,13 +500,51 @@ public sealed partial class AgentOrchestratorKernel
             "If you cannot proceed without operator input, write a line that starts with HUMAN_INPUT: followed by the exact question.",
             "Use repository-local commands for evidence when possible. Do not mark work complete without verification.",
             "Avoid generic status summaries. Tie conclusions to repository files, command output, or cited source material.",
-            "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
-            "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads.",
             "Do not stage or commit changes; the orchestrator commits verified Developer/Tester diffs."
         };
+        complexLines.InsertRange(
+            4,
+            role == AgentRole.Planner && hasDurableResearch
+                ?
+                [
+                    "Use the complete Durable Research Notes supplied below; synthesize from them and do not run another broad repository source survey."
+                ]
+                :
+                [
+                    "When surveying files, exclude generated output such as **/bin/**, **/obj/**, .scratch, and prototype state unless the task explicitly concerns those artifacts.",
+                    "Prefer the dashboard source survey or /api/source-survey?max=8 as the starting repository map before broad recursive file reads."
+                ]);
         complexLines.AddRange(AgentOutputDirectives.WorkerResultTemplateLinesForRole(role));
         complexLines.Add(modelFitInstruction);
         return complexLines;
+    }
+
+    private static void AddDurableArtifactBriefSegment(
+        ICollection<TaskBriefSegment> segments,
+        string contextDirectory,
+        string fileName,
+        string heading)
+    {
+        var path = Path.Combine(contextDirectory, fileName);
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        var text = File.ReadAllText(path, Encoding.UTF8);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+        segments.Add(TaskBriefSegment.Fixed(
+        [
+            $"## {heading}",
+            $"Artifact identity: {fileName}; sha256:{hash}",
+            text,
+            string.Empty
+        ]));
     }
 
     private static IReadOnlyList<string> BuildAcceptanceFailureBriefBlock(Goal goal, TaskSpec task, string? workingDirectory)

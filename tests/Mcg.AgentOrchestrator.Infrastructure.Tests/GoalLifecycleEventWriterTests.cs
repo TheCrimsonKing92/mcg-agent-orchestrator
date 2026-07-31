@@ -499,7 +499,7 @@ public sealed class GoalLifecycleEventWriterTests
 
     private static async Task WriteStateAsync(string statePath, string objective)
     {
-        var repository = new SqliteOrchestratorStateRepository(statePath);
+        var repository = CreateMigratedStateRepository(statePath);
         await repository.TransactAsync((kernel, _) =>
         {
             kernel.CreateGoal(objective);

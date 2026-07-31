@@ -960,13 +960,43 @@ public sealed class BackgroundDispatchRunner
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
         var task = kernel.GetTask(goalId, taskId);
+        var goal = kernel.GetGoal(goalId);
+        if (task.RequiredRole == AgentRole.Researcher &&
+            RequiresDurableResearchArtifact(goal, task) &&
+            exitCode == 0)
+        {
+            var capturedResearchOutput = ResearcherOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
+            var researchContract = ResearcherOutputContract.Resolve(capturedResearchOutput);
+            if (!researchContract.Succeeded || researchContract.Research is null)
+            {
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    researchContract.Diagnostic);
+            }
+            else if (!ResearcherOutputContract.TryPersistDurableReceipt(
+                         processRecord.StandardOutputPath,
+                         researchContract.Research,
+                         out var appendDiagnostic))
+            {
+                exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    $"Researcher output contract could not persist the accepted artifact: {appendDiagnostic}. Retry Researcher for contract repair.");
+            }
+        }
+
         if (task.RequiredRole == AgentRole.Planner && exitCode == 0)
         {
+            var acceptanceCriteria = RequiresDurablePlanArtifact(goal, task)
+                ? goal.RefinedSpec?.AcceptanceCriteria ?? []
+                : null;
             var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
             var plannerContract = PlannerOutputContract.Resolve(
                 capturedPlannerOutput,
                 decisionStandardError,
-                processRecord.WorkingDirectory);
+                processRecord.WorkingDirectory,
+                acceptanceCriteria: acceptanceCriteria);
             if (!plannerContract.Succeeded || plannerContract.Plan is null)
             {
                 exitCode = 1;
@@ -1214,6 +1244,20 @@ public sealed class BackgroundDispatchRunner
             new DispatchDiagnosticPayload(exitCode, standardOutput, standardError));
         EvictProcessLogCache(processRecord);
         return outcome;
+    }
+
+    private static bool RequiresDurableResearchArtifact(Goal goal, TaskSpec researcher)
+    {
+        var researcherIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == researcher.Id);
+        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.RequiredRole == AgentRole.Planner);
+        return researcherIndex >= 0 && plannerIndex > researcherIndex;
+    }
+
+    private static bool RequiresDurablePlanArtifact(Goal goal, TaskSpec planner)
+    {
+        var plannerIndex = goal.Tasks.ToList().FindIndex(candidate => candidate.Id == planner.Id);
+        return plannerIndex > 0 &&
+            goal.Tasks.Take(plannerIndex).Any(candidate => candidate.RequiredRole == AgentRole.Researcher);
     }
 
     private static string? TryGetWorktreeHead(string workingDirectory)

@@ -35,6 +35,8 @@ internal static class CliPersistentStateRunner
         IOperatorChannel? channel = null,
         IGoalAcceptanceVerifier? acceptanceVerifier = null)
     {
+        using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
+            $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
 
         if (IsOperatorIntentStatusCommand(args))
@@ -547,6 +549,11 @@ internal static class CliPersistentStateRunner
     internal static bool IsBacklogIntakeCommand(IReadOnlyList<string> args)
     {
         return args.Count > 0 && args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool HasStateDbMigrationAuthority(IReadOnlyList<string> args)
+    {
+        return IsConductLoop(args) || IsBacklogIntakeCommand(args);
     }
 
     internal static bool IsGoalMarkLandedCommand(IReadOnlyList<string> args)

@@ -1598,12 +1598,10 @@ internal sealed class ConductorDriver
     {
         try
         {
-            var latest = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath)
-                .LoadAsync()
+            var latest = SqliteOrchestratorStateRepository.OpenReadOnly(workspace.SqliteStatePath)
+                .LoadGoalAsync(goalId)
                 .GetAwaiter()
-                .GetResult()
-                .Goals
-                .FirstOrDefault(goal => goal.Id == goalId);
+                .GetResult();
             return latest is null ||
                 latest.Status is GoalStatus.Active or GoalStatus.Parked or GoalStatus.AcceptanceFailed or GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed;
         }

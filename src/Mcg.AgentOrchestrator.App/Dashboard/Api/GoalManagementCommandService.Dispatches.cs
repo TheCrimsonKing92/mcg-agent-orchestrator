@@ -584,8 +584,8 @@ private static int? SdlcStageOrder(AgentRole role)
 {
     return role switch
     {
-        AgentRole.Planner => 0,
-        AgentRole.Researcher => 1,
+        AgentRole.Researcher => 0,
+        AgentRole.Planner => 1,
         AgentRole.Developer => 2,
         AgentRole.Tester => 3,
         AgentRole.Reviewer => 4,
