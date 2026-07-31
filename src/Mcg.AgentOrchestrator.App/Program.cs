@@ -213,14 +213,21 @@ AgentOrchestratorKernel kernel;
 Goal? currentGoal;
 try
 {
-    if (CliPersistentStateRunner.IsConductLoop(startupArgs))
+    var isConductLoop = CliPersistentStateRunner.IsConductLoop(startupArgs);
+    if (isConductLoop)
     {
         // A handoff successor must not migrate or load state until the incumbent
         // explicitly transfers its sole-writer authority.
         ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
     }
 
-    _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+    if (CliPersistentStateRunner.HasStateDbMigrationAuthority(startupArgs))
+    {
+        // Conduct loops migrate under sole-writer authority. Backlog intake is the
+        // explicit bootstrap path used before the first conductor owns the store.
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+    }
+
     ProgramStartupLifecycle.InitializeWorkerProcessTracking(
         RunsStartupCleanup(startupArgs),
         authorityTransferRequested: false,

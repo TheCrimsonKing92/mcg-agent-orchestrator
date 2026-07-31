@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -123,6 +124,23 @@ public sealed class ConductorBatchLoopTests
     {
         Assert.False(ConductorBatchLoop.DefaultSelfRelaunchEnabled);
         Assert.Equal(expected, ConductorBatchLoop.ResolveSelfRelaunchEnabled(configuredValue));
+    }
+
+    [Xunit.Theory(DisplayName = "StateDb_startup_migrations_require_conductor_authority_or_explicit_backlog_bootstrap")]
+    [Xunit.InlineData("conduct", "--loop", true)]
+    [Xunit.InlineData("conduct", "--watch", true)]
+    [Xunit.InlineData("backlog-intake", "queued item", true)]
+    [Xunit.InlineData("status", null, false)]
+    [Xunit.InlineData("backlog-show", null, false)]
+    [Xunit.InlineData("operator-intent-status", "intent-id", false)]
+    public void StateDbStartupMigrationsRequireConductorAuthorityOrExplicitBacklogBootstrap(
+        string command,
+        string? argument,
+        bool expected)
+    {
+        var args = argument is null ? [command] : new[] { command, argument };
+
+        Assert.Equal(expected, CliPersistentStateRunner.HasStateDbMigrationAuthority(args));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_loop_start_reports_verified_journal_mode")]
@@ -4051,6 +4069,9 @@ public sealed class ConductorBatchLoopTests
         var originalWarnings = GoalWorktrees.CleanupWarningSink;
         try
         {
+            Directory.CreateDirectory(Path.Combine(root, ".git"));
+            _ = StateDbMigrations.EnsureUpToDate(
+                OrchestratorWorkspace.ForDirectory(root).SqliteStatePath);
             var kernel = new AgentOrchestratorKernel();
             var cancelled = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "historical cleanup blocker goal");
             kernel.ReportTaskProgress(cancelled.Id, cancelled.Tasks.Single().Id, WorkTaskStatus.Cancelled, "Test fixture: task cancelled.");
@@ -4575,8 +4596,8 @@ public sealed class ConductorBatchLoopTests
         Assert.True(task.LastProcess is not null);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorBatchLoop_critical_dispatch_start_retries_and_persists_dispatch_records_before_slot_release")]
-    public async Task CriticalDispatchStartRetriesAndPersistsDispatchRecordsBeforeSlotRelease()
+    [Xunit.Fact(DisplayName = "ConductorBatchLoop_critical_dispatch_start_persists_records_before_slot_release_without_outer_retry")]
+    public async Task CriticalDispatchStartPersistsRecordsBeforeSlotReleaseWithoutOuterRetry()
     {
         var db = Path.Combine(Path.GetTempPath(), $"mcg-loop-dispatch-start-{Guid.NewGuid():N}.db");
         var repo = OpenStateRepository(db);
@@ -4607,8 +4628,6 @@ public sealed class ConductorBatchLoopTests
                     (checkpoint, changedGoalIds) =>
                     {
                         attempts++;
-                        if (attempts < 3)
-                            throw SqliteBusy();
                         var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
                         var snaps = checkpoint.ExportSnapshot().Goals
                             .Where(goal => changed.Contains(goal.Id))
@@ -4631,7 +4650,7 @@ public sealed class ConductorBatchLoopTests
 
         var reloaded = await repo.LoadAsync();
         var task = reloaded.GetTask(goalId, taskId);
-        Assert.Equal(3, attempts);
+        Assert.Equal(1, attempts);
         Assert.True(task.LastDispatch is not null);
         Assert.True(task.LastProcess is not null);
         Assert.Equal(1, reloaded.Goals.Single(g => g.Id == goalId).Timeline.Count(evt =>

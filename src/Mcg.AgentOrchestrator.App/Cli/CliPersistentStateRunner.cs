@@ -551,6 +551,11 @@ internal static class CliPersistentStateRunner
         return args.Count > 0 && args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool HasStateDbMigrationAuthority(IReadOnlyList<string> args)
+    {
+        return IsConductLoop(args) || IsBacklogIntakeCommand(args);
+    }
+
     internal static bool IsGoalMarkLandedCommand(IReadOnlyList<string> args)
     {
         return args.Count > 0 && args[0].Equals("goal-mark-landed", StringComparison.OrdinalIgnoreCase);
