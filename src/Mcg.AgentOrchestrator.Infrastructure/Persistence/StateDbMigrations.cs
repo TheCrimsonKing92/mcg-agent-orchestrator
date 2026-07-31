@@ -6,6 +6,47 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class StateDbMigrations
 {
     private sealed record Migration(int Number, string Name, Action<SqliteConnection> Apply);
+    private const int CurrentMigrationNumber = 5;
+
+    /// <summary>
+    /// Reports whether the published state store already has every numbered migration.
+    /// This probe is read-only; callers that observe <see langword="false"/> must acquire
+    /// explicit migration authority before calling <see cref="EnsureUpToDate(string)"/>.
+    /// </summary>
+    public static bool IsUpToDate(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            return false;
+
+        using var connection = StateDbConnectionFactory.Open(
+            dbPath,
+            StateDbConnectionProfile.MigrationProbeRead);
+        if (!StateDbConnectionFactory.ReadJournalMode(connection)
+            .Equals("wal", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        using var table = connection.CreateCommand();
+        table.CommandText = """
+            SELECT COUNT(*)
+            FROM sqlite_schema
+            WHERE type = 'table'
+              AND name = 'schema_migrations'
+            """;
+        if (Convert.ToInt32(table.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
+            return false;
+
+        using var migrations = connection.CreateCommand();
+        migrations.CommandText = """
+            SELECT COUNT(*)
+            FROM schema_migrations
+            WHERE migration_number BETWEEN 1 AND $current
+            """;
+        migrations.Parameters.AddWithValue("$current", CurrentMigrationNumber);
+        return Convert.ToInt32(migrations.ExecuteScalar(), CultureInfo.InvariantCulture) ==
+            CurrentMigrationNumber;
+    }
 
     /// <summary>
     /// Applies numbered state-store migrations. The caller must hold conductor write
@@ -48,8 +89,9 @@ public static class StateDbMigrations
                 new(2, "worktree-cleanup-state", ApplyCleanupStateSchema),
                 new(3, "spawn-registry", ApplySpawnRegistrySchema),
                 new(4, "backlog-intake-records", ApplyBacklogIntakeSchema),
-                new(5, "model-fit-outcome-backfill", repository.ApplyModelFitHistoryBackfillMigration)
+                new(CurrentMigrationNumber, "model-fit-outcome-backfill", repository.ApplyModelFitHistoryBackfillMigration)
             };
+            ValidateMigrationSequence(migrations);
 
             foreach (var migration in migrations)
             {
@@ -98,6 +140,25 @@ public static class StateDbMigrations
             """;
         command.Parameters.AddWithValue("$number", migrationNumber);
         return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) == 1;
+    }
+
+    private static void ValidateMigrationSequence(IReadOnlyList<Migration> migrations)
+    {
+        if (migrations.Count != CurrentMigrationNumber)
+        {
+            throw new InvalidOperationException(
+                $"State database migrations must define exactly {CurrentMigrationNumber} numbered entries.");
+        }
+
+        for (var index = 0; index < migrations.Count; index++)
+        {
+            var expected = index + 1;
+            if (migrations[index].Number != expected)
+            {
+                throw new InvalidOperationException(
+                    $"State database migration sequence must be contiguous; expected {expected}, found {migrations[index].Number}.");
+            }
+        }
     }
 
     private static void ApplyCleanupStateSchema(SqliteConnection connection)

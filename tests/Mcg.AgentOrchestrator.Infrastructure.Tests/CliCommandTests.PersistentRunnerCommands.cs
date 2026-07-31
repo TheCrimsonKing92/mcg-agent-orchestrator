@@ -787,7 +787,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "Cli_startup_short_read_command_exits_within_two_seconds_and_releases_state")]
+    [Xunit.Fact(DisplayName = "Cli_startup_short_read_command_bootstraps_fresh_state_and_releases_it")]
     public async Task CliStartupShortReadCommandExitsWithinTwoSecondsAndReleasesState()
     {
         var root = CreateTempDirectory();
@@ -802,8 +802,36 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         var statePath = Path.Combine(root, ".orchestrator", "state.db");
         Xunit.Assert.True(File.Exists(statePath));
+        Xunit.Assert.True(StateDbMigrations.IsUpToDate(statePath));
         using var stateLockProbe = File.Open(statePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         Xunit.Assert.True(stateLockProbe.CanWrite);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_startup_read_command_bootstraps_unmigrated_non_wal_state")]
+    public void CliStartupReadCommandBootstrapsUnmigratedNonWalState()
+    {
+        var root = CreateTempDirectory();
+        var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+        var statePath = Path.Combine(orchestratorDirectory, "state.db");
+        Directory.CreateDirectory(orchestratorDirectory);
+        using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={statePath}"))
+        {
+            connection.Open();
+        }
+        Xunit.Assert.False(StateDbMigrations.IsUpToDate(statePath));
+
+        var result = RunAppCli(root, ["goals"]);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.True(StateDbMigrations.IsUpToDate(statePath));
+        using var migrated = new Microsoft.Data.Sqlite.SqliteConnection(
+            $"Data Source={statePath};Mode=ReadOnly;Pooling=False");
+        migrated.Open();
+        using var journalMode = migrated.CreateCommand();
+        journalMode.CommandText = "PRAGMA journal_mode";
+        Xunit.Assert.Equal(
+            "wal",
+            Convert.ToString(journalMode.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
     }
 
 

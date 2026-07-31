@@ -7,7 +7,8 @@ internal enum StateDbConnectionProfile
 {
     ReadWrite,
     FastFailRead,
-    QueryOnlyRead
+    QueryOnlyRead,
+    MigrationProbeRead
 }
 
 internal static class StateDbConnectionFactory
@@ -69,7 +70,8 @@ internal static class StateDbConnectionFactory
                     statementObserver)?.ToString() ?? string.Empty;
             }
 
-            if (!journalMode.Equals("wal", StringComparison.OrdinalIgnoreCase))
+            if (profile != StateDbConnectionProfile.MigrationProbeRead &&
+                !journalMode.Equals("wal", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
                     $"State database journal mode must be WAL; found '{journalMode}'.");

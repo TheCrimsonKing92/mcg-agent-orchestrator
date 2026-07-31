@@ -214,6 +214,8 @@ Goal? currentGoal;
 try
 {
     var isConductLoop = CliPersistentStateRunner.IsConductLoop(startupArgs);
+    var authorityTransferRequested =
+        ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs);
     if (isConductLoop)
     {
         // A handoff successor must not migrate or load state until the incumbent
@@ -221,16 +223,11 @@ try
         ConductorLoopHandoff.WaitForAuthorityTransferIfRequested();
     }
 
-    if (CliPersistentStateRunner.HasStateDbMigrationAuthority(startupArgs))
-    {
-        // Conduct loops migrate under sole-writer authority. Backlog intake is the
-        // explicit bootstrap path used before the first conductor owns the store.
-        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
-    }
+    ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
 
     ProgramStartupLifecycle.InitializeWorkerProcessTracking(
         RunsStartupCleanup(startupArgs),
-        authorityTransferRequested: false,
+        authorityTransferRequested,
         workspace.SqliteStatePath,
         workspace.ExecutionDirectory);
     stateRepository = new SqliteOrchestratorStateRepository(workspace.SqliteStatePath);
@@ -422,6 +419,31 @@ static bool IsGoalEventsFollowCommand(IReadOnlyList<string> startupArgs)
 
 internal static class ProgramStartupLifecycle
 {
+    internal static bool IsAuthorityTransferRequested(IReadOnlyList<string> startupArgs) =>
+        CliPersistentStateRunner.IsConductLoop(startupArgs) &&
+        ConductorLoopHandoff.IsAuthorityTransferRequested;
+
+    internal static void EnsureStateDbInitialized(
+        IReadOnlyList<string> startupArgs,
+        OrchestratorWorkspace workspace)
+    {
+        if (CliPersistentStateRunner.HasStateDbMigrationAuthority(startupArgs))
+        {
+            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            return;
+        }
+
+        if (StateDbMigrations.IsUpToDate(workspace.SqliteStatePath))
+            return;
+
+        // A first-use non-conductor command gets a short-lived, explicit bootstrap
+        // authority. Repositories remain schema-write-free, and established read
+        // commands never take this lease or run migrations.
+        using var bootstrapAuthority = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
+        if (!StateDbMigrations.IsUpToDate(workspace.SqliteStatePath))
+            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+    }
+
     internal static void InitializeWorkerProcessTracking(
         bool runsStartupCleanup,
         bool authorityTransferRequested,

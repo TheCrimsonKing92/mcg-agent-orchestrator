@@ -221,7 +221,7 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, "state.db");
-        var repository = new SqliteOrchestratorStateRepository(path);
+        var repository = OpenMigratedStateRepository(path);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Persist state");
         var agent = new AgentDefinition(
@@ -350,7 +350,7 @@ public sealed class StatePersistenceAndPerformanceTests
 
         var projectKernel = new AgentOrchestratorKernel();
         projectKernel.CreateGoal("Project-only goal");
-        await new SqliteOrchestratorStateRepository(projectWorkspace.SqliteStatePath).SaveAsync(projectKernel);
+        await OpenMigratedStateRepository(projectWorkspace.SqliteStatePath).SaveAsync(projectKernel);
         await new BacklogStore(projectWorkspace.BacklogStorePath).UpsertAsync(new BacklogItem(
             "project-only",
             "Project-only backlog",
@@ -360,9 +360,9 @@ public sealed class StatePersistenceAndPerformanceTests
             DateTimeOffset.UtcNow,
             SourceGoalId: null));
 
-        var defaultGoals = await new SqliteOrchestratorStateRepository(defaultWorkspace.SqliteStatePath).LoadAsync();
+        var defaultGoals = await OpenMigratedStateRepository(defaultWorkspace.SqliteStatePath).LoadAsync();
         var defaultBacklog = await new BacklogStore(defaultWorkspace.BacklogStorePath).ListAsync(includeAll: true);
-        var restoredProject = await new SqliteOrchestratorStateRepository(projectWorkspace.SqliteStatePath).LoadAsync();
+        var restoredProject = await OpenMigratedStateRepository(projectWorkspace.SqliteStatePath).LoadAsync();
         var projectBacklog = await new BacklogStore(projectWorkspace.BacklogStorePath).ListAsync(includeAll: true);
 
         Assert.Empty(defaultGoals.Goals);
@@ -376,7 +376,7 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, ".orchestrator", "state.db");
-        var repository = new SqliteOrchestratorStateRepository(path);
+        var repository = OpenMigratedStateRepository(path);
 
         var writes = Enumerable.Range(0, 16)
             .Select(index => Task.Run(async () =>
@@ -402,7 +402,7 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, ".orchestrator", "state.db");
-        var repository = new SqliteOrchestratorStateRepository(path);
+        var repository = OpenMigratedStateRepository(path);
         await repository.SaveAsync(new AgentOrchestratorKernel());
 
         var writes = Enumerable.Range(0, 12)
@@ -430,7 +430,7 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, ".orchestrator", "state.db");
-        var repository = new SqliteOrchestratorStateRepository(path);
+        var repository = OpenMigratedStateRepository(path);
         await repository.SaveAsync(new AgentOrchestratorKernel());
 
         // Mirrors the conduct --loop crash: per-tick SaveAsync checkpoints racing goal-create
@@ -468,7 +468,7 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, ".orchestrator", "state.db");
-        var repository = new SqliteOrchestratorStateRepository(path);
+        var repository = OpenMigratedStateRepository(path);
         var agents = AgentCatalog.Default().Agents;
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Render a large local dashboard smoke scenario");
@@ -502,7 +502,7 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, ".orchestrator", "state.db");
-        var repository = new SqliteOrchestratorStateRepository(path);
+        var repository = OpenMigratedStateRepository(path);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Bound large stdout");
         var agent = new AgentDefinition(
@@ -540,7 +540,7 @@ public sealed class StatePersistenceAndPerformanceTests
     {
         var root = CreateTempDirectory();
         var path = Path.Combine(root, ".orchestrator", "state.db");
-        var repository = new SqliteOrchestratorStateRepository(path);
+        var repository = OpenMigratedStateRepository(path);
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("No path bounds full text");
         var agent = new AgentDefinition(
@@ -590,12 +590,18 @@ public sealed class StatePersistenceAndPerformanceTests
 
     private static AgentOrchestratorKernel LoadState(string path)
     {
-        return new SqliteOrchestratorStateRepository(path).LoadAsync().GetAwaiter().GetResult();
+        return OpenMigratedStateRepository(path).LoadAsync().GetAwaiter().GetResult();
     }
 
     private static void SaveState(string path, AgentOrchestratorKernel kernel)
     {
-        new SqliteOrchestratorStateRepository(path).SaveAsync(kernel).GetAwaiter().GetResult();
+        OpenMigratedStateRepository(path).SaveAsync(kernel).GetAwaiter().GetResult();
+    }
+
+    private static SqliteOrchestratorStateRepository OpenMigratedStateRepository(string path)
+    {
+        _ = StateDbMigrations.EnsureUpToDate(path);
+        return new SqliteOrchestratorStateRepository(path);
     }
 }
 

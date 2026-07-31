@@ -142,6 +142,24 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_conduct_handoff_reads_production_authority_transfer_signal")]
+    public void ProgramStartupLifecycleConductHandoffReadsProductionAuthorityTransferSignal()
+    {
+        const string variable = "MCG_ORCHESTRATOR_HANDOFF_READY_PATH";
+        var previous = Environment.GetEnvironmentVariable(variable);
+        try
+        {
+            Environment.SetEnvironmentVariable(variable, "successor.ready");
+
+            Assert.True(ProgramStartupLifecycle.IsAuthorityTransferRequested(["conduct", "--loop"]));
+            Assert.False(ProgramStartupLifecycle.IsAuthorityTransferRequested(["status"]));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, previous);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_registers_and_releases_wrapper_job")]
     public void WorkerProcessJobsRegistersAndReleasesWrapperJob()
     {
