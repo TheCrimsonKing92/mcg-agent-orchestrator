@@ -904,12 +904,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 return false;
             }
 
-            var landWorktreePath = context.Worktrees.TryResolve(
-                context.Workspace.ExecutionDirectory,
-                context.CurrentGoal.Id);
-            var landChangedFiles = landWorktreePath is null
-                ? Array.Empty<string>()
-                : context.Worktrees.GetChangedFiles(landWorktreePath);
             var landResult = LandingExecutor.Execute(
                 context.Kernel,
                 context.CurrentGoal,
@@ -923,6 +917,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             Console.WriteLine($"  main-advanced: {landResult.MainAdvanced}");
             if (landResult.MainAdvanced)
             {
+                var landChangedFiles = landResult.ChangedFiles
+                    ?? throw new InvalidOperationException(
+                        "Landing advanced main without an authoritative changed-file receipt.");
                 PostLandingCanaryFactory.CreateDefault(context.Workspace)
                     .HandleLanding(new ConductorLandingReceipt(
                         context.CurrentGoal.Id.Value,

@@ -46,6 +46,71 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "Workspace merge carries authoritative changed paths without a goal worktree")]
+    public void WorkspaceMergeCarriesChangedPathsFromBranchWithoutWorktree()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var branch = GoalWorktrees.BranchName(goalId);
+            const string enginePath =
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/canary-fixture/branch-only.txt";
+            var baseBranch = GitCli.Run(repo, "branch", "--show-current").Output.Trim();
+            RunGit(repo, "checkout", "-b", branch);
+            var fullPath = Path.Combine(repo, enginePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            File.WriteAllText(fullPath, "namespace BranchOnly;");
+            RunGit(repo, "add", enginePath);
+            RunGit(repo, "commit", "-m", "Branch-only acceptance engine change");
+            RunGit(repo, "checkout", baseBranch);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goalId));
+
+            var merge = GoalWorktrees.TryFastForwardMerge(repo, goalId);
+
+            Assert.NotNull(merge);
+            Assert.True(merge!.FastForwarded);
+            Assert.Equal([enginePath], merge.ChangedFiles);
+            Assert.True(File.Exists(Path.Combine(repo, enginePath)));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Workspace merge fails closed when branch changed paths cannot be determined")]
+    public void WorkspaceMergeFailsClosedWhenChangedPathsAreUnavailable()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var goalId = GoalId.New();
+            var branch = GoalWorktrees.BranchName(goalId);
+            var baseBranch = GitCli.Run(repo, "branch", "--show-current").Output.Trim();
+            RunGit(repo, "checkout", "-b", branch);
+            File.WriteAllText(Path.Combine(repo, "branch-only.txt"), "must not land");
+            RunGit(repo, "add", "branch-only.txt");
+            RunGit(repo, "commit", "-m", "Branch-only change");
+            var branchHead = GitCli.Run(repo, "rev-parse", "HEAD").Output.Trim();
+            RunGit(repo, "checkout", baseBranch);
+            RunGit(repo, "symbolic-ref", "HEAD", "refs/heads/missing-landing-target");
+
+            var merge = GoalWorktrees.TryFastForwardMerge(repo, goalId);
+
+            Assert.NotNull(merge);
+            Assert.False(merge!.FastForwarded);
+            Assert.Null(merge.ChangedFiles);
+            Assert.Contains("changed-file determination failed", merge.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(branchHead, GitCli.Run(repo, "rev-parse", branch).Output.Trim());
+            Assert.False(File.Exists(Path.Combine(repo, "branch-only.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees rechecks mutation blocker immediately before fast-forward")]
     public void GoalWorktreesRechecksMutationBlockerBeforeFastForward()
     {

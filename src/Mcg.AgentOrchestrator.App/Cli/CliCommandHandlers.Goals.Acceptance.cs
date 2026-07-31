@@ -401,6 +401,11 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                     GoalRollbackPlanner.RecordAcceptance(context.Workspace.ExecutionDirectory, pendingRollback);
                 }
 
+                if (merge.FastForwarded && merge.ChangedFiles is not null)
+                {
+                    landingChangedFiles = merge.ChangedFiles;
+                }
+
                 return new AcceptanceMergeCommitResult(merge.FastForwarded, FormatWorkspaceMerge(merge));
             },
             "Acceptance completed goal after merge; cleanup deferred to conductor sweep."));

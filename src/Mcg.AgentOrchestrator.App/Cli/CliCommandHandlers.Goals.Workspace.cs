@@ -61,10 +61,6 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
                 return false;
             }
 
-            var mergeWorktreePath = context.Worktrees.TryResolve(executionDirectory, goal.Id);
-            var mergeChangedFiles = mergeWorktreePath is null
-                ? Array.Empty<string>()
-                : context.Worktrees.GetChangedFiles(mergeWorktreePath);
             var merge = context.Worktrees.TryFastForwardMerge(
                 executionDirectory,
                 goal.Id,
@@ -74,6 +70,9 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
                 : FormatWorkspaceMerge(merge));
             if (merge?.FastForwarded == true)
             {
+                var mergeChangedFiles = merge.ChangedFiles
+                    ?? throw new InvalidOperationException(
+                        "Workspace merge advanced main without an authoritative changed-file receipt.");
                 var landingSha = GitCli.Run(executionDirectory, "rev-parse", "HEAD");
                 if (!landingSha.Succeeded || string.IsNullOrWhiteSpace(landingSha.Output))
                 {

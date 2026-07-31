@@ -370,8 +370,10 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("BuildMutationBlockReason(context.Workspace)", acceptance, StringComparison.Ordinal);
         Assert.Contains("PostLandingCanaryFactory.CreateDefault(context.Workspace)", workspace, StringComparison.Ordinal);
         Assert.Contains("BuildMutationBlockReason(context.Workspace)", workspace, StringComparison.Ordinal);
+        Assert.Contains("var mergeChangedFiles = merge.ChangedFiles", workspace, StringComparison.Ordinal);
         Assert.Contains(".HandleLanding(new ConductorLandingReceipt(", workspace, StringComparison.Ordinal);
         Assert.Contains("mutationBlocker: () => PostLandingCanaryFactory.BuildMutationBlockReason", goals, StringComparison.Ordinal);
+        Assert.Contains("var landChangedFiles = landResult.ChangedFiles", goals, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Acceptance-engine CLI reports and explicitly clears the typed circuit")]

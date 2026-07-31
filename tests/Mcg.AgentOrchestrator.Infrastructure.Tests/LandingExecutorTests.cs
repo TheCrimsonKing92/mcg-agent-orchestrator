@@ -154,6 +154,32 @@ public sealed class LandingExecutorTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "CLI land result carries authoritative changed paths without a goal worktree")]
+    public void LandingResultCarriesChangedPathsFromBranchWithoutWorktree()
+    {
+        var repo = CreateGitRepository();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var (kernel, goal) = CreateVerifiedGoal(repo);
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            const string enginePath =
+                "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/canary-fixture/branch-only.txt";
+            AddGoalBranchCommit(repo, goalBranch, enginePath, "namespace BranchOnly;");
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+
+            var result = LandingExecutor.Execute(kernel, goal, workspace);
+
+            Assert.True(result.MainAdvanced, result.Message);
+            Assert.Equal([enginePath], result.ChangedFiles);
+            Assert.True(File.Exists(Path.Combine(repo, enginePath)));
+        }
+        finally
+        {
+            TryDeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "LandingExecutor_green_gate_non_approval_diff_auto_promotes_without_ownership_hold")]
     public void LandingExecutorGreenGateNonApprovalDiffAutoPromotesWithoutOwnershipHold()
     {

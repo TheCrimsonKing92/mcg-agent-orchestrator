@@ -88,6 +88,16 @@ public static partial class GoalWorktrees
             return null;
         }
 
+        var changedFiles = ResolveChangedFilesAgainstHead(executionDirectory, goalId);
+        if (!changedFiles.Succeeded)
+        {
+            return new GoalWorktreeMergeResult(
+                false,
+                branch,
+                $"Fast-forward blocked: changed-file determination failed: {changedFiles.FailureReason}",
+                null);
+        }
+
         var blockReason = mutationBlocker?.Invoke();
         if (!string.IsNullOrWhiteSpace(blockReason))
         {
@@ -95,7 +105,8 @@ public static partial class GoalWorktrees
                 false,
                 branch,
                 $"Fast-forward blocked before merge: {blockReason}",
-                null);
+                null,
+                changedFiles.Files);
         }
 
         var merge = GitCli.Run(executionDirectory, "merge", "--ff-only", branch);
@@ -105,14 +116,57 @@ public static partial class GoalWorktrees
                 true,
                 branch,
                 $"Fast-forwarded to {branch}.",
-                null);
+                null,
+                changedFiles.Files);
         }
 
         return new GoalWorktreeMergeResult(
             false,
             branch,
             $"Branch {branch} cannot fast-forward; merge it explicitly after review.",
-            $"git merge {branch}");
+            $"git merge {branch}",
+            changedFiles.Files);
+    }
+
+    public static GoalWorktreeChangedFilesResult ResolveChangedFilesAgainstHead(
+        string executionDirectory,
+        GoalId goalId)
+    {
+        RequireGitWorkTree(executionDirectory);
+        var branch = BranchName(goalId);
+        if (!BranchExists(executionDirectory, branch))
+        {
+            return new GoalWorktreeChangedFilesResult(
+                false,
+                [],
+                $"goal branch '{branch}' does not exist");
+        }
+
+        var diff = GitCli.Run(executionDirectory, "diff", "--name-only", $"HEAD...{branch}");
+        if (diff.DrainTimedOut)
+        {
+            return new GoalWorktreeChangedFilesResult(
+                false,
+                [],
+                "git diff output drain timed out");
+        }
+
+        if (!diff.Succeeded)
+        {
+            return new GoalWorktreeChangedFilesResult(
+                false,
+                [],
+                string.IsNullOrWhiteSpace(diff.Error)
+                    ? $"git diff exited {diff.ExitCode}"
+                    : diff.Error.Trim());
+        }
+
+        var files = diff.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return new GoalWorktreeChangedFilesResult(true, files, null);
     }
 
     public static GoalWorktreeRebaseResult TryRebaseOntoMain(string executionDirectory, GoalId goalId)
