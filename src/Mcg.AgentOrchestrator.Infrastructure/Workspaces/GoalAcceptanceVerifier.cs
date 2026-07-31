@@ -5812,6 +5812,19 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         environment.Remove(WorkerSandboxOptions.CredentialTargetVariable);
         environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
 
+        // 3. Outer acceptance-attempt identity. A child inheriting these can resolve the OUTER attempt's
+        //    receipt prefix (overwriting genuine receipts) and be accepted as the SAME custodian, which
+        //    skips the live-owner rejection guarding a recursive artifact delete. Safe to strip: the gate
+        //    passes receipt paths to children as explicit argv, so no child needs the inherited values.
+        environment.Remove(AcceptanceAttemptTrxPrefixVariable);
+        environment.Remove(AcceptanceAttemptArtifactCustody.AttemptIdVariable);
+        environment.Remove(AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
+
+        // 4. One-shot operator escape hatches must never be inherited into a verification child. This one
+        //    turns stale-lease recovery into an unconditional recursive wipe of artifacts that would
+        //    otherwise have passed their integrity probe.
+        environment.Remove(DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable);
+
         foreach (var handoffVariable in environment.Keys
                      .Cast<string>()
                      .Where(name => name.StartsWith(

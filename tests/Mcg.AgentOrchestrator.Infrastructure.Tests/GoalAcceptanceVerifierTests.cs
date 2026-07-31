@@ -20,12 +20,25 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             ["mcg_orchestrator_handoff_incumbent_pid"] = "4242",
             [WorkerSandboxOptions.EnabledVariable] = "1",
             [WorkerSandboxOptions.AccountVariable] = "worker",
+            // Outer-attempt identity: inheriting these lets a child overwrite genuine receipts and pass
+            // as the SAME custodian, skipping the live-owner check that guards a recursive artifact delete.
+            [GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable] = @"C:\outer\attempt-1",
+            [AcceptanceAttemptArtifactCustody.AttemptIdVariable] = "attempt-1",
+            [AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable] = @"C:\outer\meta.json",
+            // One-shot operator escape hatch that would otherwise wipe intact artifacts in every child.
+            [DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable] = "1",
             // Unrelated inputs the suite legitimately needs must survive.
             ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = @"C:\repo",
             ["PATH"] = @"C:\windows"
         };
 
         GoalAcceptanceVerifier.ScrubNonHermeticEnvironment(environment);
+
+        Assert.False(environment.ContainsKey(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable));
+        Assert.False(environment.ContainsKey(AcceptanceAttemptArtifactCustody.AttemptIdVariable));
+        Assert.False(environment.ContainsKey(AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable));
+        Assert.False(environment.ContainsKey(
+            DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable));
 
         Assert.Empty(environment.Keys
             .Cast<string>()
