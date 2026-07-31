@@ -1153,6 +1153,22 @@ public sealed partial class AgentOrchestratorKernel
         dependent.AddDependency(dependencyId);
     }
 
+    public void RemoveGoalDependency(GoalId dependentId, GoalId dependencyId)
+    {
+        var dependent = GetGoal(dependentId);
+        GetGoal(dependencyId);
+        if (!dependent.RemoveDependency(dependencyId))
+            throw new InvalidOperationException(
+                $"Goal '{dependentId.Value[..8]}' does not depend on '{dependencyId.Value[..8]}'.");
+    }
+
+    public void ClearGoalDependencies(GoalId dependentId)
+    {
+        var dependent = GetGoal(dependentId);
+        if (dependent.ClearDependencies() == 0)
+            throw new InvalidOperationException($"Goal '{dependentId.Value[..8]}' has no dependencies to clear.");
+    }
+
     private bool WouldCreateCycle(GoalId dependentId, GoalId newDependencyId)
     {
         // DFS from newDependencyId following DependsOn edges; if we reach dependentId, it's a cycle.

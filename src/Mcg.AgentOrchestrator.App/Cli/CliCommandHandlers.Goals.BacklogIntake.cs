@@ -57,9 +57,9 @@ private static SourceBacklogItemLink? ResolveSourceBacklogItemLink(
 
     if (!string.IsNullOrWhiteSpace(explicitPrefix))
     {
-        return new SourceBacklogItemLink(
-            ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, explicitPrefix, explicitFlag: true)!,
-            FromExplicitFlag: true);
+        var explicitItem = ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, explicitPrefix, explicitFlag: true)!;
+        ValidateBacklogPromotionPrerequisites(context, explicitItem);
+        return new SourceBacklogItemLink(explicitItem, FromExplicitFlag: true);
     }
 
     var match = OpeningBacklogObjectiveReferenceRegex.Match(objective);
@@ -69,6 +69,8 @@ private static SourceBacklogItemLink? ResolveSourceBacklogItemLink(
     }
 
     var item = ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, match.Groups[1].Value, explicitFlag: false);
+    if (item is not null)
+        ValidateBacklogPromotionPrerequisites(context, item);
     return item is null ? null : new SourceBacklogItemLink(item, FromExplicitFlag: false);
 }
 
@@ -116,6 +118,38 @@ private static void ApplySourceBacklogItemLink(CliExecutionContext context, Goal
     }
 
     context.Kernel.SetGoalSourceBacklogItemId(goal.Id, link.Item.Id);
+    ApplyBacklogPromotionDependencies(context, goal, link.Item);
+}
+
+private static void ValidateBacklogPromotionPrerequisites(CliExecutionContext context, BacklogItem item)
+{
+    foreach (var dependency in item.Dependencies)
+        ResolvePromotedDependencyGoal(context, dependency);
+}
+
+private static void ApplyBacklogPromotionDependencies(
+    CliExecutionContext context,
+    Goal goal,
+    BacklogItem item)
+{
+    foreach (var dependency in item.Dependencies)
+        context.Kernel.SetGoalDependency(goal.Id, ResolvePromotedDependencyGoal(context, dependency).Id);
+}
+
+private static Goal ResolvePromotedDependencyGoal(
+    CliExecutionContext context,
+    BacklogDependency dependency)
+{
+    var goal = dependency.TargetKind == BacklogDependencyTargetKind.Goal
+        ? context.Kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == dependency.PrerequisiteId)
+        : context.Kernel.FindGoalBySourceBacklogItemId(dependency.PrerequisiteId);
+    if (goal is not null)
+        return goal;
+
+    var reason = dependency.TargetKind == BacklogDependencyTargetKind.Backlog
+        ? $"waiting on open prerequisite {dependency.PrerequisiteId}; promote that backlog item first"
+        : $"dependency goal {dependency.PrerequisiteId} is unavailable";
+    throw new InvalidOperationException($"Cannot promote dependent backlog item: {reason}.");
 }
 
 private static void PrintClosedSourceBacklogWarning(SourceBacklogItemLink? link)
@@ -208,6 +242,9 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
             var batchItem = itemPlan.Items.Single();
             matched++;
+            var batchBacklogItem = new BacklogStore(context.Workspace.BacklogStorePath)
+                .GetByExactIdAsync(batchItem.Id).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException($"Backlog item '{batchItem.Id}' disappeared during intake.");
             if (TryReuseBacklogIntakeGoal(context, batchItem, out var reusedBatchGoal) ||
                 TryReuseBacklogIntakeRecord(context, batchItem, out reusedBatchGoal))
             {
@@ -218,6 +255,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
                 }
                 continue;
             }
+            ValidateBacklogPromotionPrerequisites(context, batchBacklogItem);
 
             var batchReservation = ReserveBacklogIntake(context, batchItem, forceReclaim);
             if (batchReservation.Kind != BacklogIntakeReservationKind.Acquired)
@@ -233,6 +271,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             if (!string.IsNullOrEmpty(batchItem.Id))
             {
                 context.Kernel.SetGoalSourceBacklogItemId(batchGoal.Id, batchItem.Id);
+                ApplyBacklogPromotionDependencies(context, batchGoal, batchBacklogItem);
             }
 
             context.CurrentGoal = batchGoal;
@@ -286,6 +325,9 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
     var item = plan.Items.Single();
     var backlogItemId = item.Id;
+    var sourceBacklogItem = new BacklogStore(context.Workspace.BacklogStorePath)
+        .GetByExactIdAsync(backlogItemId).GetAwaiter().GetResult()
+        ?? throw new InvalidOperationException($"Backlog item '{backlogItemId}' disappeared during intake.");
     if (TryReuseBacklogIntakeGoal(context, item, out var existingGoal) ||
         TryReuseBacklogIntakeRecord(context, item, out existingGoal))
     {
@@ -297,6 +339,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         }
         return false;
     }
+    ValidateBacklogPromotionPrerequisites(context, sourceBacklogItem);
 
     var reservation = ReserveBacklogIntake(context, item, forceReclaim);
     if (reservation.Kind != BacklogIntakeReservationKind.Acquired)
@@ -312,6 +355,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     if (!string.IsNullOrEmpty(backlogItemId))
     {
         context.Kernel.SetGoalSourceBacklogItemId(context.CurrentGoal.Id, backlogItemId);
+        ApplyBacklogPromotionDependencies(context, context.CurrentGoal, sourceBacklogItem);
     }
 
     PersistBacklogIntakeGoal(context, item, context.CurrentGoal);

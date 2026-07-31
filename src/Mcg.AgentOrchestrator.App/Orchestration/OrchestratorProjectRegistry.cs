@@ -44,6 +44,24 @@ internal sealed class OrchestratorProjectRegistry
 
     public OrchestratorProject CreateProject(string name, string rootDirectory)
     {
+        var project = ResolveProjectForCreation(name, rootDirectory, out var alreadyRegistered);
+        if (alreadyRegistered)
+        {
+            return project;
+        }
+
+        var file = LoadFile();
+        var entry = new ProjectEntry(project.Name, project.RootDirectory);
+        file.Projects.Add(entry);
+        SaveFile(file);
+        return new OrchestratorProject(entry.Name, entry.RootDirectory);
+    }
+
+    public OrchestratorProject ResolveProjectForCreation(
+        string name,
+        string rootDirectory,
+        out bool alreadyRegistered)
+    {
         var normalizedName = OrchestratorProjectSelection.NormalizeProjectName(name);
         if (normalizedName.Equals(OrchestratorWorkspace.DefaultProjectName, StringComparison.OrdinalIgnoreCase))
         {
@@ -56,20 +74,23 @@ internal sealed class OrchestratorProjectRegistry
             throw new DirectoryNotFoundException($"Project root does not exist: {root}");
         }
 
-        var file = LoadFile();
-        var existing = file.Projects.FindIndex(project => project.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
-        var entry = new ProjectEntry(normalizedName, root);
-        if (existing >= 0)
+        var existing = LoadFile().Projects.FirstOrDefault(project =>
+            project.Name.Equals(normalizedName, StringComparison.OrdinalIgnoreCase));
+        if (existing is null)
         {
-            file.Projects[existing] = entry;
-        }
-        else
-        {
-            file.Projects.Add(entry);
+            alreadyRegistered = false;
+            return new OrchestratorProject(normalizedName, root);
         }
 
-        SaveFile(file);
-        return new OrchestratorProject(entry.Name, entry.RootDirectory);
+        var existingRoot = Path.GetFullPath(existing.RootDirectory);
+        if (!PathsEqual(existingRoot, root))
+        {
+            throw new InvalidOperationException(
+                $"Project '{normalizedName}' is already registered at '{existingRoot}' and cannot be repointed to '{root}'.");
+        }
+
+        alreadyRegistered = true;
+        return new OrchestratorProject(existing.Name, existingRoot);
     }
 
     public void SelectProject(string name)
@@ -151,8 +172,26 @@ internal sealed class OrchestratorProjectRegistry
     private void SaveFile(RegistryFile file)
     {
         Directory.CreateDirectory(RegistryDirectory);
-        File.WriteAllText(RegistryPath, JsonSerializer.Serialize(file, JsonOptions));
+        var temporaryPath = RegistryPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, JsonSerializer.Serialize(file, JsonOptions));
+            File.Move(temporaryPath, RegistryPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
     }
+
+    private static bool PathsEqual(string left, string right) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private sealed class RegistryFile
     {

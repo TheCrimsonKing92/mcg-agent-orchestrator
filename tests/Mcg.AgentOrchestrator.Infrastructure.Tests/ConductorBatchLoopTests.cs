@@ -2165,13 +2165,18 @@ public sealed class ConductorBatchLoopTests
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         using var releaseFirst = new ManualResetEventSlim(false);
         using var firstHasLease = new ManualResetEventSlim(false);
+        using var secondReachedPreSlot = new ManualResetEventSlim(false);
         var preSlotRuns = 0;
         var coordinator = ThreadedAcceptanceAttemptCoordinator(
             attemptRoot,
             out var waitForAttempts,
             (_, _) =>
             {
-                Interlocked.Increment(ref preSlotRuns);
+                if (Interlocked.Increment(ref preSlotRuns) == 2)
+                {
+                    secondReachedPreSlot.Set();
+                }
+
                 return null;
             });
         var candidateA = ConductorParallelAcceptanceCandidate.Create(goalA, 0, ["src/HoldA.cs"], "branch-a", "main");
@@ -2189,7 +2194,7 @@ public sealed class ConductorBatchLoopTests
                     Assert.NotNull(stableSlotLease);
                     firstLeaseEnvironment = stableSlotLease.Environment;
                     firstHasLease.Set();
-                    Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(5)));
+                    releaseFirst.Wait();
                     return PassingRun(attemptCandidate, ConductorAutonomyPolicy.Conservative);
                 });
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, first.Kind);
@@ -2207,6 +2212,7 @@ public sealed class ConductorBatchLoopTests
                     secondRan = true;
                     return PassingRun(attemptCandidate, attemptPolicy);
                 });
+            Assert.True(secondReachedPreSlot.Wait(TimeSpan.FromSeconds(5)));
             var blocked = WaitForAttemptOutcome(coordinator, candidateB, ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot);
 
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, second.Kind);
@@ -4063,8 +4069,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Empty(createdWorkspaces);
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_dependent_goal_advances_when_parked_dependency_completes_in_metadata")]
-    public void BatchLoopDependentGoalAdvancesWhenParkedDependencyCompletesInMetadata()
+    [Xunit.Fact(DisplayName = "BatchLoop_dependent_goal_holds_when_dependency_is_completed_without_landing")]
+    public void BatchLoopDependentGoalHoldsWhenDependencyIsCompletedWithoutLanding()
     {
         var dependencyId = GoalId.New();
         var kernel = new AgentOrchestratorKernel();
@@ -4095,8 +4101,128 @@ public sealed class ConductorBatchLoopTests
 
         Assert.DoesNotContain(kernel.Goals, goal => goal.Id == dependencyId);
         Assert.False(kernel.IsKnownCompletedDependencyGoal(dependencyId));
+        Assert.Equal(0, summary.Advanced);
+        Assert.Equal(1, summary.Held);
+        Assert.Empty(createdWorkspaces);
+    }
+
+    [Xunit.Theory(DisplayName = "BatchLoop_terminal_unlanded_dependency_escalates_without_worker_start")]
+    [Xunit.InlineData("Failed")]
+    [Xunit.InlineData("Retired")]
+    public void BatchLoopTerminalUnlandedDependencyEscalatesWithoutWorkerStart(string terminalStatus)
+    {
+        var dependencyId = GoalId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "dependent");
+        kernel.ReplaceWithSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = kernel.ExportSnapshot().Goals
+                .Select(goal => goal.Id == active.Id.Value
+                    ? goal with { DependsOn = [dependencyId.Value] }
+                    : goal)
+                .ToArray()
+        });
+        kernel.MarkKnownDependencyGoalStatuses([
+            new KeyValuePair<GoalId, string>(dependencyId, terminalStatus)
+        ]);
+        var workerStarts = 0;
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(
+                createWorkspace: _ => throw new Xunit.Sdk.XunitException("held goal must not create a workspace"),
+                dispatchAndStart: _ =>
+                {
+                    workerStarts++;
+                    return DispatchStartOutcome.Started();
+                }),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(0, workerStarts);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Contains(
+            kernel.GetGoal(active.Id).Timeline,
+            progress => progress.Message.Contains(
+                $"dependency-terminal-without-landing: {dependencyId.Value[..8]} state={terminalStatus}",
+                StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_dependency_added_after_goal_start_does_not_retroactively_hold_goal")]
+    public void BatchLoopDependencyAddedAfterGoalStartDoesNotRetroactivelyHoldGoal()
+    {
+        var dependencyId = GoalId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "already started dependent");
+        kernel.ReplaceWithSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = kernel.ExportSnapshot().Goals
+                .Select(goal => goal.Id == active.Id.Value
+                    ? goal with { DependsOn = [dependencyId.Value] }
+                    : goal)
+                .ToArray()
+        });
+        var rehydrated = kernel.GetGoal(active.Id);
+        StartProcess(
+            kernel,
+            rehydrated,
+            rehydrated.Tasks.Single(),
+            DateTimeOffset.Parse("2026-07-30T00:00:00Z"),
+            "base");
+        kernel.MarkKnownDependencyGoalStatuses([
+            new KeyValuePair<GoalId, string>(dependencyId, GoalStatus.Completed.ToString())
+        ]);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(createWorkspace: _ => throw new Xunit.Sdk.XunitException("running goal must not recreate a workspace")),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(1, summary.Held);
+        Assert.DoesNotContain(
+            kernel.GetGoal(active.Id).Timeline,
+            progress => progress.Message.Contains("dependency-terminal-without-landing", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            kernel.GetGoal(active.Id).Timeline,
+            progress => progress.Message.Contains("waiting on dependency", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_landed_dependency_remains_satisfied_after_terminal_metadata_changes")]
+    public void BatchLoopLandedDependencyRemainsSatisfiedAfterTerminalMetadataChanges()
+    {
+        var dependencyId = GoalId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "dependent");
+        kernel.ReplaceWithSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = kernel.ExportSnapshot().Goals
+                .Select(goal => goal.Id == active.Id.Value
+                    ? goal with { DependsOn = [dependencyId.Value] }
+                    : goal)
+                .ToArray()
+        });
+        kernel.MarkKnownCompletedDependencyGoals([dependencyId]);
+        kernel.MarkKnownDependencyGoalStatuses([
+            new KeyValuePair<GoalId, string>(dependencyId, GoalStatus.Superseded.ToString())
+        ]);
+        var createdWorkspaces = new List<GoalId>();
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(createWorkspace: goal =>
+            {
+                createdWorkspaces.Add(goal.Id);
+                return "/tmp/workspace";
+            }),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
         Assert.Equal(1, summary.Advanced);
-        Assert.Equal(0, summary.Held);
+        Assert.Equal(0, summary.Escalated);
         Assert.Contains(active.Id, createdWorkspaces);
     }
 

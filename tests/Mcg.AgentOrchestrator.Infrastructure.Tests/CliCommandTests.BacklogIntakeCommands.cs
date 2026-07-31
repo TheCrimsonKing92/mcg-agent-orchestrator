@@ -602,10 +602,11 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["operator-channel", "test", "--spine"]));
 
-        // Store-only backlog commands are kernel-independent, so they skip state and stay concurrent with a conductor.
+        // Backlog commands that do not inspect dependencies skip state and stay concurrent with a conductor.
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["BACKLOG-ADD", "title"]));
-        Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-list"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-add", "title", "--depends-on", "abc"]));
+        Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-list"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-update", "abc", "--title", "new"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-annotate", "abc", "receipt"]));
         Xunit.Assert.True(CliPersistentStateRunner.SkipsKernelState(["backlog-close", "abc"]));
@@ -620,6 +621,11 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["goals"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["backlog-show", "abc"]));
+        Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-list"]));
+        Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-show", "abc"]));
+        Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-depends", "abc", "--on", "def"]));
+        Xunit.Assert.True(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-add", "title", "--depends-on", "abc"]));
+        Xunit.Assert.False(CliPersistentStateRunner.RequiresKernelBacklogState(["backlog-add", "title"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["run", "1"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["conduct", "abc123"]));
         Xunit.Assert.False(CliPersistentStateRunner.SkipsKernelState(["acceptance"]));
@@ -699,6 +705,52 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Equal(bodyContent, item.Body);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_backlog_dependency_commands_add_show_remove_and_clear")]
+    public async Task CliBacklogDependencyCommandsAddShowRemoveAndClear()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var prerequisite = await store.AddAsync("Backlog prerequisite");
+        var kernel = new AgentOrchestratorKernel();
+        var goalPrerequisite = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Goal prerequisite");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            [
+                "backlog-add", "Dependent item",
+                "--depends-on", prerequisite.Id[..8],
+                "--depends-on", goalPrerequisite.Id.Value[..8]
+            ],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        var dependent = (await store.ListAsync(includeAll: true))
+            .Single(item => item.Title == "Dependent item");
+        Xunit.Assert.Equal(
+            [prerequisite.Id, goalPrerequisite.Id.Value],
+            dependent.Dependencies.Select(edge => edge.PrerequisiteId));
+
+        var shown = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-show", dependent.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        Xunit.Assert.Contains("Dependencies:", shown);
+        Xunit.Assert.Contains(prerequisite.Id, shown);
+        Xunit.Assert.Contains(goalPrerequisite.Id.Value, shown);
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-depends", dependent.Id[..8], "--remove", prerequisite.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-depends", dependent.Id[..8], "--clear"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        Xunit.Assert.Empty((await store.GetByExactIdAsync(dependent.Id))!.Dependencies);
+    }
 
     [Xunit.Fact(DisplayName = "Cli_backlog_add_text_file_alias_creates_item_with_file_content")]
     public async Task CliBacklogAddTextFileAliasCreatesItemWithFileContent()

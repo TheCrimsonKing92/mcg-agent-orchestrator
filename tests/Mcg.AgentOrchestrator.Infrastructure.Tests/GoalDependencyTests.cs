@@ -71,6 +71,24 @@ public sealed class GoalDependencyTests
         Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Xunit.Fact(DisplayName = "GoalDependency_remove_and_clear_are_explicit_and_loud")]
+    public void GoalDependencyRemoveAndClearAreExplicitAndLoud()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var a = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "A");
+        var b = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "B");
+        var c = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "C");
+        kernel.SetGoalDependency(c.Id, a.Id);
+        kernel.SetGoalDependency(c.Id, b.Id);
+
+        kernel.RemoveGoalDependency(c.Id, a.Id);
+        Assert.DoesNotContain(a.Id, c.DependsOn);
+        Assert.Throws<InvalidOperationException>(() => kernel.RemoveGoalDependency(c.Id, a.Id));
+        kernel.ClearGoalDependencies(c.Id);
+        Assert.Empty(c.DependsOn);
+        Assert.Throws<InvalidOperationException>(() => kernel.ClearGoalDependencies(c.Id));
+    }
+
     // ── Model: snapshot round-trip ────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "GoalDependency_SnapshotRoundTrip")]
@@ -213,8 +231,8 @@ public sealed class GoalDependencyTests
             NoStopPath(),
             maxIterations: 10);
 
-        // Ticks 1-3: A advances (Executed), B held regardless of ordering.
-        Assert.True(summary.Held >= 3);
+        // B is held until A has durable merged lifecycle facts.
+        Assert.True(summary.Held >= 1);
         Assert.True(bWorkspaceCreated);
         Assert.True(kernel.IsKnownCompletedDependencyGoal(a.Id));
         Assert.Equal(0, summary.Escalated);

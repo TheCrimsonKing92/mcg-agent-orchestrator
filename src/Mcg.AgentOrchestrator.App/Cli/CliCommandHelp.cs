@@ -30,7 +30,7 @@ internal static class CliCommandHelp
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
-    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] | backlog-add <title> --body-file <path> | backlog-add <title> --text-file <path>";
+    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--depends-on <id-prefix>] | backlog-add <title> --body-file <path> [--depends-on <id-prefix>]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
@@ -38,6 +38,7 @@ internal static class CliCommandHelp
     public const string BacklogSupersedeUsage = "Usage: backlog-supersede <old-id-prefix> <new-id-prefix>";
     public const string BacklogUnsupersedeUsage = "Usage: backlog-unsupersede <id-prefix>";
     public const string BacklogLinkUsage = "Usage: backlog-link <canonical-id-prefix> <duplicate-id-prefix> [--related]";
+    public const string BacklogDependsUsage = "Usage: backlog-depends <item-prefix> --on <prerequisite-prefix> | backlog-depends <item-prefix> --remove <prerequisite-prefix> | backlog-depends <item-prefix> --clear";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
     public const string EpicAddUsage = "Usage: epic-add <title> | epic-add --text-file <path>";
@@ -207,7 +208,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
         "Add a backlog item.",
-        ["--body-file", "--text-file", "--help", "-h"]);
+        ["--body-file", "--text-file", "--depends-on", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogUpdate = new(
         BacklogUpdateUsage,
@@ -243,6 +244,11 @@ internal static class CliCommandHelp
         BacklogLinkUsage,
         "Link duplicate or related backlog items.",
         ["--related", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry BacklogDepends = new(
+        BacklogDependsUsage,
+        "Add, remove, or clear directional backlog prerequisites.",
+        ["--on", "--remove", "--clear", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogReopen = new(
         BacklogReopenUsage,
@@ -575,6 +581,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("backlog-link", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogLink;
+            return true;
+        }
+
+        if (args[0].Equals("backlog-depends", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = BacklogDepends;
             return true;
         }
 

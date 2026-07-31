@@ -65,6 +65,22 @@ internal static class CliPersistentStateRunner
                 channel);
         }
 
+        // Dependency-aware backlog commands read goal identities and landing state but mutate only
+        // BacklogStore. Hydrate state outside the generic write transaction so they can resolve goal
+        // prerequisites without taking a state.db writer lock or persisting an unchanged kernel.
+        if (RequiresKernelBacklogState(args))
+        {
+            return ExecuteCommandWithoutTransaction(
+                args,
+                stateRepository,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                ref currentGoal,
+                channel);
+        }
+
         if (IsMetadataOnlyListing(args))
         {
             var summaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult();
@@ -410,9 +426,10 @@ internal static class CliPersistentStateRunner
             // These backlog commands operate solely on the independent BacklogStore, never the
             // orchestrator kernel/state.db. Running them with an empty kernel — no state load, no
             // write lock, no process sweep — keeps them fully concurrent with a running conductor
-            // instead of contending on the per-tick write transaction. backlog-show intentionally
-            // is not listed because it renders linked goals from kernel state.
-            "backlog-list" or "backlog-add" or "backlog-update" or "backlog-annotate" or "backlog-close" or
+            // instead of contending on the per-tick write transaction. Dependency-aware add/list/show
+            // commands intentionally hydrate state through RequiresKernelBacklogState.
+            "backlog-add" when !HasFlag(args, "--depends-on") => true,
+            "backlog-update" or "backlog-annotate" or "backlog-close" or
             "backlog-supersede" or "backlog-unsupersede" or "backlog-link" or "backlog-reopen" or "backlog-view" or
             "cleanup-status" or
             "firewall-setup" or "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
@@ -421,6 +438,22 @@ internal static class CliPersistentStateRunner
             _ => false,
         };
     }
+
+    internal static bool RequiresKernelBacklogState(IReadOnlyList<string> args)
+    {
+        if (args.Count == 0)
+            return false;
+
+        return args[0].ToLowerInvariant() switch
+        {
+            "backlog-list" or "backlog-show" or "backlog-depends" => true,
+            "backlog-add" => HasFlag(args, "--depends-on"),
+            _ => false
+        };
+    }
+
+    private static bool HasFlag(IReadOnlyList<string> args, string flag) =>
+        args.Any(arg => arg.Equals(flag, StringComparison.OrdinalIgnoreCase));
 
     private static bool ShouldRunInStateTransaction(string command)
     {
@@ -732,7 +765,8 @@ internal static class CliPersistentStateRunner
         AgentOrchestratorKernel LoadLoopKernel() =>
             LoadConductLoopKernel(
                 stateRepository,
-                operatorIntentStore.ListActionableGoalIdsAsync().GetAwaiter().GetResult());
+                operatorIntentStore.ListActionableGoalIdsAsync().GetAwaiter().GetResult(),
+                workspace.ExecutionDirectory);
         var kernel = LoadLoopKernel();
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         TerminalGoalSweepResult? sweep = null;
@@ -871,12 +905,16 @@ internal static class CliPersistentStateRunner
 
     internal static AgentOrchestratorKernel LoadConductLoopKernel(
         ITransactionalOrchestratorStateRepository stateRepository,
-        IReadOnlyCollection<string>? additionalHydratedGoalIds = null)
+        IReadOnlyCollection<string>? additionalHydratedGoalIds = null,
+        string? executionDirectory = null)
     {
         var summaries = stateRepository.ListConductLoopGoalMetadataAsync().GetAwaiter().GetResult();
         var terminalSummaries = summaries
             .Where(summary => IsConductLoopTerminalStatus(summary.Status))
             .ToArray();
+        var terminalDependencyMetadata = terminalSummaries
+            .Select(summary => ReadConductLoopDependencyMetadata(summary, executionDirectory))
+            .ToDictionary(metadata => metadata.GoalId, StringComparer.Ordinal);
         var hydratedIds = summaries
             .Where(summary =>
                 !IsConductLoopTerminalStatus(summary.Status) &&
@@ -888,10 +926,14 @@ internal static class CliPersistentStateRunner
             .ToArray();
         var kernel = stateRepository.LoadGoalsAsync(hydratedIds).GetAwaiter().GetResult();
         kernel.MarkKnownDependencyGoalStatuses(summaries.Select(summary =>
-            new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
-        kernel.MarkKnownCompletedDependencyGoals(terminalSummaries
-            .Where(summary => IsConductLoopCompletedDependencyStatus(summary.Status))
-            .Select(summary => new GoalId(summary.Id)));
+            new KeyValuePair<GoalId, string>(
+                new GoalId(summary.Id),
+                terminalDependencyMetadata.TryGetValue(summary.Id, out var metadata)
+                    ? metadata.Status
+                    : summary.Status)));
+        kernel.MarkKnownCompletedDependencyGoals(terminalDependencyMetadata.Values
+            .Where(metadata => metadata.IsLanded)
+            .Select(metadata => new GoalId(metadata.GoalId)));
 
         var loadedIds = hydratedIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
         var missingDependencyIds = kernel.Goals
@@ -909,11 +951,14 @@ internal static class CliPersistentStateRunner
         var missingDependencySummaries = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
             .Where(summary => missingDependencySet.Contains(summary.Id))
             .ToArray();
-        kernel.MarkKnownDependencyGoalStatuses(missingDependencySummaries.Select(summary =>
-            new KeyValuePair<GoalId, string>(new GoalId(summary.Id), summary.Status)));
-        var completedDependencyIds = missingDependencySummaries
-            .Where(summary => IsConductLoopCompletedDependencyStatus(summary.Status))
-            .Select(summary => new GoalId(summary.Id))
+        var missingDependencyMetadata = missingDependencySummaries
+            .Select(summary => ReadConductLoopDependencyMetadata(summary, executionDirectory))
+            .ToArray();
+        kernel.MarkKnownDependencyGoalStatuses(missingDependencyMetadata.Select(metadata =>
+            new KeyValuePair<GoalId, string>(new GoalId(metadata.GoalId), metadata.Status)));
+        var completedDependencyIds = missingDependencyMetadata
+            .Where(metadata => metadata.IsLanded)
+            .Select(metadata => new GoalId(metadata.GoalId))
             .ToArray();
         kernel.MarkKnownCompletedDependencyGoals(completedDependencyIds);
         return kernel;
@@ -1067,8 +1112,35 @@ internal static class CliPersistentStateRunner
         status.Equals("Retired", StringComparison.OrdinalIgnoreCase) ||
         status.Equals("CleanedUp", StringComparison.OrdinalIgnoreCase);
 
-    private static bool IsConductLoopCompletedDependencyStatus(string status) =>
-        status.Equals(GoalStatus.Completed.ToString(), StringComparison.OrdinalIgnoreCase);
+    private static ConductLoopDependencyMetadata ReadConductLoopDependencyMetadata(
+        GoalSummary summary,
+        string? executionDirectory)
+    {
+        if (executionDirectory is null || !IsConductLoopTerminalStatus(summary.Status))
+        {
+            return new ConductLoopDependencyMetadata(summary.Id, summary.Status, IsLanded: false);
+        }
+
+        var journal = GoalOperationJournal.Read(executionDirectory, new GoalId(summary.Id));
+        var isLanded = GoalOperationJournal.HasDurableLandingIntent(journal);
+        var status = !isLanded &&
+            GoalOperationJournal.HasRetiredTerminalDisposition(journal) &&
+            !IsConductLoopTerminalWithoutLandingStatus(summary.Status)
+                ? "Retired"
+                : summary.Status;
+        return new ConductLoopDependencyMetadata(summary.Id, status, isLanded);
+    }
+
+    private static bool IsConductLoopTerminalWithoutLandingStatus(string status) =>
+        status.Equals(GoalStatus.Failed.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(GoalStatus.Cancelled.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals(GoalStatus.Superseded.ToString(), StringComparison.OrdinalIgnoreCase) ||
+        status.Equals("Retired", StringComparison.OrdinalIgnoreCase);
+
+    private sealed record ConductLoopDependencyMetadata(
+        string GoalId,
+        string Status,
+        bool IsLanded);
 
     private static TerminalGoalMetadata ToTerminalGoalMetadata(GoalSummary summary)
     {
