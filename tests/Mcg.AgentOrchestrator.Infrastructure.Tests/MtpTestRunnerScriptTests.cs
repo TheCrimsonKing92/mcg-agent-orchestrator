@@ -65,6 +65,19 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.True(trxPath.Length <= 240, trxPath);
     }
 
+    [Xunit.Fact(DisplayName = "MTP_summary_partition_defaults_to_the_infrastructure_test_project")]
+    public void MtpSummaryPartitionDefaultsToTheInfrastructureTestProject()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+
+        var result = sandbox.RunSummaryPartition("GoalWorktree");
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Xunit.Assert.Contains("stub stdout", result.Stdout, StringComparison.Ordinal);
+        var arguments = File.ReadAllLines(sandbox.ArgumentLog);
+        Xunit.Assert.Contains("*GoalWorktreeTests*", arguments);
+    }
+
     [Xunit.Fact(DisplayName = "MTP_local_partitions_preserve_CLI_help_and_dashboard_rendering_coverage")]
     public void MtpLocalPartitionsPreserveCliHelpAndDashboardRenderingCoverage()
     {
@@ -279,7 +292,7 @@ public sealed class MtpTestRunnerScriptTests
             Directory.CreateDirectory(projectDirectory);
             Directory.CreateDirectory(resultsRoot);
 
-            foreach (var fileName in new[] { "Invoke-InfrastructureTestPartition.ps1", "MtpTestRunner.psm1" })
+            foreach (var fileName in new[] { "Invoke-InfrastructureTestPartition.ps1", "Invoke-TestSummary.ps1", "MtpTestRunner.psm1" })
             {
                 File.Copy(Path.Combine(RepositoryRoot(), "scripts", fileName), Path.Combine(scripts, fileName));
             }
@@ -386,6 +399,21 @@ public sealed class MtpTestRunnerScriptTests
                 startInfo.ArgumentList.Add("-DotnetPath");
                 startInfo.ArgumentList.Add(dotnetPath);
             }
+            return Run(startInfo);
+        }
+
+        public ProcessResult RunSummaryPartition(string partition)
+        {
+            var startInfo = PowerShellStartInfo(Root);
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(Path.Combine(Root, "scripts", "Invoke-TestSummary.ps1"));
+            startInfo.ArgumentList.Add("-Partition");
+            startInfo.ArgumentList.Add(partition);
+            startInfo.ArgumentList.Add("-NoBuild");
+            startInfo.ArgumentList.Add("-ResultsRoot");
+            startInfo.ArgumentList.Add(ResultsRoot);
+            startInfo.ArgumentList.Add("-RunnerPath");
+            startInfo.ArgumentList.Add(RunnerPath);
             return Run(startInfo);
         }
 

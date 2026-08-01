@@ -59,6 +59,9 @@ if (-not [string]::IsNullOrWhiteSpace($Partition)) {
     }
     $filters = $selected[0].Filters
     $runLabel = $selected[0].Name
+    if (-not $PSBoundParameters.ContainsKey('Target')) {
+        $Target = 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj'
+    }
 }
 
 $run = Invoke-MtpTestRun `
