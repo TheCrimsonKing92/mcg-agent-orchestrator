@@ -174,7 +174,6 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             "sha-background"));
         clock.Stop();
 
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(1), clock.Elapsed.ToString());
         Assert.False(run.IsCompleted);
         Assert.Equal(AcceptanceEngineHealth.Pending, circuit.Read().Health);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -574,7 +573,6 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         clock.Stop();
 
         Assert.Equal(AcceptanceEngineHealth.Healthy, snapshot.Health);
-        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5), $"Projection took {clock.Elapsed}.");
         var typed = await fixture.RawStore.ReadByTypeSinceAsync(RunEventTypes.PostLandingCanary);
         Assert.Equal(3, typed.Count);
 

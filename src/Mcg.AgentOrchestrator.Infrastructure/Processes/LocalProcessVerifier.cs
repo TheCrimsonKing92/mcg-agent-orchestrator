@@ -293,10 +293,9 @@ public sealed class LocalProcessVerifier
             startInfo.ArgumentList.Add(args[i]);
         }
 
-        startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
         // This path also produces a verdict (a TaskVerificationRecord), so it needs the same hermeticity
         // as the acceptance gate: a verification result must describe the code, not the launch context.
-        GoalAcceptanceVerifier.ScrubNonHermeticEnvironment(startInfo.EnvironmentVariables);
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start process: {fileName}");

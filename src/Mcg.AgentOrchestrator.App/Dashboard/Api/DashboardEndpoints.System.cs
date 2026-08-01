@@ -310,6 +310,9 @@ internal static partial class DashboardEndpoints
 
         startInfo.ArgumentList.Add("-File");
         startInfo.ArgumentList.Add(runnerPath);
+        Mcg.AgentOrchestrator.Infrastructure.GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+            startInfo.Environment,
+            services.Workspace.ExecutionDirectory);
 
         var process = System.Diagnostics.Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start dashboard build/test cycle process.");

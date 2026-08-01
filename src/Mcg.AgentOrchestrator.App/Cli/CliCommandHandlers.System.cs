@@ -1332,12 +1332,12 @@ internal static partial class CliCommandHandlers
             RedirectStandardError = true,
             WorkingDirectory = workingDirectory
         };
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         if (configureDotnetEnvironment)
         {
             startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
             startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
             startInfo.Environment["UseSharedCompilation"] = "false";
-            startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
         }
 
         foreach (var argument in arguments)
