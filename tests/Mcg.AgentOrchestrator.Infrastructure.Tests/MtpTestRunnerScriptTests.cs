@@ -139,6 +139,22 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Xunit.Fact(DisplayName = "MTP_partition_build_stderr_does_not_override_a_successful_exit_code")]
+    public void MtpPartitionBuildStderrDoesNotOverrideSuccessfulExitCode()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        var buildMarker = Path.Combine(sandbox.Root, "build-started.txt");
+        var fakeDotnet = sandbox.CreateBuildStub(exitCode: 0, buildMarker, diagnosticToStderr: true);
+
+        var result = sandbox.RunPartition("GoalWorktree", noBuild: false, dotnetPath: fakeDotnet);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Xunit.Assert.Contains("compiler diagnostic from stub", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Build succeeded.", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains("stub stdout", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("BUILD FAILURE", result.Stdout, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "MTP_no_build_missing_apphost_reports_path_and_build_command")]
     public void MtpNoBuildMissingApphostReportsPathAndBuildCommand()
     {
@@ -364,10 +380,11 @@ public sealed class MtpTestRunnerScriptTests
             return new ScriptSandbox(root, resultsRoot, runnerPath, argumentLog);
         }
 
-        public string CreateBuildStub(int exitCode, string markerPath)
+        public string CreateBuildStub(int exitCode, string markerPath, bool diagnosticToStderr = false)
         {
             var path = Path.Combine(Root, "fake-dotnet.cmd");
-            File.WriteAllText(path, $"@echo off{Environment.NewLine}echo started>\"{markerPath}\"{Environment.NewLine}echo compiler diagnostic from stub{Environment.NewLine}exit /b {exitCode}{Environment.NewLine}");
+            var diagnosticRedirection = diagnosticToStderr ? " 1>&2" : string.Empty;
+            File.WriteAllText(path, $"@echo off{Environment.NewLine}echo started>\"{markerPath}\"{Environment.NewLine}echo compiler diagnostic from stub{diagnosticRedirection}{Environment.NewLine}exit /b {exitCode}{Environment.NewLine}");
             return path;
         }
 

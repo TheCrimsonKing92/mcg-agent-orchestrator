@@ -361,7 +361,12 @@ function Invoke-MtpBuild {
         $appHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
         $outputDirectory = Split-Path -Parent $appHost
         Write-Host "Building test target: $buildTarget ($Configuration) -> $outputDirectory"
+        $previousErrorActionPreference = $ErrorActionPreference
         try {
+            # Windows PowerShell promotes native stderr redirected through 2>&1 to an
+            # ErrorRecord. Build warnings still need to stream, but they must not turn a
+            # successful dotnet exit code into a synthetic BUILD FAILURE.
+            $ErrorActionPreference = 'Continue'
             & $DotnetPath build $buildTarget --configuration $Configuration --output $outputDirectory --nologo --verbosity minimal 2>&1 |
                 ForEach-Object { Write-Host $_ }
             $buildExit = $LASTEXITCODE
@@ -369,6 +374,9 @@ function Invoke-MtpBuild {
         catch {
             Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($_.Exception.Message)"
             return $false
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
         }
         if ($buildExit -ne 0) {
             Write-Host "BUILD FAILURE - '$DotnetPath build' exited $buildExit. The MTP apphost was not launched."
