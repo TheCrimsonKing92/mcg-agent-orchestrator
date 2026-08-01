@@ -13,6 +13,7 @@ Shared anchors:
 - diagnosis-discipline
 - dashboard-dogfood-boundary
 - operating-the-goal-loop
+- local-mtp-test-entry-points
 - safety
 - evidence
 <!-- HARNESS-COUNTERPART-CONTRACT:END -->
@@ -27,6 +28,8 @@ Claude Code auto-reads this file. Shared repository discipline stays in [AGENTS.
 ## Claude Harness Guidance
 
 Prefer Claude Code's dedicated Read, Grep, and Glob tools for source inspection. Use shell commands for repo helpers, runtime checks, and commands whose output is the actual evidence.
+
+For local .NET 10 tests, use `scripts/Invoke-TestSummary.ps1` or `scripts/Invoke-InfrastructureTestPartition.ps1`; both launch the Microsoft.Testing.Platform apphost directly. Do not use the unsupported VSTest `dotnet test` target for these projects.
 
 Run long-lived work as background tasks with completion notifications when possible. Do not pace a loop with repeated sleep/poll commands when a persistent monitor can wake on the event.
 

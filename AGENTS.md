@@ -13,6 +13,7 @@ Shared anchors:
 - diagnosis-discipline
 - dashboard-dogfood-boundary
 - operating-the-goal-loop
+- local-mtp-test-entry-points
 - safety
 - evidence
 <!-- HARNESS-COUNTERPART-CONTRACT:END -->
@@ -149,7 +150,8 @@ Do not raise Ollama's context window for qwen3:8b under qwen-code: at 8k/16k the
 
 **Default: drive goals with the autonomous conductor (`conduct --loop`), not the manual verbs.** The full operate / observe / recover guide — golden path, the `conduct` flag matrix, the three policies, the state model, and the **stuck-goal playbook** (symptom → first command) — lives in [`docs/operator-runbook.md`](docs/operator-runbook.md); read it first. A few notes that complement it:
 
-- **Build locks:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE, so raw `dotnet test` is safe in a worktree and no longer leaves lock-holding daemons (the old CS2012 root cause, fixed at source). If a build still hits a transient lock, `dotnet build-server shutdown` + retry clears it.
+<!-- shared-discipline:local-mtp-test-entry-points -->
+- **Build locks:** `Directory.Build.props` (`UseSharedCompilation=false`) + `Directory.Build.rsp` (`-nodeReuse:false`) disable the Roslyn/MSBuild build servers REPO-WIDE. Raw builds no longer leave lock-holding daemons, but .NET 10 MTP projects cannot use the VSTest `dotnet test` target; run local tests through `scripts/Invoke-TestSummary.ps1` or `scripts/Invoke-InfrastructureTestPartition.ps1`, which build and launch the MTP apphost directly. If a build still hits a transient lock, `dotnet build-server shutdown` + retry clears it.
 - At a landing, the conductor records the dogfood entry in `.orchestrator/dogfood-log.db`; you still close the finished backlog item (`backlog-close`) and add newly discovered ones (`backlog-add`).
 - Monitor the stable structured event stream at `.orchestrator/logs/conduct-events.log` first; it is JSON lines with `eventKind` and survives rotation with `tail -F`. Per-batch stdout/stderr log tails are fallback evidence.
 - Bounded loops self-renew on `--max-duration` when active work remains. A successful successor emits `LOOP_HANDOFF`; relaunch manually only after `LOOP_HANDOFF_FAILED`, deliberate stop/Ctrl-C, code/config changes, or an all-done stop followed by new goals.
