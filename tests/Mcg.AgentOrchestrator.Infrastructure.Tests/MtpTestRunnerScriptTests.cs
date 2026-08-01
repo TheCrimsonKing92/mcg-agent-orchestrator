@@ -171,8 +171,8 @@ public sealed class MtpTestRunnerScriptTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "MTP_runner_restores_caller_TEMP_and_TMP_after_clean_run")]
-    public void MtpRunnerRestoresCallerTempAndTmpAfterCleanRun()
+    [Xunit.Fact(DisplayName = "MTP_runner_preserves_child_and_caller_temp_roots_after_clean_run")]
+    public void MtpRunnerPreservesChildAndCallerTempRootsAfterCleanRun()
     {
         using var sandbox = ScriptSandbox.Create("success");
 
@@ -182,8 +182,10 @@ public sealed class MtpTestRunnerScriptTests
         var json = result.Stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Last(line => line.StartsWith('{'));
         using var document = JsonDocument.Parse(json);
+        Xunit.Assert.Contains("stub temp=caller-temp tmp=caller-tmp tmpdir=caller-tmpdir", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Equal("caller-temp", document.RootElement.GetProperty("temp").GetString());
         Xunit.Assert.Equal("caller-tmp", document.RootElement.GetProperty("tmp").GetString());
+        Xunit.Assert.Equal("caller-tmpdir", document.RootElement.GetProperty("tmpdir").GetString());
         Xunit.Assert.Equal(
             document.RootElement.GetProperty("expectedLocalAppData").GetString(),
             document.RootElement.GetProperty("localAppData").GetString());
@@ -330,6 +332,7 @@ public sealed class MtpTestRunnerScriptTests
                 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
                 $Arguments | Set-Content -LiteralPath '{{escapedArgumentLog}}'
                 Write-Output 'stub stdout'
+                Write-Output "stub temp=$env:TEMP tmp=$env:TMP tmpdir=$env:TMPDIR"
                 [Console]::Error.WriteLine('stub stderr')
                 $resultsIndex = [Array]::IndexOf($Arguments, '--results-directory')
                 $fileIndex = [Array]::IndexOf($Arguments, '--report-trx-filename')
@@ -395,12 +398,12 @@ public sealed class MtpTestRunnerScriptTests
             var runner = RunnerPath.Replace("'", "''");
             var command =
                 $"Import-Module '{module}' -Force; " +
-                "$env:TEMP = 'caller-temp'; $env:TMP = 'caller-tmp'; $beforeLocalAppData = $env:LOCALAPPDATA; " +
+                "$env:TEMP = 'caller-temp'; $env:TMP = 'caller-tmp'; $env:TMPDIR = 'caller-tmpdir'; $beforeLocalAppData = $env:LOCALAPPDATA; " +
                 $"$manifest = Read-MtpTestManifest '{manifest}'; " +
                 $"$run = Invoke-MtpTestRun -RepositoryRoot '{root}' -Manifest $manifest " +
                 "-Target 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj' " +
                 $"-Filters 'FullyQualifiedName~GoalWorktreeTests' -RunLabel 'environment' -NoBuild -ResultsRoot '{resultsRoot}' -RunnerPath '{runner}'; " +
-                "$result = [ordered]@{ exitCode = $run.ExitCode; temp = $env:TEMP; tmp = $env:TMP; localAppData = $env:LOCALAPPDATA; expectedLocalAppData = $beforeLocalAppData }; " +
+                "$result = [ordered]@{ exitCode = $run.ExitCode; temp = $env:TEMP; tmp = $env:TMP; tmpdir = $env:TMPDIR; localAppData = $env:LOCALAPPDATA; expectedLocalAppData = $beforeLocalAppData }; " +
                 "$result | ConvertTo-Json -Compress";
             return RunPowerShellCommand(Root, command);
         }

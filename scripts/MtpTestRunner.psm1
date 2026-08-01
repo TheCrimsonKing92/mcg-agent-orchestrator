@@ -246,7 +246,7 @@ function Set-MtpHermeticEnvironment {
     $nugetPackages = $env:NUGET_PACKAGES
     $userProfile = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
     $allowedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($name in @('PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'LOCALAPPDATA')) {
+    foreach ($name in @('PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'LOCALAPPDATA', 'TEMP', 'TMP', 'TMPDIR')) {
         [void]$allowedNames.Add($name)
     }
     foreach ($item in @(Get-ChildItem Env:)) {
@@ -278,8 +278,6 @@ function Set-MtpHermeticEnvironment {
     $env:NUGET_HTTP_CACHE_PATH = $nugetHttpCache
     $env:NUGET_PLUGINS_CACHE_PATH = $nugetPluginsCache
     $env:APPDATA = $appData
-    $env:TEMP = $WritableRoot
-    $env:TMP = $WritableRoot
     $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = [System.IO.Path]::GetFullPath($RepositoryRoot)
 }
 
