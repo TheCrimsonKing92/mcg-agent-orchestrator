@@ -719,11 +719,11 @@ public sealed partial class AgentOrchestratorKernel
         return goal;
     }
 
-    public void RecordGoalLandedFromAncestry(GoalId goalId, string branchTip, string mainSha)
+    public void RecordGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha)
     {
         _eventWriter.AppendGoalLandedFromAncestry(
             goalId,
-            $"goal/{goalId.Value}",
+            goalBranch,
             branchTip,
             mainSha);
     }

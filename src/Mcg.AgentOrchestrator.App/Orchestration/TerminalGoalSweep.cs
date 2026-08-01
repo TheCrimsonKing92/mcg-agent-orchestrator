@@ -719,16 +719,6 @@ internal static class TerminalGoalSweep
             return false;
         }
 
-        var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
-        GoalLandingPostActions.AutoCloseSourceBacklogItem(
-            goal,
-            workspace.BacklogStorePath,
-            Console.WriteLine,
-            kernel,
-            executionDirectory,
-            ancestry.MainSha);
-        GoalLandingPostActions.RecordDogfoodEntry(goal, workspace.DogfoodLogStorePath);
-
         var detail =
             $"Terminal sweep landed goal from main ancestry: branchTip={ancestry.BranchTip}; mainSha={ancestry.MainSha}; source=ancestry.";
         RecordTerminalDisposition(
@@ -737,7 +727,32 @@ internal static class TerminalGoalSweep
             goal,
             GoalTerminalDispositionKind.Landed,
             detail);
-        kernel.RecordGoalLandedFromAncestry(goal.Id, ancestry.BranchTip, ancestry.MainSha);
+        kernel.RecordGoalLandedFromAncestry(
+            goal.Id,
+            GoalWorktrees.BranchName(goal.Id),
+            ancestry.BranchTip,
+            ancestry.MainSha);
+
+        var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
+        GoalLandingPostActions.AutoCloseSourceBacklogItem(
+            goal,
+            workspace.BacklogStorePath,
+            Console.WriteLine,
+            kernel,
+            executionDirectory,
+            ancestry.MainSha);
+        try
+        {
+            GoalLandingPostActions.RecordDogfoodEntry(goal, workspace.DogfoodLogStorePath);
+        }
+        catch (Exception ex)
+        {
+            repairs.Add(new TerminalGoalSweepRepair(
+                "ancestry-landing-post-action-failed",
+                $"dogfood log entry was not recorded: {ex.Message}",
+                $"dogfood-log add {prefix}"));
+        }
+
         repairs.Add(new TerminalGoalSweepRepair(
             "ancestry-derived-landing",
             $"branchTip={ancestry.BranchTip}; mainSha={ancestry.MainSha}; source=ancestry",

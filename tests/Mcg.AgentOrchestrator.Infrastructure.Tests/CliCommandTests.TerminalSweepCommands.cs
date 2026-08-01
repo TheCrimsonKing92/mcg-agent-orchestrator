@@ -1189,6 +1189,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 return document.RootElement.GetProperty("eventType").GetString() == "GoalLanded";
             });
             using var landedEvent = JsonDocument.Parse(landedLine);
+            Xunit.Assert.Equal(goalBranch, landedEvent.RootElement.GetProperty("goalBranch").GetString());
             Xunit.Assert.Equal(branchTip, landedEvent.RootElement.GetProperty("branchTip").GetString());
             Xunit.Assert.Equal(mainSha, landedEvent.RootElement.GetProperty("mainSha").GetString());
             Xunit.Assert.Equal("ancestry", landedEvent.RootElement.GetProperty("source").GetString());
