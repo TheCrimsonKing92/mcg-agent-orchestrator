@@ -101,11 +101,11 @@ public sealed class MtpTestRunnerScriptTests
 
         var result = sandbox.RunPartition("GoalWorktree");
 
-        Xunit.Assert.True(result.ExitCode == expectedExitCode, result.Stdout + result.Stderr);
-        Xunit.Assert.Contains(expectedDiagnosis, result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains(expectedDetail, result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
-        Xunit.Assert.Contains("Retained diagnostic directory:", result.Stdout, StringComparison.Ordinal);
+        Assert.True(result.ExitCode == expectedExitCode, result.Stdout + result.Stderr);
+        Assert.Contains(expectedDiagnosis, result.Stdout, StringComparison.Ordinal);
+        Assert.Contains(expectedDetail, result.Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Retained diagnostic directory:", result.Stdout, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "MTP_partition_build_failure_is_loud_and_never_launches_stale_apphost")]
