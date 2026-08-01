@@ -60,11 +60,22 @@ public static class WorkerShell
             yield return Path.Combine(programW6432, "PowerShell", "7", "pwsh.exe");
         }
 
-        var systemRoot = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
-        if (!string.IsNullOrWhiteSpace(systemRoot))
-        {
-            yield return Path.Combine(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-        }
+        // Windows PowerShell 5.1 is deliberately NOT a candidate here. It used to be the last entry, which
+        // put it AHEAD of the PATH lookup in ResolveExecutable - so on any host where the three pwsh 7
+        // candidates above miss, resolution silently selected a different MAJOR VERSION of the shell while a
+        // perfectly good pwsh 7 sat on PATH. That is not a fallback, it is a downgrade, and it is invisible:
+        // WorkerShellTests only asserts File.Exists on the result, which 5.1 satisfies.
+        //
+        // It bit the acceptance gate hard. The first candidate derives from
+        // GetFolderPath(LocalApplicationData), and that known folder is stored as the REG_EXPAND_SZ literal
+        // "%USERPROFILE%\AppData\Local", expanded against the CHILD's environment block. The hermetic
+        // verification environment rewrites USERPROFILE, so the per-user pwsh 7 install stopped resolving and
+        // every gate lane ran workers under 5.1 - where ProcessStartInfo.ArgumentList does not exist, so
+        // argument-passing silently degraded to an interactive REPL. Setting the LOCALAPPDATA variable does
+        // not help; GetFolderPath does not read it.
+        //
+        // 5.1 stays reachable through the PATH search and the final literal fallback in ResolveExecutable,
+        // so nothing is lost on a genuinely 5.1-only host - it is simply no longer PREFERRED over pwsh 7.
     }
 
     /// <summary>
