@@ -220,6 +220,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             startInfo.ArgumentList.Add(argument);
         }
 
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         using var process = ProcessTreeGuiSuppression.Start(startInfo);
         process.StandardInput.Close();
         WorkerProcessJobs.TryRegister(process, $"post-landing-canary:{workingDirectory}");

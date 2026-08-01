@@ -1155,7 +1155,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         startInfo.ArgumentList.Add(OwnedProcessSubcommandName);
         startInfo.ArgumentList.Add(attempt.MetadataPath);
-        startInfo.Environment[OrchestratorWorkspace.RepoRootEnvironmentVariable] = attempt.ExecutionDirectory;
+        // The owned lane process takes the stable-slot lease and produces the landing verdict itself. Scrubbing
+        // only its test grandchildren is too late for lease-cleanup hatches and acceptance-scope overrides.
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+            startInfo.Environment,
+            attempt.ExecutionDirectory);
         return startInfo;
     }
 

@@ -6,12 +6,12 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
-public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
+public sealed class HermeticVerificationEnvironmentTests
 {
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_scrubs_launch_context_env_so_the_gate_verdict_is_hermetic")]
-    public void GoalAcceptanceVerifierScrubsLaunchContextEnvSoTheGateVerdictIsHermetic()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_constructs_allow_list_env_so_the_gate_verdict_is_hermetic")]
+    public void GoalAcceptanceVerifierConstructsAllowListEnvSoTheGateVerdictIsHermetic()
     {
-        var environment = new System.Collections.Specialized.StringDictionary
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             // Handoff vars leak in from a handoff-spawned conductor and make CLI grandchildren skip
             // startup cleanup, which silently greened a real backlog-list regression on some runs.
@@ -27,29 +27,95 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             [AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable] = @"C:\outer\meta.json",
             // One-shot operator escape hatch that would otherwise wipe intact artifacts in every child.
             [DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable] = "1",
-            // Unrelated inputs the suite legitimately needs must survive.
-            ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = @"C:\repo",
-            ["PATH"] = @"C:\windows"
+            ["MCG_ACCEPTANCE_FULL_SHARDS"] = "1",
+            ["MCG_ACCEPTANCE_CHANGE_SCOPED"] = "0",
+            ["MCG_ORCHESTRATOR_DISABLE_DISPATCH_START"] = "1",
+            ["MCG_ORCHESTRATOR_TEST_REWRITE_REAL_WORKER_COMMANDS"] = "1",
+            ["MCG_ORCHESTRATOR_PROTECTED_PID"] = "4242",
+            ["MCG_DOTNET_ISOLATED_ROOT"] = @"C:\ambient-dotnet",
+            ["MCG_BUILD_MAXCPUCOUNT"] = "1",
+            ["OPENAI_API_KEY"] = "real-secret",
+            ["ANTHROPIC_API_KEY"] = "real-secret",
+            ["DISCORD_BOT_TOKEN"] = "real-secret",
+            // Runtime-discovery inputs the child genuinely needs survive the allow-list.
+            ["PATH"] = @"C:\windows",
+            ["TEMP"] = @"C:\temp",
+            ["DOTNET_ROOT"] = @"C:\dotnet",
+            ["NUGET_PACKAGES"] = @"C:\packages"
         };
 
-        GoalAcceptanceVerifier.ScrubNonHermeticEnvironment(environment);
+        var repositoryRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "mcg-hermetic-repo"));
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(environment, repositoryRoot);
 
-        Assert.False(environment.ContainsKey(GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable));
-        Assert.False(environment.ContainsKey(AcceptanceAttemptArtifactCustody.AttemptIdVariable));
-        Assert.False(environment.ContainsKey(AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable));
-        Assert.False(environment.ContainsKey(
-            DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable));
-
-        Assert.Empty(environment.Keys
-            .Cast<string>()
-            .Where(name => name.StartsWith(
-                GoalAcceptanceVerifier.HandoffEnvironmentVariablePrefix,
-                StringComparison.OrdinalIgnoreCase)));
-        Assert.False(environment.ContainsKey(WorkerSandboxOptions.EnabledVariable));
-        Assert.False(environment.ContainsKey(WorkerSandboxOptions.AccountVariable));
-        Assert.Equal(@"C:\repo", environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"]);
+        Assert.DoesNotContain(environment.Keys, name => name.StartsWith("MCG_", StringComparison.OrdinalIgnoreCase) &&
+            !name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("OPENAI_API_KEY", environment.Keys);
+        Assert.DoesNotContain("ANTHROPIC_API_KEY", environment.Keys);
+        Assert.DoesNotContain("DISCORD_BOT_TOKEN", environment.Keys);
+        Assert.Equal(repositoryRoot, environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"]);
         Assert.Equal(@"C:\windows", environment["PATH"]);
+        Assert.Equal(@"C:\temp", environment["TEMP"]);
+        Assert.Equal(@"C:\dotnet", environment["DOTNET_ROOT"]);
+        Assert.Equal(@"C:\packages", environment["NUGET_PACKAGES"]);
+        Assert.Equal(
+            Path.Combine(Path.GetTempPath(), "mcg-hermetic-verification-profile"),
+            environment["USERPROFILE"]);
+        Assert.Equal(environment["USERPROFILE"], environment["DOTNET_CLI_HOME"]);
+        Assert.All(environment.Keys, name => Assert.True(
+            GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name),
+            $"Unexpected verification environment variable survived: {name}"));
     }
+
+    [Xunit.Fact(DisplayName = "Hermetic_verification_keeps_the_build_system_file_full_solution_rule_observable")]
+    public async Task HermeticVerificationKeepsTheBuildSystemFileFullSolutionRuleObservable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-hermetic-rule-tests", Guid.NewGuid().ToString("N"));
+        var manifestDirectory = Path.Combine(root, "config");
+        Directory.CreateDirectory(manifestDirectory);
+        File.WriteAllText(
+            Path.Combine(manifestDirectory, "acceptance-manifest.json"),
+            AcceptanceManifestTestDefaults.WithEngine("""
+                {
+                  "version": 1,
+                  "checks": [
+                    { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
+                    { "name": "core tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                    { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                    { "name": "full dotnet tests", "type": "dotnet-test", "project": "Mcg.AgentOrchestrator.sln", "arguments": ["--verbosity", "minimal"] }
+                  ],
+                  "forbiddenChangedPathGlobs": []
+                }
+                """));
+        try
+        {
+            var calls = new List<string[]>();
+            var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+                new(0, ""),
+                new(0, ""),
+                new(0, "Full tests passed.")
+            ]);
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(responses.Dequeue());
+            });
+
+            var result = await verifier.RunAsync(root, changedFiles: ["Directory.Build.props"]);
+
+            Assert.True(result.Passed);
+            Assert.Contains("Mcg.AgentOrchestrator.sln", calls[2], StringComparer.OrdinalIgnoreCase);
+            Assert.Contains(result.Checks!, check => check.Name == "full dotnet tests");
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+}
+
+[Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
+public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
+{
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_pre_review_attempt_namespace_cannot_collide_with_acceptance")]
     public void GoalAcceptanceVerifierPreReviewAttemptNamespaceCannotCollideWithAcceptance()

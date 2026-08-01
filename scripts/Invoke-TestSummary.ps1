@@ -29,6 +29,51 @@ $results = Join-Path $resultsRoot "run-$PID-$([Guid]::NewGuid().ToString('N'))"
 $orchestrator = Join-Path $repoRoot "mcg-orchestrator.cmd"
 $appDll = Join-Path $repoRoot "src/Mcg.AgentOrchestrator.App/bin/Debug/net10.0/Mcg.AgentOrchestrator.App.dll"
 
+function Set-HermeticVerificationEnvironment {
+    param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
+
+    $nugetPackages = $env:NUGET_PACKAGES
+    $userProfile = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+
+    $allowedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($name in @('PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'TEMP', 'TMP', 'TMPDIR')) {
+        [void]$allowedNames.Add($name)
+    }
+
+    foreach ($item in @(Get-ChildItem Env:)) {
+        if (-not $allowedNames.Contains($item.Name) -and
+            -not $item.Name.StartsWith('DOTNET_', [System.StringComparison]::OrdinalIgnoreCase) -and
+            -not $item.Name.StartsWith('NUGET_', [System.StringComparison]::OrdinalIgnoreCase)) {
+            [System.Environment]::SetEnvironmentVariable($item.Name, $null, [System.EnvironmentVariableTarget]::Process)
+        }
+    }
+
+    $profileRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'mcg-hermetic-verification-profile'
+    if ([string]::IsNullOrWhiteSpace($nugetPackages)) {
+        $packageProfile = if ([string]::IsNullOrWhiteSpace($userProfile)) { $profileRoot } else { $userProfile }
+        $nugetPackages = Join-Path $packageProfile '.nuget\packages'
+    }
+    $appData = Join-Path $profileRoot 'AppData\Roaming'
+    $localAppData = Join-Path $profileRoot 'AppData\Local'
+    New-Item -ItemType Directory -Force $appData, $localAppData | Out-Null
+    $env:HOME = $profileRoot
+    $env:USERPROFILE = $profileRoot
+    $env:DOTNET_CLI_HOME = $profileRoot
+    $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+    $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+    $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
+    $env:DOTNET_NOLOGO = '1'
+    $env:NUGET_PACKAGES = $nugetPackages
+    $profileRootPath = [System.IO.Path]::GetPathRoot($profileRoot)
+    $env:HOMEDRIVE = $profileRootPath.TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    $env:HOMEPATH = ([string][System.IO.Path]::DirectorySeparatorChar) + $profileRoot.Substring($profileRootPath.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
+    $env:APPDATA = $appData
+    $env:LOCALAPPDATA = $localAppData
+    $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = [System.IO.Path]::GetFullPath($RepositoryRoot)
+}
+
+Set-HermeticVerificationEnvironment -RepositoryRoot $repoRoot
+
 # CS2012/VBCSCompiler lock hygiene before a fresh run.
 dotnet build-server shutdown | Out-Null
 
@@ -105,7 +150,6 @@ if ($requiresExactArguments) {
         $startInfo.CreateNoWindow = $true
         $startInfo.RedirectStandardOutput = $true
         $startInfo.RedirectStandardError = $true
-        $startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = $repoRoot
         foreach ($argument in @($appDll, 'stable-slot-dotnet') + $stableArguments) {
             $startInfo.ArgumentList.Add($argument)
         }

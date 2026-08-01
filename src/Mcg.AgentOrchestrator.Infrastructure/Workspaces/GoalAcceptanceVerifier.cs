@@ -5816,52 +5816,92 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return (context.HeartbeatPath, context.StableSlotHeartbeatPath);
     }
 
-    internal const string HandoffEnvironmentVariablePrefix = "MCG_ORCHESTRATOR_HANDOFF_";
-
     // The acceptance suite verifies the CODE and must run hermetically — NOT under whatever runtime config
     // the operator's conductor happened to be launched with. Anything surviving here is an ambient input the
-    // gate silently depends on, which makes its verdict a statement about the launcher. Two proven leaks:
+    // gate silently depends on, which makes its verdict a statement about the launcher. Proven leaks include:
     //
     // 1. Worker-dispatch vars (MCG_WORKER_SANDBOX and friends) control how real workers launch (low
     //    integrity). Several tests read WorkerSandboxOptions.FromEnvironment(), so running `conduct` with
     //    MCG_WORKER_SANDBOX=1 flipped those tests' expected sandbox mode — failing acceptance INSIDE the
     //    watch while the same suite passed when `acceptance` ran standalone.
-    // 2. Handoff coordination vars: a handoff-spawned conductor carries MCG_ORCHESTRATOR_HANDOFF_*, the gate
-    //    child inherits them, and CLI grandchildren then see authority-transfer-requested and SKIP startup
-    //    cleanup. That masked a real backlog-list regression — identical code failed one run and passed the
-    //    next purely on how the conductor had been launched. Stripped by prefix rather than by name because
-    //    those constants live in the App layer.
-    internal static void ScrubNonHermeticEnvironment(
-        System.Collections.Specialized.StringDictionary environment)
+    // 2. Handoff coordination vars made CLI grandchildren skip startup cleanup, masking a real backlog-list
+    //    regression. Acceptance-scope overrides then demonstrated why extending that deny-list is insufficient:
+    //    either override could bypass the build-system-file rule and false-green its regression test.
+    internal static void ConfigureHermeticVerificationEnvironment(
+        IDictionary<string, string?> environment,
+        string repositoryRoot)
     {
-        environment.Remove(WorkerSandboxOptions.EnabledVariable);
-        environment.Remove(WorkerSandboxOptions.AccountVariable);
-        environment.Remove(WorkerSandboxOptions.CredentialTargetVariable);
-        environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
+        environment.TryGetValue("NUGET_PACKAGES", out var nugetPackages);
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        // 3. Outer acceptance-attempt identity. A child inheriting these can resolve the OUTER attempt's
-        //    receipt prefix (overwriting genuine receipts) and be accepted as the SAME custodian, which
-        //    skips the live-owner rejection guarding a recursive artifact delete. Safe to strip: the gate
-        //    passes receipt paths to children as explicit argv, so no child needs the inherited values.
-        environment.Remove(AcceptanceAttemptTrxPrefixVariable);
-        environment.Remove(AcceptanceAttemptArtifactCustody.AttemptIdVariable);
-        environment.Remove(AcceptanceAttemptArtifactCustody.LivenessCheckHintVariable);
+        var allowed = environment
+            .Where(pair => IsInheritedHermeticVerificationEnvironmentVariable(pair.Key))
+            .ToArray();
 
-        // 4. One-shot operator escape hatches must never be inherited into a verification child. This one
-        //    turns stale-lease recovery into an unconditional recursive wipe of artifacts that would
-        //    otherwise have passed their integrity probe.
-        environment.Remove(DotnetBuildEnvironmentManager.ForceCleanStaleLeaseArtifactsVariable);
-
-        foreach (var handoffVariable in environment.Keys
-                     .Cast<string>()
-                     .Where(name => name.StartsWith(
-                         HandoffEnvironmentVariablePrefix,
-                         StringComparison.OrdinalIgnoreCase))
-                     .ToArray())
+        // This is deliberately an allow-list, not another enumeration of known-dangerous inputs. Verification
+        // children have accumulated behavior switches, provider credentials, control-plane tokens, and attempt
+        // identity outside MCG_*; missing any one of them can turn a real failure green or emit real traffic.
+        environment.Clear();
+        foreach (var pair in allowed)
         {
-            environment.Remove(handoffVariable);
+            environment[pair.Key] = pair.Value;
         }
+
+        var profileRoot = Path.Combine(Path.GetTempPath(), "mcg-hermetic-verification-profile");
+        Directory.CreateDirectory(profileRoot);
+        nugetPackages = string.IsNullOrWhiteSpace(nugetPackages)
+            ? Path.Combine(string.IsNullOrWhiteSpace(userProfile) ? profileRoot : userProfile, ".nuget", "packages")
+            : nugetPackages;
+        environment["HOME"] = profileRoot;
+        environment["USERPROFILE"] = profileRoot;
+        environment["DOTNET_CLI_HOME"] = profileRoot;
+        environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+        environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        environment["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";
+        environment["DOTNET_NOLOGO"] = "1";
+        environment["NUGET_PACKAGES"] = nugetPackages;
+        if (OperatingSystem.IsWindows())
+        {
+            var profileRootPath = Path.GetPathRoot(profileRoot) ?? string.Empty;
+            var appData = Path.Combine(profileRoot, "AppData", "Roaming");
+            var localAppData = Path.Combine(profileRoot, "AppData", "Local");
+            Directory.CreateDirectory(appData);
+            Directory.CreateDirectory(localAppData);
+            environment["HOMEDRIVE"] = profileRootPath.TrimEnd(Path.DirectorySeparatorChar);
+            environment["HOMEPATH"] = Path.DirectorySeparatorChar +
+                profileRoot[profileRootPath.Length..].TrimStart(Path.DirectorySeparatorChar);
+            environment["APPDATA"] = appData;
+            environment["LOCALAPPDATA"] = localAppData;
+        }
+
+        environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = Path.GetFullPath(repositoryRoot);
     }
+
+    internal static bool IsHermeticVerificationEnvironmentVariable(string name) =>
+        IsInheritedHermeticVerificationEnvironmentVariable(name) ||
+        name.Equals("HOME", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("USERPROFILE", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("HOMEDRIVE", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("HOMEPATH", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("APPDATA", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("LOCALAPPDATA", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsInheritedHermeticVerificationEnvironmentVariable(string name) =>
+        name.Equals("PATH", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("PATHEXT", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("SystemRoot", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("WINDIR", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("COMSPEC", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("ProgramFiles", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("ProgramFiles(x86)", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("ProgramW6432", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("TEMP", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("TMP", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("TMPDIR", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("NUGET_", StringComparison.OrdinalIgnoreCase);
 
     private static async Task<CommandResult> RunProcessAsync(
         string[] arguments,
@@ -5908,8 +5948,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             startInfo.ArgumentList.Add(BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForPosix));
         }
 
-        startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
-        ScrubNonHermeticEnvironment(startInfo.EnvironmentVariables);
+        ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
 
         int? startedProcessId = null;
         try
