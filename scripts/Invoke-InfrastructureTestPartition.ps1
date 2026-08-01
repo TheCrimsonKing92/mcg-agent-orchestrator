@@ -63,6 +63,9 @@ if ($List) {
         foreach ($lane in $entry.Lanes) {
             Write-Host ("  {0}: {1}" -f $lane.name, $lane.filter)
         }
+        foreach ($filter in $entry.AdditionalFilters) {
+            Write-Host ("  Additional compatibility coverage: {0}" -f $filter)
+        }
     }
     exit 0
 }

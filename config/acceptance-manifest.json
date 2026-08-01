@@ -122,7 +122,8 @@
       {
         "name": "Cli",
         "description": "CLI command and lifecycle coverage.",
-        "laneNames": [ "Cli", "Goal lifecycle commands" ]
+        "laneNames": [ "Cli", "Goal lifecycle commands" ],
+        "additionalFilters": [ "FullyQualifiedName~CliHelpTests" ]
       },
       {
         "name": "WorkerDispatch",
@@ -137,7 +138,8 @@
       {
         "name": "Dashboard",
         "description": "Dashboard validation coverage.",
-        "laneNames": [ "Dashboard validation" ]
+        "laneNames": [ "Dashboard validation" ],
+        "additionalFilters": [ "FullyQualifiedName~DashboardRenderingTests", "FullyQualifiedName~DashboardHostTests" ]
       },
       {
         "name": "Conductor",

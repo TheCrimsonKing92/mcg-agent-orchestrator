@@ -9,6 +9,7 @@ $script:ExitCodes = [pscustomobject]@{
     InvalidTarget = 25
     Runner = 26
     ZeroTests = 27
+    Cleanup = 28
 }
 
 function Test-MtpWindows {
@@ -64,12 +65,22 @@ function Get-MtpLocalPartitions {
             }
             $matches[0]
         }
+        $additionalFilters = if ($null -ne $partition.PSObject.Properties['additionalFilters']) {
+            @($partition.additionalFilters | ForEach-Object { [string]$_ })
+        }
+        else {
+            @()
+        }
 
         [pscustomobject]@{
             Name = [string]$partition.name
             Description = [string]$partition.description
             Lanes = @($resolvedLanes)
-            Filters = @($resolvedLanes | ForEach-Object { [string]$_.filter })
+            AdditionalFilters = @($additionalFilters)
+            Filters = @(
+                @($resolvedLanes | ForEach-Object { [string]$_.filter })
+                $additionalFilters
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         }
     }
 
@@ -140,7 +151,8 @@ function ConvertTo-MtpFilterArguments {
 function Get-MtpBoundedFileName {
     param(
         [Parameter(Mandatory = $true)][string]$Stem,
-        [string]$Suffix = '.trx'
+        [string]$Suffix = '.trx',
+        [ValidateRange(32, 200)][int]$MaximumLength = 200
     )
 
     $sanitized = [regex]::Replace($Stem.Trim(), '[^A-Za-z0-9_.-]+', '-').Trim('-', '.')
@@ -148,8 +160,7 @@ function Get-MtpBoundedFileName {
         $sanitized = 'tests'
     }
 
-    $maximumLength = 200
-    if ($sanitized.Length + $Suffix.Length -le $maximumLength) {
+    if ($sanitized.Length + $Suffix.Length -le $MaximumLength) {
         return $sanitized + $Suffix
     }
 
@@ -163,7 +174,7 @@ function Get-MtpBoundedFileName {
         $sha.Dispose()
     }
 
-    $keep = $maximumLength - $Suffix.Length - $hash.Length - 1
+    $keep = $MaximumLength - $Suffix.Length - $hash.Length - 1
     if ($keep -le 0) {
         return $hash + $Suffix
     }
@@ -171,9 +182,9 @@ function Get-MtpBoundedFileName {
 }
 
 function Get-DefaultMtpResultsRoot {
-    $localAppData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData)
+    $localAppData = $env:LOCALAPPDATA
     if ([string]::IsNullOrWhiteSpace($localAppData)) {
-        $localAppData = $env:LOCALAPPDATA
+        $localAppData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData)
     }
     if ([string]::IsNullOrWhiteSpace($localAppData)) {
         throw 'LOCALAPPDATA is unavailable; specify -ResultsRoot under a Low-integrity-writable directory.'
@@ -211,13 +222,17 @@ function Initialize-MtpResultsDirectory {
         throw "Results directory '$resolvedRoot' is not writable. MTP requires a Low-integrity-writable results root. $($_.Exception.Message)"
     }
 
-    $safeLabel = Get-MtpBoundedFileName -Stem $RunLabel -Suffix ''
+    $safeLabel = Get-MtpBoundedFileName -Stem $RunLabel -Suffix '' -MaximumLength 40
     $runDirectory = Join-Path $resolvedRoot "$safeLabel-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfff'))-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
     try {
         New-Item -ItemType Directory -Path $runDirectory -ErrorAction Stop | Out-Null
     }
     catch {
         throw "Could not create invocation results directory '$runDirectory'. MTP requires a Low-integrity-writable results root. $($_.Exception.Message)"
+    }
+    if ((240 - $runDirectory.Length - 1) -lt 48) {
+        Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction Stop
+        throw "Results root '$resolvedRoot' is too long for bounded MTP TRX paths. Choose a shorter directory beneath the Low-integrity-writable root."
     }
     return $runDirectory
 }
@@ -244,24 +259,49 @@ function Set-MtpHermeticEnvironment {
 
     $profileRoot = Join-Path $WritableRoot 'profile'
     $appData = Join-Path $profileRoot 'AppData\Roaming'
-    New-Item -ItemType Directory -Force -Path $profileRoot, $appData | Out-Null
+    $nugetHttpCache = Join-Path $WritableRoot 'nuget-http-cache'
+    $nugetPluginsCache = Join-Path $WritableRoot 'nuget-plugins-cache'
+    New-Item -ItemType Directory -Force -Path $profileRoot, $appData, $nugetHttpCache, $nugetPluginsCache | Out-Null
     if ([string]::IsNullOrWhiteSpace($nugetPackages)) {
         $packageProfile = if ([string]::IsNullOrWhiteSpace($userProfile)) { $profileRoot } else { $userProfile }
         $nugetPackages = Join-Path $packageProfile '.nuget\packages'
     }
 
     $env:HOME = $profileRoot
-    $env:USERPROFILE = $profileRoot
+    $env:USERPROFILE = $userProfile
     $env:DOTNET_CLI_HOME = $profileRoot
     $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
     $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
     $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
     $env:DOTNET_NOLOGO = '1'
     $env:NUGET_PACKAGES = $nugetPackages
+    $env:NUGET_HTTP_CACHE_PATH = $nugetHttpCache
+    $env:NUGET_PLUGINS_CACHE_PATH = $nugetPluginsCache
     $env:APPDATA = $appData
     $env:TEMP = $WritableRoot
     $env:TMP = $WritableRoot
     $env:MCG_ORCHESTRATOR_REPOSITORY_ROOT = [System.IO.Path]::GetFullPath($RepositoryRoot)
+}
+
+function Get-MtpEnvironmentSnapshot {
+    $snapshot = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in @(Get-ChildItem Env:)) {
+        $snapshot[$item.Name] = [string]$item.Value
+    }
+    return ,$snapshot
+}
+
+function Restore-MtpEnvironment {
+    param([Parameter(Mandatory = $true)]$Snapshot)
+
+    foreach ($item in @(Get-ChildItem Env:)) {
+        if (-not $Snapshot.ContainsKey($item.Name)) {
+            [System.Environment]::SetEnvironmentVariable($item.Name, $null, [System.EnvironmentVariableTarget]::Process)
+        }
+    }
+    foreach ($entry in $Snapshot.GetEnumerator()) {
+        [System.Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, [System.EnvironmentVariableTarget]::Process)
+    }
 }
 
 function Get-MtpTargetProjects {
@@ -313,30 +353,29 @@ function Get-MtpTargetProjects {
 function Invoke-MtpBuild {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
-        [Parameter(Mandatory = $true)][string]$Target,
+        [Parameter(Mandatory = $true)][object[]]$Projects,
         [Parameter(Mandatory = $true)][string]$Configuration,
         [Parameter(Mandatory = $true)][string]$DotnetPath
     )
 
-    $buildTarget = if ([System.IO.Path]::IsPathRooted($Target)) {
-        [System.IO.Path]::GetFullPath($Target)
-    }
-    else {
-        [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $Target))
-    }
-    Write-Host "Building test target: $buildTarget ($Configuration)"
-    try {
-        & $DotnetPath build $buildTarget --configuration $Configuration --nologo --verbosity minimal 2>&1 |
-            ForEach-Object { Write-Host $_ }
-        $buildExit = $LASTEXITCODE
-    }
-    catch {
-        Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($_.Exception.Message)"
-        return $false
-    }
-    if ($buildExit -ne 0) {
-        Write-Host "BUILD FAILURE - '$DotnetPath build' exited $buildExit. The MTP apphost was not launched."
-        return $false
+    foreach ($project in $Projects) {
+        $buildTarget = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$project.project)))
+        $appHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
+        $outputDirectory = Split-Path -Parent $appHost
+        Write-Host "Building test target: $buildTarget ($Configuration) -> $outputDirectory"
+        try {
+            & $DotnetPath build $buildTarget --configuration $Configuration --output $outputDirectory --nologo --verbosity minimal 2>&1 |
+                ForEach-Object { Write-Host $_ }
+            $buildExit = $LASTEXITCODE
+        }
+        catch {
+            Write-Host "BUILD FAILURE - could not start '$DotnetPath build': $($_.Exception.Message)"
+            return $false
+        }
+        if ($buildExit -ne 0) {
+            Write-Host "BUILD FAILURE - '$DotnetPath build' exited $buildExit. The MTP apphost was not launched."
+            return $false
+        }
     }
     Write-Host 'Build succeeded.'
     return $true
@@ -350,19 +389,23 @@ function Resolve-MtpAppHostPath {
     )
 
     $projectPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot ([string]$Invocation.project)))
-    [xml]$project = Get-Content -LiteralPath $projectPath -Raw
-    $targetFramework = [string]$project.Project.PropertyGroup.TargetFramework
-    if ([string]::IsNullOrWhiteSpace($targetFramework)) {
-        $frameworks = [string]$project.Project.PropertyGroup.TargetFrameworks
-        $targetFramework = ($frameworks -split ';')[0].Trim()
-    }
-    if ([string]::IsNullOrWhiteSpace($targetFramework)) {
-        throw "Test project has no TargetFramework: $projectPath"
+    $template = [string]$Invocation.executablePathTemplate
+    if ([string]::IsNullOrWhiteSpace($template)) {
+        throw "Manifest MTP invocation for '$($Invocation.project)' has no executablePathTemplate."
     }
 
     $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
     $extension = if (Test-MtpWindows) { '.exe' } else { '' }
-    return Join-Path (Split-Path -Parent $projectPath) "bin\$Configuration\$targetFramework\$projectName$extension"
+    $relativePath = $template.
+        Replace('{projectName}', $projectName).
+        Replace('{configuration}', $Configuration).
+        Replace('{executableExtension}', $extension)
+    $resolved = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $relativePath))
+    $repositoryPrefix = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $resolved.StartsWith($repositoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "MTP executable path for '$($Invocation.project)' escapes the repository: $resolved"
+    }
+    return $resolved
 }
 
 function New-MtpRunnerArguments {
@@ -399,7 +442,12 @@ function Invoke-MtpAppHost {
     )
 
     $captured = [System.Collections.Generic.List[string]]::new()
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
+        # Windows PowerShell promotes native stderr redirected through 2>&1 to an ErrorRecord.
+        # Keep streaming that diagnostic, but do not let the module's Stop preference turn a
+        # normal stderr line into a synthetic wrapper exit code.
+        $ErrorActionPreference = 'Continue'
         & $Executable @($Arguments | Select-Object -Skip 1) 2>&1 | ForEach-Object {
             $line = $_.ToString()
             $captured.Add($line)
@@ -414,6 +462,9 @@ function Invoke-MtpAppHost {
         Add-Content -LiteralPath $OutputLog -Value $line
         Write-Host $line
         $runnerExit = $script:ExitCodes.Runner
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
     }
 
     return [pscustomobject]@{
@@ -474,26 +525,29 @@ function Invoke-MtpTestRun {
         return [pscustomobject]@{ ExitCode = $script:ExitCodes.ResultsDirectory; ResultsDirectory = $null }
     }
 
-    Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory
-    Write-Host "Results directory: $runDirectory"
-    if (-not $NoBuild) {
-        if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Target $Target -Configuration $Configuration -DotnetPath $DotnetPath)) {
-            Write-Host "Retained diagnostic directory: $runDirectory"
-            return [pscustomobject]@{ ExitCode = $script:ExitCodes.Build; ResultsDirectory = $runDirectory }
+    $environmentSnapshot = Get-MtpEnvironmentSnapshot
+    try {
+        Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory
+        Write-Host "Results directory: $runDirectory"
+        if (-not $NoBuild) {
+            if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath)) {
+                Write-Host "Retained diagnostic directory: $runDirectory"
+                return [pscustomobject]@{ ExitCode = $script:ExitCodes.Build; ResultsDirectory = $runDirectory }
+            }
         }
-    }
 
-    $filterList = @($Filters)
-    if ($filterList.Count -eq 0) {
-        $filterList = @('')
-    }
-    $invocationIndex = 0
-    foreach ($project in $projects) {
+        $filterList = @($Filters)
+        if ($filterList.Count -eq 0) {
+            $filterList = @('')
+        }
+        $invocationIndex = 0
+        foreach ($project in $projects) {
         $expectedAppHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
         $executable = if ([string]::IsNullOrWhiteSpace($RunnerPath)) { $expectedAppHost } else { [System.IO.Path]::GetFullPath($RunnerPath) }
         if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
             $projectPath = Join-Path $RepositoryRoot ([string]$project.project)
-            Write-Host "MISSING APPHOST - expected '$executable'. Build it with: $DotnetPath build `"$projectPath`" --configuration $Configuration"
+            $outputDirectory = Split-Path -Parent $expectedAppHost
+            Write-Host "MISSING APPHOST - expected '$executable'. Build it with: $DotnetPath build `"$projectPath`" --configuration $Configuration --output `"$outputDirectory`""
             Write-Host "Retained diagnostic directory: $runDirectory"
             return [pscustomobject]@{ ExitCode = $script:ExitCodes.MissingAppHost; ResultsDirectory = $runDirectory }
         }
@@ -503,7 +557,8 @@ function Invoke-MtpTestRun {
                 $invocationIndex++
                 $projectName = [System.IO.Path]::GetFileNameWithoutExtension([string]$project.project)
                 $stem = "$RunLabel-$projectName-$invocationIndex-r$attempt-$filter"
-                $trxFileName = Get-MtpBoundedFileName -Stem $stem
+                $fileNameBudget = [Math]::Min(200, 240 - $runDirectory.Length - 1)
+                $trxFileName = Get-MtpBoundedFileName -Stem $stem -MaximumLength $fileNameBudget
                 $trxPath = Join-Path $runDirectory $trxFileName
                 $outputLog = Join-Path $runDirectory ([System.IO.Path]::ChangeExtension($trxFileName, '.runner.log'))
                 try {
@@ -563,11 +618,22 @@ function Invoke-MtpTestRun {
                 }
             }
         }
-    }
+        }
 
-    Write-Host "ALL GREEN - clean-run TRX receipts were under '$runDirectory' and will now be removed."
-    Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction SilentlyContinue
-    return [pscustomobject]@{ ExitCode = 0; ResultsDirectory = $runDirectory }
+        Write-Host "ALL GREEN - clean-run TRX receipts were under '$runDirectory' and will now be removed."
+        try {
+            Remove-Item -LiteralPath $runDirectory -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Host "CLEANUP FAILURE - clean test receipts could not be removed from '$runDirectory': $($_.Exception.Message)"
+            Write-Host "Retained diagnostic directory: $runDirectory"
+            return [pscustomobject]@{ ExitCode = $script:ExitCodes.Cleanup; ResultsDirectory = $runDirectory }
+        }
+        return [pscustomobject]@{ ExitCode = 0; ResultsDirectory = $runDirectory }
+    }
+    finally {
+        Restore-MtpEnvironment -Snapshot $environmentSnapshot
+    }
 }
 
 Export-ModuleMember -Function @(

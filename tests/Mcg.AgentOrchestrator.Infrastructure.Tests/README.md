@@ -15,4 +15,4 @@ For focused operator verification, use the checked-in partition helper:
 .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-InfrastructureTestPartition.ps1 -Partition Cli
 ```
 
-Partition names and filters come from `config/acceptance-manifest.json`; `-List` prints the current valid names. Results default under `%LOCALAPPDATA%\Temp\Low\mcg-tests`. Exit codes 20-27 distinguish manifest, partition, results-directory, build, apphost, target, runner, and zero-test failures; an apphost non-zero exit is otherwise propagated verbatim. Clean run directories are removed and failed runs are retained.
+Partition names and filters come from `config/acceptance-manifest.json`; `-List` prints the current valid names. Results default under `%LOCALAPPDATA%\Temp\Low\mcg-tests`. Exit codes 20-28 distinguish manifest, partition, results-directory, build, apphost, target, runner, zero-test, and cleanup failures; an apphost non-zero exit is otherwise propagated verbatim. Clean run directories are removed and failed runs are retained.

@@ -10,12 +10,12 @@ public sealed class MtpTestRunnerScriptTests
     {
         var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1");
         var command = $"Import-Module '{module.Replace("'", "''")}' -Force; " +
-            "$result = [ordered]@{{ args = @(ConvertTo-MtpFilterArguments 'FullyQualifiedName~GoalWorktreeTests&FullyQualifiedName!~Cleanup&Category!=HostIntegration'); name = Get-MtpBoundedFileName ('x' * 400) }}; " +
+            "$result = [ordered]@{ args = @(ConvertTo-MtpFilterArguments 'FullyQualifiedName~GoalWorktreeTests&FullyQualifiedName!~Cleanup&Category!=HostIntegration'); name = Get-MtpBoundedFileName ('x' * 400) }; " +
             "$result | ConvertTo-Json -Compress";
 
         var result = RunPowerShellCommand(RepositoryRoot(), command);
 
-        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         using var document = JsonDocument.Parse(result.Stdout.Trim());
         var arguments = document.RootElement.GetProperty("args").EnumerateArray().Select(value => value.GetString()).ToArray();
         Xunit.Assert.Equal(
@@ -49,7 +49,7 @@ public sealed class MtpTestRunnerScriptTests
 
         var result = sandbox.RunPartition("GoalWorktree");
 
-        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         Xunit.Assert.Contains("stub stdout", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("stub stderr", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("TRX:", result.Stdout, StringComparison.Ordinal);
@@ -60,6 +60,31 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains("--filter-class", arguments);
         Xunit.Assert.Contains("*GoalWorktreeTests*", arguments);
         Xunit.Assert.DoesNotContain(arguments, argument => argument.Contains("testhost", StringComparison.OrdinalIgnoreCase));
+        var trxPath = result.Stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Single(line => line.StartsWith("TRX: ", StringComparison.Ordinal))[5..];
+        Xunit.Assert.True(trxPath.Length <= 240, trxPath);
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_local_partitions_preserve_CLI_help_and_dashboard_rendering_coverage")]
+    public void MtpLocalPartitionsPreserveCliHelpAndDashboardRenderingCoverage()
+    {
+        var root = RepositoryRoot();
+        var module = Path.Combine(root, "scripts", "MtpTestRunner.psm1");
+        var manifest = Path.Combine(root, "config", "acceptance-manifest.json");
+        var command = $"Import-Module '{module.Replace("'", "''")}' -Force; " +
+            $"$manifest = Read-MtpTestManifest '{manifest.Replace("'", "''")}'; $partitions = @(Get-MtpLocalPartitions $manifest); " +
+            "$result = [ordered]@{ cli = @(($partitions | Where-Object Name -eq 'Cli').Filters); dashboard = @(($partitions | Where-Object Name -eq 'Dashboard').Filters) }; " +
+            "$result | ConvertTo-Json -Compress";
+
+        var result = RunPowerShellCommand(root, command);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout.Trim());
+        var cliFilters = document.RootElement.GetProperty("cli").EnumerateArray().Select(item => item.GetString()).ToArray();
+        var dashboardFilters = document.RootElement.GetProperty("dashboard").EnumerateArray().Select(item => item.GetString()).ToArray();
+        Xunit.Assert.Contains("FullyQualifiedName~CliHelpTests", cliFilters);
+        Xunit.Assert.Contains("FullyQualifiedName~DashboardRenderingTests", dashboardFilters);
+        Xunit.Assert.Contains("FullyQualifiedName~DashboardHostTests", dashboardFilters);
     }
 
     [Xunit.Theory]
@@ -76,7 +101,7 @@ public sealed class MtpTestRunnerScriptTests
 
         var result = sandbox.RunPartition("GoalWorktree");
 
-        Xunit.Assert.Equal(expectedExitCode, result.ExitCode);
+        Xunit.Assert.True(result.ExitCode == expectedExitCode, result.Stdout + result.Stderr);
         Xunit.Assert.Contains(expectedDiagnosis, result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains(expectedDetail, result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
@@ -110,7 +135,10 @@ public sealed class MtpTestRunnerScriptTests
 
         Xunit.Assert.Equal(24, result.ExitCode);
         Xunit.Assert.Contains("MISSING APPHOST", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Fake.Tests.exe", result.Stdout, StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            Path.Combine("bin", "Mcg.AgentOrchestrator.Infrastructure.Tests", "Debug", "Mcg.AgentOrchestrator.Infrastructure.Tests.exe"),
+            result.Stdout,
+            StringComparison.Ordinal);
         Xunit.Assert.Contains("dotnet build", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("NO TRX", result.Stdout, StringComparison.OrdinalIgnoreCase);
     }
@@ -119,16 +147,47 @@ public sealed class MtpTestRunnerScriptTests
     public void MtpMediumIntegrityResultsOverrideFailsBeforeRunnerLaunch()
     {
         using var sandbox = ScriptSandbox.Create("success");
-        var mediumResults = Path.Combine(sandbox.Root, "medium-results");
+        var mediumResults = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Temp", "mcg-mtp-medium-tests", Guid.NewGuid().ToString("n"));
 
-        var result = sandbox.RunPartition("GoalWorktree", resultsRoot: mediumResults);
+        try
+        {
+            var result = sandbox.RunPartition("GoalWorktree", resultsRoot: mediumResults);
 
-        Xunit.Assert.Equal(22, result.ExitCode);
-        Xunit.Assert.Contains("RESULTS DIRECTORY FAILURE", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Low-integrity-writable root", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.Contains("Medium-integrity", result.Stdout, StringComparison.Ordinal);
-        Xunit.Assert.False(File.Exists(sandbox.ArgumentLog));
-        Xunit.Assert.False(Directory.Exists(mediumResults));
+            Xunit.Assert.True(result.ExitCode == 22, result.Stdout + result.Stderr);
+            Xunit.Assert.Contains("RESULTS DIRECTORY FAILURE", result.Stdout, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Low-integrity-writable root", result.Stdout, StringComparison.Ordinal);
+            Xunit.Assert.Contains("Medium-integrity", result.Stdout, StringComparison.Ordinal);
+            Xunit.Assert.False(File.Exists(sandbox.ArgumentLog));
+            Xunit.Assert.False(Directory.Exists(mediumResults));
+        }
+        finally
+        {
+            if (Directory.Exists(mediumResults))
+            {
+                Directory.Delete(mediumResults, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "MTP_runner_restores_caller_TEMP_and_TMP_after_clean_run")]
+    public void MtpRunnerRestoresCallerTempAndTmpAfterCleanRun()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+
+        var result = sandbox.RunModuleAndReportEnvironment();
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        var json = result.Stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Last(line => line.StartsWith('{'));
+        using var document = JsonDocument.Parse(json);
+        Xunit.Assert.Equal("caller-temp", document.RootElement.GetProperty("temp").GetString());
+        Xunit.Assert.Equal("caller-tmp", document.RootElement.GetProperty("tmp").GetString());
+        Xunit.Assert.Equal(
+            document.RootElement.GetProperty("expectedLocalAppData").GetString(),
+            document.RootElement.GetProperty("localAppData").GetString());
+        Xunit.Assert.Equal(0, document.RootElement.GetProperty("exitCode").GetInt32());
     }
 
     [Xunit.Fact(DisplayName = "MTP_public_scripts_have_no_VSTest_or_discarded_runner_path")]
@@ -151,6 +210,8 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains("MtpTestRunner.psm1", sources[0], StringComparison.Ordinal);
         Xunit.Assert.Contains("MtpTestRunner.psm1", sources[1], StringComparison.Ordinal);
         Xunit.Assert.Contains("& $Executable @($Arguments | Select-Object -Skip 1) 2>&1 | ForEach-Object", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.Contains("CLEANUP FAILURE", sources[2], StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("$runDirectory -Recurse -Force -ErrorAction SilentlyContinue", sources[2], StringComparison.Ordinal);
     }
 
     private static ProcessResult RunPowerShellCommand(string workingDirectory, string command)
@@ -210,7 +271,7 @@ public sealed class MtpTestRunnerScriptTests
                 "Temp", "Low", "mcg-tests", "script-tests", Guid.NewGuid().ToString("n"));
             var scripts = Path.Combine(root, "scripts");
             var config = Path.Combine(root, "config");
-            var projectDirectory = Path.Combine(root, "tests", "Fake.Tests");
+            var projectDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
             Directory.CreateDirectory(scripts);
             Directory.CreateDirectory(config);
             Directory.CreateDirectory(projectDirectory);
@@ -220,7 +281,7 @@ public sealed class MtpTestRunnerScriptTests
             {
                 File.Copy(Path.Combine(RepositoryRoot(), "scripts", fileName), Path.Combine(scripts, fileName));
             }
-            File.WriteAllText(Path.Combine(projectDirectory, "Fake.Tests.csproj"),
+            File.WriteAllText(Path.Combine(projectDirectory, "Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>");
             File.WriteAllText(Path.Combine(config, "acceptance-manifest.json"), """
                 {
@@ -233,7 +294,9 @@ public sealed class MtpTestRunnerScriptTests
                     ],
                     "mtpInvocations": [
                       {
-                        "project": "tests/Fake.Tests/Fake.Tests.csproj",
+                        "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                        "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
                         "arguments": [
                           "{executable}", "--no-ansi", "--progress", "off",
                           "--results-directory", "{resultsDirectory}",
@@ -321,6 +384,25 @@ public sealed class MtpTestRunnerScriptTests
                 startInfo.ArgumentList.Add(dotnetPath);
             }
             return Run(startInfo);
+        }
+
+        public ProcessResult RunModuleAndReportEnvironment()
+        {
+            var module = Path.Combine(Root, "scripts", "MtpTestRunner.psm1").Replace("'", "''");
+            var manifest = Path.Combine(Root, "config", "acceptance-manifest.json").Replace("'", "''");
+            var root = Root.Replace("'", "''");
+            var resultsRoot = ResultsRoot.Replace("'", "''");
+            var runner = RunnerPath.Replace("'", "''");
+            var command =
+                $"Import-Module '{module}' -Force; " +
+                "$env:TEMP = 'caller-temp'; $env:TMP = 'caller-tmp'; $beforeLocalAppData = $env:LOCALAPPDATA; " +
+                $"$manifest = Read-MtpTestManifest '{manifest}'; " +
+                $"$run = Invoke-MtpTestRun -RepositoryRoot '{root}' -Manifest $manifest " +
+                "-Target 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj' " +
+                $"-Filters 'FullyQualifiedName~GoalWorktreeTests' -RunLabel 'environment' -NoBuild -ResultsRoot '{resultsRoot}' -RunnerPath '{runner}'; " +
+                "$result = [ordered]@{ exitCode = $run.ExitCode; temp = $env:TEMP; tmp = $env:TMP; localAppData = $env:LOCALAPPDATA; expectedLocalAppData = $beforeLocalAppData }; " +
+                "$result | ConvertTo-Json -Compress";
+            return RunPowerShellCommand(Root, command);
         }
 
         public void Dispose()
