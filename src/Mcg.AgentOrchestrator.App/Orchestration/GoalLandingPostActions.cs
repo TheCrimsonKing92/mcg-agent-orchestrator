@@ -6,6 +6,21 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class GoalLandingPostActions
 {
+    public static DogfoodLogRecord RecordDogfoodEntry(Goal goal, string dogfoodLogStorePath)
+    {
+        var entry = DogfoodLogRenderer.Render(goal);
+        return new DogfoodLogStore(dogfoodLogStorePath)
+            .UpsertAsync(new DogfoodLogAppend(
+                goal.Id.Value,
+                entry.Header,
+                entry.Summary,
+                entry.OperatorGate,
+                entry.ModelFit,
+                entry.Render()))
+            .GetAwaiter()
+            .GetResult();
+    }
+
     public static void RunAdvisorySemanticAcceptance(
         Goal goal,
         OrchestratorWorkspace workspace,
@@ -80,7 +95,8 @@ internal static class GoalLandingPostActions
         string backlogStorePath,
         Action<string>? writeLine = null,
         AgentOrchestratorKernel? kernel = null,
-        string? executionDirectory = null)
+        string? executionDirectory = null,
+        string? integrateCommitSha = null)
     {
         if (goal?.SourceBacklogItemId is null)
         {
@@ -90,7 +106,9 @@ internal static class GoalLandingPostActions
         try
         {
             var store = new BacklogStore(backlogStorePath);
-            var commitSha = TryResolveHeadCommit(executionDirectory) ?? "unknown";
+            var commitSha = string.IsNullOrWhiteSpace(integrateCommitSha)
+                ? TryResolveHeadCommit(executionDirectory) ?? "unknown"
+                : integrateCommitSha.Trim();
             var note = $"Auto-closed after goal {goal.Id.Value} landed. integrateCommit={commitSha}";
             var result = store.TryCloseByIdWithResultAsync(goal.SourceBacklogItemId, note: note).GetAwaiter().GetResult();
             switch (result.Disposition)

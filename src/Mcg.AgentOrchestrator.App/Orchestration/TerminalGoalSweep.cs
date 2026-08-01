@@ -432,6 +432,22 @@ internal static class TerminalGoalSweep
                 }
             }
 
+            if (TryTerminalizeFromMainAncestry(
+                    kernel,
+                    executionDirectory,
+                    goal,
+                    branchFactIndex,
+                    prefix,
+                    repairs))
+            {
+                goal = kernel.GetGoal(originalGoal.Id);
+                branchFacts = branchFactIndex.BuildGoalBranchFacts(goal) with
+                {
+                    BranchAlreadyLanded = true
+                };
+                hasDurableLandingIntent = true;
+            }
+
             if (!blockedByDirtyWorktree &&
                 !branchFacts.BranchAlreadyLanded &&
                 TryBuildTerminalLiveDispatchBlocker(goal, prefix, out var liveDispatchEvidence, out var liveDispatchCommand))
@@ -686,6 +702,48 @@ internal static class TerminalGoalSweep
         GoalBranchFacts branchFacts) =>
         (goal.Status == GoalStatus.Cancelled || !branchFacts.HasGoalBranchArtifact) &&
         GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(executionDirectory, goal.Id));
+
+    private static bool TryTerminalizeFromMainAncestry(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        Goal goal,
+        GoalGitFactIndex branchFactIndex,
+        string prefix,
+        List<TerminalGoalSweepRepair> repairs)
+    {
+        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified) ||
+            !goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled) ||
+            !branchFactIndex.TryResolveMainAncestry(goal.Id, out var ancestry) ||
+            ancestry is null)
+        {
+            return false;
+        }
+
+        var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
+        GoalLandingPostActions.AutoCloseSourceBacklogItem(
+            goal,
+            workspace.BacklogStorePath,
+            Console.WriteLine,
+            kernel,
+            executionDirectory,
+            ancestry.MainSha);
+        GoalLandingPostActions.RecordDogfoodEntry(goal, workspace.DogfoodLogStorePath);
+
+        var detail =
+            $"Terminal sweep landed goal from main ancestry: branchTip={ancestry.BranchTip}; mainSha={ancestry.MainSha}; source=ancestry.";
+        RecordTerminalDisposition(
+            kernel,
+            executionDirectory,
+            goal,
+            GoalTerminalDispositionKind.Landed,
+            detail);
+        kernel.RecordGoalLandedFromAncestry(goal.Id, ancestry.BranchTip, ancestry.MainSha);
+        repairs.Add(new TerminalGoalSweepRepair(
+            "ancestry-derived-landing",
+            $"branchTip={ancestry.BranchTip}; mainSha={ancestry.MainSha}; source=ancestry",
+            $"conduct {prefix} --loop"));
+        return true;
+    }
 
     private static bool HasDurableLandingIntentForCleanup(string executionDirectory, Goal goal) =>
         goal.Status != GoalStatus.Cancelled &&

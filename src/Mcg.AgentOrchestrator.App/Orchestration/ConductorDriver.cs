@@ -578,17 +578,7 @@ internal sealed class ConductorDriver
         _record = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:record", "Recording to SQLite dogfood log.");
-            var entry = DogfoodLogRenderer.Render(goal);
-            new DogfoodLogStore(workspace.DogfoodLogStorePath)
-                .UpsertAsync(new DogfoodLogAppend(
-                    goal.Id.Value,
-                    entry.Header,
-                    entry.Summary,
-                    entry.OperatorGate,
-                    entry.ModelFit,
-                    entry.Render()))
-                .GetAwaiter()
-                .GetResult();
+            GoalLandingPostActions.RecordDogfoodEntry(goal, workspace.DogfoodLogStorePath);
             GoalOperationJournal.Completed(dir, goal, "conductor:record", workspace.DogfoodLogStorePath);
             RefreshJournal(goal.Id);
         };

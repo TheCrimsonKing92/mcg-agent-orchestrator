@@ -14,6 +14,10 @@ internal sealed record GoalBranchFacts(
     public bool MissingBranchOrWorktree => IsAcceptedOrVerifiedGitGoal && (!HasRegisteredWorktree || !HasGoalBranch);
 }
 
+internal sealed record GoalMainAncestry(
+    string BranchTip,
+    string MainSha);
+
 internal sealed class GoalGitFactIndex(
     string executionDirectory,
     bool isGitWorkTree,
@@ -67,6 +71,39 @@ internal sealed class GoalGitFactIndex(
             hasGoalBranch,
             hasGoalBranchArtifact,
             branchAlreadyLanded);
+    }
+
+    public bool TryResolveMainAncestry(GoalId goalId, out GoalMainAncestry? ancestry)
+    {
+        ancestry = null;
+        var branch = GoalWorktrees.BranchName(goalId);
+        if (!isGitWorkTree ||
+            !goalBranchTips.TryGetValue(branch, out var branchTip) ||
+            string.IsNullOrWhiteSpace(branchTip))
+        {
+            return false;
+        }
+
+        var mainResult = RunGit(executionDirectory, "rev-parse", "--verify", "refs/heads/main");
+        var mainSha = mainResult.ExitCode == 0 ? mainResult.Output.Trim() : string.Empty;
+        if (!IsSingleToken(mainSha))
+        {
+            return false;
+        }
+
+        var ancestorResult = RunGit(
+            executionDirectory,
+            "merge-base",
+            "--is-ancestor",
+            branchTip,
+            mainSha);
+        if (ancestorResult.ExitCode != 0)
+        {
+            return false;
+        }
+
+        ancestry = new GoalMainAncestry(branchTip, mainSha);
+        return true;
     }
 
     public string BuildGoalEvidenceKey(Goal goal)

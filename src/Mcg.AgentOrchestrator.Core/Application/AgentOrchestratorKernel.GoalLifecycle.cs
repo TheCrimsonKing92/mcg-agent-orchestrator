@@ -703,14 +703,29 @@ public sealed partial class AgentOrchestratorKernel
             return goal;
         }
 
-        if (goal.Status != GoalStatus.Verified)
+        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified))
         {
-            throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verified goals can be completed.");
+            throw new InvalidOperationException($"Goal '{goalId}' is {goal.Status}; only Verifying or Verified goals can be completed.");
+        }
+
+        if (goal.Status == GoalStatus.Verifying &&
+            !goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled))
+        {
+            throw new InvalidOperationException($"Goal '{goalId}' cannot complete from Verifying until every task is terminal.");
         }
 
         goal.SetStatus(GoalStatus.Completed);
         Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
         return goal;
+    }
+
+    public void RecordGoalLandedFromAncestry(GoalId goalId, string branchTip, string mainSha)
+    {
+        _eventWriter.AppendGoalLandedFromAncestry(
+            goalId,
+            $"goal/{goalId.Value}",
+            branchTip,
+            mainSha);
     }
 
     private Goal StopGoal(GoalId goalId, GoalStatus terminalStatus, string reason)
