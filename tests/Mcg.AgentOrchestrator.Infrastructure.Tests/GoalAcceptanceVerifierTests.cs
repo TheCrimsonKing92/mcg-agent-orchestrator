@@ -58,7 +58,7 @@ public sealed class HermeticVerificationEnvironmentTests
         Assert.Equal(@"C:\dotnet", environment["DOTNET_ROOT"]);
         Assert.Equal(@"C:\packages", environment["NUGET_PACKAGES"]);
         Assert.Equal(
-            Path.Combine(Path.GetTempPath(), "mcg-hermetic-verification-profile"),
+            Path.Combine(Path.GetTempPath(), "mcg-hvp"),
             environment["USERPROFILE"]);
         Assert.Equal(environment["USERPROFILE"], environment["DOTNET_CLI_HOME"]);
         Assert.All(environment.Keys, name => Assert.True(
@@ -777,7 +777,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         // Resolve the same profile root the production code will, and REMOVE the derived temp directory
         // first. Without this the assertion passes on a directory left by an earlier run and proves nothing -
         // verified: the negative control initially stayed green until this delete was added.
-        var expectedProfileRoot = Path.Combine(Path.GetTempPath(), "mcg-hermetic-verification-profile");
+        var expectedProfileRoot = Path.Combine(Path.GetTempPath(), "mcg-hvp");
         var expectedDerivedTemp = Path.Combine(expectedProfileRoot, "AppData", "Local", "Temp");
         if (Directory.Exists(expectedDerivedTemp))
         {
@@ -800,7 +800,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         // The Windows per-user temp location is %LOCALAPPDATA%\Temp, and the test assembly's temp redirect
         // resolves its root that way, so this directory must EXIST or lanes fail on environment construction
         // rather than on the code under verification. Absent it, a real gate run reported
-        // "unable to write file ...\mcg-hermetic-verification-profile\AppData\Local\Temp".
+        // "unable to write file ...\mcg-hvp\AppData\Local\Temp".
         var derivedTemp = Path.Combine(localAppData!, "Temp");
         Assert.True(
             Directory.Exists(derivedTemp),
