@@ -1165,16 +1165,23 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Xunit.Assert.NotEqual(0, GitCli.Run(root, "merge-base", "--is-ancestor", branchTip, "HEAD").ExitCode);
             Xunit.Assert.Equal(0, GitCli.Run(root, "merge-base", "--is-ancestor", branchTip, mainSha).ExitCode);
 
-            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            TerminalGoalSweepResult? result = null;
+            var incidentalOutput = CaptureConsole(() => result = TerminalGoalSweep.Run(kernel, root, goal.Id));
 
-            var goalResult = Xunit.Assert.Single(result.Goals);
+            var goalResult = Xunit.Assert.Single(Xunit.Assert.IsType<TerminalGoalSweepResult>(result).Goals);
+            Xunit.Assert.DoesNotContain("Closed backlog item", incidentalOutput, StringComparison.Ordinal);
             Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "ancestry-derived-landing");
+            Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "ancestry-landing-backlog-post-action");
             Xunit.Assert.Empty(goalResult.Blockers);
             Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
             var journal = GoalOperationJournal.Read(root, goal.Id);
             Xunit.Assert.True(GoalOperationJournal.HasCompletedLandingEvidence(journal));
             Xunit.Assert.True(GoalOperationJournal.HasCompletedRecordEvidence(journal));
             Xunit.Assert.True(GoalOperationJournal.HasCompletedCleanupEvidence(journal));
+            var terminalDispositionEntry = Xunit.Assert.Single(journal.Entries.Where(entry =>
+                entry.Operation == GoalOperationJournal.TerminalDispositionOperation));
+            Xunit.Assert.Contains("\"kind\":\"Landed\"", terminalDispositionEntry.Detail, StringComparison.Ordinal);
+            Xunit.Assert.Contains("source=ancestry", terminalDispositionEntry.Detail, StringComparison.Ordinal);
 
             var closedBacklogItem = await backlogStore.GetByExactIdAsync(backlogItem.Id);
             Xunit.Assert.Equal(BacklogItemStatus.Done, closedBacklogItem!.Status);
@@ -1271,7 +1278,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             {
                 if (Path.GetFullPath(workingDirectory).Equals(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) &&
                     args.Count > 0 &&
-                    (args[0] == "for-each-ref" || args.SequenceEqual(["worktree", "list", "--porcelain"])))
+                    (args[0] is "for-each-ref" or "rev-parse" || args.SequenceEqual(["worktree", "list", "--porcelain"])))
                 {
                     batchedGitCalls.Add(string.Join(" ", args));
                 }
@@ -1285,6 +1292,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "worktree list --porcelain"));
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "rev-parse --verify refs/heads/main"));
         }
         finally
         {

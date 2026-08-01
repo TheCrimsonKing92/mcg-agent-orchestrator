@@ -334,6 +334,37 @@ public sealed class GoalLifecycleTests
     Assert.Equal(GoalLifecycleState.Verifying, GoalLifecycle.ResolveState(goal));
 }
 
+    [Xunit.Fact(DisplayName = "CompleteGoal_from_Verifying_requires_every_task_to_remain_terminal")]
+    public void CompleteGoalFromVerifyingRequiresEveryTaskToRemainTerminal()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Ancestry landing", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.Single();
+    kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+    kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    kernel.BeginGoalAcceptanceVerification(goal.Id, "gate record persisted and launched");
+
+    var completed = kernel.CompleteGoal(goal.Id, "Branch tip is an ancestor of main.");
+
+    Assert.Equal(GoalStatus.Completed, completed.Status);
+
+    var invalidKernel = new AgentOrchestratorKernel();
+    var invalidGoal = invalidKernel.CreateGoal("Invalid ancestry landing", [new TaskSpec(TaskId.New(), "Implement fix", AgentRole.Developer)]);
+    invalidKernel.ActivateGoal(invalidGoal.Id, DefaultAgents());
+    var invalidTask = invalidGoal.Tasks.Single();
+    invalidKernel.ReportTaskProgress(invalidGoal.Id, invalidTask.Id, WorkTaskStatus.Completed, "Done.");
+    invalidKernel.RecordTaskVerification(invalidGoal.Id, invalidTask.Id, new TaskVerificationRecord("dotnet test", "C:\\repo", 0, "passed", "", DateTimeOffset.UtcNow));
+    invalidKernel.BeginGoalAcceptanceVerification(invalidGoal.Id, "gate record persisted and launched");
+    invalidTask.SetStatus(WorkTaskStatus.Assigned);
+
+    var error = Assert.Throws<InvalidOperationException>(() =>
+        invalidKernel.CompleteGoal(invalidGoal.Id, "Branch tip is an ancestor of main."));
+
+    Assert.Contains("every task is terminal", error.Message, StringComparison.Ordinal);
+    Assert.Equal(GoalStatus.Verifying, invalidGoal.Status);
+}
+
     [Xunit.Fact(DisplayName = "ReconcileGoalAcceptanceVerified_moves_Verifying_goal_to_Verified")]
     public void ReconcileGoalAcceptanceVerifiedMovesVerifyingGoalToVerified()
 {
