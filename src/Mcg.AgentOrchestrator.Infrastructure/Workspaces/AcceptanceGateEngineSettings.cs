@@ -162,20 +162,6 @@ internal sealed class AcceptanceMtpInvocation
         return candidate;
     }
 
-    // Launch the managed dll through the shared `dotnet` host rather than the per-goal apphost .exe.
-    // Windows Firewall keys its program rules on the executable IMAGE and does not accept wildcards, so
-    // running the apphost meant every new goal produced a never-before-seen *.Tests.exe path under
-    // <artifactsRoot>/bin/... and prompted a human to approve it. That is a hard blocker for unattended
-    // driving: a modal dialog cannot be answered by the loop. Going through `dotnet` makes the listening
-    // image one already-approved path for every goal, forever, and is robust to the artifacts root moving
-    // again later. The test assembly's own module initializers (including the Low-integrity temp redirect)
-    // run identically either way, because they live in the assembly rather than in the apphost.
-    public IReadOnlyList<string> ResolveLaunchCommand(DotnetBuildEnvironment environment)
-    {
-        var managedAssemblyPath = Path.ChangeExtension(ResolveExecutablePath(environment), ".dll");
-        return ["dotnet", "exec", managedAssemblyPath];
-    }
-
     internal void Validate()
     {
         if (string.IsNullOrWhiteSpace(Project) ||

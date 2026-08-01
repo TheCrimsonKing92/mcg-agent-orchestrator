@@ -4326,7 +4326,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // coverage invariant report by-design-excluded tests as missing on every attempt.
             return
             [
-                .. invocation.ResolveLaunchCommand(environment),
+                invocation.ResolveExecutablePath(environment),
                 "--no-ansi",
                 "--progress",
                 "off",
@@ -5043,13 +5043,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 .Replace("{resultsDirectory}", resultsDirectory, StringComparison.Ordinal)
                 .Replace("{trxFileName}", trxFileName, StringComparison.Ordinal))
             .ToList();
-        if (args.Count > 0 &&
-            string.Equals(args[0], executablePath, StringComparison.OrdinalIgnoreCase))
-        {
-            args.RemoveAt(0);
-            args.InsertRange(0, invocation.ResolveLaunchCommand(environment));
-        }
-
         var filter = ExtractMtpCompatibleArguments(check.Arguments, args);
         if (!string.IsNullOrWhiteSpace(filter))
         {
