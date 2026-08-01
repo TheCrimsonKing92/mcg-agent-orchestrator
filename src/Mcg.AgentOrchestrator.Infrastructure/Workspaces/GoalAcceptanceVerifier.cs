@@ -5868,6 +5868,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var localAppData = Path.Combine(profileRoot, "AppData", "Local");
             Directory.CreateDirectory(appData);
             Directory.CreateDirectory(localAppData);
+            // Repointing LOCALAPPDATA silently moves every path DERIVED from it, and the Windows per-user
+            // temp location is %LOCALAPPDATA%\Temp. Callers that resolve their own temp root that way - the
+            // test assembly's temp redirect does exactly this - then land under a directory that exists only
+            // if we make it. Leaving it absent produced
+            // "unable to write file ...\mcg-hermetic-verification-profile\AppData\Local\Temp" and failed
+            // whole lanes on environment construction rather than on the code being verified. The parent
+            // dirs above are created for the same reason; this is the one that was missed.
+            Directory.CreateDirectory(Path.Combine(localAppData, "Temp"));
             environment["HOMEDRIVE"] = profileRootPath.TrimEnd(Path.DirectorySeparatorChar);
             environment["HOMEPATH"] = Path.DirectorySeparatorChar +
                 profileRoot[profileRootPath.Length..].TrimStart(Path.DirectorySeparatorChar);

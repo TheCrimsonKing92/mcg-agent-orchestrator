@@ -766,6 +766,47 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_hermetic_profile_creates_derived_temp_directory")]
+    public void GoalAcceptanceVerifierHermeticProfileCreatesDerivedTempDirectory()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        // Resolve the same profile root the production code will, and REMOVE the derived temp directory
+        // first. Without this the assertion passes on a directory left by an earlier run and proves nothing -
+        // verified: the negative control initially stayed green until this delete was added.
+        var expectedProfileRoot = Path.Combine(Path.GetTempPath(), "mcg-hermetic-verification-profile");
+        var expectedDerivedTemp = Path.Combine(expectedProfileRoot, "AppData", "Local", "Temp");
+        if (Directory.Exists(expectedDerivedTemp))
+        {
+            Directory.Delete(expectedDerivedTemp, recursive: true);
+        }
+
+        Assert.False(
+            Directory.Exists(expectedDerivedTemp),
+            "arrange failed: derived temp directory must be absent before the call under test");
+
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+            environment,
+            Path.GetTempPath());
+
+        var localAppData = Assert.Contains("LOCALAPPDATA", environment);
+        Assert.False(string.IsNullOrWhiteSpace(localAppData));
+
+        // LOCALAPPDATA is repointed into a temp-resident profile, so every path DERIVED from it moves too.
+        // The Windows per-user temp location is %LOCALAPPDATA%\Temp, and the test assembly's temp redirect
+        // resolves its root that way, so this directory must EXIST or lanes fail on environment construction
+        // rather than on the code under verification. Absent it, a real gate run reported
+        // "unable to write file ...\mcg-hermetic-verification-profile\AppData\Local\Temp".
+        var derivedTemp = Path.Combine(localAppData!, "Temp");
+        Assert.True(
+            Directory.Exists(derivedTemp),
+            $"Hermetic profile must create the temp directory derived from LOCALAPPDATA: {derivedTemp}");
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_bounds_generated_artifact_file_names")]
     public void GoalAcceptanceVerifierBoundsGeneratedArtifactFileNames()
     {
