@@ -5239,7 +5239,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var filePrefix = string.IsNullOrWhiteSpace(attemptPrefix)
             ? $"{environment.LeaseId}.{Slug(check.Name)}"
             : $"{Path.GetFileName(attemptPrefix)}.{Slug(check.Name)}";
-        var fileName = $"{SanitizeFileName(filePrefix)}.trx";
+        var fileName = BoundFileName(SanitizeFileName(filePrefix), ".trx");
         var path = Path.Combine(directory, fileName);
         return new DotnetTestTelemetry([path], []);
     }
@@ -5576,6 +5576,33 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return string.IsNullOrWhiteSpace(slug) ? "check" : slug;
     }
 
+    // A check names its own artifacts, and a focused-evidence check is named after its entire filter
+    // expression, so the generated name grows with the request rather than staying bounded. Windows raises
+    // ERROR_INVALID_NAME - "The filename, directory name, or volume label syntax is incorrect" - once a single
+    // path component passes the 255-character NTFS limit, and a four-class evidence request produced a
+    // 324-character TRX name. That killed the run inside MTP's TRX writer, where the IOException is unhandled:
+    // the host exited 0xE0434352 and the gate booked the crash as a test failure. Bound every generated
+    // component here rather than at the callers, and keep a stable hash of the full name so two long names
+    // still land on two files.
+    //
+    // The 200 leaves headroom under 255 for suffixes callers append to a resolved path, the widest being the
+    // ".{guid:N}.tmp" staging name used when copying receipts into an attempt folder.
+    private const int MaxGeneratedFileNameLength = 200;
+
+    private static string BoundFileName(string stem, string suffix)
+    {
+        if (stem.Length + suffix.Length <= MaxGeneratedFileNameLength)
+        {
+            return stem + suffix;
+        }
+
+        var hash = ShortHash(stem);
+        var keep = MaxGeneratedFileNameLength - suffix.Length - hash.Length - 1;
+        return keep <= 0
+            ? hash + suffix
+            : $"{stem[..keep].TrimEnd('-', '.')}-{hash}{suffix}";
+    }
+
     private static bool GlobMatches(string glob, string path)
     {
         var normalizedGlob = glob.Replace('\\', '/').TrimStart('/');
@@ -5722,7 +5749,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var attemptPrefix = AcceptanceAttemptResultsPrefix;
         if (!string.IsNullOrWhiteSpace(attemptPrefix))
         {
-            return $"{attemptPrefix}.{Slug(check.Name)}-{ShortHash(check.Name)}.{GateHeartbeatArtifacts.FileName}";
+            var attemptDirectory = Path.GetDirectoryName(attemptPrefix);
+            var stem = $"{Path.GetFileName(attemptPrefix)}.{Slug(check.Name)}-{ShortHash(check.Name)}";
+            var heartbeatFileName = BoundFileName(stem, $".{GateHeartbeatArtifacts.FileName}");
+            return string.IsNullOrWhiteSpace(attemptDirectory)
+                ? heartbeatFileName
+                : Path.Combine(attemptDirectory, heartbeatFileName);
         }
 
         if (environment is not null)
@@ -5745,6 +5777,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             environment,
             stableSlotIndex,
             worktreePath: null);
+
+    internal static string ResolveTrxPathForTests(string checkName, DotnetBuildEnvironment environment) =>
+        ResolveTestTelemetry(new AcceptanceManifestCheck { Name = checkName }, environment).Paths[0];
 
     // Test seam: drive one real gate-heartbeat "running" beat (and optionally a terminal beat) through
     // the production context creation + runtime writer, so a test can prove that gate-status's

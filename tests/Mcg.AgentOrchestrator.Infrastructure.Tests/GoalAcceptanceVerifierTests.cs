@@ -699,6 +699,59 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             DeleteDirectoryWithRetry(root);
         }
     }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_bounds_generated_artifact_file_names")]
+    public void GoalAcceptanceVerifierBoundsGeneratedArtifactFileNames()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-long-names-{Guid.NewGuid():N}");
+        var environment = new DotnetBuildEnvironment(
+            "goal-long-name",
+            root,
+            Path.Combine(root, "build-artifacts"),
+            Path.Combine(root, "build-slots", "build-0.lock"),
+            [],
+            "goal-long-name");
+        using var scope = GoalAcceptanceVerifier.PushAcceptanceAttemptResultsPrefix(
+            Path.Combine(root, "c012c6fc-pre-review-20260731222420370-2a0f855b951b461ab287ba73dfae1a28"));
+
+        // The exact shape that crashed a real gate: a focused-evidence check is named after its whole filter
+        // expression, so four target classes produced a 324-character file name. Windows rejected it with
+        // ERROR_INVALID_NAME inside MTP's TRX writer, which does not handle it, and the test host died.
+        const string CrashingCheckName =
+            "reviewer focused evidence: infrastructure tests --filter " +
+            "FullyQualifiedName~GoalWorktreeTests.RemoveCleanup|" +
+            "FullyQualifiedName~GoalWorktreeTests.OrphanEphemeralSweep|" +
+            "FullyQualifiedName~LandingExecutorTests|" +
+            "FullyQualifiedName~CliCommandTests.GoalLifecycleCommands";
+        const string SiblingCheckName = CrashingCheckName + "|FullyQualifiedName~OneMoreDistinguishingClass";
+
+        var trxPath = GoalAcceptanceVerifier.ResolveTrxPathForTests(CrashingCheckName, environment);
+        var heartbeatPath = GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(CrashingCheckName, environment);
+        var siblingTrxPath = GoalAcceptanceVerifier.ResolveTrxPathForTests(SiblingCheckName, environment);
+        var siblingHeartbeatPath =
+            GoalAcceptanceVerifier.ResolveGateHeartbeatPathForTests(SiblingCheckName, environment);
+
+        var trxFileName = Path.GetFileName(trxPath);
+        var heartbeatFileName = Path.GetFileName(heartbeatPath);
+
+        // 255 is the NTFS component limit. Receipt preservation stages through "{path}.{guid:N}.tmp", so a
+        // resolved name has to stay clear of the limit by that much rather than merely reach it.
+        const int NtfsFileNameLimit = 255;
+        const int StagingSuffixLength = 37;
+        Assert.True(
+            trxFileName.Length + StagingSuffixLength <= NtfsFileNameLimit,
+            $"TRX file name is {trxFileName.Length} characters and must leave room for the staging suffix: {trxFileName}");
+        Assert.True(
+            heartbeatFileName.Length <= NtfsFileNameLimit,
+            $"Heartbeat file name is {heartbeatFileName.Length} characters: {heartbeatFileName}");
+
+        Assert.EndsWith(".trx", trxFileName, StringComparison.Ordinal);
+        Assert.EndsWith(GateHeartbeatArtifacts.FileName, heartbeatFileName, StringComparison.Ordinal);
+
+        // Truncation must not merge two checks onto one receipt; these two names share a 300-character prefix.
+        Assert.NotEqual(trxPath, siblingTrxPath);
+        Assert.NotEqual(heartbeatPath, siblingHeartbeatPath);
+    }
 }
 
 public abstract class GoalAcceptanceVerifierTestBase
