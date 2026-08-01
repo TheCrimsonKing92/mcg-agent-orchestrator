@@ -774,20 +774,7 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
             return;
         }
 
-        // Resolve the same profile root the production code will, and REMOVE the derived temp directory
-        // first. Without this the assertion passes on a directory left by an earlier run and proves nothing -
-        // verified: the negative control initially stayed green until this delete was added.
-        var expectedProfileRoot = Path.Combine(Path.GetTempPath(), "mcg-hvp");
-        var expectedDerivedTemp = Path.Combine(expectedProfileRoot, "AppData", "Local", "Temp");
-        if (Directory.Exists(expectedDerivedTemp))
-        {
-            Directory.Delete(expectedDerivedTemp, recursive: true);
-        }
-
-        Assert.False(
-            Directory.Exists(expectedDerivedTemp),
-            "arrange failed: derived temp directory must be absent before the call under test");
-
+        var profileRoot = Path.Combine(Path.GetTempPath(), "mcg-hvp");
         var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
             environment,
@@ -796,15 +783,27 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         var localAppData = Assert.Contains("LOCALAPPDATA", environment);
         Assert.False(string.IsNullOrWhiteSpace(localAppData));
 
-        // LOCALAPPDATA is repointed into a temp-resident profile, so every path DERIVED from it moves too.
-        // The Windows per-user temp location is %LOCALAPPDATA%\Temp, and the test assembly's temp redirect
-        // resolves its root that way, so this directory must EXIST or lanes fail on environment construction
-        // rather than on the code under verification. Absent it, a real gate run reported
-        // "unable to write file ...\mcg-hvp\AppData\Local\Temp".
-        var derivedTemp = Path.Combine(localAppData!, "Temp");
+        // LOCALAPPDATA must NOT be relocated into the hermetic profile. Everything Windows derives from it
+        // moves when it does, and three separate gate defects in one day came from exactly that: the per-user
+        // temp location %LOCALAPPDATA%\Temp disappeared, paths built through it outgrew MAX_PATH and failed
+        // git object writes, and the PowerShell 7 execution alias under %LOCALAPPDATA%\Microsoft\WindowsApps
+        // stopped resolving so callers degraded to Windows PowerShell 5.1. Credential and cache isolation is
+        // carried by HOME/USERPROFILE/DOTNET_CLI_HOME/NUGET_PACKAGES instead.
+        Assert.False(
+            localAppData!.StartsWith(profileRoot, StringComparison.OrdinalIgnoreCase),
+            $"LOCALAPPDATA must stay outside the hermetic profile root, but was {localAppData}");
         Assert.True(
-            Directory.Exists(derivedTemp),
-            $"Hermetic profile must create the temp directory derived from LOCALAPPDATA: {derivedTemp}");
+            Directory.Exists(localAppData),
+            $"LOCALAPPDATA must point at a real existing directory: {localAppData}");
+
+        var appData = Assert.Contains("APPDATA", environment);
+        Assert.False(
+            appData!.StartsWith(profileRoot, StringComparison.OrdinalIgnoreCase),
+            $"APPDATA must stay outside the hermetic profile root, but was {appData}");
+
+        // The isolation that IS intended must still hold.
+        var userProfile = Assert.Contains("USERPROFILE", environment);
+        Assert.StartsWith(profileRoot, userProfile!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_bounds_generated_artifact_file_names")]

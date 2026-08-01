@@ -5864,10 +5864,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (OperatingSystem.IsWindows())
         {
             var profileRootPath = Path.GetPathRoot(profileRoot) ?? string.Empty;
-            var appData = Path.Combine(profileRoot, "AppData", "Roaming");
-            var localAppData = Path.Combine(profileRoot, "AppData", "Local");
-            Directory.CreateDirectory(appData);
-            Directory.CreateDirectory(localAppData);
+            // APPDATA/LOCALAPPDATA stay pinned to the REAL per-user locations, and are set explicitly rather
+            // than left to derive from the repointed USERPROFILE above. Moving them into the profile broke
+            // three different things in one day, each in its own way, because everything Windows derives from
+            // LOCALAPPDATA moved with it: the per-user temp location (%LOCALAPPDATA%\Temp) vanished, paths
+            // built through it outgrew MAX_PATH and failed git object writes, and the PowerShell 7 execution
+            // alias under %LOCALAPPDATA%\Microsoft\WindowsApps stopped resolving so callers silently degraded
+            // to Windows PowerShell 5.1. Isolation of credentials and caches is already achieved by HOME,
+            // USERPROFILE, DOTNET_CLI_HOME and NUGET_PACKAGES; relocating LOCALAPPDATA added no isolation the
+            // others do not, and its blast radius is every path anything derives from it.
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             // Repointing LOCALAPPDATA silently moves every path DERIVED from it, and the Windows per-user
             // temp location is %LOCALAPPDATA%\Temp. Callers that resolve their own temp root that way - the
             // test assembly's temp redirect does exactly this - then land under a directory that exists only
