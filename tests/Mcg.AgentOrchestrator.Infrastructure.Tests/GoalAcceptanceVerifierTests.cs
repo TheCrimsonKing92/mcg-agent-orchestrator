@@ -1886,22 +1886,28 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
-    public async Task FocusedEvidence_OverCapOneProject_CollapsesToProjectCheck()
+    public async Task FocusedEvidence_OverCapOneProject_CollapsesToInfrastructureManifestLanes()
     {
         var (result, calls) = await RunMappedEvidenceAsync(
             "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests");
 
         Assert.True(result.Accepted);
         Assert.True(result.Passed);
-        var check = Assert.Single(result.Checks);
-        Assert.Equal(
-            "reviewer mapped project evidence: Infrastructure.Tests (collapsed from 5 focused targets)",
-            check.Name);
+        Assert.Equal(18, result.Checks.Count);
+        Assert.All(
+            result.Checks,
+            check => Assert.StartsWith(
+                "reviewer mapped project evidence: Infrastructure.Tests (collapsed from 5 focused targets): ",
+                check.Name,
+                StringComparison.Ordinal));
         Assert.Contains("collapsed from 5 focused targets", result.Summary);
-        var testCall = Assert.Single(calls.Where(call =>
-            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
-        Assert.DoesNotContain("--filter-class", testCall);
-        Assert.DoesNotContain("--filter-not-class", testCall);
+        var testCalls = calls
+            .Where(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+            .ToArray();
+        Assert.Equal(18, testCalls.Length);
+        Assert.All(testCalls, call => Assert.True(
+            call.Contains("--filter-class", StringComparer.Ordinal) ||
+            call.Contains("--filter-not-class", StringComparer.Ordinal)));
     }
 
     [Xunit.Fact]
@@ -1912,21 +1918,30 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
         Assert.True(result.Accepted);
         Assert.True(result.Passed);
+        Assert.Equal(19, result.Checks.Count);
         Assert.Equal(
-            [
-                "reviewer mapped project evidence: Core.Tests (collapsed from 5 focused targets)",
-                "reviewer mapped project evidence: Infrastructure.Tests (collapsed from 5 focused targets)"
-            ],
-            result.Checks.Select(check => check.Name));
+            "reviewer mapped project evidence: Core.Tests (collapsed from 5 focused targets)",
+            result.Checks[0].Name);
+        Assert.All(
+            result.Checks.Skip(1),
+            check => Assert.StartsWith(
+                "reviewer mapped project evidence: Infrastructure.Tests (collapsed from 5 focused targets): ",
+                check.Name,
+                StringComparison.Ordinal));
         var testCalls = calls
             .Where(call =>
                 IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests") ||
                 IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
             .ToArray();
-        Assert.Equal(2, testCalls.Length);
+        Assert.Equal(19, testCalls.Length);
         Assert.True(IsMtpExecutableCall(testCalls[0], "Mcg.AgentOrchestrator.Core.Tests"));
-        Assert.True(IsMtpExecutableCall(testCalls[1], "Mcg.AgentOrchestrator.Infrastructure.Tests"));
-        Assert.All(testCalls, call => Assert.DoesNotContain("--filter-class", call));
+        Assert.All(
+            testCalls.Skip(1),
+            call => Assert.True(IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        Assert.DoesNotContain("--filter-class", testCalls[0]);
+        Assert.All(testCalls.Skip(1), call => Assert.True(
+            call.Contains("--filter-class", StringComparer.Ordinal) ||
+            call.Contains("--filter-not-class", StringComparer.Ordinal)));
     }
 
     [Xunit.Fact]
@@ -2003,8 +2018,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
         Assert.True(result.Accepted);
         Assert.True(result.Passed);
-        Assert.Single(result.Checks);
-        Assert.Single(calls.Where(call =>
+        Assert.Equal(18, result.Checks.Count);
+        Assert.Equal(18, calls.Count(call =>
             IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
     }
 
@@ -2019,7 +2034,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
         Assert.True(result.Accepted);
         Assert.False(result.Passed);
-        Assert.Contains(TimeSpan.FromMinutes(25), observedTimeouts);
+        Assert.Contains(TimeSpan.FromMinutes(40), observedTimeouts);
         var check = Assert.Single(result.Checks);
         Assert.False(check.Passed);
         Assert.Contains("collapsed-from-5-focused-targets", check.Name);

@@ -555,7 +555,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "pre-review");
         using var runEnvironmentScope = PushManagedRunEnvironmentScope();
 
-        if (!TryBuildFocusedEvidenceChecks(request, out var focusedChecks, out var collapsed, out var rejection))
+        if (!TryBuildFocusedEvidenceChecks(
+                request,
+                engineSettings.InfrastructureTestLanes,
+                out var focusedChecks,
+                out var collapsed,
+                out var rejection))
         {
             return new FocusedEvidenceRunResult(
                 request,
@@ -574,23 +579,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, focusedChecks, changedFiles: null, PolicyShardPlan.NotApplicable("focused evidence"))
             : null;
-        var checks = new List<AcceptanceCheckResult>();
-        foreach (var check in focusedChecks)
-        {
-            var checkResult = await RunCheckWithCancellationProbeAsync(
-                check,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                dotnetTestBuildPhase,
-                cancellationToken).ConfigureAwait(false);
-            checks.Add(checkResult.Result);
-            if (!checkResult.Result.Passed)
-            {
-                break;
-            }
-        }
+        var shardCoreBudget =
+            ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
+        var shardConcurrencyBudget = Math.Min(engineSettings.MaxConcurrentShards, shardCoreBudget);
+        var batch = await RunCheckBatchAsync(
+            focusedChecks,
+            cacheContext: null,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            dotnetTestBuildPhase,
+            shardConcurrencyBudget,
+            cancellationToken).ConfigureAwait(false);
+        var checks = batch.Results;
 
         var failed = checks.FirstOrDefault(check => !check.Passed);
         var receiptPaths = checks
@@ -1025,6 +1027,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static bool TryBuildFocusedEvidenceChecks(
         string request,
+        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
         out bool collapsed,
         out string rejection)
@@ -1086,19 +1089,23 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     continue;
                 }
 
-                built.Add(new AcceptanceManifestCheck
+                var projectCheck = new AcceptanceManifestCheck
                 {
                     Name = $"reviewer mapped project evidence: {ProjectLabel(item.Project)} " +
                         $"(collapsed from {totalTargets} focused targets)",
                     Type = "dotnet-test",
-                    // Both focused-evidence target projects are MTP. The collapsed Infrastructure
-                    // project completed serially in 15.82 minutes on 2026-08-02, so 25 minutes
-                    // preserves useful margin without silently inheriting the 40-minute default.
                     Runner = "mtp",
                     Project = item.Project,
-                    Arguments = ["--verbosity", "minimal"],
-                    TimeoutMinutes = 25
-                });
+                    Arguments = ["--verbosity", "minimal"]
+                };
+                if (IsInfrastructureTestProject(item.Project))
+                {
+                    built.AddRange(ExpandBroadInfrastructureCheck(projectCheck, infrastructureTestLanes));
+                }
+                else
+                {
+                    built.Add(projectCheck);
+                }
             }
         }
         else
@@ -2043,14 +2050,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        var separator = check.Name.IndexOf(": ", StringComparison.Ordinal);
-        if (separator < 0 ||
-            !check.Name[..separator].Equals("infrastructure tests", StringComparison.OrdinalIgnoreCase))
+        var standardPrefix = "infrastructure tests: ";
+        var collapsedPrefix = "reviewer mapped project evidence: Infrastructure.Tests (collapsed from ";
+        string? partitionName = null;
+        if (check.Name.StartsWith(standardPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            partitionName = check.Name[standardPrefix.Length..];
+        }
+        else if (check.Name.StartsWith(collapsedPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var separator = check.Name.LastIndexOf(": ", StringComparison.Ordinal);
+            if (separator >= collapsedPrefix.Length)
+            {
+                partitionName = check.Name[(separator + 2)..];
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(partitionName))
         {
             return false;
         }
 
-        partitionId = Slug(check.Name[(separator + 2)..]);
+        partitionId = Slug(partitionName);
         return true;
     }
 
