@@ -908,10 +908,52 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
         var request = Assert.Single(restored.GetPendingHumanInput(goal.Id));
         Assert.Equal(task.Id, request.TaskId);
         Assert.Equal("Should scope expand?", request.Question);
+        Assert.Contains(
+            restored.GetGoal(goal.Id).Timeline,
+            evt => evt.Kind == ProgressKind.TaskUpdated &&
+                evt.Message.Contains("original kind and policy metadata were unavailable", StringComparison.Ordinal));
         var reloaded = AgentOrchestratorKernel.FromSnapshot(corrupt, clock);
         Assert.Equal(request.Id, Assert.Single(reloaded.GetPendingHumanInput(goal.Id)).Id);
         reloaded.SubmitHumanInput(request.Id, "Keep the existing scope.");
         Assert.Equal(WorkTaskStatus.Assigned, reloaded.GetTask(goal.Id, task.Id).Status);
+    }
+
+    [Xunit.Fact]
+    public void RefreshTrackedGoals_NewHumanWait_DoesNotCreateDuplicate()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Refresh an external request",
+            [new TaskSpec(TaskId.New(), "Ask outside the conductor", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var external = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), new FakeClock());
+        var expected = external.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Proceed?");
+        var snapshot = external.ExportSnapshot();
+
+        kernel.RefreshTrackedGoals(snapshot);
+        kernel.IngestNewGoals(snapshot);
+
+        var actual = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        Assert.Equal(expected.Id, actual.Id);
+    }
+
+    [Xunit.Fact]
+    public void FromSnapshot_CompletedHumanWait_RestoresTaskWithoutResurrection()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Do not resurrect a resolved wait",
+            [new TaskSpec(TaskId.New(), "Await an operator decision", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        kernel.RequestHumanInput(goal.Id, task.Id, "Proceed?");
+        kernel.ParkGoal(goal.Id, "waiting for a decision");
+        kernel.UnparkGoal(goal.Id, "decision recorded");
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), new FakeClock());
+
+        Assert.Empty(restored.GetPendingHumanInput(goal.Id));
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, task.Id).Status);
     }
     [Xunit.Fact(DisplayName = "Submitting_human_input_resumes_waiting_task")]
     public void SubmittingHumanInputResumesWaitingTask()

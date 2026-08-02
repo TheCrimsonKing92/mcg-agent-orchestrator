@@ -1218,6 +1218,30 @@ public sealed class LandingExecutorTests
             Func<GoalSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalSnapshot? NewSnapshot, T Result)>> transaction,
             CancellationToken cancellationToken = default) =>
             inner.TransactGoalAsync(goalId, transaction, cancellationToken);
+
+        public async Task<T> TransactGoalStateAsync<T>(
+            GoalId goalId,
+            Func<GoalStateSnapshot?, CancellationToken, Task<(bool ShouldSave, GoalStateSnapshot? NewState, T Result)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            var saved = false;
+            var result = await inner.TransactGoalStateAsync(
+                    goalId,
+                    async (state, token) =>
+                    {
+                        var mutation = await transaction(state, token).ConfigureAwait(false);
+                        saved = mutation.ShouldSave && mutation.NewState is not null;
+                        return mutation;
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (saved)
+            {
+                Interlocked.Increment(ref _saveCount);
+            }
+
+            return result;
+        }
     }
 
     private sealed class DelegateDisposable(Action dispose) : IDisposable

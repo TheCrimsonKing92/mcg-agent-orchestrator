@@ -45,6 +45,21 @@ public static HumanInputRequest ResolveHumanInputRequest(AgentOrchestratorKernel
         throw BuildAmbiguousHumanInputException(idOrPrefix, matches);
     }
 
+    var completedMatches = kernel.HumanInputRequests
+        .Where(request =>
+            request.IsCompleted &&
+            request.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
+        .ToList();
+    if (completedMatches.Count == 1)
+    {
+        return completedMatches[0];
+    }
+
+    if (completedMatches.Count > 1)
+    {
+        throw BuildAmbiguousHumanInputException(idOrPrefix, completedMatches);
+    }
+
     var goals = kernel.Goals
         .Where(goal => goal.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
         .ToList();

@@ -174,7 +174,11 @@ public static void PrintHumanInputWorklist(Goal goal, GoalHumanInputWorklist wor
             Console.WriteLine($"     flags: auto-defaultable={item.IsAutoDefaultable}; dismissible={item.IsDismissible}; answer-required={item.IsAnswerRequired}; externally-blocked={item.IsExternallyBlocked}");
             Console.WriteLine($"     question: {OutputTextPreview.CreateSummary(item.Question).Text}");
             Console.WriteLine($"     action: {OutputTextPreview.CreateTimeline(item.SuggestedAction).Text}");
-            Console.WriteLine($"     command: answer {item.RequestId.Value} <answer>");
+            var defaultResumeCommand = HumanInputRequest.BuildDefaultResumeCommand(item.RequestId);
+            var resumeCommand = string.Equals(item.ResumeCommand, defaultResumeCommand, StringComparison.Ordinal)
+                ? $"answer {item.RequestId.Value} <answer>"
+                : item.ResumeCommand;
+            Console.WriteLine($"     command: {resumeCommand}");
         }
     }
 

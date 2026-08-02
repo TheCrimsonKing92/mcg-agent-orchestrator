@@ -972,7 +972,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         Xunit.Assert.True(verifierObservedUnlockedState);
         Xunit.Assert.Equal(1, verifier.RunCount);
-        Xunit.Assert.Equal(1, repository.TransactionCount);
+        Xunit.Assert.Equal(2, repository.TransactionCount);
         Xunit.Assert.Equal(0, repository.LoadCount);
         Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
@@ -1079,7 +1079,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 ref profiles,
                 ref currentGoal));
 
-            Xunit.Assert.Equal(1, repository.TransactionCount);
+            Xunit.Assert.Equal(2, repository.TransactionCount);
             Xunit.Assert.Equal(2, repository.SaveGoalSnapshotsCount);
             Xunit.Assert.False(changed);
             Xunit.Assert.Contains("Acceptance evidence bundle: passed", output);
@@ -1311,7 +1311,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var restored = (await repository.LoadAsync()).GetGoal(goal.Id);
         Xunit.Assert.True(changed);
         Xunit.Assert.Equal(GoalStatus.Active, restored.Status);
-        Xunit.Assert.Equal(0, repository.TransactionCount);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
         Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
         Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
@@ -2234,6 +2234,40 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains(second.Id.Value, error.Message, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void PrintHumanInputWorklist_UsesCustomResumeCommand()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Authenticate provider");
+        var request = kernel.RequestHumanInput(
+            goal.Id,
+            null,
+            "Authenticate the provider.",
+            HumanWaitKind.ProviderAuth,
+            resumeCommand: "provider auth resume");
+
+        var output = CaptureConsole(() =>
+            ConsoleViews.PrintHumanInputWorklist(goal, kernel.BuildHumanInputWorklist(goal.Id)));
+
+        Xunit.Assert.Contains("command: provider auth resume", output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain($"answer {request.Id.Value} <answer>", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ResolveHumanInputRequest_CompletedId_PreservesAnsweredError()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Answer once");
+        var request = kernel.RequestHumanInput(goal.Id, null, "Proceed?");
+        kernel.SubmitHumanInput(request.Id, "Yes.");
+
+        var resolved = OrchestratorEntityResolver.ResolveHumanInputRequest(kernel, request.Id.Value[..8]);
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            kernel.SubmitHumanInput(resolved.Id, "Again."));
+
+        Xunit.Assert.Contains("already been answered", error.Message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_provenance_loads_completed_goals_on_demand")]
     public void PersistentRunnerProvenanceLoadsCompletedGoalsOnDemand()
     {
@@ -2412,7 +2446,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 Xunit.Assert.True(changed);
             });
 
-            Xunit.Assert.Equal(0, repository.TransactionCount);
+            Xunit.Assert.Equal(2, repository.TransactionCount);
             Xunit.Assert.Contains("Workspace cleanup deferred", output);
             Xunit.Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
             Xunit.Assert.Contains(GoalWorktrees.BranchName(goal.Id), RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)), StringComparison.Ordinal);
@@ -2474,7 +2508,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             });
 
             Xunit.Assert.DoesNotContain("warning: goal-mark-landed state commit failed", stderr);
-            Xunit.Assert.Equal(0, repository.TransactionCount);
+            Xunit.Assert.Equal(2, repository.TransactionCount);
             Xunit.Assert.NotNull(GoalWorktrees.TryGetCleanupBackoff(root, goal.Id));
         }
         finally
@@ -2529,7 +2563,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             });
 
             Xunit.Assert.DoesNotContain("warning: goal-mark-landed state commit failed", stderr);
-            Xunit.Assert.Equal(0, repository.TransactionCount);
+            Xunit.Assert.Equal(2, repository.TransactionCount);
         }
         finally
         {
@@ -2588,7 +2622,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             });
 
             Xunit.Assert.DoesNotContain("warning: goal-mark-landed state commit failed", stderr);
-            Xunit.Assert.Equal(0, repository.TransactionCount);
+            Xunit.Assert.Equal(2, repository.TransactionCount);
         }
         finally
         {

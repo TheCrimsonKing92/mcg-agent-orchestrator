@@ -208,7 +208,7 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var request in snapshot.HumanInputRequests.Select(HumanInputRequest.FromSnapshot))
         {
-            if (_humanInputRequests.ContainsKey(request.Id))
+            if (_goals.ContainsKey(request.GoalId))
             {
                 _humanInputRequests[request.Id] = request;
             }
@@ -237,9 +237,7 @@ public sealed partial class AgentOrchestratorKernel
                 }
 
                 var requested = goal.Timeline
-                    .Where(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested)
-                    .OrderByDescending(evt => evt.OccurredAt)
-                    .FirstOrDefault();
+                    .LastOrDefault(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested);
                 if (requested is null)
                 {
                     RestoreTaskAfterHumanInput(goal, task);
@@ -247,15 +245,38 @@ public sealed partial class AgentOrchestratorKernel
                     continue;
                 }
 
+                var requestWasResolved = _humanInputRequests.Values.Any(request =>
+                        request.GoalId == goal.Id &&
+                        request.TaskId == task.Id &&
+                        request.IsCompleted) &&
+                    goal.Timeline
+                        .SkipWhile(evt => !ReferenceEquals(evt, requested))
+                        .Skip(1)
+                        .Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputReceived);
+                if (requestWasResolved)
+                {
+                    RestoreTaskAfterHumanInput(goal, task);
+                    clearedWait = true;
+                    continue;
+                }
+
                 var requestId = BuildRepairedHumanInputRequestId(goal.Id, task.Id, requested);
-                _humanInputRequests.TryAdd(
+                if (_humanInputRequests.TryAdd(
                     requestId,
                     new HumanInputRequest(
                         requestId,
                         goal.Id,
                         task.Id,
                         requested.Message,
-                        requested.OccurredAt));
+                        requested.OccurredAt)))
+                {
+                    Append(
+                        goal,
+                        task.Id,
+                        ProgressKind.TaskUpdated,
+                        $"Repaired missing human-input request {requestId.Value[..8]}; " +
+                        "original kind and policy metadata were unavailable, so SpecClarification defaults apply.");
+                }
             }
 
             if (clearedWait)

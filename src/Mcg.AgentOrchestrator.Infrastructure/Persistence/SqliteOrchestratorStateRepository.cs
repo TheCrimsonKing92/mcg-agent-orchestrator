@@ -633,7 +633,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 
                     if (SnapshotEquals(storedSnapshot, request.Baseline))
                     {
-                        var state = BuildConsistentGoalState(
+                        var state = ValidateConsistentGoalState(
                             request.Current,
                             MergeHumanInputRequests(storedState!.HumanInputRequests, request.HumanInputRequests));
                         return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
@@ -656,7 +656,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 
                     var normalized = NormalizeStoredVerificationStatus(merged, out var normalizedReason);
                     var resultReason = normalizedReason is null ? reason : $"{reason}; {normalizedReason}";
-                    var mergedState = BuildConsistentGoalState(
+                    var mergedState = ValidateConsistentGoalState(
                         normalized,
                         MergeHumanInputRequests(storedState!.HumanInputRequests, request.HumanInputRequests));
                     return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
@@ -694,14 +694,30 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         return merged.Values.ToArray();
     }
 
-    private static GoalStateSnapshot BuildConsistentGoalState(
+    private static GoalStateSnapshot ValidateConsistentGoalState(
         GoalSnapshot goal,
         IReadOnlyList<HumanInputRequestSnapshot> humanInputRequests)
     {
-        var repaired = AgentOrchestratorKernel.FromSnapshot(
-            new OrchestratorSnapshot([goal], humanInputRequests));
-        var snapshot = repaired.ExportSnapshot();
-        return new GoalStateSnapshot(snapshot.Goals.Single(), snapshot.HumanInputRequests);
+        var openRequests = humanInputRequests
+            .Where(request => !request.IsCompleted)
+            .ToArray();
+        foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.WaitingForHuman))
+        {
+            if (!openRequests.Any(request => string.Equals(request.TaskId, task.Id, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"Goal '{ShortGoalId(goal.Id)}' task '{task.Id[..Math.Min(8, task.Id.Length)]}' " +
+                    "is WaitingForHuman but has no open human-input request.");
+            }
+        }
+
+        if (goal.Status == GoalStatus.WaitingForHuman && openRequests.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"Goal '{ShortGoalId(goal.Id)}' is WaitingForHuman but has no open human-input request.");
+        }
+
+        return new GoalStateSnapshot(goal, humanInputRequests);
     }
 
     public async Task<T> TransactAsync<T>(

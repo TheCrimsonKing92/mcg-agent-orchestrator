@@ -1087,7 +1087,7 @@ internal static class CliPersistentStateRunner
             .Count();
     }
 
-    private static void PersistSweepChanges(
+    internal static void PersistSweepChanges(
         AgentOrchestratorKernel sweepKernel,
         ITransactionalOrchestratorStateRepository stateRepository,
         IReadOnlyCollection<GoalId> changedGoalIds)
@@ -2303,10 +2303,13 @@ internal static class CliPersistentStateRunner
         var snapshot = kernel.ExportSnapshot();
         var goal = snapshot.Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
             ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
-        return new GoalStateSnapshot(goal, snapshot.HumanInputRequests);
+        var humanInputRequests = snapshot.HumanInputRequests
+            .Where(request => string.Equals(request.GoalId, goalId.Value, StringComparison.Ordinal))
+            .ToArray();
+        return new GoalStateSnapshot(goal, humanInputRequests);
     }
 
-    private static void PersistSingleGoalSnapshot(
+    internal static void PersistSingleGoalSnapshot(
         ITransactionalOrchestratorStateRepository stateRepository,
         AgentOrchestratorKernel kernel,
         GoalId goalId,
