@@ -2793,6 +2793,23 @@ internal sealed class ConductorDriver
     {
         earlyOutcome = null;
         var rebase = _rebaseOntoMain(goal);
+
+        // A rebase failure that is NOT a conflict and NOT a missing branch has been transient every time it
+        // has been observed - nine occurrences on 2026-08-01, every one replaying all commits cleanly on the
+        // first manual retry, because main advances between the target being resolved and the rebase running.
+        // Each occurrence cost an operator a manual rebase plus a three-verb reopen, and it fires when a goal
+        // reaches Verified, so it taxed every SUCCESS rather than every failure. Retry once before escalating.
+        //
+        // A genuine conflict is deliberately NOT retried: it reports Conflict along with the conflicting
+        // paths, and retrying it would just burn a second rebase to reach the same verdict. That distinction
+        // is observable - real conflicts named their file, all nine spurious ones reported only progress.
+        if (!rebase.UpdatedBranch &&
+            rebase.Status != GoalWorktreeRebaseStatus.Conflict &&
+            rebase.Status != GoalWorktreeRebaseStatus.MissingBranch)
+        {
+            rebase = _rebaseOntoMain(goal);
+        }
+
         if (rebase.UpdatedBranch)
         {
             return null;
