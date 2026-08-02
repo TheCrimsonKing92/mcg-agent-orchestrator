@@ -1576,9 +1576,9 @@ internal sealed class ConductorBatchLoop
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
-        var oldestWaiter = SelectOldestParallelAcceptanceWaiter(
-            orderedEligible,
-            driver.ParallelAcceptanceAttemptCoordinator);
+        var liveAttemptGoalIds = driver.ParallelAcceptanceAttemptCoordinator.GetLiveAttemptGoalIds(
+            orderedEligible.Select(goal => goal.Id.Value));
+        var oldestWaiter = SelectOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
         var oldestServedThisTick = false;
         foreach (var goal in orderedEligible)
         {
@@ -1621,7 +1621,8 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
-            if (oldestWaiter is not null &&
+            if (!liveAttemptGoalIds.Contains(goal.Id.Value) &&
+                oldestWaiter is not null &&
                 goal.Id != oldestWaiter.Id &&
                 !oldestServedThisTick &&
                 ShouldDeferForParallelAcceptanceFairness(oldestWaiter.Id.Value))
@@ -1997,8 +1998,8 @@ internal sealed class ConductorBatchLoop
 
     internal static Goal? SelectOldestParallelAcceptanceWaiter(
         IReadOnlyList<Goal> orderedEligible,
-        ConductorParallelAcceptanceAttemptCoordinator coordinator) =>
-        orderedEligible.FirstOrDefault(goal => !coordinator.HasLiveAttempt(goal.Id.Value));
+        IReadOnlySet<string> liveAttemptGoalIds) =>
+        orderedEligible.FirstOrDefault(goal => !liveAttemptGoalIds.Contains(goal.Id.Value));
 
     private static bool IsParallelAcceptanceLifecycleEligible(
         Goal goal,

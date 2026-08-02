@@ -265,11 +265,35 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
 
-        return TryReadLatest(goalId) is
-        {
-            Outcome: ConductorParallelAcceptanceAttemptOutcome.Running
-        };
+        var attempt = TryReadLatest(goalId);
+        return attempt is not null && IsLiveAttempt(attempt);
     }
+
+    internal IReadOnlySet<string> GetLiveAttemptGoalIds(IEnumerable<string> goalIds)
+    {
+        ArgumentNullException.ThrowIfNull(goalIds);
+
+        var liveGoalIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var goalId in goalIds.Distinct(StringComparer.Ordinal))
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
+            var attempt = TryReadLatest(goalId);
+            if (attempt is not null && IsLiveAttempt(attempt))
+            {
+                liveGoalIds.Add(goalId);
+            }
+        }
+
+        return liveGoalIds;
+    }
+
+    private bool IsLiveAttempt(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running &&
+        !attempt.ReconciledAt.HasValue &&
+        !File.Exists(attempt.ResultPath) &&
+        !File.Exists(attempt.ExitCodePath) &&
+        _isProcessAlive(attempt.OwnerProcessId) &&
+        !IsHeartbeatStale(attempt);
 
     private bool IsLiveInvalidatedAttempt(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
