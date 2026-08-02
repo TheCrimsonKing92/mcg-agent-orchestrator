@@ -555,7 +555,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "pre-review");
         using var runEnvironmentScope = PushManagedRunEnvironmentScope();
 
-        if (!TryBuildFocusedEvidenceChecks(request, out var focusedChecks, out var rejection))
+        if (!TryBuildFocusedEvidenceChecks(request, out var focusedChecks, out var collapsed, out var rejection))
         {
             return new FocusedEvidenceRunResult(
                 request,
@@ -598,9 +598,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var collapseSummary = failed is null
-            ? FormatFocusedEvidenceCollapseSummary(focusedChecks)
-            : string.Empty;
+        var collapseSummary = FormatFocusedEvidenceCollapseSummary(focusedChecks, collapsed);
         var summary = failed is null
             ? $"focused evidence passed: {checks.Count} check(s){collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
             : $"focused evidence failed: {failed.Name} exit {failed.ExitCode}{collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
@@ -1028,9 +1026,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool TryBuildFocusedEvidenceChecks(
         string request,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
+        out bool collapsed,
         out string rejection)
     {
         checks = [];
+        collapsed = false;
         rejection = string.Empty;
         var items = request
             .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -1077,6 +1077,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var built = new List<AcceptanceManifestCheck>();
         if (totalTargets > MaxFocusedEvidenceTargets)
         {
+            collapsed = true;
             var emittedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in validated)
             {
@@ -1090,9 +1091,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     Name = $"reviewer mapped project evidence: {ProjectLabel(item.Project)} " +
                         $"(collapsed from {totalTargets} focused targets)",
                     Type = "dotnet-test",
+                    // Both focused-evidence target projects are MTP. The collapsed Infrastructure
+                    // project completed serially in 15.82 minutes on 2026-08-02, so 25 minutes
+                    // preserves useful margin without silently inheriting the 40-minute default.
                     Runner = "mtp",
                     Project = item.Project,
-                    Arguments = ["--verbosity", "minimal"]
+                    Arguments = ["--verbosity", "minimal"],
+                    TimeoutMinutes = 25
                 });
             }
         }
@@ -1222,13 +1227,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         paths.Count == 0 ? "none" : string.Join(", ", paths);
 
     private static string FormatFocusedEvidenceCollapseSummary(
-        IReadOnlyList<AcceptanceManifestCheck> checks)
+        IReadOnlyList<AcceptanceManifestCheck> checks,
+        bool collapsed)
     {
-        var collapsed = checks
-            .Where(check => check.Name.Contains("(collapsed from ", StringComparison.Ordinal))
-            .Select(check => check.Name)
-            .ToArray();
-        return collapsed.Length == 0 ? string.Empty : $"; {string.Join(", ", collapsed)}";
+        return collapsed ? $"; {string.Join(", ", checks.Select(check => check.Name))}" : string.Empty;
     }
 
     private static List<AcceptanceManifestCheck> BuildDeferredChecks(

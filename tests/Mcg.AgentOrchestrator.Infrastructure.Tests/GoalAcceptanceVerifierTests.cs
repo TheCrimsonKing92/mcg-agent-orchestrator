@@ -1930,9 +1930,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
-    public async Task FocusedEvidence_AtOrUnderCap_PreservesExistingBehavior()
+    public async Task FocusedEvidence_AtCap_PreservesFocusedChecks()
     {
-        // Sole unchanged-behaviour guard: these cases pass before and after the overflow fix.
+        // Unchanged-behaviour guard: this passes before and after the overflow fix.
         var (result, _) = await RunMappedEvidenceAsync(
             "Infrastructure.Tests: AlphaTests,BetaTests; Core.Tests: GammaTests,DeltaTests");
 
@@ -1944,7 +1944,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 "reviewer focused evidence: Core.Tests FullyQualifiedName~GammaTests|FullyQualifiedName~DeltaTests"
             ],
             result.Checks.Select(check => check.Name));
+    }
 
+    [Xunit.Fact]
+    public async Task FocusedEvidence_NativeProjectRequest_HasNoCollapseMarker()
+    {
         var (nativeProjectResult, _) = await RunMappedEvidenceAsync("Infrastructure.Tests: mapped-project");
         Assert.True(nativeProjectResult.Accepted);
         Assert.True(nativeProjectResult.Passed);
@@ -1952,7 +1956,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             "reviewer mapped project evidence: Infrastructure.Tests",
             nativeProjectResult.Checks.Single().Name);
         Assert.DoesNotContain("collapsed from", nativeProjectResult.Summary);
+    }
 
+    [Xunit.Fact]
+    public async Task FocusedEvidence_EmptyRequest_IsRejectedWithoutRunnerCall()
+    {
         var (emptyResult, calls) = await RunMappedEvidenceAsync(" ; ");
         Assert.False(emptyResult.Accepted);
         Assert.False(emptyResult.Passed);
@@ -2003,12 +2011,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     [Xunit.Fact]
     public async Task FocusedEvidence_CollapsedCheckTimesOut_RemainsFailed()
     {
+        var observedTimeouts = new List<TimeSpan>();
         var (result, _) = await RunMappedEvidenceAsync(
             "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests",
-            timeOutTests: true);
+            timeOutTests: true,
+            observedTimeouts: observedTimeouts);
 
         Assert.True(result.Accepted);
         Assert.False(result.Passed);
+        Assert.Contains(TimeSpan.FromMinutes(25), observedTimeouts);
         var check = Assert.Single(result.Checks);
         Assert.False(check.Passed);
         Assert.Contains("collapsed-from-5-focused-targets", check.Name);
@@ -2017,7 +2028,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
     private static async Task<(FocusedEvidenceRunResult Result, List<string[]> Calls)> RunMappedEvidenceAsync(
         string request,
-        bool timeOutTests = false)
+        bool timeOutTests = false,
+        List<TimeSpan>? observedTimeouts = null)
     {
         var calls = new List<string[]>();
         var root = CreateManifestWorkspace("""
@@ -2027,12 +2039,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "forbiddenChangedPathGlobs": []
             }
             """);
+        var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+        var configuredManifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        configuredManifest["engine"]!["timeouts"]!["defaultMinutes"] = 40;
+        File.WriteAllText(manifestPath, configuredManifest.ToJsonString());
         var goalId = new GoalId(Guid.NewGuid().ToString("N"));
         try
         {
-            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
             {
                 calls.Add(args);
+                observedTimeouts?.Add(timeout);
                 if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests") ||
                     IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
                 {
