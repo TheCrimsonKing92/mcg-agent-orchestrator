@@ -248,6 +248,59 @@ public sealed class VerificationAndProcessLogTests
     Assert.True(new FileInfo(stderrPath).Length > 1_000_000);
 }
 
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_keeps_worker_result_present_when_the_block_opens_inside_the_head_preview")]
+    public void RefreshLatestProcessKeepsWorkerResultPresentWhenTheBlockOpensInsideTheHeadPreview()
+{
+    // Shape measured from goal 0b81147a's reviewer log: 16,690 chars total with the WORKER_RESULT block
+    // opening at byte 3,153 - i.e. INSIDE the 8,192-char head-preview window. The head prefix and the
+    // decision content each charged those in-window block lines to the same 20,000-char budget, so the
+    // retention overflowed by roughly 1,100 chars at the END of the block. model_fit, skills and confidence
+    // live there and are REQUIRED fields, so the parser reported the block absent, WorkerResultPresent went
+    // false, MergedReviewFindings was never set, and the convergence brief announced "merged finding state
+    // was EMPTY" while twelve valid findings sat in the log.
+    var root = CreateTempDirectory();
+    var kernel = new AgentOrchestratorKernel();
+    var reviewTask = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Keep worker result present", [reviewTask]);
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var stdoutPath = Path.Combine(root, "out.log");
+    var stderrPath = Path.Combine(root, "err.log");
+    var exitPath = Path.Combine(root, "exit.txt");
+
+    var findingsJson =
+        "findings: [{\"stable_id\":\"budget-straddling-finding\",\"state\":\"open\",\"severity\":\"blocking\"," +
+        "\"category\":\"correctness\",\"location\":{\"file\":\"src/Some/File.cs\",\"region\":\"SomeMethod\"}," +
+        "\"description\":\"" + new string('D', 6_500) + "\"}]";
+    var stdout =
+        new string('R', 3_100) + Environment.NewLine +          // prose review before the block, as in production
+        "WORKER_RESULT" + Environment.NewLine +
+        "files: src/Some/File.cs" + Environment.NewLine +
+        "commands: dotnet test" + Environment.NewLine +
+        "tests: not-run - Reviewer role" + Environment.NewLine +
+        new string('B', 5_500) + Environment.NewLine +          // in-block prose inside the head-preview window
+        findingsJson + Environment.NewLine +
+        "touched_anchors: []" + Environment.NewLine +
+        "blockers: P1 something is wrong" + Environment.NewLine +
+        "model_fit: Anthropic/claude-opus-5 - adequate" + Environment.NewLine +
+        "skills: none" + Environment.NewLine +
+        "confidence: high" + Environment.NewLine +
+        "END_WORKER_RESULT";
+    File.WriteAllText(stdoutPath, stdout);
+    File.WriteAllText(stderrPath, string.Empty);
+    File.WriteAllText(exitPath, "0");
+    kernel.RecordTaskDispatch(goal.Id, reviewTask.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+    var processRecord = new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null);
+    kernel.RecordTaskProcessStarted(goal.Id, reviewTask.Id, processRecord);
+
+    var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+    runner.RefreshLatestProcess(kernel, goal.Id, reviewTask.Id);
+
+    // The trailing REQUIRED fields must survive the retention budget, or the whole block reads as absent.
+    Assert.True(
+        reviewTask.LastVerification!.WorkerResultPresent,
+        "WORKER_RESULT must still be detected when the block opens inside the head-preview window");
+}
+
     [Xunit.Fact(DisplayName = "RefreshLatestProcess_pauses_for_middle_log_human_input_before_retained_excerpt")]
     public void RefreshLatestProcessPausesForMiddleLogHumanInputBeforeRetainedExcerpt()
 {

@@ -2262,31 +2262,37 @@ public sealed class BackgroundDispatchRunner
                 break;
             }
 
+            // Same single-charge rule as ProcessDecisionLine; see the comment there for the measured failure
+            // this prevents.
+            var normalized = NormalizeWorkerResultMarker(line);
+            var isOpener = IsWorkerResultOpener(normalized);
+            var isEndMarker = !isOpener && IsWorkerResultEndMarker(normalized);
+            var isDecisionContent = isOpener || isEndMarker || inWorkerResult || IsDecisionSignificantLine(line);
+
             if (prefixRemaining > 0)
             {
                 var take = Math.Min(prefixRemaining, line.Length);
-                AppendDecisionLine(retained, line[..take], MaxDecisionChars);
+                if (!isDecisionContent)
+                {
+                    AppendDecisionLine(retained, line[..take], MaxDecisionChars);
+                }
+
                 prefixRemaining -= take;
             }
 
-            var normalized = NormalizeWorkerResultMarker(line);
-            if (IsWorkerResultOpener(normalized))
+            if (isOpener)
             {
                 inWorkerResult = true;
-                AppendDecisionLine(retained, line, MaxDecisionChars);
-                continue;
             }
 
-            if (IsWorkerResultEndMarker(normalized))
+            if (isDecisionContent)
             {
                 AppendDecisionLine(retained, line, MaxDecisionChars);
+            }
+
+            if (isEndMarker)
+            {
                 inWorkerResult = false;
-                continue;
-            }
-
-            if (inWorkerResult || IsDecisionSignificantLine(line))
-            {
-                AppendDecisionLine(retained, line, MaxDecisionChars);
             }
         }
 
@@ -2313,29 +2319,52 @@ public sealed class BackgroundDispatchRunner
             var line = lineBuffer.ToString();
             lineBuffer.Clear();
             var containsFinalOutput = ContainsCodexFinalOutput(line);
+
+            // A line must be charged to the retention budget ONCE. The head preview and the decision content
+            // used to both append the same line when a WORKER_RESULT block began inside the first
+            // PreviewHeadChars, spending that prefix twice against one MaxDecisionChars budget.
+            //
+            // Measured on goal 0b81147a: the block opened at byte 3,153 of a 16,690-char reviewer log, so
+            // 8,192 of prefix plus a ~12,912-char block came to ~21,104 against the 20,000 cap. The overflow
+            // fell on the END of the block - where model_fit, skills and confidence live - and those are
+            // REQUIRED fields. Losing them made WorkerResultParser report the block absent, which set
+            // WorkerResultPresent=false, which made PrepareReviewFindingRecord early-return without ever
+            // setting MergedReviewFindings, which made the convergence brief report "merged finding state was
+            // EMPTY" while twelve valid findings sat in the log. The reviewer was blamed for submitting
+            // nothing.
+            var normalized = NormalizeWorkerResultMarker(line);
+            var isOpener = IsWorkerResultOpener(normalized);
+            var isEndMarker = !isOpener && IsWorkerResultEndMarker(normalized);
+            var isDecisionContent =
+                isOpener || isEndMarker || inWorkerResult || IsDecisionSignificantLine(line, containsFinalOutput);
+
             if (prefixRemaining > 0)
             {
                 var take = Math.Min(prefixRemaining, line.Length);
-                AppendDecisionLine(decision, line[..take], MaxDecisionChars);
+                if (!isDecisionContent)
+                {
+                    AppendDecisionLine(decision, line[..take], MaxDecisionChars);
+                }
+
+                // Consume the head budget either way: it measures how far into the log we are, not how much
+                // of it we chose to retain.
                 prefixRemaining -= take;
             }
 
-            var normalized = NormalizeWorkerResultMarker(line);
-            if (IsWorkerResultOpener(normalized))
+            if (isOpener)
             {
                 inWorkerResult = true;
-                AppendDecisionLine(decision, line, MaxDecisionChars);
             }
-            else if (IsWorkerResultEndMarker(normalized))
-            {
-                AppendDecisionLine(decision, line, MaxDecisionChars);
-                inWorkerResult = false;
-            }
-            else if (inWorkerResult || IsDecisionSignificantLine(line, containsFinalOutput))
+
+            if (isDecisionContent)
             {
                 AppendDecisionLine(decision, line, MaxDecisionChars);
             }
 
+            if (isEndMarker)
+            {
+                inWorkerResult = false;
+            }
         }
 
         while (true)
