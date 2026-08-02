@@ -555,7 +555,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         using var resultsScope = PushOwnerResultsScope(worktreePath, goalId, "pre-review");
         using var runEnvironmentScope = PushManagedRunEnvironmentScope();
 
-        if (!TryBuildFocusedEvidenceChecks(request, out var focusedChecks, out var rejection))
+        if (!TryBuildFocusedEvidenceChecks(
+                request,
+                engineSettings.InfrastructureTestLanes,
+                out var focusedChecks,
+                out var collapsed,
+                out var rejection))
         {
             return new FocusedEvidenceRunResult(
                 request,
@@ -574,23 +579,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, focusedChecks, changedFiles: null, PolicyShardPlan.NotApplicable("focused evidence"))
             : null;
-        var checks = new List<AcceptanceCheckResult>();
-        foreach (var check in focusedChecks)
-        {
-            var checkResult = await RunCheckWithCancellationProbeAsync(
-                check,
-                worktreePath,
-                goalId,
-                stableSlotIndex,
-                stableSlotLease,
-                dotnetTestBuildPhase,
-                cancellationToken).ConfigureAwait(false);
-            checks.Add(checkResult.Result);
-            if (!checkResult.Result.Passed)
-            {
-                break;
-            }
-        }
+        var shardCoreBudget =
+            ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
+        var shardConcurrencyBudget = Math.Min(engineSettings.MaxConcurrentShards, shardCoreBudget);
+        var batch = await RunCheckBatchAsync(
+            focusedChecks,
+            cacheContext: null,
+            worktreePath,
+            goalId,
+            stableSlotIndex,
+            stableSlotLease,
+            dotnetTestBuildPhase,
+            shardConcurrencyBudget,
+            cancellationToken).ConfigureAwait(false);
+        var checks = batch.Results;
 
         var failed = checks.FirstOrDefault(check => !check.Passed);
         var receiptPaths = checks
@@ -598,9 +600,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var collapseSummary = FormatFocusedEvidenceCollapseSummary(focusedChecks, collapsed);
         var summary = failed is null
-            ? $"focused evidence passed: {checks.Count} check(s); receipts: {FormatReceiptPaths(receiptPaths)}"
-            : $"focused evidence failed: {failed.Name} exit {failed.ExitCode}; receipts: {FormatReceiptPaths(receiptPaths)}";
+            ? $"focused evidence passed: {checks.Count} check(s){collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
+            : $"focused evidence failed: {failed.Name} exit {failed.ExitCode}{collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
         var evidence = new FocusedEvidenceRunResult(
             request,
             Accepted: true,
@@ -1024,10 +1027,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static bool TryBuildFocusedEvidenceChecks(
         string request,
+        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
+        out bool collapsed,
         out string rejection)
     {
         checks = [];
+        collapsed = false;
         rejection = string.Empty;
         var items = request
             .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -1037,7 +1043,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        var built = new List<AcceptanceManifestCheck>();
+        var validated = new List<(string Project, string? Filter)>();
         var totalTargets = 0;
         foreach (var item in items)
         {
@@ -1068,28 +1074,61 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             totalTargets += targetCount;
-            if (totalTargets > MaxFocusedEvidenceTargets)
-            {
-                rejection = $"evidence request exceeds focused target limit ({MaxFocusedEvidenceTargets})";
-                return false;
-            }
+            validated.Add((project, filter));
+        }
 
-            built.Add(new AcceptanceManifestCheck
+        var built = new List<AcceptanceManifestCheck>();
+        if (totalTargets > MaxFocusedEvidenceTargets)
+        {
+            collapsed = true;
+            var emittedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in validated)
             {
-                Name = filter is null
-                    ? $"reviewer mapped project evidence: {ProjectLabel(project)}"
-                    : $"reviewer focused evidence: {ProjectLabel(project)} {filter}",
-                Type = "dotnet-test",
-                // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
-                // without this the check defaults to the VSTest runner and fails on .NET 10 with
-                // "VSTest target is no longer supported", making every reviewer evidence run fail.
-                Runner = "mtp",
-                Project = project,
-                Arguments = filter is null
-                    ? ["--verbosity", "minimal"]
-                    : ["--verbosity", "minimal", "--filter", filter],
-                TimeoutMinutes = 10
-            });
+                if (!emittedProjects.Add(item.Project))
+                {
+                    continue;
+                }
+
+                var projectCheck = new AcceptanceManifestCheck
+                {
+                    Name = $"reviewer mapped project evidence: {ProjectLabel(item.Project)} " +
+                        $"(collapsed from {totalTargets} focused targets)",
+                    Type = "dotnet-test",
+                    Runner = "mtp",
+                    Project = item.Project,
+                    Arguments = ["--verbosity", "minimal"]
+                };
+                if (IsInfrastructureTestProject(item.Project))
+                {
+                    built.AddRange(ExpandBroadInfrastructureCheck(projectCheck, infrastructureTestLanes));
+                }
+                else
+                {
+                    built.Add(projectCheck);
+                }
+            }
+        }
+        else
+        {
+            foreach (var item in validated)
+            {
+                built.Add(new AcceptanceManifestCheck
+                {
+                    Name = item.Filter is null
+                        ? $"reviewer mapped project evidence: {ProjectLabel(item.Project)}"
+                        : $"reviewer focused evidence: {ProjectLabel(item.Project)} {item.Filter}",
+                    Type = "dotnet-test",
+                    // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
+                    // without this the check defaults to the VSTest runner and fails on .NET 10 with
+                    // "VSTest target is no longer supported", making every reviewer evidence run fail.
+                    Runner = "mtp",
+                    Project = item.Project,
+                    Arguments = item.Filter is null
+                        ? ["--verbosity", "minimal"]
+                        : ["--verbosity", "minimal", "--filter", item.Filter],
+                    TimeoutMinutes = 10
+                });
+            }
         }
 
         checks = built;
@@ -1193,6 +1232,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string FormatReceiptPaths(IReadOnlyList<string> paths) =>
         paths.Count == 0 ? "none" : string.Join(", ", paths);
+
+    private static string FormatFocusedEvidenceCollapseSummary(
+        IReadOnlyList<AcceptanceManifestCheck> checks,
+        bool collapsed)
+    {
+        return collapsed ? $"; {string.Join(", ", checks.Select(check => check.Name))}" : string.Empty;
+    }
 
     private static List<AcceptanceManifestCheck> BuildDeferredChecks(
         AcceptanceManifestCheck? solutionCheck,
@@ -2004,14 +2050,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        var separator = check.Name.IndexOf(": ", StringComparison.Ordinal);
-        if (separator < 0 ||
-            !check.Name[..separator].Equals("infrastructure tests", StringComparison.OrdinalIgnoreCase))
+        var standardPrefix = "infrastructure tests: ";
+        var collapsedPrefix = "reviewer mapped project evidence: Infrastructure.Tests (collapsed from ";
+        string? partitionName = null;
+        if (check.Name.StartsWith(standardPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            partitionName = check.Name[standardPrefix.Length..];
+        }
+        else if (check.Name.StartsWith(collapsedPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            var separator = check.Name.LastIndexOf(": ", StringComparison.Ordinal);
+            if (separator >= collapsedPrefix.Length)
+            {
+                partitionName = check.Name[(separator + 2)..];
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(partitionName))
         {
             return false;
         }
 
-        partitionId = Slug(check.Name[(separator + 2)..]);
+        partitionId = Slug(partitionName);
         return true;
     }
 
