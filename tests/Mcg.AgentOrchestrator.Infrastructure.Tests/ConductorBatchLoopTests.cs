@@ -1020,6 +1020,8 @@ public sealed class ConductorBatchLoopTests
                 line.Contains("ADMISSION", StringComparison.Ordinal) &&
                 line.Contains("reason=parallel-acceptance-slot-cap", StringComparison.Ordinal));
             Assert.DoesNotContain(firstTick.ProgressLines!, line =>
+                line.Contains("reason=parallel-acceptance-fairness", StringComparison.Ordinal));
+            Assert.DoesNotContain(firstTick.ProgressLines!, line =>
                 line.Contains("reason=reserved-gate-slot", StringComparison.Ordinal));
         }
         finally
@@ -2064,9 +2066,59 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact]
+    public void ParallelAcceptance_waiter_skips_persisted_running_attempt()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var running = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/Running.cs");
+        var waiting = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/Waiting.cs");
+        var now = DateTimeOffset.UtcNow;
+        PassVerificationAt(kernel, running, running.Tasks.Single(), now);
+        PassVerificationAt(kernel, waiting, waiting.Tasks.Single(), now.AddMinutes(1));
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+
+        try
+        {
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(8701));
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                running,
+                0,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/Running.cs"],
+                "branch",
+                "main");
+
+            var decision = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+            var oldestWaiter = ConductorBatchLoop.SelectOldestParallelAcceptanceWaiter(
+                [running, waiting],
+                coordinator);
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, decision.Kind);
+            Assert.True(coordinator.HasLiveAttempt(running.Id.Value));
+            Assert.Equal(waiting.Id, oldestWaiter!.Id);
+            Assert.False(ConductorBatchLoop.ShouldDeferForParallelAcceptanceFairness(oldestWaiter.Id.Value));
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_bounded_overtake_defers_newer_after_cap")]
     public void BatchLoopParallelAcceptanceBoundedOvertakeDefersNewerAfterCap()
     {
+        Assert.Equal(1, ConductorBatchLoop.ParallelAcceptanceBoundedOvertakeLimit);
         using var _ = IsolatedDotnetRootScope();
         var kernel = new AgentOrchestratorKernel();
         var older = GoalLifecycleCommands.CreateAndActivateSimpleGoal(

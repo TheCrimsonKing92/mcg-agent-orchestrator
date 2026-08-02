@@ -1576,7 +1576,9 @@ internal sealed class ConductorBatchLoop
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
-        var oldestWaiter = orderedEligible.FirstOrDefault();
+        var oldestWaiter = SelectOldestParallelAcceptanceWaiter(
+            orderedEligible,
+            driver.ParallelAcceptanceAttemptCoordinator);
         var oldestServedThisTick = false;
         foreach (var goal in orderedEligible)
         {
@@ -1993,6 +1995,11 @@ internal sealed class ConductorBatchLoop
             .ThenBy(goal => goal.Id.Value, StringComparer.Ordinal)
             .ToArray();
 
+    internal static Goal? SelectOldestParallelAcceptanceWaiter(
+        IReadOnlyList<Goal> orderedEligible,
+        ConductorParallelAcceptanceAttemptCoordinator coordinator) =>
+        orderedEligible.FirstOrDefault(goal => !coordinator.HasLiveAttempt(goal.Id.Value));
+
     private static bool IsParallelAcceptanceLifecycleEligible(
         Goal goal,
         ConductorDriver driver)
@@ -2042,7 +2049,7 @@ internal sealed class ConductorBatchLoop
             (task.Status == WorkTaskStatus.Completed &&
              task.LastVerification is { Succeeded: true }));
 
-    private static bool ShouldDeferForParallelAcceptanceFairness(string oldestGoalId)
+    internal static bool ShouldDeferForParallelAcceptanceFairness(string oldestGoalId)
     {
         lock (ParallelAcceptanceFairnessGate)
         {

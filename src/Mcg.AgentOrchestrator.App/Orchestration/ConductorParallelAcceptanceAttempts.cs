@@ -261,6 +261,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         return false;
     }
 
+    internal bool HasLiveAttempt(string goalId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
+
+        return TryReadLatest(goalId) is
+        {
+            Outcome: ConductorParallelAcceptanceAttemptOutcome.Running
+        };
+    }
+
     private bool IsLiveInvalidatedAttempt(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
         attempt.ReconciledAt.HasValue &&
