@@ -29,12 +29,15 @@ internal sealed class ConductorDriver
     // "repeat" (the mechanical evidence re-dispatch retries the reviewer task itself, so it never
     // advances the round boundary). Requests beyond this bound escalate normally.
     private const int MaxReviewerEvidenceRequestsPerRound = 3;
+    private const int MaxConductorEvidenceSubstitutionsPerRound = 2;
+    private const int MaxConductorDerivedEvidenceTargets = 4;
 
     // Prefix of the message the conductor writes when it mechanically re-dispatches the reviewer
     // task to attach evidence-on-demand receipts within the SAME round. Retries carrying this prefix
     // must NOT advance the evidence-round boundary (otherwise the per-round bound would never apply);
     // any other reviewer retry (operator recover, fresh review) begins a new evidence round.
     private const string ReviewerEvidenceRetryMessagePrefix = "reviewer evidence-on-demand:";
+    private const string ReviewerEvidenceSubstitutionMessagePrefix = "reviewer evidence substitution:";
     private const int MaxReviewFindingContractRepairsPerRound = 2;
     private const string ReviewContractRepairRetryMessagePrefix = "review-finding contract-repair:";
     private static readonly string[] MechanicalReviewerRetryMessagePrefixes =
@@ -42,6 +45,15 @@ internal sealed class ConductorDriver
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex KnownTestProjectPattern = new(
+        @"(?<![A-Za-z0-9_.])(?<alias>Core\.Tests|Infrastructure\.Tests)(?![A-Za-z0-9_.])",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+    private static readonly Regex TestClassPattern = new(
+        @"\b[A-Za-z_][A-Za-z0-9_]*Tests\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CandidateShaPattern = new(
+        @"^[0-9a-f]{7,64}$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
@@ -1145,7 +1157,7 @@ internal sealed class ConductorDriver
             _recordReviewerEvidenceRequestReceived(
                 goal.Id,
                 triggeringTask.Id,
-                $"Reviewer evidence request received: {evidenceRequest}. Full reviewer output: {outputArtifact}");
+                $"Reviewer evidence request received: source=reviewer-issued; request={evidenceRequest}. Full reviewer output: {outputArtifact}");
 
             if (priorEvidenceRequests >= MaxReviewerEvidenceRequestsPerRound)
             {
@@ -1157,7 +1169,10 @@ internal sealed class ConductorDriver
 
             var evidence = _runFocusedEvidence(goal, evidenceRequest);
             var evidenceMessage = FormatFocusedEvidenceResult(evidence);
-            _recordReviewerEvidenceRunRecorded(goal.Id, triggeringTask.Id, evidenceMessage);
+            _recordReviewerEvidenceRunRecorded(
+                goal.Id,
+                triggeringTask.Id,
+                $"source=reviewer-issued; {evidenceMessage}");
 
             if (!evidence.Accepted)
             {
@@ -1167,16 +1182,9 @@ internal sealed class ConductorDriver
                 return true;
             }
 
-            if (!evidence.Passed)
-            {
-                decision = VerifyingFindingAutoRetryDecision.Escalate(
-                    $"Reviewer requested focused evidence failed for task {triggeringTask.Id.Value[..8]}; normal escalation required. " +
-                    $"{evidenceMessage}. Full reviewer output: {outputArtifact}");
-                return true;
-            }
-
             var evidenceRetryMessage =
-                $"{ReviewerEvidenceRetryMessagePrefix} Reviewer task {triggeringTask.Id.Value[..8]} requested focused test evidence; " +
+                $"{ReviewerEvidenceRetryMessagePrefix} avoided_developer_reopen=1; source=reviewer-issued; " +
+                $"Reviewer task {triggeringTask.Id.Value[..8]} requested focused test evidence; " +
                 $"conductor ran it without reopening upstream Developer/Tester work. {evidenceMessage}. " +
                 $"Re-review the same round using these receipts.";
             decision = VerifyingFindingAutoRetryDecision.Retry(
@@ -1184,6 +1192,18 @@ internal sealed class ConductorDriver
                 evidenceRetryMessage,
                 null,
                 RetryRoundKind.Mechanical);
+            return true;
+        }
+
+        string? conductorEvidenceFallbackReason = null;
+        if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
+            TryBuildConductorEvidenceSubstitution(
+                goal,
+                triggeringTask,
+                out var substitutionDecision,
+                out conductorEvidenceFallbackReason))
+        {
+            decision = substitutionDecision;
             return true;
         }
 
@@ -1203,6 +1223,13 @@ internal sealed class ConductorDriver
             }
 
             reviewerRoute = ResolveReviewerRetryRoute(goal, triggeringTask, trigger.Finding);
+            if (conductorEvidenceFallbackReason is not null)
+            {
+                reviewerRoute = reviewerRoute with
+                {
+                    Reason = $"{reviewerRoute.Reason}; conductor evidence substitution fallback: {conductorEvidenceFallbackReason}"
+                };
+            }
             if (reviewerRoute.EscalateToOperator)
             {
                 decision = VerifyingFindingAutoRetryDecision.Escalate(
@@ -1381,7 +1408,222 @@ internal sealed class ConductorDriver
         return goal.Timeline.Count(evt =>
             evt.TaskId == reviewerTask.Id &&
             evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
-            evt.OccurredAt >= currentRoundStartedAt);
+            evt.OccurredAt >= currentRoundStartedAt &&
+            !evt.Message.StartsWith(ReviewerEvidenceSubstitutionMessagePrefix, StringComparison.Ordinal));
+    }
+
+    private bool TryBuildConductorEvidenceSubstitution(
+        Goal goal,
+        TaskSpec reviewerTask,
+        out VerifyingFindingAutoRetryDecision decision,
+        out string? developerFallbackReason)
+    {
+        decision = VerifyingFindingAutoRetryDecision.None;
+        developerFallbackReason = null;
+        if (!WorkerResultBlockers.TryFindReviewFindingRound(
+                reviewerTask.LastVerification,
+                out var round,
+                out _))
+        {
+            return false;
+        }
+
+        var blockers = round.Findings
+            .Where(finding =>
+                finding.State == ReviewFindingState.Open &&
+                finding.Severity == FindingSeverity.Blocking)
+            .ToArray();
+        if (blockers.Length == 0)
+        {
+            return false;
+        }
+
+        var nonEvidenceCategories = blockers
+            .Where(finding => finding.Category is not (FindingCategory.TestEvidence or FindingCategory.TestCoverage))
+            .Select(finding => FindingCategoryJsonConverter.ToWireValue(finding.Category))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (nonEvidenceCategories.Length > 0)
+        {
+            if (blockers.Any(finding =>
+                    finding.Category is FindingCategory.TestEvidence or FindingCategory.TestCoverage or FindingCategory.Unspecified))
+            {
+                _recordReviewerEvidenceRequestReceived(
+                    goal.Id,
+                    reviewerTask.Id,
+                    $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-category; evidence_request=absent; " +
+                    $"category={string.Join(',', nonEvidenceCategories)}; reason=every-open-blocker-must-be-known-evidence");
+            }
+            return false;
+        }
+
+        if (!TryDeriveFocusedEvidenceRequest(blockers, out var request))
+        {
+            _recordReviewerEvidenceRequestReceived(
+                goal.Id,
+                reviewerTask.Id,
+                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-unparseable; evidence_request=absent; " +
+                "reason=no-validated-test-project-and-class-pairs");
+            developerFallbackReason = "no-validated-test-project-and-class-pairs";
+            return false;
+        }
+
+        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
+        if (candidateSha is null || !CandidateShaPattern.IsMatch(candidateSha))
+        {
+            _recordReviewerEvidenceRequestReceived(
+                goal.Id,
+                reviewerTask.Id,
+                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-unparseable; evidence_request=absent; " +
+                "reason=candidate-sha-unavailable");
+            developerFallbackReason = "candidate-sha-unavailable";
+            return false;
+        }
+
+        if (HasConductorDerivedReceipt(goal, reviewerTask, candidateSha, request))
+        {
+            _recordReviewerEvidenceRequestReceived(
+                goal.Id,
+                reviewerTask.Id,
+                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-evidence-already-present; " +
+                $"candidate_sha={candidateSha}; request='{request}'; reason=evidence-already-present");
+            developerFallbackReason = "evidence-already-present";
+            return false;
+        }
+
+        var priorSubstitutions = CountConductorEvidenceSubstitutionsInCurrentRound(goal, reviewerTask);
+        if (priorSubstitutions >= MaxConductorEvidenceSubstitutionsPerRound)
+        {
+            _recordReviewerEvidenceRequestReceived(
+                goal.Id,
+                reviewerTask.Id,
+                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-cap; candidate_sha={candidateSha}; " +
+                $"request='{request}'; reason=substitution-cap-exceeded; " +
+                $"attempt={priorSubstitutions + 1}/{MaxConductorEvidenceSubstitutionsPerRound}");
+            developerFallbackReason = "substitution-cap-exceeded";
+            return false;
+        }
+
+        _recordReviewerEvidenceRequestReceived(
+            goal.Id,
+            reviewerTask.Id,
+            $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=substituted; source=conductor-derived; " +
+            $"candidate_sha={candidateSha}; request='{request}'; " +
+            $"attempt={priorSubstitutions + 1}/{MaxConductorEvidenceSubstitutionsPerRound}");
+
+        var evidence = _runFocusedEvidence(goal, request);
+        var evidenceMessage = FormatFocusedEvidenceResult(evidence);
+        _recordReviewerEvidenceRunRecorded(
+            goal.Id,
+            reviewerTask.Id,
+            $"source=conductor-derived; candidate_sha={candidateSha}; {evidenceMessage}");
+        if (!evidence.Accepted)
+        {
+            _recordReviewerEvidenceRequestReceived(
+                goal.Id,
+                reviewerTask.Id,
+                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-run-rejected; " +
+                $"candidate_sha={candidateSha}; request='{request}'; reason=evidence-run-not-accepted");
+            developerFallbackReason = "evidence-run-not-accepted";
+            return false;
+        }
+
+        var retryMessage =
+            $"{ReviewerEvidenceRetryMessagePrefix} avoided_developer_reopen=1; source=conductor-derived; " +
+            $"Reviewer task {reviewerTask.Id.Value[..8]} omitted an evidence request; conductor derived and ran it " +
+            $"without reopening upstream Developer/Tester work. {evidenceMessage}. " +
+            "Re-review the same round using these receipts.";
+        decision = VerifyingFindingAutoRetryDecision.Retry(
+            reviewerTask,
+            retryMessage,
+            null,
+            RetryRoundKind.Mechanical);
+        return true;
+    }
+
+    private static bool TryDeriveFocusedEvidenceRequest(
+        IReadOnlyList<ReviewFinding> blockers,
+        out string request)
+    {
+        request = string.Empty;
+        var text = string.Join(" ", blockers.Select(finding => finding.Description));
+        var projectMatches = KnownTestProjectPattern.Matches(text);
+        if (projectMatches.Count == 0)
+        {
+            return false;
+        }
+
+        var targets = new List<(string Alias, List<string> Classes)>();
+        foreach (Match projectMatch in projectMatches)
+        {
+            var alias = projectMatch.Groups["alias"].Value.Equals("Core.Tests", StringComparison.OrdinalIgnoreCase)
+                ? "Core.Tests"
+                : "Infrastructure.Tests";
+            var segmentStart = projectMatch.Index + projectMatch.Length;
+            var nextMatch = projectMatch.NextMatch();
+            var segmentLength = (nextMatch.Success ? nextMatch.Index : text.Length) - segmentStart;
+            var classes = TestClassPattern
+                .Matches(text.Substring(segmentStart, segmentLength))
+                .Select(match => match.Value)
+                .Where(className => !className.Equals("Tests", StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (classes.Length == 0)
+            {
+                continue;
+            }
+
+            var existing = targets.FirstOrDefault(target => target.Alias == alias);
+            if (existing.Classes is null)
+            {
+                targets.Add((alias, [.. classes]));
+            }
+            else
+            {
+                foreach (var className in classes)
+                {
+                    if (!existing.Classes.Contains(className, StringComparer.Ordinal))
+                    {
+                        existing.Classes.Add(className);
+                    }
+                }
+            }
+        }
+
+        if (targets.Count == 0 ||
+            targets.Sum(target => target.Classes.Count) > MaxConductorDerivedEvidenceTargets)
+        {
+            return false;
+        }
+
+        request = string.Join(
+            "; ",
+            targets.Select(target => $"{target.Alias}: {string.Join(',', target.Classes)}"));
+        return true;
+    }
+
+    private static bool HasConductorDerivedReceipt(
+        Goal goal,
+        TaskSpec reviewerTask,
+        string candidateSha,
+        string request) =>
+        goal.Timeline.Any(evt =>
+            evt.TaskId == reviewerTask.Id &&
+            evt.Kind == ProgressKind.ReviewerEvidenceRunRecorded &&
+            evt.Message.Contains("source=conductor-derived", StringComparison.Ordinal) &&
+            evt.Message.Contains($"candidate_sha={candidateSha}", StringComparison.OrdinalIgnoreCase) &&
+            evt.Message.Contains($"request='{request}'", StringComparison.Ordinal) &&
+            evt.Message.Contains("accepted=True", StringComparison.Ordinal));
+
+    private static int CountConductorEvidenceSubstitutionsInCurrentRound(Goal goal, TaskSpec reviewerTask)
+    {
+        var currentRoundStartedAt = GetCurrentReviewerRoundStart(goal, reviewerTask);
+        return goal.Timeline.Count(evt =>
+            evt.TaskId == reviewerTask.Id &&
+            evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
+            evt.OccurredAt >= currentRoundStartedAt &&
+            evt.Message.StartsWith(ReviewerEvidenceSubstitutionMessagePrefix, StringComparison.Ordinal) &&
+            evt.Message.Contains("outcome=substituted", StringComparison.Ordinal));
     }
 
     private static int CountReviewerContractRepairsInCurrentRound(Goal goal, TaskSpec reviewerTask)
