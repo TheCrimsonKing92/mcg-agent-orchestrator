@@ -2844,10 +2844,10 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
-    public void ExistingDerivedReceipt_ReopensDeveloperWithoutRerun()
+    public void ExistingDerivedReceipt_RoutesTesterWithoutRerun()
     {
         var (kernel, goal) = SoftwareGoal();
-        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
         {
@@ -2890,7 +2890,7 @@ public sealed class ConductorDriverTests
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(0, focusedRuns);
-        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Equal(tester.Id, retriedTaskId);
         Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
             evt.Message.Contains("reason=evidence-already-present", StringComparison.Ordinal));
@@ -2916,7 +2916,7 @@ public sealed class ConductorDriverTests
             "reviewer evidence substitution: outcome=substituted; source=conductor-derived; attempt=2/2");
         kernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
         var goal = kernel.GetGoal(originalGoal.Id);
-        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         const string blocker = "Infrastructure.Tests GoalAcceptanceVerifierTests receipt is missing.";
         FailReviewerNeedsWork(kernel, goal, reviewer, blocker, findings: [EvidenceFinding(blocker)]);
@@ -2934,7 +2934,7 @@ public sealed class ConductorDriverTests
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Equal(tester.Id, retriedTaskId);
         Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
             evt.Message.Contains("reason=substitution-cap-exceeded", StringComparison.Ordinal) &&
