@@ -771,6 +771,7 @@ public sealed class ConductorBatchLoopTests
                 line.Contains("result=started", StringComparison.Ordinal));
             Assert.DoesNotContain(admissionTick.ProgressLines!, line =>
                 line.Contains($"goal={waiting.Id.Value[..8]}", StringComparison.Ordinal) &&
+                line.Contains("result=deferred", StringComparison.Ordinal) &&
                 line.Contains("reason=parallel-acceptance-fairness", StringComparison.Ordinal));
             Assert.True(waitingEntered.Wait(TimeSpan.FromSeconds(5)));
 
@@ -1156,6 +1157,28 @@ public sealed class ConductorBatchLoopTests
             Assert.All(inFlightAttempts, attempt => Assert.True(coordinator.HasLiveAttempt(attempt.GoalId)));
             Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity, heldPermits.Distinct(StringComparer.Ordinal).Count());
             Assert.All(heldPermits, permit => Assert.Contains(permit, configuredPermits));
+
+            const int simulatedGateDurationMs = 1000;
+            var beforeMakespansMs = Enumerable.Range(0, 2)
+                .Select(_ => SimulateFixedGateMakespanMs(
+                    heldPermits,
+                    parallelCapacity: 1,
+                    simulatedGateDurationMs))
+                .ToArray();
+            var afterMakespansMs = Enumerable.Range(0, 2)
+                .Select(_ => SimulateFixedGateMakespanMs(
+                    heldPermits,
+                    parallelCapacity: ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
+                    simulatedGateDurationMs))
+                .ToArray();
+
+            Assert.All(beforeMakespansMs, makespan => Assert.Equal(2000, makespan));
+            Assert.All(afterMakespansMs, makespan => Assert.Equal(1000, makespan));
+            Console.WriteLine(
+                $"SIMULATED_ACCEPTANCE_MAKESPAN D={simulatedGateDurationMs}ms samples=2 " +
+                $"beforeMedianMs={beforeMakespansMs[0]} beforeRangeMs={beforeMakespansMs.Min()}-{beforeMakespansMs.Max()} " +
+                $"afterMedianMs={afterMakespansMs[0]} afterRangeMs={afterMakespansMs.Min()}-{afterMakespansMs.Max()} " +
+                $"permits={string.Join(',', heldPermits)}");
 
             BatchTickSummary? saturatedTick = null;
             var saturatedSummary = new ConductorBatchLoop().Run(
@@ -3094,6 +3117,25 @@ public sealed class ConductorBatchLoopTests
             receipt.Split(' ', StringSplitOptions.RemoveEmptyEntries),
             token => token.StartsWith("permit=", StringComparison.Ordinal));
         return permitToken["permit=".Length..];
+    }
+
+    private static int SimulateFixedGateMakespanMs(
+        IReadOnlyList<string> permitIds,
+        int parallelCapacity,
+        int gateDurationMs)
+    {
+        Assert.NotEmpty(permitIds);
+        Assert.InRange(parallelCapacity, 1, permitIds.Count);
+        Assert.True(gateDurationMs > 0);
+
+        var laneAvailableAtMs = new int[parallelCapacity];
+        foreach (var _ in permitIds)
+        {
+            var nextLane = Array.IndexOf(laneAvailableAtMs, laneAvailableAtMs.Min());
+            laneAvailableAtMs[nextLane] += gateDurationMs;
+        }
+
+        return laneAvailableAtMs.Max();
     }
 
     private static int BuildPermitIndex(Goal goal) =>
