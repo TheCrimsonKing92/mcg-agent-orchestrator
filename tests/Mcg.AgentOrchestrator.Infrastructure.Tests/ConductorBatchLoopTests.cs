@@ -641,6 +641,164 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_live_oldest_attempt_does_not_block_second_slot_across_ticks")]
+    public void BatchLoopLiveOldestAttemptDoesNotBlockSecondSlotAcrossTicks()
+    {
+        using var isolatedRoot = IsolatedDotnetRootScope();
+        var kernel = new AgentOrchestratorKernel();
+        var running = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/RunningAcrossTicks.cs");
+        var primer = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/PrimerAcrossTicks.cs");
+        var waiting = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Update src/Mcg.AgentOrchestrator.App/Orchestration/WaitingAcrossTicks.cs");
+        for (var attempt = 1;
+             attempt < 128 &&
+             (BuildPermitIndex(running) == BuildPermitIndex(primer) ||
+              BuildPermitIndex(running) == BuildPermitIndex(waiting));
+             attempt++)
+        {
+            kernel = new AgentOrchestratorKernel();
+            running = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                DefaultAgents(),
+                "Update src/Mcg.AgentOrchestrator.App/Orchestration/RunningAcrossTicks.cs");
+            primer = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                DefaultAgents(),
+                "Update src/Mcg.AgentOrchestrator.App/Orchestration/PrimerAcrossTicks.cs");
+            waiting = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                kernel,
+                DefaultAgents(),
+                "Update src/Mcg.AgentOrchestrator.App/Orchestration/WaitingAcrossTicks.cs");
+        }
+        if (BuildPermitIndex(running) == BuildPermitIndex(primer) ||
+            BuildPermitIndex(running) == BuildPermitIndex(waiting))
+        {
+            throw new InvalidOperationException(
+                $"Could not generate a running goal with a permit distinct from both later goals after 128 attempts; " +
+                $"running={BuildPermitIndex(running)}, primer={BuildPermitIndex(primer)}, waiting={BuildPermitIndex(waiting)}.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        PassVerificationAt(kernel, running, running.Tasks.Single(), now);
+        using var releaseGates = new ManualResetEventSlim(false);
+        using var runningEntered = new ManualResetEventSlim(false);
+        using var primerEntered = new ManualResetEventSlim(false);
+        using var waitingEntered = new ManualResetEventSlim(false);
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var rejectRunningCandidateRebuild = false;
+        Action waitForAttempts = () => { };
+
+        try
+        {
+            var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts);
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (goal, _) =>
+                {
+                    if (goal.Id == running.Id)
+                    {
+                        runningEntered.Set();
+                        Assert.True(releaseGates.Wait(TimeSpan.FromSeconds(5)));
+                    }
+                    else if (goal.Id == primer.Id)
+                    {
+                        primerEntered.Set();
+                    }
+                    else if (goal.Id == waiting.Id)
+                    {
+                        waitingEntered.Set();
+                        Assert.True(releaseGates.Wait(TimeSpan.FromSeconds(5)));
+                    }
+
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                land: goal => new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "ok"),
+                getLandingFileScopes: goal =>
+                {
+                    if (goal.Id == running.Id && rejectRunningCandidateRebuild)
+                    {
+                        throw new IOException("running candidate scope temporarily unavailable");
+                    }
+
+                    return [$"src/Mcg.AgentOrchestrator.App/Orchestration/{goal.Id.Value}.cs"];
+                },
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            Assert.True(runningEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            rejectRunningCandidateRebuild = true;
+            PassVerificationAt(kernel, primer, primer.Tasks.Single(), now.AddMinutes(1));
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            Assert.True(primerEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            PassVerificationAt(kernel, waiting, waiting.Tasks.Single(), now.AddMinutes(2));
+            BatchTickSummary? admissionTick = null;
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1,
+                onTick: current => admissionTick = current);
+
+            Assert.Contains(admissionTick!.ProgressLines!, line =>
+                line.Contains($"ACCEPTANCE goal={waiting.Id.Value[..8]}", StringComparison.Ordinal) &&
+                line.Contains("result=started", StringComparison.Ordinal));
+            Assert.DoesNotContain(admissionTick.ProgressLines!, line =>
+                line.Contains($"goal={waiting.Id.Value[..8]}", StringComparison.Ordinal) &&
+                line.Contains("reason=parallel-acceptance-fairness", StringComparison.Ordinal));
+            Assert.True(waitingEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            var runningAttempt = ReadLatestAttempt(attemptRoot, running);
+            var waitingAttempt = ReadLatestAttempt(attemptRoot, waiting);
+            var heldPermits = new[]
+            {
+                ReadAcquirePermit(runningAttempt),
+                ReadAcquirePermit(waitingAttempt)
+            };
+            var configuredPermits = Enumerable
+                .Range(0, DotnetBuildEnvironmentManager.BuildConcurrencySlotCount)
+                .Select(index => $"build-{index}")
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.True(coordinator.HasLiveAttempt(running.Id.Value));
+            Assert.True(coordinator.HasLiveAttempt(waiting.Id.Value));
+            Assert.Equal(2, heldPermits.Distinct(StringComparer.Ordinal).Count());
+            Assert.All(heldPermits, permit => Assert.Contains(permit, configuredPermits));
+        }
+        finally
+        {
+            releaseGates.Set();
+            waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_candidate_manifest_slot_count_limits_own_parallel_acceptance")]
     public void BatchLoopCandidateManifestSlotCountLimitsOwnParallelAcceptance()
     {
