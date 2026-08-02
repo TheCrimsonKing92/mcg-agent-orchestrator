@@ -683,6 +683,7 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
+            RestoreTasksAfterResolvedHumanInput(goal);
             RefreshGoalStatus(goal, allowParkedRefresh: true);
             if (goal.Status != GoalStatus.Parked)
             {
@@ -1085,6 +1086,7 @@ public sealed partial class AgentOrchestratorKernel
 
     private int CompleteOpenHumanInputRequestsForGoal(GoalId goalId, string resolution)
     {
+        var goal = GetGoal(goalId);
         var completed = 0;
         foreach (var request in _humanInputRequests.Values
             .Where(request => request.GoalId == goalId && !request.IsCompleted)
@@ -1093,10 +1095,24 @@ public sealed partial class AgentOrchestratorKernel
         {
             request.Complete(resolution, _clock.UtcNow);
             completed++;
-            Append(GetGoal(goalId), request.TaskId, ProgressKind.HumanInputReceived, resolution);
+            Append(goal, request.TaskId, ProgressKind.HumanInputReceived, resolution);
         }
 
+        RestoreTasksAfterResolvedHumanInput(goal);
         return completed;
+    }
+
+    private void RestoreTasksAfterResolvedHumanInput(Goal goal)
+    {
+        foreach (var task in goal.Tasks.Where(task =>
+                     task.Status == WorkTaskStatus.WaitingForHuman &&
+                     !_humanInputRequests.Values.Any(request =>
+                         request.GoalId == goal.Id &&
+                         request.TaskId == task.Id &&
+                         !request.IsCompleted)))
+        {
+            RestoreTaskAfterHumanInput(goal, task);
+        }
     }
 
     private static bool HasHumanInputResolvedAfterLatestParkDecision(Goal goal)

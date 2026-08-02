@@ -1339,6 +1339,31 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     }
 
     [Xunit.Fact]
+    public async Task TickMerge_ParkedHumanWait_PersistsWithoutOrphanState()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Persist a parked operator wait",
+            [new TaskSpec(TaskId.New(), "Await an operator decision", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+        kernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Proceed?");
+        kernel.ParkGoal(goal.Id, "deferred by operator");
+        var parkedState = kernel.ExportSnapshot();
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, parkedState.Goals.Single(), parkedState.HumanInputRequests)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Saved, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        Assert.Equal(GoalStatus.Parked, restored.GetGoal(goal.Id).Status);
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, goal.Tasks.Single().Id).Status);
+        Assert.Empty(restored.GetPendingHumanInput(goal.Id));
+    }
+
+    [Xunit.Fact]
     public async Task GoalCheckpoint_HumanWait_RemainsAnswerable()
     {
         var repo = new SqliteOrchestratorStateRepository(TempDb());

@@ -955,6 +955,50 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
         Assert.Empty(restored.GetPendingHumanInput(goal.Id));
         Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, task.Id).Status);
     }
+
+    [Xunit.Fact]
+    public void RefreshParkedGoal_LegacyResolvedWait_RestoresTaskBeforePromotion()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Repair a parked resolved wait",
+            [new TaskSpec(TaskId.New(), "Await an operator decision", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        var request = kernel.RequestHumanInput(goal.Id, task.Id, "Proceed?");
+        kernel.SubmitHumanInput(request.Id, "Proceed with the existing scope.");
+        var snapshot = kernel.ExportSnapshot();
+        var answered = snapshot.Goals.Single();
+        var resolvedAt = answered.Timeline.Last(evt => evt.Kind == ProgressKind.HumanInputReceived).OccurredAt;
+        var legacyParked = answered with
+        {
+            Status = GoalStatus.Parked,
+            Tasks = answered.Tasks
+                .Select(candidate => candidate.Id == task.Id.Value
+                    ? candidate with { Status = WorkTaskStatus.WaitingForHuman }
+                    : candidate)
+                .ToArray(),
+            Timeline = answered.Timeline
+                .Append(new ProgressEventSnapshot(
+                    goal.Id.Value,
+                    null,
+                    ProgressKind.GoalPolicyDecision,
+                    "Goal parked: waiting for a decision",
+                    resolvedAt.AddTicks(-1)))
+                .ToArray()
+        };
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            snapshot with { Goals = [legacyParked] },
+            clock);
+
+        var promoted = restored.RefreshParkedGoalsWithResolvedHumanWaits();
+
+        Assert.Equal(1, promoted);
+        Assert.Equal(GoalStatus.Active, restored.GetGoal(goal.Id).Status);
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, task.Id).Status);
+    }
+
     [Xunit.Fact(DisplayName = "Submitting_human_input_resumes_waiting_task")]
     public void SubmittingHumanInputResumesWaitingTask()
 {
