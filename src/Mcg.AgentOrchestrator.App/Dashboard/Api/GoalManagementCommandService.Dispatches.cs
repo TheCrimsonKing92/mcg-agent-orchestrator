@@ -311,7 +311,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         agents,
         profiles,
         providers,
-        containsInterruptedDispatchRecovery ? checkpointBeforeWorkerStart : null,
+        checkpointBeforeWorkerStart,
         readCurrentInterruptedDispatchState);
     return new SubscriptionStartResult(
         batch.Dispatches,
