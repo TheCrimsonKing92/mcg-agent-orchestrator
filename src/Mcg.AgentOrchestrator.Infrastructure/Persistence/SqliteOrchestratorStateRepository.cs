@@ -550,6 +550,13 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         if (goals.Count == 0)
             return;
 
+        var waitingGoal = goals.FirstOrDefault(HasHumanWaitState);
+        if (waitingGoal is not null)
+        {
+            throw new InvalidOperationException(
+                $"Goal '{ShortGoalId(waitingGoal.Id)}' contains WaitingForHuman state; persist it with its human-input requests.");
+        }
+
         var write = await BeginWriteAsync(
             ResolveOperationTag($"{nameof(SaveGoalSnapshotsAsync)}({goals.Count})", operationName),
             cancellationToken);
@@ -609,13 +616,14 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 continue;
             }
 
-            var result = await TransactGoalAsync(
+            var result = await TransactGoalStateAsync(
                 new GoalId(request.Current.Id),
-                (storedSnapshot, _) =>
+                (storedState, _) =>
                 {
+                    var storedSnapshot = storedState?.Goal;
                     if (storedSnapshot is null)
                     {
-                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, GoalSnapshotSaveResult Result)>(
+                        return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
                             (false, null, new GoalSnapshotSaveResult(
                                 request.Current.Id,
                                 GoalSnapshotSaveDisposition.Skipped,
@@ -625,17 +633,20 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 
                     if (SnapshotEquals(storedSnapshot, request.Baseline))
                     {
-                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, GoalSnapshotSaveResult Result)>(
-                            (true, request.Current, new GoalSnapshotSaveResult(
+                        var state = BuildConsistentGoalState(
+                            request.Current,
+                            MergeHumanInputRequests(storedState!.HumanInputRequests, request.HumanInputRequests));
+                        return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
+                            (true, state, new GoalSnapshotSaveResult(
                                 request.Current.Id,
                                 GoalSnapshotSaveDisposition.Saved,
-                                request.Current,
+                                state.Goal,
                                 "stored version matched tick baseline")));
                     }
 
                     if (!TryMergeGoalSnapshots(request.Baseline, storedSnapshot, request.Current, out var merged, out var reason))
                     {
-                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, GoalSnapshotSaveResult Result)>(
+                        return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
                             (false, null, new GoalSnapshotSaveResult(
                                 request.Current.Id,
                                 GoalSnapshotSaveDisposition.Skipped,
@@ -645,11 +656,14 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 
                     var normalized = NormalizeStoredVerificationStatus(merged, out var normalizedReason);
                     var resultReason = normalizedReason is null ? reason : $"{reason}; {normalizedReason}";
-                    return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, GoalSnapshotSaveResult Result)>(
-                        (true, normalized, new GoalSnapshotSaveResult(
+                    var mergedState = BuildConsistentGoalState(
+                        normalized,
+                        MergeHumanInputRequests(storedState!.HumanInputRequests, request.HumanInputRequests));
+                    return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, GoalSnapshotSaveResult Result)>(
+                        (true, mergedState, new GoalSnapshotSaveResult(
                             request.Current.Id,
                             GoalSnapshotSaveDisposition.Merged,
-                            normalized,
+                            mergedState.Goal,
                             resultReason)));
                 },
                 cancellationToken);
@@ -657,6 +671,37 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         }
 
         return results;
+    }
+
+    private static bool HasHumanWaitState(GoalSnapshot goal) =>
+        goal.Status == GoalStatus.WaitingForHuman ||
+        goal.Tasks.Any(task => task.Status == WorkTaskStatus.WaitingForHuman);
+
+    private static IReadOnlyList<HumanInputRequestSnapshot> MergeHumanInputRequests(
+        IReadOnlyList<HumanInputRequestSnapshot> stored,
+        IReadOnlyList<HumanInputRequestSnapshot>? current)
+    {
+        var merged = stored.ToDictionary(request => request.Id, StringComparer.Ordinal);
+        foreach (var request in current ?? [])
+        {
+            if (!merged.TryGetValue(request.Id, out var existing) ||
+                request.IsCompleted && !existing.IsCompleted)
+            {
+                merged[request.Id] = request;
+            }
+        }
+
+        return merged.Values.ToArray();
+    }
+
+    private static GoalStateSnapshot BuildConsistentGoalState(
+        GoalSnapshot goal,
+        IReadOnlyList<HumanInputRequestSnapshot> humanInputRequests)
+    {
+        var repaired = AgentOrchestratorKernel.FromSnapshot(
+            new OrchestratorSnapshot([goal], humanInputRequests));
+        var snapshot = repaired.ExportSnapshot();
+        return new GoalStateSnapshot(snapshot.Goals.Single(), snapshot.HumanInputRequests);
     }
 
     public async Task<T> TransactAsync<T>(

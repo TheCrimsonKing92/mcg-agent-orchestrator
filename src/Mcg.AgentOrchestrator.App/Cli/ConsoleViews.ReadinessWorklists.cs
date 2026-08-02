@@ -170,11 +170,11 @@ public static void PrintHumanInputWorklist(Goal goal, GoalHumanInputWorklist wor
             var scope = item.TaskId is null
                 ? "goal"
                 : $"task {GetTaskDisplayNumber(goal, item.TaskId)} [{item.TaskStatus}] {item.Role}: {OutputTextPreview.CreateSummary(item.Description ?? string.Empty).Text}";
-            Console.WriteLine($"  {item.RequestId.Value[..8]} {item.Kind} age={item.AgeSeconds}s {scope}");
+            Console.WriteLine($"  {item.RequestId.Value} {item.Kind} age={item.AgeSeconds}s {scope}");
             Console.WriteLine($"     flags: auto-defaultable={item.IsAutoDefaultable}; dismissible={item.IsDismissible}; answer-required={item.IsAnswerRequired}; externally-blocked={item.IsExternallyBlocked}");
             Console.WriteLine($"     question: {OutputTextPreview.CreateSummary(item.Question).Text}");
             Console.WriteLine($"     action: {OutputTextPreview.CreateTimeline(item.SuggestedAction).Text}");
-            Console.WriteLine($"     command: {item.ResumeCommand}");
+            Console.WriteLine($"     command: answer {item.RequestId.Value} <answer>");
         }
     }
 

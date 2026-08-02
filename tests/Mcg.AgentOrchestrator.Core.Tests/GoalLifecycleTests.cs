@@ -889,6 +889,30 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
     Assert.Equal(request.Id, kernel.GetPendingHumanInput(goal.Id).Single().Id);
     Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.HumanInputRequested && evt.TaskId == task.Id);
 }
+
+    [Xunit.Fact]
+    public void FromSnapshot_MissingHumanRequest_ReconstructsOpenRequest()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Repair a missing request",
+            [new TaskSpec(TaskId.New(), "Ask before expanding scope", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        kernel.RequestHumanInput(goal.Id, task.Id, "Should scope expand?");
+        var corrupt = kernel.ExportSnapshot() with { HumanInputRequests = [] };
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(corrupt, clock);
+
+        var request = Assert.Single(restored.GetPendingHumanInput(goal.Id));
+        Assert.Equal(task.Id, request.TaskId);
+        Assert.Equal("Should scope expand?", request.Question);
+        var reloaded = AgentOrchestratorKernel.FromSnapshot(corrupt, clock);
+        Assert.Equal(request.Id, Assert.Single(reloaded.GetPendingHumanInput(goal.Id)).Id);
+        reloaded.SubmitHumanInput(request.Id, "Keep the existing scope.");
+        Assert.Equal(WorkTaskStatus.Assigned, reloaded.GetTask(goal.Id, task.Id).Status);
+    }
     [Xunit.Fact(DisplayName = "Submitting_human_input_resumes_waiting_task")]
     public void SubmittingHumanInputResumesWaitingTask()
 {

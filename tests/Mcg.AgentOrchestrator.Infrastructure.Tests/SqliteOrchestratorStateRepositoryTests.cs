@@ -1309,6 +1309,35 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
     }
 
+    [Xunit.Fact]
+    public async Task TickMerge_HumanWait_PersistsAnswerableRequest()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Persist a conductor question",
+            [new TaskSpec(TaskId.New(), "Ask before expanding scope", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        var request = tickKernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Should scope expand?");
+        var tickState = tickKernel.ExportSnapshot();
+        var tickSnapshot = tickState.Goals.Single();
+
+        await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, tickSnapshot, tickState.HumanInputRequests)]);
+
+        var restored = await repo.LoadAsync();
+        var persisted = Assert.Single(restored.GetPendingHumanInput(goal.Id));
+        Assert.Equal(request.Id, persisted.Id);
+        Assert.Equal(request.Question, persisted.Question);
+        restored.SubmitHumanInput(persisted.Id, "Keep the existing scope.");
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, goal.Tasks.Single().Id).Status);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_never_replaces_newer_dispatch_attempt_with_stale_completion")]
     public async Task TickMergeNeverReplacesNewerDispatchAttemptWithStaleCompletion()
     {

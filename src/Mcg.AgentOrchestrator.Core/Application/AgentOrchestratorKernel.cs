@@ -77,6 +77,7 @@ public sealed partial class AgentOrchestratorKernel
             kernel._humanInputRequests.Add(request.Id, request);
         }
 
+        kernel.RepairMissingHumanInputRequests();
         kernel.SweepParkedGoalHumanWaits();
         return kernel;
     }
@@ -99,6 +100,7 @@ public sealed partial class AgentOrchestratorKernel
             _humanInputRequests.Add(request.Id, request);
         }
 
+        RepairMissingHumanInputRequests();
         SweepParkedGoalHumanWaits();
     }
 
@@ -138,6 +140,7 @@ public sealed partial class AgentOrchestratorKernel
             _humanInputRequests.TryAdd(request.Id, request);
         }
 
+        RepairMissingHumanInputRequests();
         SweepParkedGoalHumanWaits();
         return ingested;
     }
@@ -211,8 +214,65 @@ public sealed partial class AgentOrchestratorKernel
             }
         }
 
+        RepairMissingHumanInputRequests();
         SweepParkedGoalHumanWaits();
         return refreshed;
+    }
+
+    private void RepairMissingHumanInputRequests()
+    {
+        foreach (var goal in _goals.Values.Where(goal =>
+                     goal.Status != GoalStatus.Parked &&
+                     !IsTerminalGoalStatus(goal.Status)))
+        {
+            var clearedWait = false;
+            foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.WaitingForHuman))
+            {
+                if (_humanInputRequests.Values.Any(request =>
+                        request.GoalId == goal.Id &&
+                        request.TaskId == task.Id &&
+                        !request.IsCompleted))
+                {
+                    continue;
+                }
+
+                var requested = goal.Timeline
+                    .Where(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.HumanInputRequested)
+                    .OrderByDescending(evt => evt.OccurredAt)
+                    .FirstOrDefault();
+                if (requested is null)
+                {
+                    RestoreTaskAfterHumanInput(goal, task);
+                    clearedWait = true;
+                    continue;
+                }
+
+                var requestId = BuildRepairedHumanInputRequestId(goal.Id, task.Id, requested);
+                _humanInputRequests.TryAdd(
+                    requestId,
+                    new HumanInputRequest(
+                        requestId,
+                        goal.Id,
+                        task.Id,
+                        requested.Message,
+                        requested.OccurredAt));
+            }
+
+            if (clearedWait)
+            {
+                RefreshGoalStatus(goal);
+            }
+        }
+    }
+
+    private static HumanInputRequestId BuildRepairedHumanInputRequestId(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressEvent requested)
+    {
+        var seed = $"{goalId.Value}\n{taskId.Value}\n{requested.OccurredAt:O}\n{requested.Message}";
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(seed));
+        return new HumanInputRequestId(Convert.ToHexString(hash).ToLowerInvariant()[..32]);
     }
 
     private bool TrackTerminalGoalMetadata(TerminalGoalMetadata metadata)

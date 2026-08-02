@@ -819,7 +819,12 @@ internal static class CliPersistentStateRunner
             if (changedGoalIds.Count == 0) return;
 
             var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
-            var requests = checkpoint.ExportSnapshot().Goals
+            var checkpointSnapshot = checkpoint.ExportSnapshot();
+            var humanInputByGoal = checkpointSnapshot.HumanInputRequests
+                .Where(request => changed.Contains(request.GoalId))
+                .GroupBy(request => request.GoalId, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => (IReadOnlyList<HumanInputRequestSnapshot>)group.ToArray(), StringComparer.Ordinal);
+            var requests = checkpointSnapshot.Goals
                 .Where(goal => changed.Contains(goal.Id))
                 .Select(goal =>
                 {
@@ -828,7 +833,10 @@ internal static class CliPersistentStateRunner
                         : stateRepository.LoadGoalAsync(new GoalId(goal.Id), CancellationToken.None)
                             .GetAwaiter()
                             .GetResult() ?? goal;
-                    return new GoalSnapshotSaveRequest(baseline, goal);
+                    return new GoalSnapshotSaveRequest(
+                        baseline,
+                        goal,
+                        humanInputByGoal.GetValueOrDefault(goal.Id, []));
                 })
                 .ToArray();
 
@@ -1089,13 +1097,9 @@ internal static class CliPersistentStateRunner
             return;
         }
 
-        var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
-        var snapshots = sweepKernel.ExportSnapshot().Goals
-            .Where(goal => changed.Contains(goal.Id))
-            .ToArray();
-        if (snapshots.Length > 0)
+        foreach (var goalId in changedGoalIds)
         {
-            stateRepository.SaveGoalSnapshotsAsync(snapshots, CancellationToken.None).GetAwaiter().GetResult();
+            PersistSingleGoalSnapshot(stateRepository, sweepKernel, goalId);
         }
     }
 
@@ -1700,9 +1704,7 @@ internal static class CliPersistentStateRunner
 
         void PersistCurrentGoal(AgentOrchestratorKernel checkpoint, GoalId goalId)
         {
-            var snapshot = checkpoint.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
-                ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists; retry acceptance.");
-            stateRepository.SaveGoalSnapshotsAsync([snapshot], CancellationToken.None).GetAwaiter().GetResult();
+            PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
         }
 
         AcceptanceMergeCommitResult Finalize(AcceptanceMergeCommitRequest request)
@@ -2310,8 +2312,42 @@ internal static class CliPersistentStateRunner
         GoalId goalId,
         CancellationToken cancellationToken = default)
     {
-        var snapshot = ExportGoalSnapshot(kernel, goalId);
-        stateRepository.SaveGoalSnapshotsAsync([snapshot], cancellationToken).GetAwaiter().GetResult();
+        var state = ExportGoalStateSnapshot(kernel, goalId);
+        stateRepository.TransactGoalStateAsync(
+                goalId,
+                (stored, _) =>
+                {
+                    if (stored is null)
+                    {
+                        throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
+                    }
+
+                    return Task.FromResult((
+                        true,
+                        (GoalStateSnapshot?)MergeHumanInputCheckpoint(stored, state),
+                        true));
+                },
+                cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static GoalStateSnapshot MergeHumanInputCheckpoint(
+        GoalStateSnapshot stored,
+        GoalStateSnapshot current)
+    {
+        var requests = stored.HumanInputRequests
+            .ToDictionary(request => request.Id, StringComparer.Ordinal);
+        foreach (var request in current.HumanInputRequests)
+        {
+            if (!requests.TryGetValue(request.Id, out var existing) ||
+                request.IsCompleted && !existing.IsCompleted)
+            {
+                requests[request.Id] = request;
+            }
+        }
+
+        return new GoalStateSnapshot(current.Goal, requests.Values.ToArray());
     }
 
     private static GoalId? ResolveConductWatchGoalId(

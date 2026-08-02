@@ -165,7 +165,10 @@ public interface IOrchestratorStateOutboxRepository : ITransactionalOrchestrator
         CancellationToken cancellationToken = default);
 }
 
-public sealed record GoalSnapshotSaveRequest(GoalSnapshot Baseline, GoalSnapshot Current);
+public sealed record GoalSnapshotSaveRequest(
+    GoalSnapshot Baseline,
+    GoalSnapshot Current,
+    IReadOnlyList<HumanInputRequestSnapshot>? HumanInputRequests = null);
 
 public sealed record GoalSnapshotSaveResult(
     string GoalId,
