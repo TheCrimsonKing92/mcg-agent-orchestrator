@@ -2794,22 +2794,12 @@ internal sealed class ConductorDriver
         earlyOutcome = null;
         var rebase = _rebaseOntoMain(goal);
 
-        // A rebase failure that is NOT a conflict and NOT a missing branch has been transient every time it
-        // has been observed - nine occurrences on 2026-08-01, every one replaying all commits cleanly on the
-        // first manual retry, because main advances between the target being resolved and the rebase running.
-        // Each occurrence cost an operator a manual rebase plus a three-verb reopen, and it fires when a goal
-        // reaches Verified, so it taxed every SUCCESS rather than every failure. Retry once before escalating.
-        //
-        // A genuine conflict is deliberately NOT retried: it reports Conflict along with the conflicting
-        // paths, and retrying it would just burn a second rebase to reach the same verdict. That distinction
-        // is observable - real conflicts named their file, all nine spurious ones reported only progress.
-        if (!rebase.UpdatedBranch &&
-            rebase.Status != GoalWorktreeRebaseStatus.Conflict &&
-            rebase.Status != GoalWorktreeRebaseStatus.MissingBranch)
-        {
-            rebase = _rebaseOntoMain(goal);
-        }
-
+        // No retry here, deliberately. An earlier version of this method retried a non-conflict failure once,
+        // on the theory that those failures were transient races against main advancing. That theory was
+        // WRONG: the nine occurrences that motivated it were a deterministic git exit 128, because the
+        // pre-landing rebase runs inside the hermetic acceptance child, which had no git identity and so
+        // could not create the commits a rebase replays. Retrying a deterministic failure cannot help, and it
+        // doubled the cost of every genuine one. The identity fix belongs in the environment, not here.
         if (rebase.UpdatedBranch)
         {
             return null;

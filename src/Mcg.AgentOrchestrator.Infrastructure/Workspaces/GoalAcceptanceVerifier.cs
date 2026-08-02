@@ -5827,6 +5827,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     // 2. Handoff coordination vars made CLI grandchildren skip startup cleanup, masking a real backlog-list
     //    regression. Acceptance-scope overrides then demonstrated why extending that deny-list is insufficient:
     //    either override could bypass the build-system-file rule and false-green its regression test.
+    // Identity for commits a verification child creates (the pre-landing rebase replays commits). Fixed and
+    // attributable on purpose: a gate must not author commits as the operator, and it must not depend on the
+    // operator having configured git at all.
+    private const string HermeticGitIdentityName = "MCG Acceptance Gate";
+    private const string HermeticGitIdentityEmail = "acceptance-gate@localhost";
+
     internal static void ConfigureHermeticVerificationEnvironment(
         IDictionary<string, string?> environment,
         string repositoryRoot)
@@ -5865,16 +5871,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // git printed its progress, hit the first commit, and died. A manual rebase always worked because an
         // operator shell still has the real HOME.
         //
-        // Point GIT_CONFIG_GLOBAL at the operator's real global config rather than relaxing HOME. Identity is
-        // the thing the child genuinely needs; HOME stays redirected so credential helpers and caches keep
-        // resolving into the throwaway profile.
-        var realGlobalGitConfig = string.IsNullOrWhiteSpace(userProfile)
-            ? null
-            : Path.Combine(userProfile, ".gitconfig");
-        if (realGlobalGitConfig is not null && File.Exists(realGlobalGitConfig))
-        {
-            environment["GIT_CONFIG_GLOBAL"] = realGlobalGitConfig;
-        }
+        // Supply a DETERMINISTIC identity rather than borrowing the operator's global config. Pointing
+        // GIT_CONFIG_GLOBAL at the real ~/.gitconfig would restore identity but reintroduce exactly the
+        // ambient-input class this function exists to forbid - any [core], [merge], [rebase] or [alias] the
+        // operator later adds would silently steer gate behaviour - and it would still miss a host that keeps
+        // identity under $XDG_CONFIG_HOME. These four variables outrank every config file, so identity is
+        // guaranteed regardless of where the operator's happens to live. Same shape as the canary's inline
+        // -c user.name/-c user.email.
+        environment["GIT_AUTHOR_NAME"] = HermeticGitIdentityName;
+        environment["GIT_AUTHOR_EMAIL"] = HermeticGitIdentityEmail;
+        environment["GIT_COMMITTER_NAME"] = HermeticGitIdentityName;
+        environment["GIT_COMMITTER_EMAIL"] = HermeticGitIdentityEmail;
         environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
         environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         environment["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";

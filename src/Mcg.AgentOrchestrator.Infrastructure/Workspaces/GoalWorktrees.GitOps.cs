@@ -264,8 +264,14 @@ public static partial class GoalWorktrees
         // on 2026-08-01 and told the operator nothing: no exit code, no error text, and an EMPTY conflict list
         // (so it had not conflicted - it was unable to complete). Diagnosing it took correlating tick logs by
         // hand. Whatever the cause, the record has to carry enough to tell "conflicted" from "could not run".
-        var stdErr = rebase.Error.Trim();
-        var stdOut = rebase.Output.Trim();
+        // Collapse CR/LF before splicing into a single-line record. git separates "Rebasing (n/m)" from what
+        // follows with a BARE CARRIAGE RETURN, so the fatal text landed after a \r and every downstream
+        // single-line renderer swallowed it - the operator saw "...failed: Rebasing (1/3)" and not
+        // "Committer identity unknown ... fatal: unable to auto-detect email address". The full text was in
+        // the record all along; only the rendering lost it, which is the worst way to lose evidence because
+        // the record looks complete.
+        var stdErr = CollapseControlWhitespace(rebase.Error);
+        var stdOut = CollapseControlWhitespace(rebase.Output);
         var streams = string.Join(
             "; ",
             new[]
@@ -283,6 +289,13 @@ public static partial class GoalWorktrees
             [],
             $"goal-recovery {Prefix(goalId)}");
     }
+
+    private static string CollapseControlWhitespace(string value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : string.Join(
+                " | ",
+                value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
     private static bool BranchExists(string executionDirectory, string branch)
     {

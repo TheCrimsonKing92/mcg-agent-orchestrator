@@ -810,17 +810,21 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         // identity. Read-only git does not care, which is why it hid - but the pre-landing rebase replays
         // commits and git exits 128 the moment it needs one, failing every landing attempt with
         // "exit=128; stderr=Rebasing (1/3)".
-        var realGlobalGitConfig = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".gitconfig");
-        if (File.Exists(realGlobalGitConfig))
+        foreach (var identityVariable in new[]
+                 {
+                     "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+                 })
         {
-            var gitConfigGlobal = Assert.Contains("GIT_CONFIG_GLOBAL", environment);
-            Assert.Equal(realGlobalGitConfig, gitConfigGlobal);
+            var value = Assert.Contains(identityVariable, environment);
             Assert.False(
-                gitConfigGlobal!.StartsWith(profileRoot, StringComparison.OrdinalIgnoreCase),
-                "GIT_CONFIG_GLOBAL must point at the real global config, not into the empty hermetic profile");
+                string.IsNullOrWhiteSpace(value),
+                $"{identityVariable} must be set so a verification child can create commits");
         }
+
+        // The identity must be DETERMINISTIC, not borrowed from the operator. Pointing GIT_CONFIG_GLOBAL at
+        // the real ~/.gitconfig would also restore identity, but it would drag in every other global git
+        // setting - the ambient-input class this whole function exists to forbid.
+        Assert.DoesNotContain("GIT_CONFIG_GLOBAL", environment.Keys);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_bounds_generated_artifact_file_names")]
