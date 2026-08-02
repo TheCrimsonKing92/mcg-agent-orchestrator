@@ -16,6 +16,13 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTests
 {
+    private readonly ITestOutputHelper _output;
+
+    public ConductorBatchLoopTests(ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static IReadOnlyList<AgentDefinition> DefaultAgents() => AgentCatalog.Default().Agents;
@@ -1157,28 +1164,6 @@ public sealed class ConductorBatchLoopTests
             Assert.All(inFlightAttempts, attempt => Assert.True(coordinator.HasLiveAttempt(attempt.GoalId)));
             Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity, heldPermits.Distinct(StringComparer.Ordinal).Count());
             Assert.All(heldPermits, permit => Assert.Contains(permit, configuredPermits));
-
-            const int simulatedGateDurationMs = 1000;
-            var beforeMakespansMs = Enumerable.Range(0, 2)
-                .Select(_ => SimulateFixedGateMakespanMs(
-                    heldPermits,
-                    parallelCapacity: 1,
-                    simulatedGateDurationMs))
-                .ToArray();
-            var afterMakespansMs = Enumerable.Range(0, 2)
-                .Select(_ => SimulateFixedGateMakespanMs(
-                    heldPermits,
-                    parallelCapacity: ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
-                    simulatedGateDurationMs))
-                .ToArray();
-
-            Assert.All(beforeMakespansMs, makespan => Assert.Equal(2000, makespan));
-            Assert.All(afterMakespansMs, makespan => Assert.Equal(1000, makespan));
-            Console.WriteLine(
-                $"SIMULATED_ACCEPTANCE_MAKESPAN D={simulatedGateDurationMs}ms samples=2 " +
-                $"beforeMedianMs={beforeMakespansMs[0]} beforeRangeMs={beforeMakespansMs.Min()}-{beforeMakespansMs.Max()} " +
-                $"afterMedianMs={afterMakespansMs[0]} afterRangeMs={afterMakespansMs.Min()}-{afterMakespansMs.Max()} " +
-                $"permits={string.Join(',', heldPermits)}");
 
             BatchTickSummary? saturatedTick = null;
             var saturatedSummary = new ConductorBatchLoop().Run(
@@ -2345,6 +2330,42 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_capacity_reduces_measured_makespan")]
+    public void BatchLoopParallelAcceptanceCapacityReducesMeasuredMakespan()
+    {
+        const int fixedGateDurationMs = 500;
+        const double tolerance = 0.35;
+        var serialized = Enumerable.Range(0, 2)
+            .Select(_ => MeasureFixedGateMakespan(parallelCapacity: 1, fixedGateDurationMs))
+            .OrderBy(sample => sample.MakespanMs)
+            .ToArray();
+        var parallel = Enumerable.Range(0, 2)
+            .Select(_ => MeasureFixedGateMakespan(
+                parallelCapacity: ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
+                fixedGateDurationMs))
+            .OrderBy(sample => sample.MakespanMs)
+            .ToArray();
+
+        Assert.All(serialized, sample => Assert.InRange(
+            sample.MakespanMs,
+            2 * fixedGateDurationMs * (1 - tolerance),
+            2 * fixedGateDurationMs * (1 + tolerance)));
+        Assert.All(parallel, sample => Assert.InRange(
+            sample.MakespanMs,
+            fixedGateDurationMs * (1 - tolerance),
+            fixedGateDurationMs * (1 + tolerance)));
+        Assert.True(
+            serialized.Min(sample => sample.MakespanMs) > parallel.Max(sample => sample.MakespanMs),
+            $"Expected non-overlapping makespan ranges, serialized={FormatRange(serialized)} parallel={FormatRange(parallel)}.");
+
+        _output.WriteLine(
+            $"MEASURED_ACCEPTANCE_MAKESPAN fixedGateDurationMs={fixedGateDurationMs} samples=2 tolerance=35% " +
+            $"beforeMedianMs={Median(serialized):F1} beforeRangeMs={FormatRange(serialized)} " +
+            $"afterMedianMs={Median(parallel):F1} afterRangeMs={FormatRange(parallel)} " +
+            $"beforeGateDurationsMs={FormatGateDurations(serialized)} afterGateDurationsMs={FormatGateDurations(parallel)} " +
+            $"beforePermits={FormatPermits(serialized)} afterPermits={FormatPermits(parallel)}");
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_bounded_overtake_defers_newer_after_cap")]
     public void BatchLoopParallelAcceptanceBoundedOvertakeDefersNewerAfterCap()
     {
@@ -3119,24 +3140,137 @@ public sealed class ConductorBatchLoopTests
         return permitToken["permit=".Length..];
     }
 
-    private static int SimulateFixedGateMakespanMs(
-        IReadOnlyList<string> permitIds,
+    private static AcceptanceMakespanSample MeasureFixedGateMakespan(
         int parallelCapacity,
-        int gateDurationMs)
+        int fixedGateDurationMs)
     {
-        Assert.NotEmpty(permitIds);
-        Assert.InRange(parallelCapacity, 1, permitIds.Count);
-        Assert.True(gateDurationMs > 0);
-
-        var laneAvailableAtMs = new int[parallelCapacity];
-        foreach (var _ in permitIds)
+        using var isolatedRoot = IsolatedDotnetRootScope();
+        var kernel = new AgentOrchestratorKernel();
+        var goals = Enumerable.Range(0, 2)
+            .Select(index => CreateVerifiedSimpleGoal(
+                kernel,
+                $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Makespan{index}.cs"))
+            .ToArray();
+        for (var attempt = 1;
+             attempt < 128 && goals.Select(BuildPermitIndex).Distinct().Count() < goals.Length;
+             attempt++)
         {
-            var nextLane = Array.IndexOf(laneAvailableAtMs, laneAvailableAtMs.Min());
-            laneAvailableAtMs[nextLane] += gateDurationMs;
+            kernel = new AgentOrchestratorKernel();
+            goals = Enumerable.Range(0, 2)
+                .Select(index => CreateVerifiedSimpleGoal(
+                    kernel,
+                    $"Update src/Mcg.AgentOrchestrator.App/Orchestration/Makespan{index}.cs"))
+                .ToArray();
         }
+        Assert.Equal(goals.Length, goals.Select(BuildPermitIndex).Distinct().Count());
 
-        return laneAvailableAtMs.Max();
+        var timings = new ConcurrentQueue<(long Started, long Completed)>();
+        var landed = new HashSet<string>(StringComparer.Ordinal);
+        var attemptRoot = CreateTempDirectory("mcg-conductor-measured-makespan");
+        Action waitForAttempts = () => { };
+
+        try
+        {
+            var coordinator = ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts);
+            var driver = MakeDriver(
+                getFacts: goal => landed.Contains(goal.Id.Value)
+                    ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+                    : new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    var started = Stopwatch.GetTimestamp();
+                    using var gateDurationElapsed = new ManualResetEventSlim();
+                    using var timer = new Timer(
+                        static state => ((ManualResetEventSlim)state!).Set(),
+                        gateDurationElapsed,
+                        TimeSpan.FromMilliseconds(fixedGateDurationMs),
+                        Timeout.InfiniteTimeSpan);
+                    Assert.True(gateDurationElapsed.Wait(TimeSpan.FromSeconds(5)));
+                    timings.Enqueue((started, Stopwatch.GetTimestamp()));
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                getLandingFileScopes: goal =>
+                {
+                    var index = Array.FindIndex(goals, candidate => candidate.Id == goal.Id);
+                    return [$"src/Mcg.AgentOrchestrator.App/Orchestration/Makespan{index}.cs"];
+                },
+                land: goal =>
+                {
+                    landed.Add(goal.Id.Value);
+                    return new LandingResult(
+                        goal.Id.Value,
+                        goal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        "integration",
+                        true,
+                        "ok");
+                },
+                parallelAcceptanceAttemptCoordinator: coordinator,
+                getAcceptanceSlotCount: _ => parallelCapacity);
+
+            for (var tick = 0; tick < 6 && landed.Count < goals.Length; tick++)
+            {
+                new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1);
+                waitForAttempts();
+            }
+
+            Assert.Equal(goals.Length, landed.Count);
+            var completedTimings = timings.ToArray();
+            Assert.Equal(goals.Length, completedTimings.Length);
+            var firstStarted = completedTimings.Min(timing => timing.Started);
+            var lastCompleted = completedTimings.Max(timing => timing.Completed);
+            var gateDurationsMs = completedTimings
+                .Select(timing => StopwatchTicksToMilliseconds(timing.Completed - timing.Started))
+                .Order()
+                .ToArray();
+            var permits = goals
+                .Select(goal => ReadAcquirePermit(ReadLatestAttempt(attemptRoot, goal)))
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+
+            if (parallelCapacity > 1)
+            {
+                Assert.Equal(goals.Length, permits.Distinct(StringComparer.Ordinal).Count());
+            }
+
+            return new AcceptanceMakespanSample(
+                StopwatchTicksToMilliseconds(lastCompleted - firstStarted),
+                gateDurationsMs,
+                permits);
+        }
+        finally
+        {
+            waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
     }
+
+    private static double StopwatchTicksToMilliseconds(long ticks) =>
+        ticks * 1000d / Stopwatch.Frequency;
+
+    private static double Median(IReadOnlyList<AcceptanceMakespanSample> samples) =>
+        samples.Count % 2 == 0
+            ? (samples[(samples.Count / 2) - 1].MakespanMs + samples[samples.Count / 2].MakespanMs) / 2
+            : samples[samples.Count / 2].MakespanMs;
+
+    private static string FormatRange(IReadOnlyList<AcceptanceMakespanSample> samples) =>
+        $"{samples.Min(sample => sample.MakespanMs):F1}-{samples.Max(sample => sample.MakespanMs):F1}";
+
+    private static string FormatGateDurations(IEnumerable<AcceptanceMakespanSample> samples) =>
+        string.Join('|', samples.Select(sample => string.Join(',', sample.GateDurationsMs.Select(duration => $"{duration:F1}"))));
+
+    private static string FormatPermits(IEnumerable<AcceptanceMakespanSample> samples) =>
+        string.Join('|', samples.Select(sample => string.Join(',', sample.Permits)));
+
+    private sealed record AcceptanceMakespanSample(
+        double MakespanMs,
+        IReadOnlyList<double> GateDurationsMs,
+        IReadOnlyList<string> Permits);
 
     private static int BuildPermitIndex(Goal goal) =>
         goal.Id.Value[..8]
