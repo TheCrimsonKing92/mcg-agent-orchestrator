@@ -51,8 +51,20 @@ public sealed partial class AgentOrchestratorKernel
             .SelectMany(candidate => candidate.VerificationHistory)
             .OrderBy(candidate => candidate.CompletedAt))
         {
-            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _))
+            if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var parseDiagnostic))
             {
+                // RECORD the parse failure instead of discarding it. This used to be `out _` plus a bare
+                // continue, which made a reviewer whose findings could not be parsed indistinguishable from a
+                // reviewer that submitted none - the operator was told "merged finding state was EMPTY" while
+                // twelve valid findings sat in the log. Convergence failures below were already collected;
+                // parse failures were the asymmetric silent case, and that asymmetry cost a full day of
+                // misdirected diagnosis onto reviewers who had done nothing wrong.
+                if (!string.IsNullOrWhiteSpace(parseDiagnostic))
+                {
+                    (skipped ??= []).Add(
+                        $"reviewer findings could not be parsed and were skipped: {parseDiagnostic}");
+                }
+
                 continue;
             }
 
