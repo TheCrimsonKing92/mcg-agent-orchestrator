@@ -5,4 +5,14 @@ public sealed record ProgressEvent(
     TaskId? TaskId,
     ProgressKind Kind,
     string Message,
-    DateTimeOffset OccurredAt);
+    DateTimeOffset OccurredAt,
+    TaskRequeueSkippedPayload? RequeueSkipped = null);
+
+public sealed record TaskRequeueSkippedPayload(
+    string TaskId,
+    string GoalId,
+    string DispatchId,
+    string BlockingEntity,
+    string? TerminalState,
+    string Reason,
+    string? Detail = null);

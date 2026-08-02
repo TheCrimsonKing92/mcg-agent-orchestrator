@@ -85,7 +85,8 @@ public sealed record TaskSnapshot(
     int EmptyOutputRetryCount = 0,
     DateTimeOffset? LatestRetryAt = null,
     RetryRoundKind? PendingRetryRoundKind = null,
-    PreReviewEvidenceReceipt? PreReviewEvidenceReceipt = null);
+    PreReviewEvidenceReceipt? PreReviewEvidenceReceipt = null,
+    string? InterruptedDispatchRecoveryId = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -177,7 +178,8 @@ public sealed record ProgressEventSnapshot(
     string? TaskId,
     ProgressKind Kind,
     string Message,
-    DateTimeOffset OccurredAt);
+    DateTimeOffset OccurredAt,
+    TaskRequeueSkippedPayload? RequeueSkipped = null);
 
 public sealed record HumanInputRequestSnapshot(
     string Id,

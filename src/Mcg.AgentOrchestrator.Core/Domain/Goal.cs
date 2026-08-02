@@ -222,7 +222,8 @@ public sealed class Goal
                 evt.TaskId?.Value,
                 evt.Kind,
                 evt.Message,
-                evt.OccurredAt)).ToList(),
+                evt.OccurredAt,
+                evt.RequeueSkipped)).ToList(),
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
             SourceBacklogItemId,
             RefinedSpec is null ? null : new RefinedSpecSnapshot(
@@ -283,7 +284,8 @@ public sealed class Goal
                 evt.TaskId is null ? null : new TaskId(evt.TaskId),
                 evt.Kind,
                 evt.Message,
-                evt.OccurredAt));
+                evt.OccurredAt,
+                evt.RequeueSkipped));
         }
 
         foreach (var depId in snapshot.DependsOn ?? [])

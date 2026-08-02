@@ -18,7 +18,8 @@ internal sealed record GoalOperationPath(string GoalIdPrefix, string Operation, 
 internal sealed record ProcessBatchExecutionResult(
     ProcessBatchPlan Plan,
     IReadOnlyList<TaskSpec> Tasks,
-    IReadOnlyList<WorkerSandboxPrepRecoverableAction>? RecoveryActions = null);
+    IReadOnlyList<WorkerSandboxPrepRecoverableAction>? RecoveryActions = null,
+    int RequeueSkippedCount = 0);
 
 internal sealed record SubscriptionStartResult(
     IReadOnlyList<WorkerProfileDispatchResult> Dispatches,

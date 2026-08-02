@@ -104,7 +104,8 @@ internal sealed class ConductorDriver
         WorkerProfileCatalog profiles,
         IOperatorChannel? channel = null,
         IModelProviderRegistry? providers = null,
-        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null)
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistCriticalDispatchStart = null,
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
     {
         var dir = workspace.ExecutionDirectory;
         _executionDirectory = dir;
@@ -195,7 +196,8 @@ internal sealed class ConductorDriver
                                 persistCriticalDispatchStart,
                                 checkpointKernel,
                                 goalId,
-                                taskId));
+                                taskId),
+                    readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState);
             }
             catch (Exception ex)
             {
@@ -240,7 +242,8 @@ internal sealed class ConductorDriver
                                 persistCriticalDispatchStart,
                                 checkpointKernel,
                                 goalId,
-                                taskId));
+                                taskId),
+                    readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState);
             }
             catch (Exception ex)
             {
@@ -808,6 +811,12 @@ internal sealed class ConductorDriver
             return DispatchStartOutcome.Started();
         }
 
+        if (result.Processes.RequeueSkippedCount > 0)
+        {
+            return DispatchStartOutcome.EmptyBatch(
+                $"Skipped {result.Processes.RequeueSkippedCount} automatic interrupted-dispatch requeue(s) after terminal-state preflight");
+        }
+
         var reason = result.Dispatches.Count == 0
             ? DescribeEmptyBatch(result.ParallelPlan, result.BlockedDiagnostics)
             : $"Dispatched {result.Dispatches.Count} task(s) but no processes started (spawn failed)";
@@ -829,6 +838,12 @@ internal sealed class ConductorDriver
         if (result.Tasks.Count > 0)
         {
             return DispatchStartOutcome.Started();
+        }
+
+        if (result.RequeueSkippedCount > 0)
+        {
+            return DispatchStartOutcome.EmptyBatch(
+                $"Skipped {result.RequeueSkippedCount} automatic interrupted-dispatch requeue(s) after terminal-state preflight");
         }
 
         return DispatchStartOutcome.EmptyBatch(FormatNoRecordedDispatchStartedReason(result.Plan));

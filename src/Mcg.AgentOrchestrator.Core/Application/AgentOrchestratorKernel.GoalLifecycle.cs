@@ -377,7 +377,11 @@ public sealed partial class AgentOrchestratorKernel
         return true;
     }
 
-    public TaskSpec RequeueInterruptedDispatch(GoalId goalId, TaskId taskId, string message)
+    public TaskSpec RequeueInterruptedDispatch(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        string? interruptedDispatchId = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -399,6 +403,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
         task.RecordRetry(_clock.UtcNow);
+        task.SetInterruptedDispatchRecovery(interruptedDispatchId);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
         Append(goal, taskId, ProgressKind.TaskRetried, retryMessage);
         ReopenTerminalGoalWithNonTerminalTasks(goal, $"Interrupted dispatch recovery reopened goal because task {task.Id.Value[..8]} is dispatchable.");
@@ -824,6 +829,7 @@ public sealed partial class AgentOrchestratorKernel
         task.ClearLastDispatch();
         task.ClearLastProcess();
         task.ClearSubscriptionRetryAfter();
+        task.SetInterruptedDispatchRecovery(null);
         task.RecordRetry(retryAt, retryRoundKind);
         task.SetStatus(task.AssignedAgentId is null ? WorkTaskStatus.Pending : WorkTaskStatus.Assigned);
     }

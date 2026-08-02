@@ -20,4 +20,44 @@ public sealed partial class AgentOrchestratorKernel
         goal.Append(progressEvent);
         _eventWriter.AppendTimelineEvent(progressEvent);
     }
+
+    public bool RecordTaskRequeueSkipped(
+        GoalId goalId,
+        TaskId taskId,
+        string dispatchId,
+        string blockingEntity,
+        string? terminalState,
+        string reason,
+        string? detail = null)
+    {
+        var goal = GetGoal(goalId);
+        var payload = new TaskRequeueSkippedPayload(
+            taskId.Value,
+            goalId.Value,
+            dispatchId,
+            blockingEntity,
+            terminalState,
+            reason,
+            detail);
+        if (goal.Timeline.Any(evt =>
+                evt.Kind == ProgressKind.TaskRequeueSkipped &&
+                evt.RequeueSkipped?.DispatchId == dispatchId))
+        {
+            return false;
+        }
+
+        var message = terminalState is null
+            ? $"Skipped auto-requeue: {blockingEntity} state is unreadable ({detail ?? reason})"
+            : $"Skipped auto-requeue: {blockingEntity} is {terminalState}";
+        var progressEvent = new ProgressEvent(
+            goalId,
+            taskId,
+            ProgressKind.TaskRequeueSkipped,
+            message,
+            _clock.UtcNow,
+            payload);
+        goal.Append(progressEvent);
+        _eventWriter.AppendTimelineEvent(progressEvent);
+        return true;
+    }
 }

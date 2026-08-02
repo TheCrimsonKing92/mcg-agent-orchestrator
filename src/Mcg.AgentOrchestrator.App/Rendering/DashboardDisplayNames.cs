@@ -49,6 +49,7 @@ internal static class DashboardDisplayNames
         ProgressKind.TaskCancelled => "Task cancelled",
         ProgressKind.TaskAdded => "Task added",
         ProgressKind.TaskRetried => "Task retried",
+        ProgressKind.TaskRequeueSkipped => "Task auto-requeue skipped",
         ProgressKind.TaskVerificationPlanUpdated => "Verification plan updated",
         ProgressKind.TaskNote => "Task note",
         ProgressKind.TaskSubscriptionLimitReviewAcknowledged => "Subscription limit reviewed",

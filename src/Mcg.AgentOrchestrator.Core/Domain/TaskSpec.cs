@@ -54,6 +54,8 @@ public sealed class TaskSpec
 
     public TaskProcessRecord? LastProcess { get; private set; }
 
+    public string? InterruptedDispatchRecoveryId { get; private set; }
+
     public PreReviewEvidenceReceipt? PreReviewEvidenceReceipt { get; private set; }
 
     internal void AssignTo(AgentId agentId)
@@ -181,7 +183,8 @@ public sealed class TaskSpec
             EmptyOutputRetryCount,
             LatestRetryAt,
             PendingRetryRoundKind,
-            PreReviewEvidenceReceipt);
+            PreReviewEvidenceReceipt,
+            InterruptedDispatchRecoveryId);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -322,6 +325,7 @@ public sealed class TaskSpec
         task.LatestRetryAt = snapshot.LatestRetryAt;
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
         task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
+        task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
         return task;
     }
 
@@ -332,6 +336,9 @@ public sealed class TaskSpec
     internal void ClearLastDispatch() => LastDispatch = null;
 
     internal void ClearLastProcess() => LastProcess = null;
+
+    internal void SetInterruptedDispatchRecovery(string? dispatchId) =>
+        InterruptedDispatchRecoveryId = string.IsNullOrWhiteSpace(dispatchId) ? null : dispatchId.Trim();
 
     internal void SetVerificationPlan(string verificationPlan) => VerificationPlan = RequireText(verificationPlan, nameof(verificationPlan));
 
