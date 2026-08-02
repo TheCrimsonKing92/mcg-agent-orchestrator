@@ -1309,6 +1309,170 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
     }
 
+    [Xunit.Fact]
+    public async Task TickMerge_HumanWait_PersistsAnswerableRequest()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Persist a conductor question",
+            [new TaskSpec(TaskId.New(), "Ask before expanding scope", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+        var tickKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([baseline], []));
+        var request = tickKernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Should scope expand?");
+        var tickState = tickKernel.ExportSnapshot();
+        var tickSnapshot = tickState.Goals.Single();
+
+        await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, tickSnapshot, tickState.HumanInputRequests)]);
+
+        var restored = await repo.LoadAsync();
+        var persisted = Assert.Single(restored.GetPendingHumanInput(goal.Id));
+        Assert.Equal(request.Id, persisted.Id);
+        Assert.Equal(request.Question, persisted.Question);
+        restored.SubmitHumanInput(persisted.Id, "Keep the existing scope.");
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, goal.Tasks.Single().Id).Status);
+    }
+
+    [Xunit.Fact]
+    public async Task TickMerge_ParkedHumanWait_PersistsWithoutOrphanState()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Persist a parked operator wait",
+            [new TaskSpec(TaskId.New(), "Await an operator decision", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+        kernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Proceed?");
+        kernel.ParkGoal(goal.Id, "deferred by operator");
+        var parkedState = kernel.ExportSnapshot();
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, parkedState.Goals.Single(), parkedState.HumanInputRequests)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Saved, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        Assert.Equal(GoalStatus.Parked, restored.GetGoal(goal.Id).Status);
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, goal.Tasks.Single().Id).Status);
+        Assert.Empty(restored.GetPendingHumanInput(goal.Id));
+    }
+
+    [Xunit.Fact]
+    public async Task GoalCheckpoint_HumanWait_RemainsAnswerable()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Checkpoint an operator question",
+            [new TaskSpec(TaskId.New(), "Ask before proceeding", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repo.SaveAsync(kernel);
+        var expected = kernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Proceed?");
+
+        CliPersistentStateRunner.PersistSingleGoalSnapshot(repo, kernel, goal.Id);
+
+        var restored = await repo.LoadAsync();
+        var actual = Assert.Single(restored.GetPendingHumanInput(goal.Id));
+        Assert.Equal(expected.Id, actual.Id);
+        restored.SubmitHumanInput(actual.Id, "Proceed.");
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, goal.Tasks.Single().Id).Status);
+    }
+
+    [Xunit.Fact]
+    public async Task SweepCheckpoint_IgnoresOtherGoalRequests()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal("Persist one swept goal");
+        var other = kernel.CreateGoal(
+            "Keep another goal's request",
+            [new TaskSpec(TaskId.New(), "Await input", AgentRole.Developer)]);
+        kernel.ActivateGoal(target.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(other.Id, AgentCatalog.Default().Agents);
+        var otherRequest = kernel.RequestHumanInput(other.Id, other.Tasks.Single().Id, "Other answer?");
+        await repo.SaveAsync(kernel);
+
+        CliPersistentStateRunner.PersistSweepChanges(kernel, repo, [target.Id]);
+
+        var restored = await repo.LoadAsync();
+        Assert.Equal(otherRequest.Id, Assert.Single(restored.GetPendingHumanInput(other.Id)).Id);
+    }
+
+    [Xunit.Fact]
+    public async Task LoadAsync_MissingHumanRequest_RepairsAnswerableWait()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Repair persisted human wait",
+            [new TaskSpec(TaskId.New(), "Ask before proceeding", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var missing = kernel.RequestHumanInput(goal.Id, task.Id, "Should work continue?");
+        await repo.SaveAsync(kernel);
+
+        using (var connection = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM human_input_requests WHERE id = $id";
+            command.Parameters.AddWithValue("$id", missing.Id.Value);
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        var restored = await repo.LoadAsync();
+
+        var repaired = Assert.Single(restored.GetPendingHumanInput(goal.Id));
+        Assert.Equal(task.Id, repaired.TaskId);
+        Assert.Equal("Should work continue?", repaired.Question);
+        restored.SubmitHumanInput(repaired.Id, "Continue.");
+        Assert.Equal(WorkTaskStatus.Assigned, restored.GetTask(goal.Id, task.Id).Status);
+    }
+
+    [Xunit.Fact]
+    public async Task SaveGoalSnapshots_HumanWait_IsRejected()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Reject partial human wait",
+            [new TaskSpec(TaskId.New(), "Ask first", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Proceed?");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            repo.SaveGoalSnapshotsAsync(kernel.ExportSnapshot().Goals));
+
+        Assert.Contains("persist it with its human-input requests", error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task TickMerge_InconsistentHumanWait_IsRejected()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Reject an incomplete checkpoint",
+            [new TaskSpec(TaskId.New(), "Ask first", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repo.SaveAsync(kernel);
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+        kernel.RequestHumanInput(goal.Id, goal.Tasks.Single().Id, "Proceed?");
+        var waiting = kernel.ExportSnapshot().Goals.Single();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, waiting, [])]));
+
+        Assert.Contains("has no open human-input request", error.Message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_never_replaces_newer_dispatch_attempt_with_stale_completion")]
     public async Task TickMergeNeverReplacesNewerDispatchAttemptWithStaleCompletion()
     {

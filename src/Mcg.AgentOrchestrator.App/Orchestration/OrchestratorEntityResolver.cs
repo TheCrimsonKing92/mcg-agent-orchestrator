@@ -30,16 +30,66 @@ public static Goal ResolveGoal(AgentOrchestratorKernel kernel, Goal? currentGoal
 public static HumanInputRequest ResolveHumanInputRequest(AgentOrchestratorKernel kernel, string idOrPrefix)
 {
     var matches = kernel.HumanInputRequests
-        .Where(request => request.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
+        .Where(request =>
+            !request.IsCompleted &&
+            request.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
         .ToList();
 
-    return matches.Count switch
+    if (matches.Count == 1)
     {
-        1 => matches[0],
-        0 => throw new KeyNotFoundException($"Human input request '{idOrPrefix}' was not found."),
-        _ => throw new InvalidOperationException($"Human input request prefix '{idOrPrefix}' is ambiguous.")
-    };
+        return matches[0];
+    }
+
+    if (matches.Count > 1)
+    {
+        throw BuildAmbiguousHumanInputException(idOrPrefix, matches);
+    }
+
+    var completedMatches = kernel.HumanInputRequests
+        .Where(request =>
+            request.IsCompleted &&
+            request.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
+        .ToList();
+    if (completedMatches.Count == 1)
+    {
+        return completedMatches[0];
+    }
+
+    if (completedMatches.Count > 1)
+    {
+        throw BuildAmbiguousHumanInputException(idOrPrefix, completedMatches);
+    }
+
+    var goals = kernel.Goals
+        .Where(goal => goal.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
+        .ToList();
+    if (goals.Count == 1)
+    {
+        var openForGoal = kernel.GetPendingHumanInput(goals[0].Id);
+        return openForGoal.Count switch
+        {
+            1 => openForGoal[0],
+            0 => throw new KeyNotFoundException(
+                $"Goal '{goals[0].Id.Value}' has no open human input requests."),
+            _ => throw BuildAmbiguousHumanInputException(idOrPrefix, openForGoal)
+        };
+    }
+
+    if (goals.Count > 1)
+    {
+        throw new InvalidOperationException(
+            $"Goal prefix '{idOrPrefix}' is ambiguous. Candidates: {string.Join(", ", goals.Select(goal => goal.Id.Value))}");
+    }
+
+    throw new KeyNotFoundException($"Human input request or goal '{idOrPrefix}' was not found.");
 }
+
+private static InvalidOperationException BuildAmbiguousHumanInputException(
+    string idOrPrefix,
+    IReadOnlyList<HumanInputRequest> requests) =>
+    new($"Human input selector '{idOrPrefix}' is ambiguous. Candidates: " +
+        string.Join("; ", requests.Select(request =>
+            $"{request.Id.Value} (goal {request.GoalId.Value}): {request.Question}")));
 
 public static Goal RequireGoal(Goal? goal)
 {
