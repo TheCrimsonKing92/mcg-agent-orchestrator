@@ -34,6 +34,13 @@ function Set-HermeticVerificationEnvironment {
 
     $nugetPackages = $env:NUGET_PACKAGES
     $userProfile = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::UserProfile)
+    # Capture the REAL per-user application-data folders BEFORE the loop below strips the environment and
+    # USERPROFILE is repointed. These must mirror GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment,
+    # which pins APPDATA/LOCALAPPDATA to their real locations: relocating them into the profile root removed the
+    # per-user temp directory, pushed git object paths past MAX_PATH, and stopped the per-user PowerShell 7
+    # install from resolving so callers silently degraded to Windows PowerShell 5.1.
+    $realAppData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::ApplicationData)
+    $realLocalAppData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData)
 
     $allowedNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($name in @('PATH', 'PATHEXT', 'SystemRoot', 'WINDIR', 'COMSPEC', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'TEMP', 'TMP', 'TMPDIR')) {
@@ -53,12 +60,19 @@ function Set-HermeticVerificationEnvironment {
         $packageProfile = if ([string]::IsNullOrWhiteSpace($userProfile)) { $profileRoot } else { $userProfile }
         $nugetPackages = Join-Path $packageProfile '.nuget\packages'
     }
-    $appData = Join-Path $profileRoot 'AppData\Roaming'
-    $localAppData = Join-Path $profileRoot 'AppData\Local'
-    New-Item -ItemType Directory -Force $appData, $localAppData | Out-Null
+    $appData = $realAppData
+    $localAppData = $realLocalAppData
+    New-Item -ItemType Directory -Force $profileRoot | Out-Null
     $env:HOME = $profileRoot
     $env:USERPROFILE = $profileRoot
     $env:DOTNET_CLI_HOME = $profileRoot
+    # Git resolves user.name/user.email from $HOME/.gitconfig, and the profile root above is empty, so a
+    # verification child would inherit NO IDENTITY and any commit-replaying git operation exits 128. These
+    # four variables outrank every config file. Mirrors the production hermetic environment.
+    $env:GIT_AUTHOR_NAME = 'MCG Acceptance Gate'
+    $env:GIT_AUTHOR_EMAIL = 'acceptance-gate@localhost'
+    $env:GIT_COMMITTER_NAME = 'MCG Acceptance Gate'
+    $env:GIT_COMMITTER_EMAIL = 'acceptance-gate@localhost'
     $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
     $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
     $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'

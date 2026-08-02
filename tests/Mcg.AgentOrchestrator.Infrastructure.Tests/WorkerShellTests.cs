@@ -18,6 +18,54 @@ public sealed class WorkerShellTests
         Assert.True(WorkerShell.Executable.EndsWith("pwsh", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "WorkerShell_prefers_the_localappdata_variable_over_the_redirected_known_folder")]
+    public void WorkerShellPrefersTheLocalAppDataVariableOverTheRedirectedKnownFolder()
+    {
+        // Reproduces the acceptance gate's hermetic environment: USERPROFILE is repointed at an empty profile
+        // root, so GetFolderPath(LocalApplicationData) expands to a directory that has never held a
+        // PowerShell install, while the LOCALAPPDATA variable still carries the real per-user location.
+        const string RealLocalAppData = @"C:\Users\real\AppData\Local";
+        const string RedirectedLocalAppData = @"C:\Temp\mcg-hvp\AppData\Local";
+
+        var candidates = WorkerShell.WindowsPowerShellCandidates(
+            localAppDataVariable: RealLocalAppData,
+            localAppDataKnownFolder: RedirectedLocalAppData,
+            programFiles: @"C:\Program Files",
+            programW6432: @"C:\Program Files").ToArray();
+
+        Assert.Equal(
+            Path.Combine(RealLocalAppData, "Programs", "PowerShell", "7", "pwsh.exe"),
+            candidates[0]);
+
+        // The redirected known folder must still be offered, just never ahead of the real one - a host whose
+        // LOCALAPPDATA variable is unset relies on it.
+        Assert.Contains(
+            Path.Combine(RedirectedLocalAppData, "Programs", "PowerShell", "7", "pwsh.exe"),
+            candidates);
+
+        // Windows PowerShell 5.1 must never be a candidate: it is a different MAJOR VERSION whose
+        // ProcessStartInfo lacks ArgumentList, and every candidate here outranks the PATH search.
+        Assert.DoesNotContain(candidates, candidate =>
+            candidate.Contains("WindowsPowerShell", StringComparison.OrdinalIgnoreCase) ||
+            candidate.EndsWith("powershell.exe", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerShell_falls_back_to_the_known_folder_when_the_localappdata_variable_is_absent")]
+    public void WorkerShellFallsBackToTheKnownFolderWhenTheLocalAppDataVariableIsAbsent()
+    {
+        const string KnownFolder = @"C:\Users\real\AppData\Local";
+
+        var candidates = WorkerShell.WindowsPowerShellCandidates(
+            localAppDataVariable: null,
+            localAppDataKnownFolder: KnownFolder,
+            programFiles: null,
+            programW6432: null).ToArray();
+
+        Assert.Equal(
+            Path.Combine(KnownFolder, "Programs", "PowerShell", "7", "pwsh.exe"),
+            candidates[0]);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerShell_base_arguments_end_with_command")]
     public void WorkerShellBaseArgumentsEndWithCommand()
     {

@@ -5927,6 +5927,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         name.Equals("HOMEPATH", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("APPDATA", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("LOCALAPPDATA", StringComparison.OrdinalIgnoreCase) ||
+        // The four deterministic git identity variables this function sets. They are DECLARED here rather
+        // than inherited: the allow-list is what the hermetic environment is permitted to contain, so every
+        // variable ConfigureHermeticVerificationEnvironment writes must be nameable here or the gate's own
+        // hermeticity assertion fails on it.
+        name.Equals("GIT_AUTHOR_NAME", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("GIT_AUTHOR_EMAIL", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("GIT_COMMITTER_NAME", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("GIT_COMMITTER_EMAIL", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsInheritedHermeticVerificationEnvironmentVariable(string name) =>
