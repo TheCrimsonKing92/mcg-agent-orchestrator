@@ -532,10 +532,13 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
     {
         var workingDirectory = CreateTempDirectory();
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        // The deleted weak-mapping assertion encoded the defect by requiring mapping vocabulary
+        // in the body. This real 05cfd4da section is the red/green regression instead.
         var plan = PlannerContractPlanFixture().Replace(
-            PlannerContractAcceptanceMappingFixture(),
-            Planner05cfd4daAcceptanceMappingFixture(),
+            PlannerContractAcceptanceMappingBody,
+            Planner05cfd4daAcceptanceMappingBody(),
             StringComparison.Ordinal);
+        Assert.DoesNotContain(PlannerContractAcceptanceMappingBody, plan, StringComparison.Ordinal);
 
         var result = PlannerOutputContract.Resolve(
             plan,
@@ -543,26 +546,22 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             workingDirectory);
 
         Assert.True(result.Succeeded, result.Diagnostic);
-        Assert.DoesNotContain(
-            "acceptance criterion mapping",
-            result.Diagnostic,
-            StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Theory]
     [Xunit.InlineData("")]
     [Xunit.InlineData("TBD")]
-    [Xunit.InlineData("N/A")]
-    [Xunit.InlineData("—")]
     public void PlannerContract_AcceptanceMappingPlaceholder_Fails(string body)
     {
+        // Control: the pre-existing substance floor rejects empty and placeholder bodies
+        // both before and after removal of the acceptance-mapping keyword gate.
         var workingDirectory = CreateTempDirectory();
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
-        var placeholderSection = $"## Acceptance criteria mapping{Environment.NewLine}{body}";
         var plan = PlannerContractPlanFixture().Replace(
-            PlannerContractAcceptanceMappingFixture(),
-            placeholderSection,
+            PlannerContractAcceptanceMappingBody,
+            body,
             StringComparison.Ordinal);
+        Assert.DoesNotContain(PlannerContractAcceptanceMappingBody, plan, StringComparison.Ordinal);
 
         var result = PlannerOutputContract.Resolve(
             plan,
@@ -571,14 +570,62 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
 
         Assert.False(result.Succeeded);
         Assert.Contains(
-            "required section 'acceptance criterion mapping' is not substantive",
+            "required section 'acceptance criterion mapping' must contain at least 40 characters of substantive content",
             result.Diagnostic,
             StringComparison.Ordinal);
+        Assert.Contains("inspected heading '## Acceptance criteria mapping'", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("inspected section-body excerpt:", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_MissingPremiseMarker_ReportsInspectedText()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var weakPremise = PlannerPlanWithoutPremiseMarker();
+
+        var result = PlannerOutputContract.Resolve(
+            weakPremise,
+            string.Empty,
+            workingDirectory);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains(
+            "must explicitly state whether the premise is valid or invalid in its section body",
+            result.Diagnostic,
+            StringComparison.Ordinal);
+        Assert.Contains("inspected heading '## Premise validity'", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains(
+            "inspected section-body excerpt: \"The two launcher scripts already export",
+            result.Diagnostic,
+            StringComparison.Ordinal);
+        Assert.Contains("…\"", result.Diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("mechanical evidence marker", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ForgedDurableReceipt_RevalidatesSectionMarkers()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var receipt = PlannerOutputContract.BuildIngestedReceipt(
+            "forged-plan.md",
+            PlannerPlanWithoutPremiseMarker());
+
+        var result = PlannerOutputContract.Resolve(
+            receipt,
+            string.Empty,
+            workingDirectory);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("Planner durable receipt failed revalidation", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("inspected heading '## Premise validity'", result.Diagnostic, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
     public void PlannerContract_IncidentalAdditionPrefix_RejectsMissingCitation()
     {
+        // Control: citation validation is intentionally unchanged by the marker fix.
         var workingDirectory = CreateTempDirectory();
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
 
@@ -889,9 +936,11 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Contains("complete Durable Planner Plan", prompt, StringComparison.Ordinal);
         Assert.Null(developer.LastProcess);
 
+        // The former acceptance-mapping tamper encoded the body-keyword defect. Keep this
+        // durable-receipt revalidation check on a section marker that remains in force.
         var tamperedOutput = File.ReadAllText(stdoutPath).Replace(
-            "Map the requested behavior to captured output, map completion to a deterministic gate, and map downstream use to the generated context artifact with exact-content assertions.",
-            "This summary describes requested behavior, deterministic completion, and downstream context using enough prose to remain superficially substantive.",
+            "The premise is valid because the named source seams were inspected in the fixture repository and the task can be completed without inventing missing dependencies or external behavior.",
+            "The two launcher scripts already export the four requested names, and the source evidence establishes the concrete implementation seams without inventing dependencies.",
             StringComparison.Ordinal);
         File.WriteAllText(stdoutPath, tamperedOutput);
         new WorkerArtifactWriter().Write(goal, developer, worktree);
@@ -1479,11 +1528,8 @@ internal static string PlannerContractPlanFixture() =>
     Stop when any required section is absent, a cited external plan is unreadable or oversized, durable capture fails, or exact downstream content cannot be proven by the fixture.
     """;
 
-internal static string PlannerContractAcceptanceMappingFixture() =>
-    """
-    ## Acceptance criteria mapping
-    1. Map the requested behavior to captured output, map completion to a deterministic gate, and map downstream use to the generated context artifact with exact-content assertions.
-    """;
+internal const string PlannerContractAcceptanceMappingBody =
+    "1. Map the requested behavior to captured output, map completion to a deterministic gate, and map downstream use to the generated context artifact with exact-content assertions.";
 
 internal static string Planner05cfd4daAcceptanceMappingFixture() =>
     """
@@ -1494,6 +1540,19 @@ internal static string Planner05cfd4daAcceptanceMappingFixture() =>
     - Preserve the Windows values; no Windows before/after timing test is required unless values change.
     - Verify both launchers contain the same four names and values.
     """;
+
+internal static string Planner05cfd4daAcceptanceMappingBody()
+{
+    var fixture = Planner05cfd4daAcceptanceMappingFixture().ReplaceLineEndings("\n");
+    return fixture[(fixture.IndexOf("\n\n", StringComparison.Ordinal) + 2)..];
+}
+
+internal static string PlannerPlanWithoutPremiseMarker() =>
+    PlannerContractPlanFixture().Replace(
+        "The premise is valid because the named source seams were inspected in the fixture repository and the task can be completed without inventing missing dependencies or external behavior.",
+        "The two launcher scripts already export the four requested names, and the repository evidence establishes the concrete implementation seams without inventing dependencies. " +
+        "The implementation can preserve the Windows values while bringing the shell launcher into parity and checking exact names and values in focused tests.",
+        StringComparison.Ordinal);
 
 internal static string ResearcherContractFixture() =>
     """
