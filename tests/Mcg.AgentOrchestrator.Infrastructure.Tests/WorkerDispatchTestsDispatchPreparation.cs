@@ -200,6 +200,44 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         }
     }
 
+    [Xunit.Fact(DisplayName = "Reviewer_round_missing_baseline_degrades_instead_of_blocking_dispatch")]
+    public void ReviewerRoundMissingBaselineDegradesInsteadOfBlockingDispatch()
+    {
+        // A task's FIRST reviewer round records no reviewed commit, so the baseline is legitimately absent.
+        // Throwing here aborted the reviewer DISPATCH BEFORE IT STARTED and wedged the goal permanently:
+        // retrying the Developer worked, the Reviewer threw every time, and no operator verb could
+        // repopulate the baseline. Goal 5f59b0d6 sat in that state, and it is reachable from the ordinary
+        // review-retry cycle.
+        //
+        // The list is only used to PROVE a resolved anchor was touched again, so empty means "cannot prove",
+        // which errs toward not reopening resolved findings - the safe direction.
+        var root = CreateSeededDispatchRepository();
+        try
+        {
+            var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
+            var anchor = new ReviewFindingLocation("src/Example.cs", "Example.Run", "guard");
+
+            var missingPrevious = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+                root,
+                previousReviewedCommit: null,
+                currentCommit: current,
+                [anchor]);
+
+            var missingCurrent = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+                root,
+                previousReviewedCommit: current,
+                currentCommit: "   ",
+                [anchor]);
+
+            Assert.Empty(missingPrevious);
+            Assert.Empty(missingCurrent);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "StartDispatches_refreshes_recorded_prompt_before_worker_start")]
     public void StartDispatchesRefreshesRecordedPromptBeforeWorkerStart()
 {

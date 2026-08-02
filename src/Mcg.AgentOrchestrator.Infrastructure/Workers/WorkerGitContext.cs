@@ -109,15 +109,19 @@ internal sealed class WorkerGitContext
                 "Reviewer round touched-anchor scope unavailable because the working directory is not a git workspace.");
         }
 
+        // No usable baseline: DEGRADE, do not throw. This list is only ever used to PROVE that a resolved
+        // structural anchor was touched again, so an empty list means "cannot prove", which errs toward NOT
+        // reopening resolved findings - the conservative direction. Throwing instead aborted the Reviewer
+        // DISPATCH BEFORE IT STARTED, and because a task's first round records no reviewed commit the goal
+        // could never advance again: retrying the Developer worked, the Reviewer threw every time, and no
+        // operator verb could repopulate the baseline. That wedged goal 5f59b0d6 permanently, and it is
+        // reachable from the ordinary review-retry cycle.
+        //
+        // The equal-commits case immediately below already degrades silently for exactly the same reason, so
+        // this is the established behaviour for an uninformative baseline, not a new one.
         if (string.IsNullOrWhiteSpace(previousReviewedCommit) ||
-            string.IsNullOrWhiteSpace(currentCommit))
-        {
-            throw new ReviewerRoundTouchScopeException(
-                ReviewerRoundTouchScopeUnavailableErrorCode,
-                "Reviewer round touched-anchor scope unavailable because the previous or current reviewed commit is missing.");
-        }
-
-        if (string.Equals(previousReviewedCommit, currentCommit, StringComparison.OrdinalIgnoreCase))
+            string.IsNullOrWhiteSpace(currentCommit) ||
+            string.Equals(previousReviewedCommit, currentCommit, StringComparison.OrdinalIgnoreCase))
         {
             return [];
         }
