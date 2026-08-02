@@ -272,7 +272,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     WorkerProfileCatalog profiles,
     IModelProviderRegistry? providers = null,
     bool approveHighRiskOwnership = false,
-    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
+    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null,
+    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
 {
     GoalRefinementGate.EnsureRefined(
         kernel,
@@ -292,7 +293,11 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
         safeBatch.TaskIds);
-    if (checkpointBeforeWorkerStart is not null && batch.Dispatches.Count > 0)
+    var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
+        dispatch.Task.InterruptedDispatchRecoveryId is not null);
+    if (!containsInterruptedDispatchRecovery &&
+        checkpointBeforeWorkerStart is not null &&
+        batch.Dispatches.Count > 0)
     {
         checkpointBeforeWorkerStart(kernel, goal.Id, batch.Dispatches[0].Task.Id);
     }
@@ -306,7 +311,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         agents,
         profiles,
         providers,
-        checkpointBeforeWorkerStart);
+        checkpointBeforeWorkerStart,
+        readCurrentInterruptedDispatchState);
     return new SubscriptionStartResult(
         batch.Dispatches,
         processes,
@@ -612,7 +618,8 @@ public static ProcessBatchExecutionResult StartDispatches(
     WorkerProfileCatalog? profiles = null,
     IModelProviderRegistry? providers = null,
     bool refreshBeforeStart = true,
-    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
+    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null,
+    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
 {
     return StartDispatches(
         kernel,
@@ -623,7 +630,8 @@ public static ProcessBatchExecutionResult StartDispatches(
         agents,
         profiles,
         providers,
-        checkpointBeforeWorkerStart);
+        checkpointBeforeWorkerStart,
+        readCurrentInterruptedDispatchState);
 }
 
 private static ProcessBatchExecutionResult StartDispatches(
@@ -635,13 +643,15 @@ private static ProcessBatchExecutionResult StartDispatches(
     IReadOnlyList<AgentDefinition>? agents = null,
     WorkerProfileCatalog? profiles = null,
     IModelProviderRegistry? providers = null,
-    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
+    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null,
+    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
 {
     var runner = new BackgroundDispatchRunner();
     var logRoot = workspace.LogDirectory;
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
     var started = new List<TaskSpec>();
     var recoveryActions = new List<WorkerSandboxPrepRecoverableAction>();
+    var requeueSkippedCount = 0;
     IReadOnlyList<AgentDefinition>? resolvedAgents = null;
     WorkerProfileCatalog? resolvedProfiles = null;
 
@@ -664,17 +674,29 @@ private static ProcessBatchExecutionResult StartDispatches(
                 providers);
         }
 
-        var startResult = runner.TryStartLatestDispatch(kernel, goal.Id, task.Id, logRoot, checkpointBeforeWorkerStart);
+        var startResult = runner.TryStartLatestDispatch(
+            kernel,
+            goal.Id,
+            task.Id,
+            logRoot,
+            checkpointBeforeWorkerStart,
+            readCurrentInterruptedDispatchState);
         if (startResult.RecoveryAction is { } action)
         {
             recoveryActions.Add(action);
             continue;
         }
 
+        if (startResult.RequeueSkipped)
+        {
+            requeueSkippedCount++;
+            continue;
+        }
+
         started.Add(task);
     }
 
-    return new ProcessBatchExecutionResult(plan, started, recoveryActions);
+    return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount);
 }
 
 public static ProcessBatchExecutionResult RefreshDispatches(

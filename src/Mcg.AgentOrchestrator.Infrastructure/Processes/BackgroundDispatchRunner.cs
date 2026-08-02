@@ -27,11 +27,27 @@ public sealed record DispatchAutoRequeueDisposition(string EventName, string Mes
 
 public sealed record DispatchProcessStartResult(
     TaskProcessRecord? ProcessRecord,
-    WorkerSandboxPrepRecoverableAction? RecoveryAction)
+    WorkerSandboxPrepRecoverableAction? RecoveryAction,
+    bool RequeueSkipped = false)
 {
     public static DispatchProcessStartResult Started(TaskProcessRecord processRecord) => new(processRecord, null);
 
     public static DispatchProcessStartResult RequiresRecovery(WorkerSandboxPrepRecoverableAction action) => new(null, action);
+
+    public static DispatchProcessStartResult Skipped() => new(null, null, RequeueSkipped: true);
+}
+
+public sealed record InterruptedDispatchStateRead(
+    GoalStatus? GoalStatus,
+    WorkTaskStatus? TaskStatus,
+    string? UnreadableEntity = null,
+    string? Error = null,
+    bool WasTaskCancelledByConductor = false)
+{
+    public bool IsReadable => UnreadableEntity is null;
+
+    public static InterruptedDispatchStateRead Unreadable(string entity, string error) =>
+        new(null, null, entity, error);
 }
 
 public sealed class BackgroundDispatchRunner
@@ -88,6 +104,7 @@ public sealed class BackgroundDispatchRunner
     private readonly WorkerProviderCatalog _workerProviders;
     private readonly Func<string, Stream> _openLogReadStream;
     private readonly Action? _beforeGoalWorktreeInspection;
+    private readonly Func<ProcessStartInfo, Process?> _startProcess;
     private readonly Dictionary<ProcessLogCacheKey, ProcessLogSnapshot> _processLogCache = [];
     private readonly object _processLogCacheGate = new();
     private readonly ConcurrentDictionary<WorktreeInspectionCacheKey, WorktreeInspectionCacheEntry> _worktreeInspectionCache = [];
@@ -106,7 +123,8 @@ public sealed class BackgroundDispatchRunner
         DispatchRecoveryPolicy? recoveryPolicy = null,
         WorkerProviderCatalog? workerProviders = null,
         Func<string, Stream>? openLogReadStream = null,
-        Action? beforeGoalWorktreeInspection = null)
+        Action? beforeGoalWorktreeInspection = null,
+        Func<ProcessStartInfo, Process?>? startProcess = null)
     {
         _clock = clock ?? new SystemClock();
         _postOutputIdleTimeout = postOutputIdleTimeout ?? DefaultPostOutputIdleTimeout;
@@ -123,6 +141,7 @@ public sealed class BackgroundDispatchRunner
         _openLogReadStream = openLogReadStream ??
             (path => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
         _beforeGoalWorktreeInspection = beforeGoalWorktreeInspection;
+        _startProcess = startProcess ?? Process.Start;
     }
 
     private static bool IsDispatchStartDisabledByEnvironment()
@@ -195,7 +214,8 @@ public sealed class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         string logRoot,
-        Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
+        Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null,
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null)
     {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
@@ -332,8 +352,36 @@ public sealed class BackgroundDispatchRunner
         if (spawnReceipt.WorktreeHeadSha is not null)
             kernel.RecordDispatchBaseCommit(goalId, taskId, spawnReceipt.WorktreeHeadSha);
 
+        var currentTask = kernel.GetTask(goalId, taskId);
+        if (currentTask.InterruptedDispatchRecoveryId is { } interruptedDispatchId &&
+            TryReadAutoRequeueBlocker(kernel, goalId, taskId, readCurrentState, out var blocker))
+        {
+            kernel.RecordTaskRequeueSkipped(
+                goalId,
+                taskId,
+                interruptedDispatchId,
+                blocker.BlockingEntity,
+                blocker.TerminalState,
+                blocker.Reason,
+                blocker.Detail);
+            if (blocker.Reason == "terminal-state")
+            {
+                kernel.ConcludeInterruptedDispatchRecovery(
+                    goalId,
+                    taskId,
+                    blocker.GoalStatus,
+                    blocker.TaskStatus);
+            }
+            return DispatchProcessStartResult.Skipped();
+        }
+
+        // Only persist automatic recovery preparation after the live state guard admits it. A
+        // checkpoint before this read can merge the stale tick-owned task status over an operator
+        // cancellation and make the subsequent read falsely appear non-terminal.
+        checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId);
+
         ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
-        var process = Process.Start(startInfo)
+        var process = _startProcess(startInfo)
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
         WorkerProcessJobs.TryRegister(process, $"{goalId.Value}:{taskId.Value}");
 
@@ -1875,7 +1923,17 @@ public sealed class BackgroundDispatchRunner
             : string.Join(" | ", entries);
     }
 
-    public TaskProcessRecord CancelLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
+    public TaskProcessRecord CancelLatestProcess(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId) =>
+        CancelLatestProcess(kernel, goalId, taskId, cancelledByConductor: false);
+
+    private TaskProcessRecord CancelLatestProcess(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        bool cancelledByConductor)
     {
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
@@ -1899,7 +1957,8 @@ public sealed class BackgroundDispatchRunner
         {
             CompletedAt = _clock.UtcNow,
             WasCancelled = true,
-            ResourceAccounting = resourceAccounting
+            ResourceAccounting = resourceAccounting,
+            WasCancelledByConductor = cancelledByConductor
         };
 
         kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled);
@@ -1924,7 +1983,7 @@ public sealed class BackgroundDispatchRunner
                 continue;
             }
 
-            CancelLatestProcess(kernel, goalId, task.Id);
+            CancelLatestProcess(kernel, goalId, task.Id, cancelledByConductor: true);
             cancelled++;
         }
 
@@ -1949,25 +2008,32 @@ public sealed class BackgroundDispatchRunner
         return detached;
     }
 
-    public int RequeueInterruptedDispatches(AgentOrchestratorKernel kernel)
+    public int RequeueInterruptedDispatches(
+        AgentOrchestratorKernel kernel,
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null)
     {
         var recovered = 0;
-        foreach (var goal in kernel.Goals.Where(goal => goal.Status == GoalStatus.Active).ToArray())
+        foreach (var goal in kernel.Goals.Where(goal =>
+                     goal.Status == GoalStatus.Active || IsAutoRequeueTerminalGoalStatus(goal.Status)).ToArray())
         {
             foreach (var task in goal.Tasks.ToArray())
             {
-                if (task.Status == WorkTaskStatus.Cancelled)
+                if (task.Status == WorkTaskStatus.Cancelled &&
+                    task.LastProcess is { WasCancelledByConductor: true })
                 {
                     if (task.LastProcess is { } cancelledProcess)
                     {
                         EvictProcessLogCache(cancelledProcess);
                     }
 
-                    kernel.RequeueInterruptedDispatch(
+                    recovered += TryAutoRequeue(
+                        kernel,
                         goal.Id,
                         task.Id,
-                        "Auto-requeued interrupted dispatch after conductor loop stop.");
-                    recovered++;
+                        "Auto-requeued interrupted dispatch after conductor loop stop.",
+                        readCurrentState)
+                        ? 1
+                        : 0;
                     continue;
                 }
 
@@ -1980,16 +2046,192 @@ public sealed class BackgroundDispatchRunner
                 }
 
                 EvictProcessLogCache(process);
-                kernel.RequeueInterruptedDispatch(
+                recovered += TryAutoRequeue(
+                    kernel,
                     goal.Id,
                     task.Id,
-                    "Auto-requeued orphaned running dispatch; no tracked process is alive.");
-                recovered++;
+                    "Auto-requeued orphaned running dispatch; no tracked process is alive.",
+                    readCurrentState)
+                    ? 1
+                    : 0;
             }
         }
 
         return recovered;
     }
+
+    private bool TryAutoRequeue(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState)
+    {
+        var currentTask = kernel.GetTask(goalId, taskId);
+        var interruptedDispatch = currentTask.LastDispatch;
+        if (interruptedDispatch is null)
+        {
+            return false;
+        }
+
+        var dispatchId = BuildDispatchId(goalId, taskId, interruptedDispatch);
+        var priorSkip = kernel.GetGoal(goalId).Timeline.FirstOrDefault(evt =>
+            evt.Kind == ProgressKind.TaskRequeueSkipped &&
+            evt.RequeueSkipped?.DispatchId == dispatchId);
+        if (currentTask.InterruptedDispatchRecoveryId == dispatchId ||
+            priorSkip?.RequeueSkipped?.Reason == "terminal-state")
+        {
+            return false;
+        }
+
+        if (TryReadAutoRequeueBlocker(kernel, goalId, taskId, readCurrentState, out var blocker))
+        {
+            kernel.RecordTaskRequeueSkipped(
+                goalId,
+                taskId,
+                dispatchId,
+                blocker.BlockingEntity,
+                blocker.TerminalState,
+                blocker.Reason,
+                blocker.Detail);
+            if (blocker.Reason == "terminal-state")
+            {
+                kernel.ConcludeInterruptedDispatchRecovery(
+                    goalId,
+                    taskId,
+                    blocker.GoalStatus,
+                    blocker.TaskStatus);
+            }
+            return false;
+        }
+
+        kernel.RequeueInterruptedDispatch(goalId, taskId, message, dispatchId);
+        return true;
+    }
+
+    private static bool TryReadAutoRequeueBlocker(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState,
+        out AutoRequeueBlocker blocker)
+    {
+        InterruptedDispatchStateRead state;
+        try
+        {
+            state = readCurrentState?.Invoke(goalId, taskId) ?? ReadCurrentState(kernel, goalId, taskId);
+        }
+        catch (Exception ex)
+        {
+            blocker = new AutoRequeueBlocker("task", null, "state-unreadable", ex.Message, null, null);
+            return true;
+        }
+
+        if (!state.IsReadable || state.GoalStatus is null || state.TaskStatus is null)
+        {
+            blocker = new AutoRequeueBlocker(
+                state.UnreadableEntity is "goal" ? "goal" : "task",
+                null,
+                "state-unreadable",
+                state.Error ?? "current task or goal state was unavailable",
+                state.GoalStatus,
+                state.TaskStatus);
+            return true;
+        }
+
+        if (!IsAutoRequeueTaskStatusAllowed(
+                state.TaskStatus.Value,
+                state.WasTaskCancelledByConductor))
+        {
+            blocker = new AutoRequeueBlocker(
+                "task",
+                state.TaskStatus.Value.ToString(),
+                "terminal-state",
+                null,
+                state.GoalStatus,
+                state.TaskStatus);
+            return true;
+        }
+
+        if (!IsAutoRequeueGoalStatusAllowed(state.GoalStatus.Value))
+        {
+            blocker = new AutoRequeueBlocker(
+                "goal",
+                state.GoalStatus.Value.ToString(),
+                "terminal-state",
+                null,
+                state.GoalStatus,
+                state.TaskStatus);
+            return true;
+        }
+
+        blocker = default!;
+        return false;
+    }
+
+    public static InterruptedDispatchStateRead ReadCurrentState(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId)
+    {
+        Goal goal;
+        try
+        {
+            goal = kernel.GetGoal(goalId);
+        }
+        catch (Exception ex)
+        {
+            return InterruptedDispatchStateRead.Unreadable("goal", ex.Message);
+        }
+
+        try
+        {
+            var task = kernel.GetTask(goalId, taskId);
+            return new InterruptedDispatchStateRead(
+                goal.Status,
+                task.Status,
+                WasTaskCancelledByConductor: task.WasCancelledByConductor);
+        }
+        catch (Exception ex)
+        {
+            return InterruptedDispatchStateRead.Unreadable("task", ex.Message);
+        }
+    }
+
+    private static bool IsAutoRequeueTaskStatusAllowed(
+        WorkTaskStatus status,
+        bool wasCancelledByConductor) =>
+        status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running ||
+        status == WorkTaskStatus.Cancelled && wasCancelledByConductor;
+
+    private static bool IsAutoRequeueGoalStatusAllowed(GoalStatus status) =>
+        status == GoalStatus.Active;
+
+    private static bool IsAutoRequeueTerminalGoalStatus(GoalStatus status) => status is
+        GoalStatus.Cancelled or
+        GoalStatus.Superseded or
+        GoalStatus.Completed;
+
+    private static string BuildDispatchId(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
+    {
+        var raw = string.Join('\u001f',
+            goalId.Value,
+            taskId.Value,
+            dispatch.DispatchedAt.ToUniversalTime().ToString("O"),
+            dispatch.WorkerName,
+            dispatch.WorkingDirectory,
+            dispatch.ProviderSessionId,
+            dispatch.Command);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)))[..16].ToLowerInvariant();
+    }
+
+    private sealed record AutoRequeueBlocker(
+        string BlockingEntity,
+        string? TerminalState,
+        string Reason,
+        string? Detail,
+        GoalStatus? GoalStatus,
+        WorkTaskStatus? TaskStatus);
 
     private string? ReapWorktreeBuildDaemons(string workingDirectory)
     {

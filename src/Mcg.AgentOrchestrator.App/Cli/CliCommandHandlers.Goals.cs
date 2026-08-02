@@ -1006,7 +1006,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     context.WorkerProfiles,
                     context.Channel,
                     context.Providers,
-                    context.PersistGoalCheckpoint);
+                    context.PersistGoalCheckpoint,
+                    (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
+                        context.ReloadKernel(),
+                        goalId,
+                        taskId));
                 var postLandingCanary = PostLandingCanaryFactory.CreateDefault(
                     context.Workspace,
                     line =>
@@ -1133,7 +1137,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     measuredSweep: reconcileSweep,
                     reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
-                    recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(loopKernel),
+                    recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(
+                        loopKernel,
+                        (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
+                            context.ReloadKernel(),
+                            goalId,
+                            taskId)),
                     refreshGoalDispatchesBeforeAdvance: (loopKernel, loopGoal) =>
                     {
                         GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper);
@@ -1176,7 +1185,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.WorkerProfiles,
                 context.Channel,
                 context.Providers,
-                context.PersistGoalCheckpoint);
+                context.PersistGoalCheckpoint,
+                (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
+                    context.ReloadKernel(),
+                    goalId,
+                    taskId));
 
             // Single-goal continuous mode: drive just this goal to its next checkpoint without the
             // whole-kernel loop, so adding a goal never requires stopping a running loop and other
@@ -1208,7 +1221,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     watchSweep,
                     (wk, goal) => watchReaper.CancelRunningProcessesForGoal(wk, goal.Id),
                     (wk, goal) => watchReaper.DetachRunningProcessesForGoal(wk, goal.Id),
-                    wk => watchReaper.RequeueInterruptedDispatches(wk),
+                    wk => watchReaper.RequeueInterruptedDispatches(
+                        wk,
+                        (goalId, taskId) => BackgroundDispatchRunner.ReadCurrentState(
+                            context.ReloadKernel(),
+                            goalId,
+                            taskId)),
                     (wk, goal) => { GoalManagementCommandService.RefreshDispatches(wk, goal, watchReaper); },
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),

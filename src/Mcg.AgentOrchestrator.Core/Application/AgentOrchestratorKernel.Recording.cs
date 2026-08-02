@@ -741,7 +741,14 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         task.RecordProcess(process);
-        task.SetStatus(WorkTaskStatus.Cancelled);
+        if (process.WasCancelledByConductor)
+        {
+            task.SetConductorCancelledStatus();
+        }
+        else
+        {
+            task.SetStatus(WorkTaskStatus.Cancelled);
+        }
         Append(goal, taskId, ProgressKind.TaskCancelled, $"Cancelled process {process.ProcessId}: {process.Command}");
     }
 

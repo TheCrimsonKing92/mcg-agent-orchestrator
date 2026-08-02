@@ -6350,8 +6350,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(777, recoveredTask.LastProcess!.ProcessId);
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_prior_cancelled_sdlc_task_is_requeued_before_ready_batch")]
-    public void BatchLoopPriorCancelledSdlcTaskIsRequeuedBeforeReadyBatch()
+    [Xunit.Fact]
+    public void BatchLoop_ConductorCancelledTask_AutoRequeues()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("five stage goal");
@@ -6372,17 +6372,18 @@ public sealed class ConductorBatchLoopTests
             .CancelRunningProcessesForGoal(kernel, goal.Id);
 
         Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, developer.Id).Status);
+        Assert.True(kernel.GetTask(goal.Id, developer.Id).WasCancelledByConductor);
 
         var dispatches = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            dispatchAndStart: g =>
+            dispatchAndStart: recoveredGoal =>
             {
-                var ready = g.Tasks.Single(t => t.Status == WorkTaskStatus.Assigned && t.RequiredRole == AgentRole.Developer);
-                kernel.RecordTaskDispatch(g.Id, ready.Id,
-                    new TaskDispatchRecord("test-worker", "dev-redo.exe", "C:\\goal", DateTimeOffset.UtcNow));
-                kernel.RecordTaskProcessStarted(g.Id, ready.Id,
-                    new TaskProcessRecord(777, "dev-redo.exe", "C:\\goal", "out2.log", "err2.log", "exit2.txt",
+                var recoveredTask = recoveredGoal.Tasks.Single(t => t.Id == developer.Id);
+                kernel.RecordTaskDispatch(recoveredGoal.Id, recoveredTask.Id,
+                    new TaskDispatchRecord("test-worker", "second.exe", "C:\\goal", DateTimeOffset.UtcNow));
+                kernel.RecordTaskProcessStarted(recoveredGoal.Id, recoveredTask.Id,
+                    new TaskProcessRecord(777, "second.exe", "C:\\goal", "out2.log", "err2.log", "exit2.txt",
                         DateTimeOffset.UtcNow, null, null, OwnedProcessIds: [777]));
                 dispatches++;
                 return DispatchStartOutcome.Started();
@@ -6398,11 +6399,13 @@ public sealed class ConductorBatchLoopTests
                 maxIterations: 1,
                 onlyGoalId: goal.Id.Value);
 
-        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(1, summary.Advanced);
         Assert.Equal(1, dispatches);
         var recoveredDeveloper = kernel.GetTask(goal.Id, developer.Id);
         Assert.Equal(WorkTaskStatus.Running, recoveredDeveloper.Status);
         Assert.Equal(777, recoveredDeveloper.LastProcess!.ProcessId);
+        Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.TaskId == developer.Id);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRequeueSkipped);
     }
 
     // ── Watch mode: continues when all held instead of breaking ──────────

@@ -59,6 +59,23 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             {
                 obj["taskId"] = progressEvent.TaskId.Value;
             }
+
+            if (progressEvent.RequeueSkipped is { } skipped)
+            {
+                obj["goalId"] = skipped.GoalId;
+                obj["taskId"] = skipped.TaskId;
+                obj["dispatchId"] = skipped.DispatchId;
+                obj["blockingEntity"] = skipped.BlockingEntity;
+                if (skipped.TerminalState is not null)
+                {
+                    obj["terminalState"] = skipped.TerminalState;
+                }
+                obj["reason"] = skipped.Reason;
+                if (skipped.Detail is not null)
+                {
+                    obj["detail"] = skipped.Detail;
+                }
+            }
         });
 
     public void AppendGoalCreated(GoalId goalId, string objective) =>
