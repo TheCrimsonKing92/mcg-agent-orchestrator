@@ -62,7 +62,7 @@
       },
       {
         "name": "Process spawning",
-        "filter": "FullyQualifiedName~CliHelpTests|FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~GitCliTests|FullyQualifiedName~LauncherScriptTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~SemanticAcceptanceTests|FullyQualifiedName~WorkerContextArtifactsCharacterizationTests|(FullyQualifiedName~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsModelSelectionEnvMutation)",
+        "filter": "FullyQualifiedName~CliHelpTests|FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~ConductorSelfRelaunchTests|FullyQualifiedName~ConductorSuccessorSelfCheckTests|FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DispatchProcessHostTests|FullyQualifiedName~GitCliTests|FullyQualifiedName~LauncherScriptTests|FullyQualifiedName~MtpTestRunnerScriptTests|FullyQualifiedName~ProcessTreeGuiSuppressionTests|FullyQualifiedName~SemanticAcceptanceTests|FullyQualifiedName~WorkerContextArtifactsCharacterizationTests|(FullyQualifiedName~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsModelSelectionEnvMutation)",
         "estimatedSerialSeconds": 223.76,
         "exclusiveResourceKeys": [ "xunit:ProcessSpawning" ]
       },
@@ -110,12 +110,51 @@
       },
       {
         "name": "Remainder",
-        "filter": "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~WorkerShellTests&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~ConductWatchSweepScopingTests&FullyQualifiedName!~GoalGitFactIndexTests&FullyQualifiedName!~GoalsPruneTests&FullyQualifiedName!~GoalWorktreeTestsAcceptanceLanding&FullyQualifiedName!~GoalWorktreeTestsCreationResolution&FullyQualifiedName!~GoalWorktreeTestsOrphanEphemeralSweep&FullyQualifiedName!~GoalWorktreeTestsRebaseMerge&FullyQualifiedName!~GoalWorktreeTestsRemoveCleanup&FullyQualifiedName!~GoalWorktreeTestsSqliteTooling&FullyQualifiedName!~LandingExecutorTests&FullyQualifiedName!~AdvanceLoopTests&FullyQualifiedName!~ConductLoopLockTests&FullyQualifiedName!~ConductorLoopHandoffTests&FullyQualifiedName!~FirewallSetupCommandTests&FullyQualifiedName!~GoalBacklogLinkTests&FullyQualifiedName!~GoalLifecycleEventWriterTests&FullyQualifiedName!~RealWorkerProcessGuardTests&FullyQualifiedName!~SqliteOrchestratorStateRepositoryTests&FullyQualifiedName!~WorkerDispatchTestsDispatchPreparation&FullyQualifiedName!~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsSandboxLowIntegrity&FullyQualifiedName!~WorkerDispatchTestsSubscriptionPreflight&FullyQualifiedName!~WorkerDispatchTestsWorkerResultClassification&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerProfileTests&FullyQualifiedName!~WorkspaceConsolidatorTests&FullyQualifiedName!~CliHelpTests&FullyQualifiedName!~ConductorDriverTests&FullyQualifiedName!~ConductorSelfRelaunchTests&FullyQualifiedName!~ConductorSuccessorSelfCheckTests&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DispatchProcessHostTests&FullyQualifiedName!~GitCliTests&FullyQualifiedName!~LauncherScriptTests&FullyQualifiedName!~ProcessTreeGuiSuppressionTests&FullyQualifiedName!~SemanticAcceptanceTests&FullyQualifiedName!~WorkerContextArtifactsCharacterizationTests&FullyQualifiedName!~ChaosGate&FullyQualifiedName!~AutoReviewRetryConvergenceBriefBuilderTests&FullyQualifiedName!~InquiryDispatcherTests&FullyQualifiedName!~ProgressiveReviewSteeringTests&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~DotnetBuildEnvironmentManagerTests&FullyQualifiedName!~LocalProcessVerifierDotnetBuildSlotTests&FullyQualifiedName!~AcceptanceGateEngineSettingsTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&FullyQualifiedName!~GoalAcceptanceVerifierDotnetBuildSlotTests&FullyQualifiedName!~RealProcessShardAlphaSmokeTests&FullyQualifiedName!~RealProcessShardBetaSmokeTests&FullyQualifiedName!~WorkerDispatchJobAccountingTests&FullyQualifiedName!~ProviderDefaultTests&FullyQualifiedName!~ProviderProbeTests&FullyQualifiedName!~RunEventStoreTests&FullyQualifiedName!~RunGoalServiceTests&FullyQualifiedName!~GoalMonitoringSubscriptionCommandTests&FullyQualifiedName!~VerificationAndProcessLogTests&FullyQualifiedName!~ToolchainDetectionTests&FullyQualifiedName!~FundamentalAliasTests&FullyQualifiedName!~GoalWorktreeIsolatedDotnetTests&FullyQualifiedName!~WorkerDispatchSpecClarificationTests&FullyQualifiedName!~ProgressiveReviewGlanceTests&FullyQualifiedName!~CodexEgressProxyTests&FullyQualifiedName!~DispatchRecoveryPolicyTests&FullyQualifiedName!~OperatorChannelTests&FullyQualifiedName!~StatePersistenceAndPerformanceTests&FullyQualifiedName!~DiscordGatewayTests&Category!=HostIntegration",
+        "filter": "FullyQualifiedName!~CliCommandTests&FullyQualifiedName!~WorkerShellTests&FullyQualifiedName!~WorkerSandboxCapabilityPlannerTests&FullyQualifiedName!~DashboardValidationHarnessTests&FullyQualifiedName!~ConductWatchSweepScopingTests&FullyQualifiedName!~GoalGitFactIndexTests&FullyQualifiedName!~GoalsPruneTests&FullyQualifiedName!~GoalWorktreeTestsAcceptanceLanding&FullyQualifiedName!~GoalWorktreeTestsCreationResolution&FullyQualifiedName!~GoalWorktreeTestsOrphanEphemeralSweep&FullyQualifiedName!~GoalWorktreeTestsRebaseMerge&FullyQualifiedName!~GoalWorktreeTestsRemoveCleanup&FullyQualifiedName!~GoalWorktreeTestsSqliteTooling&FullyQualifiedName!~LandingExecutorTests&FullyQualifiedName!~AdvanceLoopTests&FullyQualifiedName!~ConductLoopLockTests&FullyQualifiedName!~ConductorLoopHandoffTests&FullyQualifiedName!~FirewallSetupCommandTests&FullyQualifiedName!~GoalBacklogLinkTests&FullyQualifiedName!~GoalLifecycleEventWriterTests&FullyQualifiedName!~RealWorkerProcessGuardTests&FullyQualifiedName!~SqliteOrchestratorStateRepositoryTests&FullyQualifiedName!~WorkerDispatchTestsDispatchPreparation&FullyQualifiedName!~WorkerDispatchTestsModelSelection&FullyQualifiedName!~WorkerDispatchTestsSandboxLowIntegrity&FullyQualifiedName!~WorkerDispatchTestsSubscriptionPreflight&FullyQualifiedName!~WorkerDispatchTestsWorkerResultClassification&FullyQualifiedName!~WorkerProcessJobsTests&FullyQualifiedName!~WorkerProfileTests&FullyQualifiedName!~WorkspaceConsolidatorTests&FullyQualifiedName!~CliHelpTests&FullyQualifiedName!~ConductorDriverTests&FullyQualifiedName!~ConductorSelfRelaunchTests&FullyQualifiedName!~ConductorSuccessorSelfCheckTests&FullyQualifiedName!~DashboardRenderingTests&FullyQualifiedName!~DispatchProcessHostTests&FullyQualifiedName!~GitCliTests&FullyQualifiedName!~LauncherScriptTests&FullyQualifiedName!~MtpTestRunnerScriptTests&FullyQualifiedName!~ProcessTreeGuiSuppressionTests&FullyQualifiedName!~SemanticAcceptanceTests&FullyQualifiedName!~WorkerContextArtifactsCharacterizationTests&FullyQualifiedName!~ChaosGate&FullyQualifiedName!~AutoReviewRetryConvergenceBriefBuilderTests&FullyQualifiedName!~InquiryDispatcherTests&FullyQualifiedName!~ProgressiveReviewSteeringTests&FullyQualifiedName!~ConductorBatchLoopTests&FullyQualifiedName!~DotnetBuildEnvironmentManagerTests&FullyQualifiedName!~LocalProcessVerifierDotnetBuildSlotTests&FullyQualifiedName!~AcceptanceGateEngineSettingsTests&FullyQualifiedName!~GoalAcceptanceVerifierTests&FullyQualifiedName!~GoalAcceptanceVerifierDotnetBuildSlotTests&FullyQualifiedName!~RealProcessShardAlphaSmokeTests&FullyQualifiedName!~RealProcessShardBetaSmokeTests&FullyQualifiedName!~WorkerDispatchJobAccountingTests&FullyQualifiedName!~ProviderDefaultTests&FullyQualifiedName!~ProviderProbeTests&FullyQualifiedName!~RunEventStoreTests&FullyQualifiedName!~RunGoalServiceTests&FullyQualifiedName!~GoalMonitoringSubscriptionCommandTests&FullyQualifiedName!~VerificationAndProcessLogTests&FullyQualifiedName!~ToolchainDetectionTests&FullyQualifiedName!~FundamentalAliasTests&FullyQualifiedName!~GoalWorktreeIsolatedDotnetTests&FullyQualifiedName!~WorkerDispatchSpecClarificationTests&FullyQualifiedName!~ProgressiveReviewGlanceTests&FullyQualifiedName!~CodexEgressProxyTests&FullyQualifiedName!~DispatchRecoveryPolicyTests&FullyQualifiedName!~OperatorChannelTests&FullyQualifiedName!~StatePersistenceAndPerformanceTests&FullyQualifiedName!~DiscordGatewayTests&Category!=HostIntegration",
         "estimatedSerialSeconds": 22.60,
         "exclusiveResourceKeys": [
           "xunit:DotnetBuildSlots",
           "xunit:GoalAcceptanceVerifier"
         ]
+      }
+    ],
+    "localTestPartitions": [
+      {
+        "name": "Cli",
+        "description": "CLI command and lifecycle coverage.",
+        "laneNames": [ "Cli", "Goal lifecycle commands" ],
+        "additionalFilters": [ "FullyQualifiedName~CliHelpTests" ]
+      },
+      {
+        "name": "WorkerDispatch",
+        "description": "Worker shell, sandbox, profile, and dispatch coverage.",
+        "laneNames": [ "Worker shell", "Worker sandbox planner", "Worker profiles", "Worker dispatch fixtures" ]
+      },
+      {
+        "name": "GoalWorktree",
+        "description": "Goal worktree and acceptance-verifier coverage.",
+        "laneNames": [ "Goal worktree cleanup", "Goal acceptance verifier", "Goal acceptance build slots" ]
+      },
+      {
+        "name": "Dashboard",
+        "description": "Dashboard validation coverage.",
+        "laneNames": [ "Dashboard validation" ],
+        "additionalFilters": [ "FullyQualifiedName~DashboardRenderingTests", "FullyQualifiedName~DashboardHostTests" ]
+      },
+      {
+        "name": "Conductor",
+        "description": "Conductor watch, build-slot, and process-spawning coverage.",
+        "laneNames": [ "Conduct watch sweep scoping", "Dotnet build slots", "Process spawning" ]
+      },
+      {
+        "name": "ChaosGate",
+        "description": "Chaos-gate acceptance contract coverage.",
+        "laneNames": [ "Chaos gate" ]
+      },
+      {
+        "name": "Remainder",
+        "description": "Infrastructure coverage outside the named focused partitions.",
+        "laneNames": [ "Provider environment", "Remainder balance A", "Remainder balance B", "Remainder" ]
       }
     ],
     "mtpInvocations": [

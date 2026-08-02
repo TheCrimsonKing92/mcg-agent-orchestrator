@@ -485,13 +485,14 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Contains("Assert-CustodyAllowsTakeover -ArtifactsPath $Path", source, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "InvokeTestSummary_preserves_absolute_solution_project_paths_for_MTP_detection")]
-    public void InvokeTestSummaryPreservesAbsoluteSolutionProjectPathsForMtpDetection()
+    [Xunit.Fact(DisplayName = "MtpTestRunner_preserves_absolute_targets_and_selects_manifest_projects_from_solution")]
+    public void MtpTestRunnerPreservesAbsoluteTargetsAndSelectsManifestProjectsFromSolution()
     {
-        var source = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-TestSummary.ps1"));
+        var source = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "MtpTestRunner.psm1"));
 
-        Assert.Contains("[System.IO.Path]::IsPathRooted($_)", source, StringComparison.Ordinal);
-        Assert.Contains("[System.IO.Path]::GetFullPath($_)", source, StringComparison.Ordinal);
+        Assert.Contains("[System.IO.Path]::IsPathRooted($Target)", source, StringComparison.Ordinal);
+        Assert.Contains("[System.IO.Path]::GetFullPath($Target)", source, StringComparison.Ordinal);
+        Assert.Contains("$solutionText.IndexOf($project", source, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_owned_artifact_holder_is_reaped_and_retried")]
