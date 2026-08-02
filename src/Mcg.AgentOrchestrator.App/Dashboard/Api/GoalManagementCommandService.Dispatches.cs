@@ -293,6 +293,15 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
         safeBatch.TaskIds);
+    var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
+        dispatch.Task.InterruptedDispatchRecoveryId is not null);
+    if (!containsInterruptedDispatchRecovery &&
+        checkpointBeforeWorkerStart is not null &&
+        batch.Dispatches.Count > 0)
+    {
+        checkpointBeforeWorkerStart(kernel, goal.Id, batch.Dispatches[0].Task.Id);
+    }
+
     var processes = StartDispatches(
         kernel,
         workspace,
@@ -302,7 +311,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         agents,
         profiles,
         providers,
-        checkpointBeforeWorkerStart,
+        containsInterruptedDispatchRecovery ? checkpointBeforeWorkerStart : null,
         readCurrentInterruptedDispatchState);
     return new SubscriptionStartResult(
         batch.Dispatches,
