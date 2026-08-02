@@ -442,6 +442,87 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(submittedLocation, Assert.Single(state).Location);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("collapse branch :1078-1102", "collapse branch :1078-1097")]
+    [Xunit.InlineData("collapse branch :1078", "collapse branch :1097")]
+    [Xunit.InlineData("GoalStatus [24-37]", "GoalStatus [39-52]")]
+    [Xunit.InlineData("GoalStatus [24]", "GoalStatus [39]")]
+    [Xunit.InlineData("RunFocusedEvidence L1078-L1102", "RunFocusedEvidence L1080-L1097")]
+    [Xunit.InlineData("RunFocusedEvidence lines 1078-1102", "RunFocusedEvidence lines 1080-1097")]
+    [Xunit.InlineData("RunFocusedEvidence1078-1102", "RunFocusedEvidence1080-1097")]
+    public void ApplyRound_ShiftedTrailingLineRange_KeepsAnchor(
+        string previousRegion,
+        string submittedRegion)
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", previousRegion, "old hunk"),
+                "Missing guard.")
+        };
+        var submittedLocation = new ReviewFindingLocation("src/A.cs", submittedRegion, "new hunk");
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-1", ReviewFindingState.Open, submittedLocation, "Missing guard.")],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(submittedLocation, Assert.Single(state).Location);
+    }
+
+    [Xunit.Fact]
+    public void ApplyRound_DifferentRegionWithLineRanges_RejectsMove()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", "FirstRegion :1078-1102"),
+                "Missing guard.")
+        };
+        var next = new ReviewFindingRound(
+            [
+                new ReviewFinding(
+                    "F-1",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/A.cs", "SecondRegion :1080-1097"),
+                    "Missing guard.")
+            ],
+            []);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next));
+
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, error.Code);
+    }
+
+    [Xunit.Fact]
+    public void ApplyRound_IdenticalRenderedLocations_ReportsNormalizedRegions()
+    {
+        var previousLocation = new ReviewFindingLocation("src/A.cs", "GoalStatus", "current block");
+        var submittedLocation = new ReviewFindingLocation("src/A.cs", "GoalStatus [current block]");
+        Assert.Equal(previousLocation.ToString(), submittedLocation.ToString());
+        var previous = new[]
+        {
+            new ReviewFinding("F-1", ReviewFindingState.Open, previousLocation, "Missing guard.")
+        };
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-1", ReviewFindingState.Open, submittedLocation, "Missing guard.")],
+            []);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next));
+
+        Assert.Contains("normalized_prior_region='goalstatus'", error.Violation.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "normalized_submitted_region='goalstatus [current block]'",
+            error.Violation.Message,
+            StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_does_not_normalize_file_identity")]
     public void ReviewFindingConvergenceDoesNotNormalizeFileIdentity()
     {
