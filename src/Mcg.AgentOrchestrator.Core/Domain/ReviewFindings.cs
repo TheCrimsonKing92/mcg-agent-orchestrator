@@ -351,14 +351,15 @@ public static class ReviewFindingConvergence
             var anchorMoved = !SameAnchor(prior.Location, submitted.Location);
             if (anchorMoved && submitted.State == ReviewFindingState.Open)
             {
+                var message = BuildIdentityMovedMessage(prior.StableId, prior.Location, submitted.Location);
                 throw new ReviewFindingConvergenceException(
                     IdentityMovedViolationCode,
                     CountOpen(previous),
                     CountOpen(submittedFindings),
-                    $"Finding '{prior.StableId}' is still open but was reported at a different structural anchor; report it at its original anchor, or resolve it and open a new stable_id for the new anchor.",
+                    message,
                     new ReviewFindingContractViolation(
                         IdentityMovedViolationCode,
-                        $"Finding '{prior.StableId}' is still open but was reported at a different structural anchor; report it at its original anchor, or resolve it and open a new stable_id for the new anchor.",
+                        message,
                         prior.StableId,
                         prior.StableId,
                         prior.Location,
@@ -543,6 +544,15 @@ public static class ReviewFindingConvergence
     private static string NormalizeRegion(string region)
     {
         var normalized = Regex.Replace(region.Trim(), @"\s+", " ").ToLowerInvariant();
+        var withoutLineRange = Regex.Replace(
+            normalized,
+            @"(?:\s*:\s*\d+(?:\s*-\s*\d+)?|\s*\[\s*\d+(?:\s*-\s*\d+)?\s*\]|\s+l\d+\s*-\s*l?\d+|\s+lines?\s+\d+\s*-\s*\d+|(?<!\d)\d+\s*-\s*\d+)\s*$",
+            string.Empty).TrimEnd();
+        if (withoutLineRange.Length > 0)
+        {
+            normalized = withoutLineRange;
+        }
+
         var withoutArguments = Regex.Replace(
             normalized,
             @"\s*\(.*\)\s*$",
@@ -569,6 +579,23 @@ public static class ReviewFindingConvergence
         }
 
         return normalized;
+    }
+
+    private static string BuildIdentityMovedMessage(
+        string stableId,
+        ReviewFindingLocation prior,
+        ReviewFindingLocation submitted)
+    {
+        var message =
+            $"Finding '{stableId}' is still open but was reported at a different structural anchor; report it at its original anchor, or resolve it and open a new stable_id for the new anchor.";
+        if (!string.Equals(prior.ToString(), submitted.ToString(), StringComparison.Ordinal))
+        {
+            return message;
+        }
+
+        return message +
+            $" Raw locations render identically; normalized_prior_region='{NormalizeRegion(prior.Region)}'; " +
+            $"normalized_submitted_region='{NormalizeRegion(submitted.Region)}'.";
     }
 
     // Exact anchor equality (including hunk) — used only by the recycle guard so that a second,
