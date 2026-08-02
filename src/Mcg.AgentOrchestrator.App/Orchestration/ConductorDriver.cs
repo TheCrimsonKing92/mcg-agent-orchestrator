@@ -30,6 +30,7 @@ internal sealed class ConductorDriver
     // advances the round boundary). Requests beyond this bound escalate normally.
     private const int MaxReviewerEvidenceRequestsPerRound = 3;
     private const int MaxConductorEvidenceSubstitutionsPerRound = 2;
+    private const int MaxConductorDerivedEvidenceTargets = 4;
 
     // Prefix of the message the conductor writes when it mechanically re-dispatches the reviewer
     // task to attach evidence-on-demand receipts within the SAME round. Retries carrying this prefix
@@ -1221,12 +1222,14 @@ internal sealed class ConductorDriver
                     $"CRITERIA_ATTESTATION missing: {TrimForConductorMessage(criteriaDiagnostic)}");
             }
 
-            reviewerRoute = conductorEvidenceFallbackReason is null
-                ? ResolveReviewerRetryRoute(goal, triggeringTask, trigger.Finding)
-                : new ReviewRetryRoute(
-                    AgentRole.Developer,
-                    EscalateToOperator: false,
-                    $"conductor evidence substitution fallback: {conductorEvidenceFallbackReason}");
+            reviewerRoute = ResolveReviewerRetryRoute(goal, triggeringTask, trigger.Finding);
+            if (conductorEvidenceFallbackReason is not null)
+            {
+                reviewerRoute = reviewerRoute with
+                {
+                    Reason = $"{reviewerRoute.Reason}; conductor evidence substitution fallback: {conductorEvidenceFallbackReason}"
+                };
+            }
             if (reviewerRoute.EscalateToOperator)
             {
                 decision = VerifyingFindingAutoRetryDecision.Escalate(
@@ -1587,7 +1590,8 @@ internal sealed class ConductorDriver
             }
         }
 
-        if (targets.Count == 0)
+        if (targets.Count == 0 ||
+            targets.Sum(target => target.Classes.Count) > MaxConductorDerivedEvidenceTargets)
         {
             return false;
         }

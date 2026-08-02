@@ -2299,11 +2299,11 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_unparseable_typed_evidence_finding_routes_developer")]
-    public void ConductorDriverUnparseableTypedEvidenceFindingRoutesDeveloper()
+    [Xunit.Fact(DisplayName = "ConductorDriver_unparseable_typed_evidence_finding_routes_tester")]
+    public void ConductorDriverUnparseableTypedEvidenceFindingRoutesTester()
     {
         var (kernel, goal) = SoftwareGoal();
-        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
         var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
         {
@@ -2343,7 +2343,7 @@ public sealed class ConductorDriverTests
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(developer.Id, retriedTask);
+        Assert.Equal(tester.Id, retriedTask);
         Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
             evt.Message.Contains("reason=no-validated-test-project-and-class-pairs", StringComparison.Ordinal));
@@ -2802,21 +2802,29 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
-    public void UnparseableEvidenceBlocker_RecordsReasonAndReopensDeveloper()
+    public void OverCapEvidenceBlocker_RecordsUnparseableReasonAndRoutesTesterWithoutRunning()
     {
         var (kernel, goal) = SoftwareGoal();
-        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
         {
             PassVerification(kernel, goal, task);
         }
 
-        const string blocker = "Run whatever full test suite seems relevant; no focused class is named.";
+        const string blocker =
+            "Infrastructure.Tests FirstReceiptTests SecondReceiptTests ThirdReceiptTests " +
+            "FourthReceiptTests FifthReceiptTests receipts are missing.";
         FailReviewerNeedsWork(kernel, goal, reviewer, blocker, findings: [EvidenceFinding(blocker)]);
+        var focusedRuns = 0;
         TaskId? retriedTaskId = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
+            runFocusedEvidence: (_, _) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult("", true, true, "should not run", []);
+            },
             retryTask: (goalId, taskId, message) =>
             {
                 retriedTaskId = taskId;
@@ -2827,7 +2835,8 @@ public sealed class ConductorDriverTests
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Equal(0, focusedRuns);
+        Assert.Equal(tester.Id, retriedTaskId);
         Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
             evt.Message.Contains("outcome=fell-back-unparseable", StringComparison.Ordinal) &&
