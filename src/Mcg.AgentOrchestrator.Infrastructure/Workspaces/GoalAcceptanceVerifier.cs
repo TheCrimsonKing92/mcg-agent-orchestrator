@@ -598,9 +598,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var collapseSummary = failed is null
+            ? FormatFocusedEvidenceCollapseSummary(focusedChecks)
+            : string.Empty;
         var summary = failed is null
-            ? $"focused evidence passed: {checks.Count} check(s); receipts: {FormatReceiptPaths(receiptPaths)}"
-            : $"focused evidence failed: {failed.Name} exit {failed.ExitCode}; receipts: {FormatReceiptPaths(receiptPaths)}";
+            ? $"focused evidence passed: {checks.Count} check(s){collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
+            : $"focused evidence failed: {failed.Name} exit {failed.ExitCode}{collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
         var evidence = new FocusedEvidenceRunResult(
             request,
             Accepted: true,
@@ -1037,7 +1040,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        var built = new List<AcceptanceManifestCheck>();
+        var validated = new List<(string Project, string? Filter)>();
         var totalTargets = 0;
         foreach (var item in items)
         {
@@ -1068,28 +1071,52 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             totalTargets += targetCount;
-            if (totalTargets > MaxFocusedEvidenceTargets)
-            {
-                rejection = $"evidence request exceeds focused target limit ({MaxFocusedEvidenceTargets})";
-                return false;
-            }
+            validated.Add((project, filter));
+        }
 
-            built.Add(new AcceptanceManifestCheck
+        var built = new List<AcceptanceManifestCheck>();
+        if (totalTargets > MaxFocusedEvidenceTargets)
+        {
+            var emittedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in validated)
             {
-                Name = filter is null
-                    ? $"reviewer mapped project evidence: {ProjectLabel(project)}"
-                    : $"reviewer focused evidence: {ProjectLabel(project)} {filter}",
-                Type = "dotnet-test",
-                // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
-                // without this the check defaults to the VSTest runner and fails on .NET 10 with
-                // "VSTest target is no longer supported", making every reviewer evidence run fail.
-                Runner = "mtp",
-                Project = project,
-                Arguments = filter is null
-                    ? ["--verbosity", "minimal"]
-                    : ["--verbosity", "minimal", "--filter", filter],
-                TimeoutMinutes = 10
-            });
+                if (!emittedProjects.Add(item.Project))
+                {
+                    continue;
+                }
+
+                built.Add(new AcceptanceManifestCheck
+                {
+                    Name = $"reviewer mapped project evidence: {ProjectLabel(item.Project)} " +
+                        $"(collapsed from {totalTargets} focused targets)",
+                    Type = "dotnet-test",
+                    Runner = "mtp",
+                    Project = item.Project,
+                    Arguments = ["--verbosity", "minimal"]
+                });
+            }
+        }
+        else
+        {
+            foreach (var item in validated)
+            {
+                built.Add(new AcceptanceManifestCheck
+                {
+                    Name = item.Filter is null
+                        ? $"reviewer mapped project evidence: {ProjectLabel(item.Project)}"
+                        : $"reviewer focused evidence: {ProjectLabel(item.Project)} {item.Filter}",
+                    Type = "dotnet-test",
+                    // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
+                    // without this the check defaults to the VSTest runner and fails on .NET 10 with
+                    // "VSTest target is no longer supported", making every reviewer evidence run fail.
+                    Runner = "mtp",
+                    Project = item.Project,
+                    Arguments = item.Filter is null
+                        ? ["--verbosity", "minimal"]
+                        : ["--verbosity", "minimal", "--filter", item.Filter],
+                    TimeoutMinutes = 10
+                });
+            }
         }
 
         checks = built;
@@ -1193,6 +1220,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string FormatReceiptPaths(IReadOnlyList<string> paths) =>
         paths.Count == 0 ? "none" : string.Join(", ", paths);
+
+    private static string FormatFocusedEvidenceCollapseSummary(
+        IReadOnlyList<AcceptanceManifestCheck> checks)
+    {
+        var collapsed = checks
+            .Where(check => check.Name.Contains("(collapsed from ", StringComparison.Ordinal))
+            .Select(check => check.Name)
+            .ToArray();
+        return collapsed.Length == 0 ? string.Empty : $"; {string.Join(", ", collapsed)}";
+    }
 
     private static List<AcceptanceManifestCheck> BuildDeferredChecks(
         AcceptanceManifestCheck? solutionCheck,

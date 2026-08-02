@@ -1885,6 +1885,186 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact]
+    public async Task FocusedEvidence_OverCapOneProject_CollapsesToProjectCheck()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests");
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        var check = Assert.Single(result.Checks);
+        Assert.Equal(
+            "reviewer mapped project evidence: Infrastructure.Tests (collapsed from 5 focused targets)",
+            check.Name);
+        Assert.Contains("collapsed from 5 focused targets", result.Summary);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        Assert.DoesNotContain("--filter-class", testCall);
+        Assert.DoesNotContain("--filter-not-class", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_OverCapTwoProjects_CollapsesInFirstSeenOrder()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Core.Tests: AlphaTests,BetaTests,GammaTests; Infrastructure.Tests: DeltaTests,EpsilonTests");
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        Assert.Equal(
+            [
+                "reviewer mapped project evidence: Core.Tests (collapsed from 5 focused targets)",
+                "reviewer mapped project evidence: Infrastructure.Tests (collapsed from 5 focused targets)"
+            ],
+            result.Checks.Select(check => check.Name));
+        var testCalls = calls
+            .Where(call =>
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests") ||
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+            .ToArray();
+        Assert.Equal(2, testCalls.Length);
+        Assert.True(IsMtpExecutableCall(testCalls[0], "Mcg.AgentOrchestrator.Core.Tests"));
+        Assert.True(IsMtpExecutableCall(testCalls[1], "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+        Assert.All(testCalls, call => Assert.DoesNotContain("--filter-class", call));
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_AtOrUnderCap_PreservesExistingBehavior()
+    {
+        // Sole unchanged-behaviour guard: these cases pass before and after the overflow fix.
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests; Core.Tests: GammaTests,DeltaTests");
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        Assert.Equal(
+            [
+                "reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~AlphaTests|FullyQualifiedName~BetaTests",
+                "reviewer focused evidence: Core.Tests FullyQualifiedName~GammaTests|FullyQualifiedName~DeltaTests"
+            ],
+            result.Checks.Select(check => check.Name));
+
+        var (nativeProjectResult, _) = await RunMappedEvidenceAsync("Infrastructure.Tests: mapped-project");
+        Assert.True(nativeProjectResult.Accepted);
+        Assert.True(nativeProjectResult.Passed);
+        Assert.Equal(
+            "reviewer mapped project evidence: Infrastructure.Tests",
+            nativeProjectResult.Checks.Single().Name);
+        Assert.DoesNotContain("collapsed from", nativeProjectResult.Summary);
+
+        var (emptyResult, calls) = await RunMappedEvidenceAsync(" ; ");
+        Assert.False(emptyResult.Accepted);
+        Assert.False(emptyResult.Passed);
+        Assert.Equal("empty evidence request", emptyResult.Summary);
+        Assert.Empty(emptyResult.Checks);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_OverCapWithBadAlias_RejectsAlias()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests; Unknown.Tests: ZetaTests");
+
+        Assert.False(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Equal("unsupported evidence request project alias 'Unknown.Tests'", result.Summary);
+        Assert.Empty(result.Checks);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_OverCapWithBadFilter_RejectsFilter()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests; Core.Tests: all");
+
+        Assert.False(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Contains("unbounded evidence request rejected", result.Summary);
+        Assert.Empty(result.Checks);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_OverCapDuplicateAliases_EmitsOneProjectCheck()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests; Mcg.AgentOrchestrator.Infrastructure.Tests: DeltaTests,EpsilonTests");
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        Assert.Single(result.Checks);
+        Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_CollapsedCheckTimesOut_RemainsFailed()
+    {
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests",
+            timeOutTests: true);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Passed);
+        var check = Assert.Single(result.Checks);
+        Assert.False(check.Passed);
+        Assert.Contains("collapsed-from-5-focused-targets", check.Name);
+        Assert.Contains("collapsed-from-5-focused-targets", result.Summary);
+    }
+
+    private static async Task<(FocusedEvidenceRunResult Result, List<string[]> Calls)> RunMappedEvidenceAsync(
+        string request,
+        bool timeOutTests = false)
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var goalId = new GoalId(Guid.NewGuid().ToString("N"));
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Core.Tests") ||
+                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    if (timeOutTests)
+                    {
+                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                            124,
+                            "timed out",
+                            TimedOut: true,
+                            Timeout: TimeSpan.FromMinutes(40),
+                            Elapsed: TimeSpan.FromMinutes(40)));
+                    }
+
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunFocusedEvidenceAsync(root, goalId, request);
+            return (result, calls);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_rejects_unbounded_focused_evidence_request")]
     public async Task GoalAcceptanceVerifierRejectsUnboundedFocusedEvidenceRequest()
     {
