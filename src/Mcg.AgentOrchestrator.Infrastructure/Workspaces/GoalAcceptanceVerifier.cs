@@ -5899,8 +5899,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // to Windows PowerShell 5.1. Isolation of credentials and caches is already achieved by HOME,
             // USERPROFILE, DOTNET_CLI_HOME and NUGET_PACKAGES; relocating LOCALAPPDATA added no isolation the
             // others do not, and its blast radius is every path anything derives from it.
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            // This function MUST BE IDEMPOTENT, because it runs at two nested levels: the conductor
+            // configures the __acceptance-gate-attempt child, and that child - already living inside the
+            // hermetic environment, with USERPROFILE repointed at the profile root - configures each lane in
+            // turn. GetFolderPath expands the REG_EXPAND_SZ literal "%USERPROFILE%\AppData\Local" against the
+            // CALLING process, so at the inner level it no longer returns the real per-user folder: it
+            // returns <profile-root>\AppData\Local, and the lanes inherited THAT as their LOCALAPPDATA. Every
+            // path derived from it then nested one level deeper per hop, which is where the observed
+            // ...\mcg-hvp\AppData\Local\Temp\Low\mcg-tests came from, and it is why gate lanes kept resolving
+            // Windows PowerShell 5.1 instead of the per-user pwsh 7 install even after WorkerShell learned to
+            // read the variable - the variable it read was already redirected.
+            //
+            // Prefer the INHERITED variable, which the outer level pinned to the real location, and fall back
+            // to the known folder only at the outermost level where no variable exists yet.
+            var (appData, localAppData) = ResolvePerUserFolders(
+                Environment.GetEnvironmentVariable("APPDATA"),
+                Environment.GetEnvironmentVariable("LOCALAPPDATA"),
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
             // Repointing LOCALAPPDATA silently moves every path DERIVED from it, and the Windows per-user
             // temp location is %LOCALAPPDATA%\Temp. Callers that resolve their own temp root that way - the
             // test assembly's temp redirect does exactly this - then land under a directory that exists only
@@ -5918,6 +5934,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = Path.GetFullPath(repositoryRoot);
     }
+
+    /// <summary>
+    /// Chooses the per-user APPDATA/LOCALAPPDATA this environment should carry, preferring the INHERITED
+    /// variables over the known-folder API. Pure so the nested-level behaviour is assertable: the known-folder
+    /// values cannot be varied in-process (Windows resolves them from the token, not from a mutated
+    /// USERPROFILE), so a test that tried to simulate nesting by setting environment variables would pass
+    /// with or without the fix.
+    /// </summary>
+    internal static (string AppData, string LocalAppData) ResolvePerUserFolders(
+        string? appDataVariable,
+        string? localAppDataVariable,
+        string appDataKnownFolder,
+        string localAppDataKnownFolder) =>
+        (string.IsNullOrWhiteSpace(appDataVariable) ? appDataKnownFolder : appDataVariable,
+         string.IsNullOrWhiteSpace(localAppDataVariable) ? localAppDataKnownFolder : localAppDataVariable);
 
     internal static bool IsHermeticVerificationEnvironmentVariable(string name) =>
         IsInheritedHermeticVerificationEnvironmentVariable(name) ||

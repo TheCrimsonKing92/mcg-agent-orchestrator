@@ -57,6 +57,27 @@ because a gate held the build slots. Test and commit them before anything else.
    (`WorkerShellCandidatesForTests`) with two new tests, because the old test only asserted `File.Exists`,
    which 5.1 satisfies.
 
+## The known-folder trap has THREE sites — two fixed, watch for more
+
+`Environment.GetFolderPath(SpecialFolder.LocalApplicationData)` expands the REG_EXPAND_SZ literal
+`%USERPROFILE%\AppData\Local` against the CURRENT PROCESS's environment block. The gate rewrites USERPROFILE
+to a hermetic profile root, so ANY code that calls it in a gate-spawned child silently resolves into
+`<temp>\mcg-hvp\AppData\Local`, which has never held a PowerShell install and is not writable.
+
+PROVEN experimentally 2026-08-01: with USERPROFILE repointed and LOCALAPPDATA set to the real path, an
+already-running PARENT returns the REAL folder from GetFolderPath, but a freshly spawned CHILD returns the
+REDIRECTED one. That asymmetry is why this looks inconsistent when probed casually — always measure in a
+child.
+
+Sites found and fixed:
+1. `WorkerShell.WindowsPowerShellCandidates` — fixed in `c70a99e7`.
+2. `AssemblyTempRedirect.EnumerateCandidateRoots` — fixed in `84c1222d`.
+
+The fix in both is the same: read the `LOCALAPPDATA` VARIABLE first, then fall back to `GetFolderPath`. The
+gate sets that variable to the real per-user location precisely so derived paths keep working.
+**If you find a third caller of `GetFolderPath` on a per-user folder in code that runs under the gate, it has
+this bug.**
+
 ## Gate failures still unexplained — RE-MEASURE, do not file yet
 
 `5146fab4`'s gate failed 5 checks. Two are fixed above. These three are NOT yet diagnosed, and they ran
@@ -103,12 +124,26 @@ commit a brief cites as its baseline — `14b9ab0e`'s cited `97bcf627`, which wa
 
 ## Operator stop verbs: the order that actually works
 
-`cancel-goal`/`supersede-goal` RE-OPEN previously-cancelled tasks. Verified again today. The sequence is:
+**Cancel EVERY TASK FIRST, while the goal is still non-terminal. THEN stop the goal.**
 
-1. Stop the goal FIRST (`cancel-goal <g> "<reason>" --confirm-goal-stop`).
-2. THEN `progress <g> <task#> cancelled "<msg>"` for every task the stop left non-terminal.
+1. `progress <g> <task#> cancelled "<msg>"` for every non-terminal task.
+2. Confirm every task reads Completed/Cancelled.
+3. `cancel-goal <g> "<reason>" --confirm-goal-stop` (or `supersede-goal`).
+4. Re-verify after the next tick.
 
-I did it backwards on four goals and had to redo all of them.
+Do NOT do it the other way round. `StopGoal` (`AgentOrchestratorKernel.GoalLifecycle.cs:716-751`) only calls
+`goal.SetStatus(terminalStatus)` at `:744` — it does NOT reopen tasks, contrary to earlier belief. The real
+failure is a DEADLOCK: once the goal is terminal it leaves conductor scope, so a task `progress` intent comes
+back **`Rejected progress: goal was not found in conductor state`** (verified on intents `24d6dd7b`/eef5ffd9
+and `65771ff3`/14b9ab0e). The tasks then stay non-terminal, and `ReopenTerminalGoalWithNonTerminalTasks`
+(`:816-827`) sees terminal-goal + non-terminal-task and flips the goal back to **Active**.
+
+That is why `f8f71793` stuck (task 1 already Completed, task 2 cancelled while still Active) and `eef5ffd9`
+did not.
+
+HAZARD that defeats even the correct order: the post-loop-stop auto-requeue can flip a task back to
+Assigned/Running between steps 1 and 3 — exactly what happened to `eef5ffd9` (cancelled 02:49:58, requeued
+02:50:22). Re-check task states immediately before the goal stop.
 
 SEPARATELY: after any stop within ~15 min of a loop bounce, run
 `scripts\Get-GoalDispatchInventory.ps1 -GoalPrefix <goal>` and look for `exit=running hb=running`. On

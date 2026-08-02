@@ -827,6 +827,51 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         Assert.DoesNotContain("GIT_CONFIG_GLOBAL", environment.Keys);
     }
 
+    [Xunit.Fact(DisplayName = "Hermetic_per_user_folders_prefer_the_inherited_variables_over_the_known_folder")]
+    public void HermeticPerUserFoldersPreferTheInheritedVariablesOverTheKnownFolder()
+    {
+        // The gate applies the hermetic environment at TWO nested levels: the conductor configures the
+        // __acceptance-gate-attempt child (ConductorParallelAcceptanceAttempts.cs:1160), and that child -
+        // already inside the hermetic environment, with USERPROFILE repointed - configures each lane
+        // (GoalAcceptanceVerifier.cs:6016). At the inner level GetFolderPath expands
+        // "%USERPROFILE%\AppData\Local" against the redirected profile, so the known-folder inputs below are
+        // what the INNER level actually sees, while the variables still carry the real locations the outer
+        // level pinned.
+        const string RealAppData = @"C:\Users\real\AppData\Roaming";
+        const string RealLocalAppData = @"C:\Users\real\AppData\Local";
+        const string NestedAppData = @"C:\Temp\mcg-hvp\AppData\Roaming";
+        const string NestedLocalAppData = @"C:\Temp\mcg-hvp\AppData\Local";
+
+        var (appData, localAppData) = GoalAcceptanceVerifier.ResolvePerUserFolders(
+            appDataVariable: RealAppData,
+            localAppDataVariable: RealLocalAppData,
+            appDataKnownFolder: NestedAppData,
+            localAppDataKnownFolder: NestedLocalAppData);
+
+        // Taking the known folder here is what pushed the per-user folders one level deeper per hop. Every
+        // lane then inherited a nested LOCALAPPDATA, the per-user pwsh 7 install stopped resolving under it,
+        // and the gate silently ran each lane under Windows PowerShell 5.1.
+        Assert.Equal(RealAppData, appData);
+        Assert.Equal(RealLocalAppData, localAppData);
+    }
+
+    [Xunit.Fact(DisplayName = "Hermetic_per_user_folders_fall_back_to_the_known_folder_at_the_outermost_level")]
+    public void HermeticPerUserFoldersFallBackToTheKnownFolderAtTheOutermostLevel()
+    {
+        // At the outermost level there is no inherited value yet, so the known folder is correct there.
+        const string KnownAppData = @"C:\Users\real\AppData\Roaming";
+        const string KnownLocalAppData = @"C:\Users\real\AppData\Local";
+
+        var (appData, localAppData) = GoalAcceptanceVerifier.ResolvePerUserFolders(
+            appDataVariable: null,
+            localAppDataVariable: "   ",
+            appDataKnownFolder: KnownAppData,
+            localAppDataKnownFolder: KnownLocalAppData);
+
+        Assert.Equal(KnownAppData, appData);
+        Assert.Equal(KnownLocalAppData, localAppData);
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_bounds_generated_artifact_file_names")]
     public void GoalAcceptanceVerifierBoundsGeneratedArtifactFileNames()
     {
