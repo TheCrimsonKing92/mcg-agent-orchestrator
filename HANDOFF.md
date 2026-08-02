@@ -4,11 +4,23 @@
 
 ## Repository state
 
-Main is at `90d77e31`. Two further fixes are IN THE WORKING TREE, built but NOT yet committed — see
-"Finish this first" below.
+**THE GATE WORKS AGAIN. `fcf8669a` landed autonomously at 05:37 UTC as `9f0ee27e Integrate goal/fcf8669a`** —
+acceptance passed, pre-landing rebase succeeded, conductor integrated it with no operator action. That is the
+first goal through the pipeline since the gate broke, and it is the end-to-end proof that the git-identity fix
+plus the three known-folder fixes are correct.
 
-Landed 2026-08-01: `a68cc155`, `e89f9110`, `fb53d9c0`, `def0a48e`, `e7835e32`, `13d9d5e6`, `b8988202`,
-`82186ad5`, `fb686e53`, `e553625e`, `90d77e31`. Goals landed: `c012c6fc`, `4c001f19`.
+Main is at `9f0ee27e`. Working tree clean.
+
+Landed 2026-08-01/02: `a68cc155`, `e89f9110`, `fb53d9c0`, `def0a48e`, `e7835e32`, `13d9d5e6`, `b8988202`,
+`82186ad5`, `fb686e53`, `e553625e`, `90d77e31`, `c70a99e7`, `b66d363c`, `84c1222d`, `8a3c8961`, `2bd95504`.
+Goals landed: `c012c6fc`, `4c001f19`, `fcf8669a`.
+
+**PENDING VALIDATION:** `c28a87de` is the live before/after evidence for what `fcf8669a` just fixed — a goal
+whose branch is merged into main should now auto-terminalize instead of escalating at Verified forever. It was
+still `Verifying` immediately after the landing, which is EXPECTED: the running loop predates `9f0ee27e`, and
+the max-duration handoff does not rebuild. Bounce via the launcher when no worker is in flight, then watch
+whether `c28a87de` terminalizes on its own. If it does, `b9398a95` (the abandoned 4-round predecessor of
+`fcf8669a`) can be stopped using the recipe below.
 
 ## THE LANDING BLOCKER IS FIXED — confirmed live
 
