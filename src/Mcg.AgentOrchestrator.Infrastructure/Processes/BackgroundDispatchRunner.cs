@@ -41,7 +41,8 @@ public sealed record InterruptedDispatchStateRead(
     GoalStatus? GoalStatus,
     WorkTaskStatus? TaskStatus,
     string? UnreadableEntity = null,
-    string? Error = null)
+    string? Error = null,
+    bool WasTaskCancelledByConductor = false)
 {
     public bool IsReadable => UnreadableEntity is null;
 
@@ -363,11 +364,14 @@ public sealed class BackgroundDispatchRunner
                 blocker.TerminalState,
                 blocker.Reason,
                 blocker.Detail);
-            kernel.ConcludeInterruptedDispatchRecovery(
-                goalId,
-                taskId,
-                blocker.GoalStatus,
-                blocker.TaskStatus);
+            if (blocker.Reason == "terminal-state")
+            {
+                kernel.ConcludeInterruptedDispatchRecovery(
+                    goalId,
+                    taskId,
+                    blocker.GoalStatus,
+                    blocker.TaskStatus);
+            }
             return DispatchProcessStartResult.Skipped();
         }
 
@@ -1919,7 +1923,17 @@ public sealed class BackgroundDispatchRunner
             : string.Join(" | ", entries);
     }
 
-    public TaskProcessRecord CancelLatestProcess(AgentOrchestratorKernel kernel, GoalId goalId, TaskId taskId)
+    public TaskProcessRecord CancelLatestProcess(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId) =>
+        CancelLatestProcess(kernel, goalId, taskId, cancelledByConductor: false);
+
+    private TaskProcessRecord CancelLatestProcess(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        bool cancelledByConductor)
     {
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
@@ -1943,7 +1957,8 @@ public sealed class BackgroundDispatchRunner
         {
             CompletedAt = _clock.UtcNow,
             WasCancelled = true,
-            ResourceAccounting = resourceAccounting
+            ResourceAccounting = resourceAccounting,
+            WasCancelledByConductor = cancelledByConductor
         };
 
         kernel.RecordTaskProcessCancelled(goalId, taskId, cancelled);
@@ -1968,7 +1983,7 @@ public sealed class BackgroundDispatchRunner
                 continue;
             }
 
-            CancelLatestProcess(kernel, goalId, task.Id);
+            CancelLatestProcess(kernel, goalId, task.Id, cancelledByConductor: true);
             cancelled++;
         }
 
@@ -1998,11 +2013,13 @@ public sealed class BackgroundDispatchRunner
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null)
     {
         var recovered = 0;
-        foreach (var goal in kernel.Goals.Where(goal => goal.Status == GoalStatus.Active).ToArray())
+        foreach (var goal in kernel.Goals.Where(goal =>
+                     goal.Status == GoalStatus.Active || IsAutoRequeueTerminalGoalStatus(goal.Status)).ToArray())
         {
             foreach (var task in goal.Tasks.ToArray())
             {
-                if (task.Status == WorkTaskStatus.Cancelled)
+                if (task.Status == WorkTaskStatus.Cancelled &&
+                    task.LastProcess is { WasCancelledByConductor: true })
                 {
                     if (task.LastProcess is { } cancelledProcess)
                     {
@@ -2058,10 +2075,11 @@ public sealed class BackgroundDispatchRunner
         }
 
         var dispatchId = BuildDispatchId(goalId, taskId, interruptedDispatch);
+        var priorSkip = kernel.GetGoal(goalId).Timeline.FirstOrDefault(evt =>
+            evt.Kind == ProgressKind.TaskRequeueSkipped &&
+            evt.RequeueSkipped?.DispatchId == dispatchId);
         if (currentTask.InterruptedDispatchRecoveryId == dispatchId ||
-            kernel.GetGoal(goalId).Timeline.Any(evt =>
-                evt.Kind == ProgressKind.TaskRequeueSkipped &&
-                evt.RequeueSkipped?.DispatchId == dispatchId))
+            priorSkip?.RequeueSkipped?.Reason == "terminal-state")
         {
             return false;
         }
@@ -2076,11 +2094,14 @@ public sealed class BackgroundDispatchRunner
                 blocker.TerminalState,
                 blocker.Reason,
                 blocker.Detail);
-            kernel.ConcludeInterruptedDispatchRecovery(
-                goalId,
-                taskId,
-                blocker.GoalStatus,
-                blocker.TaskStatus);
+            if (blocker.Reason == "terminal-state")
+            {
+                kernel.ConcludeInterruptedDispatchRecovery(
+                    goalId,
+                    taskId,
+                    blocker.GoalStatus,
+                    blocker.TaskStatus);
+            }
             return false;
         }
 
@@ -2118,7 +2139,9 @@ public sealed class BackgroundDispatchRunner
             return true;
         }
 
-        if (!IsAutoRequeueTaskStatusAllowed(state.TaskStatus.Value))
+        if (!IsAutoRequeueTaskStatusAllowed(
+                state.TaskStatus.Value,
+                state.WasTaskCancelledByConductor))
         {
             blocker = new AutoRequeueBlocker(
                 "task",
@@ -2163,7 +2186,11 @@ public sealed class BackgroundDispatchRunner
 
         try
         {
-            return new InterruptedDispatchStateRead(goal.Status, kernel.GetTask(goalId, taskId).Status);
+            var task = kernel.GetTask(goalId, taskId);
+            return new InterruptedDispatchStateRead(
+                goal.Status,
+                task.Status,
+                WasTaskCancelledByConductor: task.WasCancelledByConductor);
         }
         catch (Exception ex)
         {
@@ -2171,13 +2198,19 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static bool IsAutoRequeueTaskStatusAllowed(WorkTaskStatus status) => status is
-        WorkTaskStatus.Pending or
-        WorkTaskStatus.Assigned or
-        WorkTaskStatus.Running;
+    private static bool IsAutoRequeueTaskStatusAllowed(
+        WorkTaskStatus status,
+        bool wasCancelledByConductor) =>
+        status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running ||
+        status == WorkTaskStatus.Cancelled && wasCancelledByConductor;
 
     private static bool IsAutoRequeueGoalStatusAllowed(GoalStatus status) =>
         status == GoalStatus.Active;
+
+    private static bool IsAutoRequeueTerminalGoalStatus(GoalStatus status) => status is
+        GoalStatus.Cancelled or
+        GoalStatus.Superseded or
+        GoalStatus.Completed;
 
     private static string BuildDispatchId(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
     {

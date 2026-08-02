@@ -1361,6 +1361,9 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             InterruptedDispatchRecoveryId = attemptAuthority is null
                 ? PickTickOwned(baseline.InterruptedDispatchRecoveryId, stored.InterruptedDispatchRecoveryId, current.InterruptedDispatchRecoveryId)
                 : attemptAuthority.InterruptedDispatchRecoveryId,
+            WasCancelledByConductor = attemptAuthority is null
+                ? PickTickOwned(baseline.WasCancelledByConductor, stored.WasCancelledByConductor, current.WasCancelledByConductor)
+                : attemptAuthority.WasCancelledByConductor,
             // Pre-review receipts are produced by the conductor tick. Preserve the tick's
             // current-HEAD evidence when an unrelated store mutation advances concurrently.
             PreReviewEvidenceReceipt = PickTickOwned(baseline.PreReviewEvidenceReceipt, stored.PreReviewEvidenceReceipt, current.PreReviewEvidenceReceipt)

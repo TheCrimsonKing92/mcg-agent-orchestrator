@@ -6351,7 +6351,7 @@ public sealed class ConductorBatchLoopTests
     }
 
     [Xunit.Fact]
-    public void BatchLoop_PriorCancelledTask_SkipsAutoRequeue()
+    public void BatchLoop_ConductorCancelledTask_AutoRequeues()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("five stage goal");
@@ -6372,10 +6372,22 @@ public sealed class ConductorBatchLoopTests
             .CancelRunningProcessesForGoal(kernel, goal.Id);
 
         Assert.Equal(WorkTaskStatus.Cancelled, kernel.GetTask(goal.Id, developer.Id).Status);
+        Assert.True(kernel.GetTask(goal.Id, developer.Id).WasCancelledByConductor);
 
+        var dispatches = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            dispatchAndStart: _ => DispatchStartOutcome.EmptyBatch("cancelled predecessor remains terminal"));
+            dispatchAndStart: recoveredGoal =>
+            {
+                var recoveredTask = recoveredGoal.Tasks.Single(t => t.Id == developer.Id);
+                kernel.RecordTaskDispatch(recoveredGoal.Id, recoveredTask.Id,
+                    new TaskDispatchRecord("test-worker", "second.exe", "C:\\goal", DateTimeOffset.UtcNow));
+                kernel.RecordTaskProcessStarted(recoveredGoal.Id, recoveredTask.Id,
+                    new TaskProcessRecord(777, "second.exe", "C:\\goal", "out2.log", "err2.log", "exit2.txt",
+                        DateTimeOffset.UtcNow, null, null, OwnedProcessIds: [777]));
+                dispatches++;
+                return DispatchStartOutcome.Started();
+            });
         var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
 
         var summary = new ConductorBatchLoop(
@@ -6387,14 +6399,13 @@ public sealed class ConductorBatchLoopTests
                 maxIterations: 1,
                 onlyGoalId: goal.Id.Value);
 
-        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(1, dispatches);
         var recoveredDeveloper = kernel.GetTask(goal.Id, developer.Id);
-        Assert.Equal(WorkTaskStatus.Cancelled, recoveredDeveloper.Status);
-        Assert.Contains(goal.Timeline, evt =>
-            evt.Kind == ProgressKind.TaskRequeueSkipped &&
-            evt.RequeueSkipped?.BlockingEntity == "task" &&
-            evt.RequeueSkipped.TerminalState == nameof(WorkTaskStatus.Cancelled));
-        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.TaskId == developer.Id);
+        Assert.Equal(WorkTaskStatus.Running, recoveredDeveloper.Status);
+        Assert.Equal(777, recoveredDeveloper.LastProcess!.ProcessId);
+        Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.TaskId == developer.Id);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRequeueSkipped);
     }
 
     // ── Watch mode: continues when all held instead of breaking ──────────

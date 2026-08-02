@@ -86,7 +86,8 @@ public sealed record TaskSnapshot(
     DateTimeOffset? LatestRetryAt = null,
     RetryRoundKind? PendingRetryRoundKind = null,
     PreReviewEvidenceReceipt? PreReviewEvidenceReceipt = null,
-    string? InterruptedDispatchRecoveryId = null);
+    string? InterruptedDispatchRecoveryId = null,
+    bool WasCancelledByConductor = false);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -164,7 +165,8 @@ public sealed record TaskProcessSnapshot(
     int? ExitCode,
     bool WasCancelled = false,
     IReadOnlyList<int>? OwnedProcessIds = null,
-    TaskProcessResourceAccountingSnapshot? ResourceAccounting = null);
+    TaskProcessResourceAccountingSnapshot? ResourceAccounting = null,
+    bool WasCancelledByConductor = false);
 
 public sealed record TaskProcessResourceAccountingSnapshot(
     long CpuMilliseconds,

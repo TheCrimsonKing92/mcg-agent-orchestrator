@@ -67,18 +67,21 @@ public sealed partial class AgentOrchestratorKernel
         GoalStatus? authoritativeGoalStatus,
         WorkTaskStatus? authoritativeTaskStatus)
     {
+        if (authoritativeGoalStatus is null || authoritativeTaskStatus is null)
+        {
+            throw new InvalidOperationException(
+                "Interrupted dispatch recovery can only be concluded from readable authoritative state.");
+        }
+
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
         task.SetInterruptedDispatchRecovery(null);
 
-        // A skipped automatic recovery must not remain in the locally prepared state with no
-        // process. Preserve the live store status when it was readable; otherwise Cancelled is the
-        // safe, explicit disposition and manual RetryTask remains the operator override.
-        task.SetStatus(authoritativeTaskStatus ?? WorkTaskStatus.Cancelled);
+        task.SetStatus(authoritativeTaskStatus.Value);
 
-        if (authoritativeGoalStatus is { } goalStatus && goalStatus != GoalStatus.Active)
+        if (authoritativeGoalStatus.Value != GoalStatus.Active)
         {
-            goal.SetStatus(goalStatus);
+            goal.SetStatus(authoritativeGoalStatus.Value);
             return;
         }
 

@@ -35,6 +35,8 @@ public sealed class InterruptedDispatchRequeueTests
     public void Recovery_TerminalGoal_SkipsOnce(GoalStatus terminalStatus)
     {
         var (kernel, goal, _, runner) = InterruptedDispatch();
+        kernel = WithGoalStatus(kernel, goal.Id, terminalStatus);
+        goal = kernel.GetGoal(goal.Id);
         InterruptedDispatchStateRead Read(GoalId _, TaskId __) => new(terminalStatus, WorkTaskStatus.Running);
 
         Assert.Equal(0, runner.RequeueInterruptedDispatches(kernel, Read));
@@ -63,7 +65,20 @@ public sealed class InterruptedDispatchRequeueTests
         Assert.Equal("state-unreadable", skipped.RequeueSkipped.Reason);
         Assert.Equal("database unavailable", skipped.RequeueSkipped.Detail);
         Assert.Equal(WorkTaskStatus.Cancelled, task.Status);
+        Assert.True(task.WasCancelledByConductor);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
+
+        var recoveredAfterStoreReturns = runner.RequeueInterruptedDispatches(
+            kernel,
+            (_, _) => new InterruptedDispatchStateRead(
+                GoalStatus.Active,
+                WorkTaskStatus.Cancelled,
+                WasTaskCancelledByConductor: true));
+
+        Assert.Equal(1, recoveredAfterStoreReturns);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.TaskRequeueSkipped));
+        Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
     }
 
     [Xunit.Fact]
@@ -174,6 +189,63 @@ public sealed class InterruptedDispatchRequeueTests
     }
 
     [Xunit.Fact]
+    public void Launch_UnreadableState_RetriesWithoutCancelling()
+    {
+        var (kernel, goal, task, recoveryRunner) = InterruptedDispatch();
+        recoveryRunner.RequeueInterruptedDispatches(
+            kernel,
+            (_, _) => new InterruptedDispatchStateRead(GoalStatus.Active, WorkTaskStatus.Running));
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("paid-worker", "claude --print prompt", Path.GetTempPath(), DateTimeOffset.UtcNow));
+
+        var spawnCount = 0;
+        var runner = new BackgroundDispatchRunner(
+            disableProcessStart: false,
+            startProcess: _ =>
+            {
+                spawnCount++;
+                return null;
+            });
+        var logRoot = Path.Combine(Path.GetTempPath(), $"mcg-unreadable-preflight-{Guid.NewGuid():N}");
+        try
+        {
+            var first = runner.TryStartLatestDispatch(
+                kernel,
+                goal.Id,
+                task.Id,
+                logRoot,
+                readCurrentState: (_, _) =>
+                    InterruptedDispatchStateRead.Unreadable("task", "database unavailable"));
+
+            Assert.True(first.RequeueSkipped);
+            Assert.Equal(0, spawnCount);
+            Assert.Equal(WorkTaskStatus.Running, task.Status);
+            Assert.NotNull(task.InterruptedDispatchRecoveryId);
+
+            var second = Assert.Throws<InvalidOperationException>(() =>
+                runner.TryStartLatestDispatch(
+                    kernel,
+                    goal.Id,
+                    task.Id,
+                    logRoot,
+                    readCurrentState: (_, _) =>
+                        new InterruptedDispatchStateRead(GoalStatus.Active, WorkTaskStatus.Running)));
+
+            Assert.Contains("Failed to start background dispatch process", second.Message, StringComparison.Ordinal);
+            Assert.Equal(1, spawnCount);
+            Assert.Equal(WorkTaskStatus.Running, task.Status);
+            Assert.NotNull(task.InterruptedDispatchRecoveryId);
+            Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.TaskRequeueSkipped));
+        }
+        finally
+        {
+            if (Directory.Exists(logRoot)) Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public void ManualRetry_CancelledTask_ReachesProcessSpawn()
     {
         var (kernel, goal, task, runner) = InterruptedDispatch();
@@ -223,6 +295,24 @@ public sealed class InterruptedDispatchRequeueTests
         {
             if (Directory.Exists(logRoot)) Directory.Delete(logRoot, recursive: true);
         }
+    }
+
+    [Xunit.Fact]
+    public void Recovery_OperatorCancelAfterConductorReap_SkipsRequeue()
+    {
+        var (kernel, goal, task, runner) = InterruptedDispatch();
+        Assert.True(task.WasCancelledByConductor);
+
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled, "operator cancelled after restart");
+
+        var recovered = runner.RequeueInterruptedDispatches(kernel);
+
+        Assert.Equal(0, recovered);
+        Assert.False(task.WasCancelledByConductor);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.TaskRequeueSkipped &&
+            evt.RequeueSkipped?.TerminalState == nameof(WorkTaskStatus.Cancelled));
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
     }
 
     [Xunit.Fact]
@@ -284,11 +374,19 @@ public sealed class InterruptedDispatchRequeueTests
                 "err.log",
                 "exit.log",
                 now,
-                now,
                 null,
-                WasCancelled: true,
+                null,
+                WasCancelled: false,
                 OwnedProcessIds: [4242]));
-        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled, "loop stopped");
+        kernel.RecordTaskProcessCancelled(
+            goal.Id,
+            task.Id,
+            task.LastProcess with
+            {
+                CompletedAt = now,
+                WasCancelled = true,
+                WasCancelledByConductor = true
+            });
         return (kernel, goal, task, new BackgroundDispatchRunner(isStillRunning: _ => false));
     }
 

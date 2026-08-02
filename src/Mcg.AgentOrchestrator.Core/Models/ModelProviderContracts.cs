@@ -168,7 +168,8 @@ public sealed record TaskProcessRecord(
     int? ExitCode,
     bool WasCancelled = false,
     IReadOnlyList<int>? OwnedProcessIds = null,
-    TaskProcessResourceAccounting? ResourceAccounting = null)
+    TaskProcessResourceAccounting? ResourceAccounting = null,
+    bool WasCancelledByConductor = false)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 

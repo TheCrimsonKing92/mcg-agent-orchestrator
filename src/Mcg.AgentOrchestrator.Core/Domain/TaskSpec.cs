@@ -56,15 +56,28 @@ public sealed class TaskSpec
 
     public string? InterruptedDispatchRecoveryId { get; private set; }
 
+    public bool WasCancelledByConductor { get; private set; }
+
     public PreReviewEvidenceReceipt? PreReviewEvidenceReceipt { get; private set; }
 
     internal void AssignTo(AgentId agentId)
     {
         AssignedAgentId = agentId;
         Status = WorkTaskStatus.Assigned;
+        WasCancelledByConductor = false;
     }
 
-    internal void SetStatus(WorkTaskStatus status) => Status = status;
+    internal void SetStatus(WorkTaskStatus status)
+    {
+        Status = status;
+        WasCancelledByConductor = false;
+    }
+
+    internal void SetConductorCancelledStatus()
+    {
+        Status = WorkTaskStatus.Cancelled;
+        WasCancelledByConductor = true;
+    }
 
     internal TaskSnapshot ToSnapshot()
     {
@@ -172,7 +185,8 @@ public sealed class TaskSpec
                             LastProcess.ResourceAccounting.PeakMemoryBytes,
                             LastProcess.ResourceAccounting.IoBytes,
                             LastProcess.ResourceAccounting.Reaped,
-                            LastProcess.ResourceAccounting.AccountingSource)),
+                            LastProcess.ResourceAccounting.AccountingSource),
+                    LastProcess.WasCancelledByConductor),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -184,7 +198,8 @@ public sealed class TaskSpec
             LatestRetryAt,
             PendingRetryRoundKind,
             PreReviewEvidenceReceipt,
-            InterruptedDispatchRecoveryId);
+            InterruptedDispatchRecoveryId,
+            WasCancelledByConductor);
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -312,7 +327,8 @@ public sealed class TaskSpec
                         snapshot.LastProcess.ResourceAccounting.PeakMemoryBytes,
                         snapshot.LastProcess.ResourceAccounting.IoBytes,
                         snapshot.LastProcess.ResourceAccounting.Reaped,
-                        snapshot.LastProcess.ResourceAccounting.AccountingSource)));
+                        snapshot.LastProcess.ResourceAccounting.AccountingSource),
+                snapshot.LastProcess.WasCancelledByConductor));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);
@@ -326,6 +342,7 @@ public sealed class TaskSpec
         task.PendingRetryRoundKind = snapshot.PendingRetryRoundKind;
         task.PreReviewEvidenceReceipt = snapshot.PreReviewEvidenceReceipt;
         task.InterruptedDispatchRecoveryId = snapshot.InterruptedDispatchRecoveryId;
+        task.WasCancelledByConductor = snapshot.WasCancelledByConductor;
         return task;
     }
 
