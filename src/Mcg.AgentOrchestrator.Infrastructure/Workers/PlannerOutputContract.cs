@@ -264,15 +264,25 @@ internal static partial class PlannerOutputContract
             var section = sections[index];
             var end = index + 1 < sections.Count ? sections[index + 1].Start : FindPlanEnd(normalized, section.BodyStart);
             var body = normalized[section.BodyStart..end].Trim();
+            var heading = normalized[section.Start..section.BodyStart].Trim();
             if (body.Length < 40)
             {
-                diagnostic = $"required section '{section.Label}' is not substantive";
+                diagnostic = BuildSectionFailureDiagnostic(
+                    section.Label,
+                    heading,
+                    body,
+                    "must contain at least 40 characters of substantive content in its section body");
                 return false;
             }
 
-            if (!HasRequiredSectionEvidence(section.Label, body))
+            if (section.Label != "acceptance criterion mapping" &&
+                !HasRequiredSectionEvidence(section.Label, body))
             {
-                diagnostic = $"required section '{section.Label}' lacks its mechanical evidence marker";
+                diagnostic = BuildSectionFailureDiagnostic(
+                    section.Label,
+                    heading,
+                    body,
+                    RequiredSectionEvidenceRequirement(section.Label));
                 return false;
             }
         }
@@ -406,8 +416,6 @@ internal static partial class PlannerOutputContract
         {
             "premise validity" =>
                 PremiseValidityMarker().IsMatch(body),
-            "acceptance criterion mapping" =>
-                AcceptanceMappingMarker().IsMatch(body),
             "target seams and symbols" =>
                 body.Contains('`') &&
                 TargetCitation().IsMatch(body),
@@ -425,6 +433,56 @@ internal static partial class PlannerOutputContract
                 StopConditionMarker().IsMatch(body),
             _ => false
         };
+    }
+
+    private static string RequiredSectionEvidenceRequirement(string label) =>
+        label switch
+        {
+            "premise validity" =>
+                "must explicitly state whether the premise is valid or invalid in its section body",
+            "target seams and symbols" =>
+                "must cite a concrete target seam or symbol in backticks in its section body",
+            "ownership and lifecycle" =>
+                "must state ownership or lifecycle responsibility in its section body",
+            "external and edge contracts" =>
+                "must describe external interaction or edge-case behavior in its section body",
+            "integration seams" =>
+                "must describe an integration sequence in its section body",
+            "verification commands and classes" =>
+                "must include a backticked verification command or class and identify its verification class in its section body",
+            "risks and stop conditions" =>
+                "must state a stop condition in its section body",
+            _ => "must contain the required evidence in its section body"
+        };
+
+    private static string BuildSectionFailureDiagnostic(
+        string label,
+        string heading,
+        string body,
+        string requirement)
+    {
+        var normalizedBody = body.ReplaceLineEndings("\n");
+        var lines = normalizedBody.Split('\n');
+        var excerpt = string.Join('\n', lines.Take(5));
+        var ellipsized = lines.Length > 5;
+        if (excerpt.Length > 200)
+        {
+            excerpt = excerpt[..200];
+            ellipsized = true;
+        }
+
+        excerpt = excerpt.Length == 0
+            ? "(empty)"
+            : excerpt
+                .Replace("\\", "\\\\", StringComparison.Ordinal)
+                .Replace("\"", "\\\"", StringComparison.Ordinal)
+                .Replace("\n", "\\n", StringComparison.Ordinal);
+        if (ellipsized)
+        {
+            excerpt += "…";
+        }
+
+        return $"required section '{label}' {requirement}; inspected heading '{heading}'; inspected section-body excerpt: \"{excerpt}\"";
     }
 
     internal static string BuildIngestedReceipt(string path, string plan) =>
@@ -611,9 +669,6 @@ internal static partial class PlannerOutputContract
 
     [GeneratedRegex(@"(?i)\b(?:valid|invalid)\b")]
     private static partial Regex PremiseValidityMarker();
-
-    [GeneratedRegex(@"(?i)\b(?:map|maps|mapped|mapping)\b")]
-    private static partial Regex AcceptanceMappingMarker();
 
     [GeneratedRegex(@"(?i)\b(?:own|owns|owned|ownership)\b")]
     private static partial Regex OwnershipMarker();

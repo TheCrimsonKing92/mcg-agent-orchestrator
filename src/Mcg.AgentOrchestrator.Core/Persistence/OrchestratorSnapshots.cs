@@ -216,9 +216,34 @@ public static class VerificationTextBounds
             return text;
         }
 
-        var head = text[..PreviewHeadChars];
-        var tail = text[^PreviewTailChars..];
+        // Snap both cuts to LINE boundaries. Slicing raw characters severed whatever line straddled the
+        // boundary, and for a reviewer's single-line `findings:` JSON array that produced a corrupt
+        // half-array: it still looked like a findings field, so the reader picked it up, the deserialize
+        // threw ("Expected end of string, but instead reached end of data. Path: $[3].location"), the
+        // exception was swallowed, and the operator was told the reviewer had submitted NO findings while
+        // twelve valid ones sat in the log on disk. A line must be wholly kept or wholly dropped; a dropped
+        // line is an honest absence, a severed one is indistinguishable from a worker error.
+        var head = text[..LineSnappedHeadLength(text)];
+        var tail = text[LineSnappedTailStart(text)..];
         return BuildBoundedText(head, tail, text.Length, path);
+    }
+
+    private static int LineSnappedHeadLength(string text)
+    {
+        var lastNewline = text.LastIndexOf('\n', PreviewHeadChars - 1);
+
+        // A head window containing no newline at all is one enormous line; keep the raw slice rather than
+        // emit an empty head, since there is no boundary to snap to.
+        return lastNewline < 0 ? PreviewHeadChars : lastNewline + 1;
+    }
+
+    private static int LineSnappedTailStart(string text)
+    {
+        var rawStart = text.Length - PreviewTailChars;
+        var nextNewline = text.IndexOf('\n', rawStart);
+
+        // Likewise: no newline in the tail window means one enormous trailing line.
+        return nextNewline < 0 ? rawStart : nextNewline + 1;
     }
 
     public static string BuildBoundedText(string head, string tail, long totalChars, string? path)
