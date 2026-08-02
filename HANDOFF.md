@@ -114,6 +114,40 @@ parent returns the real folder while its child returns the redirected one, so an
 you everything is fine when it is not. That asymmetry made one of my tests vacuous before the negative
 control caught it.
 
+## THE GATE IS FIXED. THE REVIEW SURFACE IS NOT. Two blockers, both precisely characterised.
+
+Goals now land (four did). What blocks the two in-flight goals is the review/retry path, which only started
+failing once work actually flowed through it again. NEITHER is a worker failure; both workers did real work.
+
+**`0fd33e0c` — Reviewer dispatch cannot START (`5f59b0d6` is wedged on it).**
+`Reviewer round touched-anchor scope unavailable because the previous or current reviewed commit is missing.`
+Thrown at `WorkerGitContext.cs:112-117`, guarded by "at least one finding is Resolved". MEASURED: the
+worktree HEAD resolves fine, and BOTH recorded review commits exist in the object store, so despite the word
+"missing" nothing is absent from git. `previousReviewedCommit` comes from the Reviewer task's own
+`VerificationHistory` and is sourced from `LastDispatch.BaseCommit` (`Recording.cs:475`). WHY that was empty
+is NOT established. Reachable from the normal cycle and unrecoverable through the operator surface: retrying
+the Developer works, the Reviewer then throws again every time.
+
+**`71d4d76c` — reviewer findings vanish between worker and convergence read (`0b81147a` is wedged on it).**
+READ THE RETRACTION ANNOTATION ON THAT ITEM BEFORE TOUCHING IT. I posted a "ROOT CAUSE FOUND" annotation
+naming a double-charged head prefix and a mid-line partial append in `ReadDecisionText` /
+`AppendDecisionLine`. Both code defects are REAL but they feed `DecisionText`, which is NOT where findings
+are read from. I implemented both, could not make a test go red without them, and reverted. Nothing landed.
+
+What IS measured: the reviewer emitted a complete, valid 6,772-char `findings:` block; all three validators
+in `TryParseJson` pass on it; `touched_anchors: []` is valid and non-null. The verification's retained
+`StandardOutput` is a HEAD+TAIL excerpt past `BoundThreshold` 16,384 (8192 + 8192, MIDDLE DROPPED) and the
+real log was 16,724, so ~340 chars vanished from exactly where the findings line sits. BUT
+`ReviewerWorkerResultBlockers.EnumerateEvidenceLines:800` also streams the FULL log from disk unbounded via
+`ReadArtifactLines:824`, which should make the excerpt irrelevant.
+
+THE NEXT MEASUREMENT IS ONE FIELD, already on the persisted record: was `verification.StandardOutputPath`
+populated for goal `0b81147a` task `7412c7c7`? Null or stale ⇒ the disk fallback yields nothing, the excerpt
+is all the reader sees, and the dropped middle IS sufficient. Populated ⇒ the excerpt is a red herring and
+the loss is downstream. `TryFindReviewFindingRound` is public, so this can be settled with a small test that
+builds a `TaskVerificationRecord` with a middle-dropped StandardOutput plus a real StandardOutputPath and
+asserts on the PARSED ROUND — not on the excerpt text, which is the mistake I made.
+
 ## Gate failures still unexplained — RE-MEASURE, do not file yet
 
 `5146fab4`'s gate failed 5 checks. Two are fixed above. These three are NOT yet diagnosed, and they ran
