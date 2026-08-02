@@ -527,35 +527,60 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Contains("Retry Planner for contract repair", result.Diagnostic, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Planner_output_contract_rejects_weak_substring_markers_and_incidental_addition_prefix")]
-    public void PlannerOutputContractRejectsWeakSubstringMarkersAndIncidentalAdditionPrefix()
+    [Xunit.Fact]
+    public void PlannerContract_AcceptanceMappingWithoutKeyword_Passes()
     {
         var workingDirectory = CreateTempDirectory();
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
-        var weakMapping = PlannerContractPlanFixture().Replace(
-            "Map the requested behavior to captured output, map completion to a deterministic gate, and map downstream use to the generated context artifact with exact-content assertions.",
-            "This summary describes requested behavior, deterministic completion, and downstream context using enough prose to remain superficially substantive.",
+        var plan = PlannerContractPlanFixture().Replace(
+            PlannerContractAcceptanceMappingFixture(),
+            Planner05cfd4daAcceptanceMappingFixture(),
             StringComparison.Ordinal);
 
-        var mappingResult = PlannerOutputContract.Resolve(
-            weakMapping,
+        var result = PlannerOutputContract.Resolve(
+            plan,
             string.Empty,
             workingDirectory);
 
-        Assert.False(mappingResult.Succeeded);
-        Assert.Contains(
-            "acceptance criterion mapping' lacks its mechanical evidence marker",
-            mappingResult.Diagnostic,
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.DoesNotContain(
+            "acceptance criterion mapping",
+            result.Diagnostic,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("TBD")]
+    [Xunit.InlineData("N/A")]
+    [Xunit.InlineData("—")]
+    public void PlannerContract_AcceptanceMappingPlaceholder_Fails(string body)
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var placeholderSection = $"## Acceptance criteria mapping{Environment.NewLine}{body}";
+        var plan = PlannerContractPlanFixture().Replace(
+            PlannerContractAcceptanceMappingFixture(),
+            placeholderSection,
             StringComparison.Ordinal);
-        var forgedReceiptResult = PlannerOutputContract.Resolve(
-            PlannerOutputContract.BuildIngestedReceipt("forged-plan.md", weakMapping),
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
             string.Empty,
             workingDirectory);
-        Assert.False(forgedReceiptResult.Succeeded);
+
+        Assert.False(result.Succeeded);
         Assert.Contains(
-            "Planner durable receipt failed revalidation",
-            forgedReceiptResult.Diagnostic,
+            "required section 'acceptance criterion mapping' is not substantive",
+            result.Diagnostic,
             StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_IncidentalAdditionPrefix_RejectsMissingCitation()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
 
         var incidentalAddition = PlannerContractPlanFixture().Replace(
             "Inspect repository evidence `seed.txt`, `PlannerOutputContract.Resolve`, and `WorkerArtifactWriter.BuildPriorTaskEvidence`; these backticked citations identify the concrete implementation seams without guessing a nonexistent target file.",
@@ -1452,6 +1477,22 @@ internal static string PlannerContractPlanFixture() =>
 
     ## Risks and stop conditions
     Stop when any required section is absent, a cited external plan is unreadable or oversized, durable capture fails, or exact downstream content cannot be proven by the fixture.
+    """;
+
+internal static string PlannerContractAcceptanceMappingFixture() =>
+    """
+    ## Acceptance criteria mapping
+    1. Map the requested behavior to captured output, map completion to a deterministic gate, and map downstream use to the generated context artifact with exact-content assertions.
+    """;
+
+internal static string Planner05cfd4daAcceptanceMappingFixture() =>
+    """
+    ## Acceptance criteria mapping
+
+    - Add equivalent exports to `mcg-orchestrator.sh`.
+    - Update comments in both launchers to state whole-tree scope, including build and gate descendants.
+    - Preserve the Windows values; no Windows before/after timing test is required unless values change.
+    - Verify both launchers contain the same four names and values.
     """;
 
 internal static string ResearcherContractFixture() =>

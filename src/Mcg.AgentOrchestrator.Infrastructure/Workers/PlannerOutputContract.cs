@@ -270,9 +270,10 @@ internal static partial class PlannerOutputContract
                 return false;
             }
 
-            if (!HasRequiredSectionEvidence(section.Label, body))
+            if (section.Label != "acceptance criterion mapping" &&
+                !HasRequiredSectionEvidence(section.Label, body))
             {
-                diagnostic = $"required section '{section.Label}' lacks its mechanical evidence marker";
+                diagnostic = $"required section '{section.Label}' does not contain the required evidence in its section body";
                 return false;
             }
         }
@@ -406,8 +407,6 @@ internal static partial class PlannerOutputContract
         {
             "premise validity" =>
                 PremiseValidityMarker().IsMatch(body),
-            "acceptance criterion mapping" =>
-                AcceptanceMappingMarker().IsMatch(body),
             "target seams and symbols" =>
                 body.Contains('`') &&
                 TargetCitation().IsMatch(body),
@@ -611,9 +610,6 @@ internal static partial class PlannerOutputContract
 
     [GeneratedRegex(@"(?i)\b(?:valid|invalid)\b")]
     private static partial Regex PremiseValidityMarker();
-
-    [GeneratedRegex(@"(?i)\b(?:map|maps|mapped|mapping)\b")]
-    private static partial Regex AcceptanceMappingMarker();
 
     [GeneratedRegex(@"(?i)\b(?:own|owns|owned|ownership)\b")]
     private static partial Regex OwnershipMarker();
