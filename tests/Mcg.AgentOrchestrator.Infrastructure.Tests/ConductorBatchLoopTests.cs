@@ -1018,9 +1018,12 @@ public sealed class ConductorBatchLoopTests
                     .Count());
             Assert.Contains(firstTick!.ProgressLines!, line =>
                 line.Contains("ADMISSION", StringComparison.Ordinal) &&
+                line.Contains("result=deferred", StringComparison.Ordinal) &&
                 line.Contains("reason=parallel-acceptance-slot-cap", StringComparison.Ordinal));
             Assert.DoesNotContain(firstTick.ProgressLines!, line =>
-                line.Contains("reason=parallel-acceptance-fairness", StringComparison.Ordinal));
+                line.Contains("result=deferred", StringComparison.Ordinal) &&
+                line.Contains("reason=parallel-acceptance-fairness", StringComparison.Ordinal) &&
+                line.Contains($"goal={deferredPrefix}", StringComparison.Ordinal));
             Assert.DoesNotContain(firstTick.ProgressLines!, line =>
                 line.Contains("reason=reserved-gate-slot", StringComparison.Ordinal));
         }
