@@ -48,7 +48,7 @@ function Set-HermeticVerificationEnvironment {
         }
     }
 
-    $profileRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'mcg-hermetic-verification-profile'
+    $profileRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'mcg-hvp'
     if ([string]::IsNullOrWhiteSpace($nugetPackages)) {
         $packageProfile = if ([string]::IsNullOrWhiteSpace($userProfile)) { $profileRoot } else { $userProfile }
         $nugetPackages = Join-Path $packageProfile '.nuget\packages'

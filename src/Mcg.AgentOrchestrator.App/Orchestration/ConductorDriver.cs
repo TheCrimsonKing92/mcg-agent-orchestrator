@@ -578,17 +578,7 @@ internal sealed class ConductorDriver
         _record = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:record", "Recording to SQLite dogfood log.");
-            var entry = DogfoodLogRenderer.Render(goal);
-            new DogfoodLogStore(workspace.DogfoodLogStorePath)
-                .UpsertAsync(new DogfoodLogAppend(
-                    goal.Id.Value,
-                    entry.Header,
-                    entry.Summary,
-                    entry.OperatorGate,
-                    entry.ModelFit,
-                    entry.Render()))
-                .GetAwaiter()
-                .GetResult();
+            GoalLandingPostActions.RecordDogfoodEntry(goal, workspace.DogfoodLogStorePath);
             GoalOperationJournal.Completed(dir, goal, "conductor:record", workspace.DogfoodLogStorePath);
             RefreshJournal(goal.Id);
         };
@@ -2793,6 +2783,13 @@ internal sealed class ConductorDriver
     {
         earlyOutcome = null;
         var rebase = _rebaseOntoMain(goal);
+
+        // No retry here, deliberately. An earlier version of this method retried a non-conflict failure once,
+        // on the theory that those failures were transient races against main advancing. That theory was
+        // WRONG: the nine occurrences that motivated it were a deterministic git exit 128, because the
+        // pre-landing rebase runs inside the hermetic acceptance child, which had no git identity and so
+        // could not create the commits a rebase replays. Retrying a deterministic failure cannot help, and it
+        // doubled the cost of every genuine one. The identity fix belongs in the environment, not here.
         if (rebase.UpdatedBranch)
         {
             return null;

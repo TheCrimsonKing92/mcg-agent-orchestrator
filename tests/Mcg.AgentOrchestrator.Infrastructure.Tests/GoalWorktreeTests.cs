@@ -343,6 +343,7 @@ public abstract class GoalWorktreeTestBase
         }
 
         public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
+        public void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha) { }
 
         public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }
 

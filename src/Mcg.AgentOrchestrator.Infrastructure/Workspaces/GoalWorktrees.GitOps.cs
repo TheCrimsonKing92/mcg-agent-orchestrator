@@ -258,16 +258,44 @@ public static partial class GoalWorktrees
                 $"Create an operator task to resolve conflicts in order: {string.Join(", ", conflictFiles)}");
         }
 
-        var detail = string.IsNullOrWhiteSpace(rebase.Error) ? rebase.Output.Trim() : rebase.Error.Trim();
+        // Report the EXIT CODE and both streams, not just whichever one happened to be non-empty. git writes
+        // its "Rebasing (n/m)" progress to stderr, so the old form produced messages like
+        // "Rebase of goal/X onto main failed: Rebasing (1/6)" - a step, not a fact. That happened nine times
+        // on 2026-08-01 and told the operator nothing: no exit code, no error text, and an EMPTY conflict list
+        // (so it had not conflicted - it was unable to complete). Diagnosing it took correlating tick logs by
+        // hand. Whatever the cause, the record has to carry enough to tell "conflicted" from "could not run".
+        // Collapse CR/LF before splicing into a single-line record. git separates "Rebasing (n/m)" from what
+        // follows with a BARE CARRIAGE RETURN, so the fatal text landed after a \r and every downstream
+        // single-line renderer swallowed it - the operator saw "...failed: Rebasing (1/3)" and not
+        // "Committer identity unknown ... fatal: unable to auto-detect email address". The full text was in
+        // the record all along; only the rendering lost it, which is the worst way to lose evidence because
+        // the record looks complete.
+        var stdErr = CollapseControlWhitespace(rebase.Error);
+        var stdOut = CollapseControlWhitespace(rebase.Output);
+        var streams = string.Join(
+            "; ",
+            new[]
+            {
+                string.IsNullOrWhiteSpace(stdErr) ? null : $"stderr={stdErr}",
+                string.IsNullOrWhiteSpace(stdOut) ? null : $"stdout={stdOut}",
+            }.Where(part => part is not null));
+        var detail = string.IsNullOrWhiteSpace(streams)
+            ? $"exit={rebase.ExitCode}; no output captured"
+            : $"exit={rebase.ExitCode}; {streams}";
         return new GoalWorktreeRebaseResult(
             GoalWorktreeRebaseStatus.Failed,
             branch,
-            string.IsNullOrWhiteSpace(detail)
-                ? $"Rebase of {branch} onto {baseBranch} failed; branch was restored to its pre-rebase state."
-                : $"Rebase of {branch} onto {baseBranch} failed: {detail}",
+            $"Rebase of {branch} onto {baseBranch} failed with no conflicting paths, so it could not complete rather than conflicting ({detail}); branch was restored to its pre-rebase state.",
             [],
             $"goal-recovery {Prefix(goalId)}");
     }
+
+    private static string CollapseControlWhitespace(string value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : string.Join(
+                " | ",
+                value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
     private static bool BranchExists(string executionDirectory, string branch)
     {

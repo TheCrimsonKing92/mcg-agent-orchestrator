@@ -42,10 +42,26 @@ internal static class AssemblyTempRedirect
         // %LOCALAPPDATA%\Temp\Low is the canonical Windows Low-integrity temp area; it carries
         // a Low mandatory label so both Low- and Medium-integrity processes can write it, and
         // its path is short enough for the deeply nested workspaces these tests create.
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (!string.IsNullOrEmpty(localAppData))
+        //
+        // Read the LOCALAPPDATA VARIABLE before the known-folder API. GetFolderPath expands the
+        // REG_EXPAND_SZ literal "%USERPROFILE%\AppData\Local" against THIS PROCESS'S environment
+        // block, and the acceptance gate spawns us with USERPROFILE repointed at an empty hermetic
+        // profile root. A freshly spawned child therefore resolves the known folder to
+        // <profile-root>\AppData\Local - a directory that does not exist and is not writable - so
+        // every workspace-building test failed with UnauthorizedAccessException on a path like
+        // ...\mcg-hvp\AppData\Local\Temp\Low\mcg-tests. The gate sets the LOCALAPPDATA variable to
+        // the REAL per-user location precisely so derived paths keep working; consult it first.
+        // (Same trap, same fix, as WorkerShell.WindowsPowerShellCandidates.)
+        foreach (var localAppData in new[]
+                 {
+                     Environment.GetEnvironmentVariable("LOCALAPPDATA"),
+                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+                 })
         {
-            yield return Path.Combine(localAppData, "Temp", "Low", "mcg-tests");
+            if (!string.IsNullOrEmpty(localAppData))
+            {
+                yield return Path.Combine(localAppData, "Temp", "Low", "mcg-tests");
+            }
         }
 
         // Fallback: a directory inside the build output, which lives in the Low-labeled repo

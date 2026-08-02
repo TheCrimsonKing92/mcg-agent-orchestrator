@@ -103,11 +103,28 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             .ToArray();
         if (open.Length == 0)
         {
+            // This fires when the merged finding state carries no open BLOCKING finding, but a reviewer that
+            // submitted several can still land here if its findings were lost between parse and this read -
+            // and the old message could not tell those apart, because it asserted "contained no structured
+            // open findings" while the two count arguments below are positional placeholders rather than
+            // measurements. That cost a day of diagnosis pointed at reviewers who had in fact submitted valid
+            // findings. Report what this call actually observed so the next occurrence is decided by data.
+            var observed = findings.Count == 0
+                ? "merged finding state was EMPTY (no findings reached this read at all)"
+                : $"merged finding state had {findings.Count} finding(s): 0 open+blocking, " +
+                  $"{deferredAdvisories.Length} open+advisory, {accepted.Length} resolved [" +
+                  string.Join(
+                      ", ",
+                      findings
+                          .Take(12)
+                          .Select(item =>
+                              $"{item.Finding.StableId}:{item.Finding.State}/{item.Finding.Severity}")) +
+                  (findings.Count > 12 ? ", ..." : string.Empty) + "]";
             throw new ReviewFindingConvergenceException(
                 ReviewFindingConvergence.NeedsWorkWithoutOpenFindingsViolationCode,
                 0,
                 0,
-                "Reviewer verdict=needs-work contained no structured open findings.");
+                $"Reviewer verdict=needs-work produced no open blocking finding to retry on; {observed}.");
         }
 
         var lines = new List<string>

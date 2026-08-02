@@ -356,6 +356,7 @@ internal static class TerminalGoalSweep
             var blockedByDirtyWorktree = false;
             var hasDurableLandingIntent = HasDurableLandingIntentForCleanup(executionDirectory, goal);
             var skipMergedCleanupThisPass = false;
+            var landedFromAncestryThisPass = false;
 
             if (HasStandingRetiredDisposition(executionDirectory, goal, branchFacts))
             {
@@ -430,6 +431,23 @@ internal static class TerminalGoalSweep
                             $"goal-mark-landed {prefix} --confirm-goal-mark-landed"));
                     }
                 }
+            }
+
+            if (TryTerminalizeFromMainAncestry(
+                    kernel,
+                    executionDirectory,
+                    goal,
+                    branchFactIndex,
+                    prefix,
+                    repairs))
+            {
+                goal = kernel.GetGoal(originalGoal.Id);
+                branchFacts = branchFactIndex.BuildGoalBranchFacts(goal) with
+                {
+                    BranchAlreadyLanded = true
+                };
+                hasDurableLandingIntent = true;
+                landedFromAncestryThisPass = true;
             }
 
             if (!blockedByDirtyWorktree &&
@@ -557,12 +575,16 @@ internal static class TerminalGoalSweep
                 }
                 else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
                 {
-                    RecordTerminalDisposition(
-                        kernel,
-                        executionDirectory,
-                        goal,
-                        GoalTerminalDispositionKind.Landed,
-                        $"Terminal sweep completed merged goal cleanup: {removeResult.Message}");
+                    if (!landedFromAncestryThisPass)
+                    {
+                        RecordTerminalDisposition(
+                            kernel,
+                            executionDirectory,
+                            goal,
+                            GoalTerminalDispositionKind.Landed,
+                            $"Terminal sweep completed merged goal cleanup: {removeResult.Message}");
+                    }
+
                     repairs.Add(new TerminalGoalSweepRepair(
                         "merged-branch-cleanup",
                         removeResult.Message,
@@ -686,6 +708,68 @@ internal static class TerminalGoalSweep
         GoalBranchFacts branchFacts) =>
         (goal.Status == GoalStatus.Cancelled || !branchFacts.HasGoalBranchArtifact) &&
         GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(executionDirectory, goal.Id));
+
+    private static bool TryTerminalizeFromMainAncestry(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        Goal goal,
+        GoalGitFactIndex branchFactIndex,
+        string prefix,
+        List<TerminalGoalSweepRepair> repairs)
+    {
+        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified) ||
+            !goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled) ||
+            !branchFactIndex.TryResolveMainAncestry(goal.Id, out var ancestry) ||
+            ancestry is null)
+        {
+            return false;
+        }
+
+        var detail =
+            $"Terminal sweep landed goal from main ancestry: branchTip={ancestry.BranchTip}; mainSha={ancestry.MainSha}; source=ancestry.";
+        RecordTerminalDisposition(
+            kernel,
+            executionDirectory,
+            goal,
+            GoalTerminalDispositionKind.Landed,
+            detail);
+        kernel.RecordGoalLandedFromAncestry(
+            goal.Id,
+            GoalWorktrees.BranchName(goal.Id),
+            ancestry.BranchTip,
+            ancestry.MainSha);
+
+        var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
+        var backlogMessages = new List<string>();
+        GoalLandingPostActions.AutoCloseSourceBacklogItem(
+            goal,
+            workspace.BacklogStorePath,
+            backlogMessages.Add,
+            kernel,
+            executionDirectory,
+            ancestry.MainSha);
+        repairs.AddRange(backlogMessages.Select(message => new TerminalGoalSweepRepair(
+            "ancestry-landing-backlog-post-action",
+            message,
+            $"backlog-list {prefix}")));
+        try
+        {
+            GoalLandingPostActions.RecordDogfoodEntry(goal, workspace.DogfoodLogStorePath);
+        }
+        catch (Exception ex)
+        {
+            repairs.Add(new TerminalGoalSweepRepair(
+                "ancestry-landing-post-action-failed",
+                $"dogfood log entry was not recorded: {ex.Message}",
+                $"dogfood-log add {prefix}"));
+        }
+
+        repairs.Add(new TerminalGoalSweepRepair(
+            "ancestry-derived-landing",
+            $"branchTip={ancestry.BranchTip}; mainSha={ancestry.MainSha}; source=ancestry",
+            $"conduct {prefix} --loop"));
+        return true;
+    }
 
     private static bool HasDurableLandingIntentForCleanup(string executionDirectory, Goal goal) =>
         goal.Status != GoalStatus.Cancelled &&
@@ -942,11 +1026,11 @@ internal static class TerminalGoalSweep
         GoalTerminalDispositionKind kind,
         string detail)
     {
+        kernel.CompleteGoal(goal.Id, detail);
         GoalOperationJournal.RecordTerminalDisposition(
             executionDirectory,
             goal,
             new GoalTerminalDisposition(kind, detail));
-        kernel.CompleteGoal(goal.Id, detail);
         GoalLifecycleEventWriter.RetireDispatchProviderSessions(kernel, goal.Id, DateTimeOffset.UtcNow);
     }
 

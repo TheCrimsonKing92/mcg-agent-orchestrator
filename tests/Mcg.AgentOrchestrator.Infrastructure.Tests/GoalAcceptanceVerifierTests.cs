@@ -58,7 +58,7 @@ public sealed class HermeticVerificationEnvironmentTests
         Assert.Equal(@"C:\dotnet", environment["DOTNET_ROOT"]);
         Assert.Equal(@"C:\packages", environment["NUGET_PACKAGES"]);
         Assert.Equal(
-            Path.Combine(Path.GetTempPath(), "mcg-hermetic-verification-profile"),
+            Path.Combine(Path.GetTempPath(), "mcg-hvp"),
             environment["USERPROFILE"]);
         Assert.Equal(environment["USERPROFILE"], environment["DOTNET_CLI_HOME"]);
         Assert.All(environment.Keys, name => Assert.True(
@@ -764,6 +764,112 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         {
             DeleteDirectoryWithRetry(root);
         }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_hermetic_profile_creates_derived_temp_directory")]
+    public void GoalAcceptanceVerifierHermeticProfileCreatesDerivedTempDirectory()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var profileRoot = Path.Combine(Path.GetTempPath(), "mcg-hvp");
+        var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+            environment,
+            Path.GetTempPath());
+
+        var localAppData = Assert.Contains("LOCALAPPDATA", environment);
+        Assert.False(string.IsNullOrWhiteSpace(localAppData));
+
+        // LOCALAPPDATA must NOT be relocated into the hermetic profile. Everything Windows derives from it
+        // moves when it does, and three separate gate defects in one day came from exactly that: the per-user
+        // temp location %LOCALAPPDATA%\Temp disappeared, paths built through it outgrew MAX_PATH and failed
+        // git object writes, and the PowerShell 7 execution alias under %LOCALAPPDATA%\Microsoft\WindowsApps
+        // stopped resolving so callers degraded to Windows PowerShell 5.1. Credential and cache isolation is
+        // carried by HOME/USERPROFILE/DOTNET_CLI_HOME/NUGET_PACKAGES instead.
+        Assert.False(
+            localAppData!.StartsWith(profileRoot, StringComparison.OrdinalIgnoreCase),
+            $"LOCALAPPDATA must stay outside the hermetic profile root, but was {localAppData}");
+        Assert.True(
+            Directory.Exists(localAppData),
+            $"LOCALAPPDATA must point at a real existing directory: {localAppData}");
+
+        var appData = Assert.Contains("APPDATA", environment);
+        Assert.False(
+            appData!.StartsWith(profileRoot, StringComparison.OrdinalIgnoreCase),
+            $"APPDATA must stay outside the hermetic profile root, but was {appData}");
+
+        // The isolation that IS intended must still hold.
+        var userProfile = Assert.Contains("USERPROFILE", environment);
+        Assert.StartsWith(profileRoot, userProfile!, StringComparison.OrdinalIgnoreCase);
+
+        // Git identity must survive the HOME/USERPROFILE redirect. git reads user.name/user.email from
+        // $HOME/.gitconfig, and the profile root is empty, so without this a verification child has no
+        // identity. Read-only git does not care, which is why it hid - but the pre-landing rebase replays
+        // commits and git exits 128 the moment it needs one, failing every landing attempt with
+        // "exit=128; stderr=Rebasing (1/3)".
+        foreach (var identityVariable in new[]
+                 {
+                     "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+                 })
+        {
+            var value = Assert.Contains(identityVariable, environment);
+            Assert.False(
+                string.IsNullOrWhiteSpace(value),
+                $"{identityVariable} must be set so a verification child can create commits");
+        }
+
+        // The identity must be DETERMINISTIC, not borrowed from the operator. Pointing GIT_CONFIG_GLOBAL at
+        // the real ~/.gitconfig would also restore identity, but it would drag in every other global git
+        // setting - the ambient-input class this whole function exists to forbid.
+        Assert.DoesNotContain("GIT_CONFIG_GLOBAL", environment.Keys);
+    }
+
+    [Xunit.Fact(DisplayName = "Hermetic_per_user_folders_prefer_the_inherited_variables_over_the_known_folder")]
+    public void HermeticPerUserFoldersPreferTheInheritedVariablesOverTheKnownFolder()
+    {
+        // The gate applies the hermetic environment at TWO nested levels: the conductor configures the
+        // __acceptance-gate-attempt child (ConductorParallelAcceptanceAttempts.cs:1160), and that child -
+        // already inside the hermetic environment, with USERPROFILE repointed - configures each lane
+        // (GoalAcceptanceVerifier.cs:6016). At the inner level GetFolderPath expands
+        // "%USERPROFILE%\AppData\Local" against the redirected profile, so the known-folder inputs below are
+        // what the INNER level actually sees, while the variables still carry the real locations the outer
+        // level pinned.
+        const string RealAppData = @"C:\Users\real\AppData\Roaming";
+        const string RealLocalAppData = @"C:\Users\real\AppData\Local";
+        const string NestedAppData = @"C:\Temp\mcg-hvp\AppData\Roaming";
+        const string NestedLocalAppData = @"C:\Temp\mcg-hvp\AppData\Local";
+
+        var (appData, localAppData) = GoalAcceptanceVerifier.ResolvePerUserFolders(
+            appDataVariable: RealAppData,
+            localAppDataVariable: RealLocalAppData,
+            appDataKnownFolder: NestedAppData,
+            localAppDataKnownFolder: NestedLocalAppData);
+
+        // Taking the known folder here is what pushed the per-user folders one level deeper per hop. Every
+        // lane then inherited a nested LOCALAPPDATA, the per-user pwsh 7 install stopped resolving under it,
+        // and the gate silently ran each lane under Windows PowerShell 5.1.
+        Assert.Equal(RealAppData, appData);
+        Assert.Equal(RealLocalAppData, localAppData);
+    }
+
+    [Xunit.Fact(DisplayName = "Hermetic_per_user_folders_fall_back_to_the_known_folder_at_the_outermost_level")]
+    public void HermeticPerUserFoldersFallBackToTheKnownFolderAtTheOutermostLevel()
+    {
+        // At the outermost level there is no inherited value yet, so the known folder is correct there.
+        const string KnownAppData = @"C:\Users\real\AppData\Roaming";
+        const string KnownLocalAppData = @"C:\Users\real\AppData\Local";
+
+        var (appData, localAppData) = GoalAcceptanceVerifier.ResolvePerUserFolders(
+            appDataVariable: null,
+            localAppDataVariable: "   ",
+            appDataKnownFolder: KnownAppData,
+            localAppDataKnownFolder: KnownLocalAppData);
+
+        Assert.Equal(KnownAppData, appData);
+        Assert.Equal(KnownLocalAppData, localAppData);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_bounds_generated_artifact_file_names")]

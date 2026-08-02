@@ -10,6 +10,7 @@ public interface IGoalLifecycleEventWriter
     void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt);
     void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures);
     void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch);
+    void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha);
     void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source);
     void AppendCleanedUp(GoalId goalId);
     void AppendProgressiveReviewGlanceReceipt(
@@ -47,6 +48,7 @@ public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
     public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) { }
     public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures) { }
     public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
+    public void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha) { }
     public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }
     public void AppendCleanedUp(GoalId goalId) { }
     public void AppendProgressiveReviewGlanceReceipt(

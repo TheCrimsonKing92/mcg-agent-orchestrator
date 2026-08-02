@@ -1124,6 +1124,135 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(GoalStatus.Verifying)]
+    [Xunit.InlineData(GoalStatus.Verified)]
+    public async Task MergedMainAncestryTerminalizesPostVerificationGoal(GoalStatus status)
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+            var backlogItem = await backlogStore.AddAsync($"Ancestry landing {status}");
+            var kernel = new AgentOrchestratorKernel();
+            kernel.SetEventWriter(new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal($"Ancestry-derived landing from {status}", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.SetGoalSourceBacklogItemId(goal.Id, backlogItem.Id);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual",
+                root,
+                0,
+                "passed",
+                string.Empty,
+                DateTimeOffset.UtcNow));
+            if (status == GoalStatus.Verifying)
+            {
+                kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance started before external merge.");
+            }
+
+            CommitGoalWork(root, goal.Id, $"src/ancestry-{status}.txt", "goal work");
+            var goalBranch = GoalWorktrees.BranchName(goal.Id);
+            var branchTip = RunGitOutput(root, "rev-parse", goalBranch).Trim();
+            RunGit(root, "branch", "side", "main");
+            RunGit(root, "merge", "--no-ff", goalBranch, "-m", "Integrate ancestry test goal");
+            var mainSha = RunGitOutput(root, "rev-parse", "refs/heads/main").Trim();
+            RunGit(root, "checkout", "side");
+            Xunit.Assert.NotEqual(0, GitCli.Run(root, "merge-base", "--is-ancestor", branchTip, "HEAD").ExitCode);
+            Xunit.Assert.Equal(0, GitCli.Run(root, "merge-base", "--is-ancestor", branchTip, mainSha).ExitCode);
+
+            TerminalGoalSweepResult? result = null;
+            var incidentalOutput = CaptureConsole(() => result = TerminalGoalSweep.Run(kernel, root, goal.Id));
+
+            var goalResult = Xunit.Assert.Single(Xunit.Assert.IsType<TerminalGoalSweepResult>(result).Goals);
+            Xunit.Assert.DoesNotContain("Closed backlog item", incidentalOutput, StringComparison.Ordinal);
+            Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "ancestry-derived-landing");
+            Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "ancestry-landing-backlog-post-action");
+            Xunit.Assert.Empty(goalResult.Blockers);
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            var journal = GoalOperationJournal.Read(root, goal.Id);
+            Xunit.Assert.True(GoalOperationJournal.HasCompletedLandingEvidence(journal));
+            Xunit.Assert.True(GoalOperationJournal.HasCompletedRecordEvidence(journal));
+            Xunit.Assert.True(GoalOperationJournal.HasCompletedCleanupEvidence(journal));
+            var terminalDispositionEntry = Xunit.Assert.Single(journal.Entries.Where(entry =>
+                entry.Operation == GoalOperationJournal.TerminalDispositionOperation));
+            Xunit.Assert.Contains("\"kind\":\"Landed\"", terminalDispositionEntry.Detail, StringComparison.Ordinal);
+            Xunit.Assert.Contains("source=ancestry", terminalDispositionEntry.Detail, StringComparison.Ordinal);
+
+            var closedBacklogItem = await backlogStore.GetByExactIdAsync(backlogItem.Id);
+            Xunit.Assert.Equal(BacklogItemStatus.Done, closedBacklogItem!.Status);
+            Xunit.Assert.Contains($"integrateCommit={mainSha}", Xunit.Assert.Single(closedBacklogItem.Notes).Text);
+            Xunit.Assert.NotNull(await new DogfoodLogStore(workspace.DogfoodLogStorePath)
+                .GetByGoalIdAsync(goal.Id.Value));
+
+            var eventsPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
+            var landedLine = File.ReadLines(eventsPath).Single(line =>
+            {
+                using var document = JsonDocument.Parse(line);
+                return document.RootElement.GetProperty("eventType").GetString() == "GoalLanded";
+            });
+            using var landedEvent = JsonDocument.Parse(landedLine);
+            Xunit.Assert.Equal(goalBranch, landedEvent.RootElement.GetProperty("goalBranch").GetString());
+            Xunit.Assert.Equal(branchTip, landedEvent.RootElement.GetProperty("branchTip").GetString());
+            Xunit.Assert.Equal(mainSha, landedEvent.RootElement.GetProperty("mainSha").GetString());
+            Xunit.Assert.Equal("ancestry", landedEvent.RootElement.GetProperty("source").GetString());
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task VerifyingUnmergedBranchDoesNotRaiseDecision()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Ordinary mid-acceptance goal", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual",
+                root,
+                0,
+                "passed",
+                string.Empty,
+                DateTimeOffset.UtcNow));
+            kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance in progress.");
+            CommitGoalWork(root, goal.Id, "src/verifying-unmerged.txt", "goal work");
+            var branchTip = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
+            Xunit.Assert.NotEqual(0, GitCli.Run(root, "merge-base", "--is-ancestor", branchTip, "refs/heads/main").ExitCode);
+
+            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            await TerminalGoalSweepAttention.SurfaceAsync(
+                kernel,
+                result,
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
+            var output = CaptureConsole(() => ConsoleViews.PrintTerminalGoalSweep(result));
+
+            Xunit.Assert.Empty(result.Blockers);
+            Xunit.Assert.DoesNotContain("SWEEP_BLOCKER", output, StringComparison.Ordinal);
+            Xunit.Assert.Empty(await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+                .GetAttentionQueueAsync());
+            Xunit.Assert.Equal(GoalStatus.Verifying, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.False(GoalOperationJournal.HasCompletedLandingEvidence(
+                GoalOperationJournal.Read(root, goal.Id)));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_batches_git_branch_facts_once_per_sweep")]
     public void TerminalGoalSweepBatchesGitBranchFactsOncePerSweep()
     {
@@ -1149,7 +1278,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             {
                 if (Path.GetFullPath(workingDirectory).Equals(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) &&
                     args.Count > 0 &&
-                    (args[0] == "for-each-ref" || args.SequenceEqual(["worktree", "list", "--porcelain"])))
+                    (args[0] is "for-each-ref" or "rev-parse" || args.SequenceEqual(["worktree", "list", "--porcelain"])))
                 {
                     batchedGitCalls.Add(string.Join(" ", args));
                 }
@@ -1163,6 +1292,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/"));
             Assert.Equal(1, batchedGitCalls.Count(call => call == "worktree list --porcelain"));
+            Assert.Equal(1, batchedGitCalls.Count(call => call == "rev-parse --verify refs/heads/main"));
         }
         finally
         {

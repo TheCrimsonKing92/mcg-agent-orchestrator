@@ -14,12 +14,17 @@ internal sealed record GoalBranchFacts(
     public bool MissingBranchOrWorktree => IsAcceptedOrVerifiedGitGoal && (!HasRegisteredWorktree || !HasGoalBranch);
 }
 
+internal sealed record GoalMainAncestry(
+    string BranchTip,
+    string MainSha);
+
 internal sealed class GoalGitFactIndex(
     string executionDirectory,
     bool isGitWorkTree,
     IReadOnlyDictionary<string, string> goalBranchTips,
     IReadOnlySet<string> mergedGoalBranches,
-    IReadOnlySet<string> registeredWorktreePaths)
+    IReadOnlySet<string> registeredWorktreePaths,
+    string? mainSha)
 {
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
         (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
@@ -30,18 +35,23 @@ internal sealed class GoalGitFactIndex(
         var branchResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/goal/");
         if (branchResult.ExitCode != 0)
         {
-            return new GoalGitFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet());
+            return new GoalGitFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet(), null);
         }
 
         var mergedResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/goal/");
         var worktreeResult = RunGit(fullExecutionDirectory, "worktree", "list", "--porcelain");
+        var mainResult = RunGit(fullExecutionDirectory, "rev-parse", "--verify", "refs/heads/main");
+        var resolvedMainSha = mainResult.ExitCode == 0 && IsSingleToken(mainResult.Output.Trim())
+            ? mainResult.Output.Trim()
+            : null;
 
         return new GoalGitFactIndex(
             fullExecutionDirectory,
             true,
             ParseBranchTips(branchResult.Output),
             mergedResult.ExitCode == 0 ? ParseLines(mergedResult.Output) : EmptySet(),
-            worktreeResult.ExitCode == 0 ? ParseWorktreePaths(worktreeResult.Output) : EmptyPathSet());
+            worktreeResult.ExitCode == 0 ? ParseWorktreePaths(worktreeResult.Output) : EmptyPathSet(),
+            resolvedMainSha);
     }
 
     public bool HasGoalBranch(string branchName) => isGitWorkTree && goalBranchTips.ContainsKey(branchName);
@@ -67,6 +77,46 @@ internal sealed class GoalGitFactIndex(
             hasGoalBranch,
             hasGoalBranchArtifact,
             branchAlreadyLanded);
+    }
+
+    public bool TryResolveMainAncestry(GoalId goalId, out GoalMainAncestry? ancestry)
+    {
+        ancestry = null;
+        var branch = GoalWorktrees.BranchName(goalId);
+        if (!isGitWorkTree ||
+            !goalBranchTips.TryGetValue(branch, out var branchTip) ||
+            string.IsNullOrWhiteSpace(branchTip) ||
+            string.IsNullOrWhiteSpace(mainSha))
+        {
+            return false;
+        }
+
+        var ancestorResult = RunGit(
+            executionDirectory,
+            "merge-base",
+            "--is-ancestor",
+            branchTip,
+            mainSha);
+        if (ancestorResult.ExitCode != 0)
+        {
+            return false;
+        }
+
+        var landingPathResult = RunGit(
+            executionDirectory,
+            "log",
+            "--format=%H",
+            "-n",
+            "1",
+            "--ancestry-path",
+            $"{branchTip}..{mainSha}");
+        if (landingPathResult.ExitCode != 0 || !IsSingleToken(landingPathResult.Output.Trim()))
+        {
+            return false;
+        }
+
+        ancestry = new GoalMainAncestry(branchTip, mainSha);
+        return true;
     }
 
     public string BuildGoalEvidenceKey(Goal goal)
