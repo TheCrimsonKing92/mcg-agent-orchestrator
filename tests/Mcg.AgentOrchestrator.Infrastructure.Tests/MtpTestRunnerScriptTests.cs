@@ -298,8 +298,7 @@ public sealed class MtpTestRunnerScriptTests
         {
             var root = Path.Combine(Path.GetTempPath(), "mtp-script-tests", Guid.NewGuid().ToString("n"));
             var resultsRoot = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Temp", "Low", "mcg-tests", "script-tests", Guid.NewGuid().ToString("n"));
+                Path.GetTempPath(), "script-tests", Guid.NewGuid().ToString("n"));
             var scripts = Path.Combine(root, "scripts");
             var config = Path.Combine(root, "config");
             var projectDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
