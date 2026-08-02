@@ -2333,8 +2333,8 @@ public sealed class ConductorBatchLoopTests
     [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_capacity_reduces_measured_makespan")]
     public void BatchLoopParallelAcceptanceCapacityReducesMeasuredMakespan()
     {
-        const int fixedGateDurationMs = 500;
-        const double tolerance = 0.35;
+        const int fixedGateDurationMs = 1000;
+        const double tolerance = 0.01;
         var serialized = Enumerable.Range(0, 2)
             .Select(_ => MeasureFixedGateMakespan(parallelCapacity: 1, fixedGateDurationMs))
             .OrderBy(sample => sample.MakespanMs)
@@ -2359,7 +2359,7 @@ public sealed class ConductorBatchLoopTests
             $"Expected non-overlapping makespan ranges, serialized={FormatRange(serialized)} parallel={FormatRange(parallel)}.");
 
         _output.WriteLine(
-            $"MEASURED_ACCEPTANCE_MAKESPAN fixedGateDurationMs={fixedGateDurationMs} samples=2 tolerance=35% " +
+            $"MEASURED_ACCEPTANCE_MAKESPAN simulated=true fixedGateDurationMs={fixedGateDurationMs} samples=2 tolerance=1% " +
             $"beforeMedianMs={Median(serialized):F1} beforeRangeMs={FormatRange(serialized)} " +
             $"afterMedianMs={Median(parallel):F1} afterRangeMs={FormatRange(parallel)} " +
             $"beforeGateDurationsMs={FormatGateDurations(serialized)} afterGateDurationsMs={FormatGateDurations(parallel)} " +
@@ -3164,7 +3164,10 @@ public sealed class ConductorBatchLoopTests
         }
         Assert.Equal(goals.Length, goals.Select(BuildPermitIndex).Distinct().Count());
 
-        var timings = new ConcurrentQueue<(long Started, long Completed)>();
+        var logicalTimeMs = 0;
+        var timings = new ConcurrentQueue<(int Started, int Completed)>();
+        using var gateStarted = new SemaphoreSlim(0);
+        var gates = new ConcurrentQueue<AcceptanceMeasurementGate>();
         var landed = new HashSet<string>(StringComparer.Ordinal);
         var attemptRoot = CreateTempDirectory("mcg-conductor-measured-makespan");
         Action waitForAttempts = () => { };
@@ -3176,17 +3179,13 @@ public sealed class ConductorBatchLoopTests
                 getFacts: goal => landed.Contains(goal.Id.Value)
                     ? new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: true)
                     : new GoalLifecycleFacts(WorkspaceExists: true),
-                runAcceptanceWithSlot: (_, _) =>
+                runAcceptanceWithSlot: (_, slot) =>
                 {
-                    var started = Stopwatch.GetTimestamp();
-                    using var gateDurationElapsed = new ManualResetEventSlim();
-                    using var timer = new Timer(
-                        static state => ((ManualResetEventSlim)state!).Set(),
-                        gateDurationElapsed,
-                        TimeSpan.FromMilliseconds(fixedGateDurationMs),
-                        Timeout.InfiniteTimeSpan);
-                    Assert.True(gateDurationElapsed.Wait(TimeSpan.FromSeconds(5)));
-                    timings.Enqueue((started, Stopwatch.GetTimestamp()));
+                    var gate = new AcceptanceMeasurementGate(Volatile.Read(ref logicalTimeMs), slot);
+                    gates.Enqueue(gate);
+                    gateStarted.Release();
+                    Assert.True(gate.Release.Wait(TimeSpan.FromSeconds(5)));
+                    timings.Enqueue((gate.StartedAtMs, Volatile.Read(ref logicalTimeMs)));
                     return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
                 },
                 getLandingFileScopes: goal =>
@@ -3208,6 +3207,7 @@ public sealed class ConductorBatchLoopTests
                 parallelAcceptanceAttemptCoordinator: coordinator,
                 getAcceptanceSlotCount: _ => parallelCapacity);
 
+            var releasedGateCount = 0;
             for (var tick = 0; tick < 6 && landed.Count < goals.Length; tick++)
             {
                 new ConductorBatchLoop().Run(
@@ -3216,6 +3216,37 @@ public sealed class ConductorBatchLoopTests
                     ConductorAutonomyPolicy.Conservative,
                     NoStopPath(),
                     maxIterations: 1);
+
+                var expectedWaveCount = Math.Min(parallelCapacity, goals.Length - releasedGateCount);
+                for (var index = 0; index < expectedWaveCount; index++)
+                {
+                    Assert.True(
+                        gateStarted.Wait(TimeSpan.FromSeconds(5)),
+                        $"Expected {expectedWaveCount} acceptance gates to start in tick {tick}.");
+                }
+
+                var wave = gates.ToArray()
+                    .Skip(releasedGateCount)
+                    .Take(expectedWaveCount)
+                    .ToArray();
+                Assert.Equal(expectedWaveCount, wave.Length);
+                if (expectedWaveCount > 1)
+                {
+                    Assert.All(wave, gate => Assert.True(gate.PermitIndex.HasValue));
+                    Assert.Equal(expectedWaveCount, wave.Select(gate => gate.PermitIndex).Distinct().Count());
+                }
+
+                if (wave.Length > 0)
+                {
+                    Interlocked.Add(ref logicalTimeMs, fixedGateDurationMs);
+                    foreach (var gate in wave)
+                    {
+                        gate.Release.Set();
+                    }
+
+                    releasedGateCount += wave.Length;
+                }
+
                 waitForAttempts();
             }
 
@@ -3225,7 +3256,7 @@ public sealed class ConductorBatchLoopTests
             var firstStarted = completedTimings.Min(timing => timing.Started);
             var lastCompleted = completedTimings.Max(timing => timing.Completed);
             var gateDurationsMs = completedTimings
-                .Select(timing => StopwatchTicksToMilliseconds(timing.Completed - timing.Started))
+                .Select(timing => (double)(timing.Completed - timing.Started))
                 .Order()
                 .ToArray();
             var permits = goals
@@ -3239,19 +3270,26 @@ public sealed class ConductorBatchLoopTests
             }
 
             return new AcceptanceMakespanSample(
-                StopwatchTicksToMilliseconds(lastCompleted - firstStarted),
+                lastCompleted - firstStarted,
                 gateDurationsMs,
                 permits);
         }
         finally
         {
+            foreach (var gate in gates)
+            {
+                gate.Release.Set();
+            }
+
             waitForAttempts();
+            foreach (var gate in gates)
+            {
+                gate.Dispose();
+            }
+
             TryDeleteDirectory(attemptRoot);
         }
     }
-
-    private static double StopwatchTicksToMilliseconds(long ticks) =>
-        ticks * 1000d / Stopwatch.Frequency;
 
     private static double Median(IReadOnlyList<AcceptanceMakespanSample> samples) =>
         samples.Count % 2 == 0
@@ -3271,6 +3309,17 @@ public sealed class ConductorBatchLoopTests
         double MakespanMs,
         IReadOnlyList<double> GateDurationsMs,
         IReadOnlyList<string> Permits);
+
+    private sealed class AcceptanceMeasurementGate(int startedAtMs, int? permitIndex) : IDisposable
+    {
+        public int StartedAtMs { get; } = startedAtMs;
+
+        public int? PermitIndex { get; } = permitIndex;
+
+        public ManualResetEventSlim Release { get; } = new(false);
+
+        public void Dispose() => Release.Dispose();
+    }
 
     private static int BuildPermitIndex(Goal goal) =>
         goal.Id.Value[..8]
