@@ -1022,7 +1022,6 @@ public sealed class ConductorBatchLoopTests
                 line.Contains($"ACCEPTANCE goal={deferredPrefix}", StringComparison.Ordinal) &&
                 line.Contains("result=started", StringComparison.Ordinal));
 
-            WriteSimulatedMakespanReceipt(heldPermits);
             release.Set();
             waitForAttempts();
 
@@ -2937,51 +2936,6 @@ public sealed class ConductorBatchLoopTests
             receipt.Split(' ', StringSplitOptions.RemoveEmptyEntries),
             token => token.StartsWith("permit=", StringComparison.Ordinal));
         return permitToken["permit=".Length..];
-    }
-
-    private static void WriteSimulatedMakespanReceipt(IReadOnlyList<string> heldPermits)
-    {
-        const int sampleCount = 2;
-        const int gateCount = 2;
-        const int simulatedGateDurationMilliseconds = 1_000;
-        var before = Enumerable.Range(0, sampleCount)
-            .Select(_ => SimulateFixedGateMakespan(
-                gateCount,
-                effectiveCapacity: 1,
-                simulatedGateDurationMilliseconds))
-            .ToArray();
-        var after = Enumerable.Range(0, sampleCount)
-            .Select(_ => SimulateFixedGateMakespan(
-                gateCount,
-                effectiveCapacity: ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
-                simulatedGateDurationMilliseconds))
-            .ToArray();
-
-        Assert.All(before, elapsed => Assert.Equal(2_000, elapsed));
-        Assert.All(after, elapsed => Assert.Equal(1_000, elapsed));
-        Console.WriteLine(
-            $"SIMULATED_ACCEPTANCE_MAKESPAN D={simulatedGateDurationMilliseconds}ms " +
-            $"gateDurations=[{simulatedGateDurationMilliseconds},{simulatedGateDurationMilliseconds}]ms " +
-            $"beforeMedian={before.Order().ElementAt(sampleCount / 2)}ms " +
-            $"beforeRange={before.Min()}-{before.Max()}ms beforeSamples=[{string.Join(',', before)}]ms " +
-            $"afterMedian={after.Order().ElementAt(sampleCount / 2)}ms " +
-            $"afterRange={after.Min()}-{after.Max()}ms afterSamples=[{string.Join(',', after)}]ms " +
-            $"concurrentPermits=[{string.Join(',', heldPermits)}]");
-    }
-
-    private static int SimulateFixedGateMakespan(
-        int gateCount,
-        int effectiveCapacity,
-        int gateDurationMilliseconds)
-    {
-        var slotAvailability = new int[effectiveCapacity];
-        for (var gate = 0; gate < gateCount; gate++)
-        {
-            var slot = Array.IndexOf(slotAvailability, slotAvailability.Min());
-            slotAvailability[slot] += gateDurationMilliseconds;
-        }
-
-        return slotAvailability.Max();
     }
 
     private static int BuildPermitIndex(Goal goal) =>
