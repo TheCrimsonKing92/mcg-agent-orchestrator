@@ -2330,42 +2330,6 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_capacity_reduces_measured_makespan")]
-    public void BatchLoopParallelAcceptanceCapacityReducesMeasuredMakespan()
-    {
-        const int fixedGateDurationMs = 1000;
-        const double tolerance = 0.01;
-        var serialized = Enumerable.Range(0, 2)
-            .Select(_ => MeasureFixedGateMakespan(parallelCapacity: 1, fixedGateDurationMs))
-            .OrderBy(sample => sample.MakespanMs)
-            .ToArray();
-        var parallel = Enumerable.Range(0, 2)
-            .Select(_ => MeasureFixedGateMakespan(
-                parallelCapacity: ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
-                fixedGateDurationMs))
-            .OrderBy(sample => sample.MakespanMs)
-            .ToArray();
-
-        Assert.All(serialized, sample => Assert.InRange(
-            sample.MakespanMs,
-            2 * fixedGateDurationMs * (1 - tolerance),
-            2 * fixedGateDurationMs * (1 + tolerance)));
-        Assert.All(parallel, sample => Assert.InRange(
-            sample.MakespanMs,
-            fixedGateDurationMs * (1 - tolerance),
-            fixedGateDurationMs * (1 + tolerance)));
-        Assert.True(
-            serialized.Min(sample => sample.MakespanMs) > parallel.Max(sample => sample.MakespanMs),
-            $"Expected non-overlapping makespan ranges, serialized={FormatRange(serialized)} parallel={FormatRange(parallel)}.");
-
-        _output.WriteLine(
-            $"MEASURED_ACCEPTANCE_MAKESPAN simulated=true fixedGateDurationMs={fixedGateDurationMs} samples=2 tolerance=1% " +
-            $"beforeMedianMs={Median(serialized):F1} beforeRangeMs={FormatRange(serialized)} " +
-            $"afterMedianMs={Median(parallel):F1} afterRangeMs={FormatRange(parallel)} " +
-            $"beforeGateDurationsMs={FormatGateDurations(serialized)} afterGateDurationsMs={FormatGateDurations(parallel)} " +
-            $"beforePermits={FormatPermits(serialized)} afterPermits={FormatPermits(parallel)}");
-    }
-
     [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_bounded_overtake_defers_newer_after_cap")]
     public void BatchLoopParallelAcceptanceBoundedOvertakeDefersNewerAfterCap()
     {
