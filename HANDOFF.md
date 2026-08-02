@@ -69,14 +69,38 @@ already-running PARENT returns the REAL folder from GetFolderPath, but a freshly
 REDIRECTED one. That asymmetry is why this looks inconsistent when probed casually — always measure in a
 child.
 
-Sites found and fixed:
-1. `WorkerShell.WindowsPowerShellCandidates` — fixed in `c70a99e7`.
-2. `AssemblyTempRedirect.EnumerateCandidateRoots` — fixed in `84c1222d`.
+THE ROOT CAUSE was the third site, and it made the first two look like they had not worked: the hermetic
+environment ITSELF was not idempotent. The gate applies it TWICE — the conductor configures the
+`__acceptance-gate-attempt` process (`ConductorParallelAcceptanceAttempts.cs:1160`), and that process,
+already hermetic, configures each lane (`GoalAcceptanceVerifier.cs:6016`). The inner call re-derived
+APPDATA/LOCALAPPDATA from `GetFolderPath` against the USERPROFILE the outer call had already repointed, so it
+wrote a PROFILE-NESTED LOCALAPPDATA into every lane. Reading "the variable" therefore read an already-wrong
+value. Fixed in `8a3c8961` via the pure seam `ResolvePerUserFolders`.
 
-The fix in both is the same: read the `LOCALAPPDATA` VARIABLE first, then fall back to `GetFolderPath`. The
-gate sets that variable to the real per-user location precisely so derived paths keep working.
-**If you find a third caller of `GetFolderPath` on a per-user folder in code that runs under the gate, it has
-this bug.**
+Sites found and fixed — ALL THREE ARE LOAD-BEARING, each verified by removing it and reproducing the failure:
+1. `WorkerShell.WindowsPowerShellCandidates` — `c70a99e7`. Removing it reproduces the gate signature exactly:
+   `stdout=Windows PowerShell` plus `$psi.ArgumentList` null (`You cannot call a method on a null-valued
+   expression`) — 5.1 has no `ArgumentList`.
+2. `AssemblyTempRedirect.EnumerateCandidateRoots` — `84c1222d`. Without it, and even with a REAL
+   LOCALAPPDATA, the test temp lands at `...\mcg-hvp\AppData\Local\Temp\Low\mcg-tests` and every
+   workspace-building test dies with `UnauthorizedAccessException`. A hand-created directory there also
+   fails: the real `%LOCALAPPDATA%\Temp\Low` carries a LOW mandatory label that a copy does not, and the MTP
+   exe runs at Low integrity.
+3. `GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment` — `8a3c8961`, the root cause above.
+
+The fix in all three is the same: read the `LOCALAPPDATA` VARIABLE first, then fall back to `GetFolderPath`.
+
+**DO NOT consolidate these into one shared helper.** Site 2 is a `[ModuleInitializer]` in the TEST assembly
+whose entire purpose is to redirect TMP/TEMP *before anything else resolves a temp path*. Calling into
+Infrastructure from it would trigger Infrastructure's static initializers — including
+`WorkerShell.Executable` — ahead of the redirect, which is the exact ordering it exists to guarantee. The
+duplication is deliberate; each copy carries the reasoning.
+
+**If you find a FOURTH caller of `GetFolderPath` on a per-user folder in code that runs under the gate, it
+has this bug.** Measure it in a freshly spawned CHILD, never in the current process: an already-running
+parent returns the real folder while its child returns the redirected one, so an in-process probe will tell
+you everything is fine when it is not. That asymmetry made one of my tests vacuous before the negative
+control caught it.
 
 ## Gate failures still unexplained — RE-MEASURE, do not file yet
 
