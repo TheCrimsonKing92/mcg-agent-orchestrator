@@ -934,6 +934,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         using var holder = StartFileHolder(lockedPath, readyPath, releasePath);
         Assert.True(SpinWait.SpinUntil(() => File.Exists(readyPath), TimeSpan.FromSeconds(10)), "Fixture holder did not signal readiness.");
         DotnetBuildEnvironmentManager.WriteLandingTestFixtureMarkerForTests(fixtureRoot, holder.Id);
+        var fakeTimeProvider = new RecordingTimeProvider();
         var prepareAttempts = 0;
         DotnetBuildEnvironmentManager.PrepareArtifactsDirectoryForTests = current =>
         {
@@ -951,8 +952,17 @@ public sealed class DotnetBuildEnvironmentManagerTests
         try
         {
             DotnetBuildLeaseAcquisition? result = null;
+            void AdvanceClock(TimeSpan delay)
+            {
+                fakeTimeProvider.Advance(delay);
+            }
+
             var output = AsyncLocalConsoleRouter.Capture(() =>
-                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(1)));
+                result = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                    environment,
+                    TimeSpan.FromSeconds(1),
+                    timeProvider: fakeTimeProvider,
+                    sleep: AdvanceClock));
 
             var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(result);
             acquired.Lease.Dispose();
