@@ -5856,6 +5856,25 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         environment["HOME"] = profileRoot;
         environment["USERPROFILE"] = profileRoot;
         environment["DOTNET_CLI_HOME"] = profileRoot;
+
+        // Git resolves user.name/user.email from $HOME/.gitconfig, and the profile root above is empty, so a
+        // verification child inherits NO GIT IDENTITY. Read-only git is unaffected, which is why this hid for
+        // so long - but the pre-landing rebase REPLAYS COMMITS, and git exits 128 ("unable to auto-detect
+        // email address") the moment it needs an identity. That surfaced as
+        // "Rebase of goal/X onto main failed ... (exit=128; stderr=Rebasing (1/3)" on every landing attempt:
+        // git printed its progress, hit the first commit, and died. A manual rebase always worked because an
+        // operator shell still has the real HOME.
+        //
+        // Point GIT_CONFIG_GLOBAL at the operator's real global config rather than relaxing HOME. Identity is
+        // the thing the child genuinely needs; HOME stays redirected so credential helpers and caches keep
+        // resolving into the throwaway profile.
+        var realGlobalGitConfig = string.IsNullOrWhiteSpace(userProfile)
+            ? null
+            : Path.Combine(userProfile, ".gitconfig");
+        if (realGlobalGitConfig is not null && File.Exists(realGlobalGitConfig))
+        {
+            environment["GIT_CONFIG_GLOBAL"] = realGlobalGitConfig;
+        }
         environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
         environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         environment["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";

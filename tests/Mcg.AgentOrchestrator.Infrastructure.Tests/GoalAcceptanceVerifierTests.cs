@@ -804,6 +804,23 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         // The isolation that IS intended must still hold.
         var userProfile = Assert.Contains("USERPROFILE", environment);
         Assert.StartsWith(profileRoot, userProfile!, StringComparison.OrdinalIgnoreCase);
+
+        // Git identity must survive the HOME/USERPROFILE redirect. git reads user.name/user.email from
+        // $HOME/.gitconfig, and the profile root is empty, so without this a verification child has no
+        // identity. Read-only git does not care, which is why it hid - but the pre-landing rebase replays
+        // commits and git exits 128 the moment it needs one, failing every landing attempt with
+        // "exit=128; stderr=Rebasing (1/3)".
+        var realGlobalGitConfig = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".gitconfig");
+        if (File.Exists(realGlobalGitConfig))
+        {
+            var gitConfigGlobal = Assert.Contains("GIT_CONFIG_GLOBAL", environment);
+            Assert.Equal(realGlobalGitConfig, gitConfigGlobal);
+            Assert.False(
+                gitConfigGlobal!.StartsWith(profileRoot, StringComparison.OrdinalIgnoreCase),
+                "GIT_CONFIG_GLOBAL must point at the real global config, not into the empty hermetic profile");
+        }
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_bounds_generated_artifact_file_names")]
