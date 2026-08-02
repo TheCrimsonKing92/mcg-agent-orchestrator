@@ -60,4 +60,28 @@ public sealed partial class AgentOrchestratorKernel
         _eventWriter.AppendTimelineEvent(progressEvent);
         return true;
     }
+
+    public void ConcludeInterruptedDispatchRecovery(
+        GoalId goalId,
+        TaskId taskId,
+        GoalStatus? authoritativeGoalStatus,
+        WorkTaskStatus? authoritativeTaskStatus)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.SetInterruptedDispatchRecovery(null);
+
+        // A skipped automatic recovery must not remain in the locally prepared state with no
+        // process. Preserve the live store status when it was readable; otherwise Cancelled is the
+        // safe, explicit disposition and manual RetryTask remains the operator override.
+        task.SetStatus(authoritativeTaskStatus ?? WorkTaskStatus.Cancelled);
+
+        if (authoritativeGoalStatus is { } goalStatus && goalStatus != GoalStatus.Active)
+        {
+            goal.SetStatus(goalStatus);
+            return;
+        }
+
+        RefreshGoalStatus(goal);
+    }
 }

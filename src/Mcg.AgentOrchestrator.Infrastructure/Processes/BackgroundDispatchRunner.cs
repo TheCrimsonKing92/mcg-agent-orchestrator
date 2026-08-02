@@ -351,9 +351,6 @@ public sealed class BackgroundDispatchRunner
         if (spawnReceipt.WorktreeHeadSha is not null)
             kernel.RecordDispatchBaseCommit(goalId, taskId, spawnReceipt.WorktreeHeadSha);
 
-        // Persist the freshly prepared automatic recovery before the authoritative re-read. The
-        // second checkpoint below records the process while its start gate is still closed.
-        checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId);
         var currentTask = kernel.GetTask(goalId, taskId);
         if (currentTask.InterruptedDispatchRecoveryId is { } interruptedDispatchId &&
             TryReadAutoRequeueBlocker(kernel, goalId, taskId, readCurrentState, out var blocker))
@@ -366,8 +363,18 @@ public sealed class BackgroundDispatchRunner
                 blocker.TerminalState,
                 blocker.Reason,
                 blocker.Detail);
+            kernel.ConcludeInterruptedDispatchRecovery(
+                goalId,
+                taskId,
+                blocker.GoalStatus,
+                blocker.TaskStatus);
             return DispatchProcessStartResult.Skipped();
         }
+
+        // Only persist automatic recovery preparation after the live state guard admits it. A
+        // checkpoint before this read can merge the stale tick-owned task status over an operator
+        // cancellation and make the subsequent read falsely appear non-terminal.
+        checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId);
 
         ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
         var process = _startProcess(startInfo)
@@ -1991,7 +1998,7 @@ public sealed class BackgroundDispatchRunner
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null)
     {
         var recovered = 0;
-        foreach (var goal in kernel.Goals.ToArray())
+        foreach (var goal in kernel.Goals.Where(goal => goal.Status == GoalStatus.Active).ToArray())
         {
             foreach (var task in goal.Tasks.ToArray())
             {
@@ -2051,6 +2058,14 @@ public sealed class BackgroundDispatchRunner
         }
 
         var dispatchId = BuildDispatchId(goalId, taskId, interruptedDispatch);
+        if (currentTask.InterruptedDispatchRecoveryId == dispatchId ||
+            kernel.GetGoal(goalId).Timeline.Any(evt =>
+                evt.Kind == ProgressKind.TaskRequeueSkipped &&
+                evt.RequeueSkipped?.DispatchId == dispatchId))
+        {
+            return false;
+        }
+
         if (TryReadAutoRequeueBlocker(kernel, goalId, taskId, readCurrentState, out var blocker))
         {
             kernel.RecordTaskRequeueSkipped(
@@ -2061,6 +2076,11 @@ public sealed class BackgroundDispatchRunner
                 blocker.TerminalState,
                 blocker.Reason,
                 blocker.Detail);
+            kernel.ConcludeInterruptedDispatchRecovery(
+                goalId,
+                taskId,
+                blocker.GoalStatus,
+                blocker.TaskStatus);
             return false;
         }
 
@@ -2082,7 +2102,7 @@ public sealed class BackgroundDispatchRunner
         }
         catch (Exception ex)
         {
-            blocker = new AutoRequeueBlocker("task", null, "state-unreadable", ex.Message);
+            blocker = new AutoRequeueBlocker("task", null, "state-unreadable", ex.Message, null, null);
             return true;
         }
 
@@ -2092,19 +2112,33 @@ public sealed class BackgroundDispatchRunner
                 state.UnreadableEntity is "goal" ? "goal" : "task",
                 null,
                 "state-unreadable",
-                state.Error ?? "current task or goal state was unavailable");
+                state.Error ?? "current task or goal state was unavailable",
+                state.GoalStatus,
+                state.TaskStatus);
             return true;
         }
 
         if (!IsAutoRequeueTaskStatusAllowed(state.TaskStatus.Value))
         {
-            blocker = new AutoRequeueBlocker("task", state.TaskStatus.Value.ToString(), "terminal-state", null);
+            blocker = new AutoRequeueBlocker(
+                "task",
+                state.TaskStatus.Value.ToString(),
+                "terminal-state",
+                null,
+                state.GoalStatus,
+                state.TaskStatus);
             return true;
         }
 
         if (!IsAutoRequeueGoalStatusAllowed(state.GoalStatus.Value))
         {
-            blocker = new AutoRequeueBlocker("goal", state.GoalStatus.Value.ToString(), "terminal-state", null);
+            blocker = new AutoRequeueBlocker(
+                "goal",
+                state.GoalStatus.Value.ToString(),
+                "terminal-state",
+                null,
+                state.GoalStatus,
+                state.TaskStatus);
             return true;
         }
 
@@ -2140,19 +2174,10 @@ public sealed class BackgroundDispatchRunner
     private static bool IsAutoRequeueTaskStatusAllowed(WorkTaskStatus status) => status is
         WorkTaskStatus.Pending or
         WorkTaskStatus.Assigned or
-        WorkTaskStatus.Running or
-        WorkTaskStatus.WaitingForHuman or
-        WorkTaskStatus.Failed;
+        WorkTaskStatus.Running;
 
-    private static bool IsAutoRequeueGoalStatusAllowed(GoalStatus status) => status is
-        GoalStatus.Draft or
-        GoalStatus.Active or
-        GoalStatus.WaitingForHuman or
-        GoalStatus.Parked or
-        GoalStatus.Verifying or
-        GoalStatus.Verified or
-        GoalStatus.AcceptanceFailed or
-        GoalStatus.Failed;
+    private static bool IsAutoRequeueGoalStatusAllowed(GoalStatus status) =>
+        status == GoalStatus.Active;
 
     private static string BuildDispatchId(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
     {
@@ -2171,7 +2196,9 @@ public sealed class BackgroundDispatchRunner
         string BlockingEntity,
         string? TerminalState,
         string Reason,
-        string? Detail);
+        string? Detail,
+        GoalStatus? GoalStatus,
+        WorkTaskStatus? TaskStatus);
 
     private string? ReapWorktreeBuildDaemons(string workingDirectory)
     {

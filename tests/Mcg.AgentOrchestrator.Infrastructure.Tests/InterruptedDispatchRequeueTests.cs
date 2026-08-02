@@ -7,7 +7,9 @@ public sealed class InterruptedDispatchRequeueTests
     [Xunit.Theory]
     [Xunit.InlineData(WorkTaskStatus.Cancelled)]
     [Xunit.InlineData(WorkTaskStatus.Completed)]
-    public void Recovery_TerminalTask_SkipsOnce(WorkTaskStatus terminalStatus)
+    [Xunit.InlineData(WorkTaskStatus.WaitingForHuman)]
+    [Xunit.InlineData(WorkTaskStatus.Failed)]
+    public void Recovery_NonDispatchableCurrentTask_SkipsOnce(WorkTaskStatus terminalStatus)
     {
         var (kernel, goal, task, runner) = InterruptedDispatch();
         InterruptedDispatchStateRead Read(GoalId _, TaskId __) => new(GoalStatus.Active, terminalStatus);
@@ -22,6 +24,7 @@ public sealed class InterruptedDispatchRequeueTests
         Assert.Equal("task", skipped.RequeueSkipped.BlockingEntity);
         Assert.Equal(terminalStatus.ToString(), skipped.RequeueSkipped.TerminalState);
         Assert.Equal("terminal-state", skipped.RequeueSkipped.Reason);
+        Assert.Equal(terminalStatus, task.Status);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
     }
 
@@ -40,13 +43,14 @@ public sealed class InterruptedDispatchRequeueTests
         var skipped = Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.TaskRequeueSkipped));
         Assert.Equal("goal", skipped.RequeueSkipped!.BlockingEntity);
         Assert.Equal(terminalStatus.ToString(), skipped.RequeueSkipped.TerminalState);
+        Assert.Equal(terminalStatus, goal.Status);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
     }
 
     [Xunit.Fact]
     public void Recovery_UnreadableState_FailsClosed()
     {
-        var (kernel, goal, _, runner) = InterruptedDispatch();
+        var (kernel, goal, task, runner) = InterruptedDispatch();
 
         var recovered = runner.RequeueInterruptedDispatches(
             kernel,
@@ -58,6 +62,7 @@ public sealed class InterruptedDispatchRequeueTests
         Assert.Null(skipped.RequeueSkipped.TerminalState);
         Assert.Equal("state-unreadable", skipped.RequeueSkipped.Reason);
         Assert.Equal("database unavailable", skipped.RequeueSkipped.Detail);
+        Assert.Equal(WorkTaskStatus.Cancelled, task.Status);
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried);
     }
 
@@ -77,6 +82,35 @@ public sealed class InterruptedDispatchRequeueTests
         Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRequeueSkipped);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(GoalStatus.Draft)]
+    [Xunit.InlineData(GoalStatus.WaitingForHuman)]
+    [Xunit.InlineData(GoalStatus.Parked)]
+    [Xunit.InlineData(GoalStatus.Verifying)]
+    [Xunit.InlineData(GoalStatus.Verified)]
+    [Xunit.InlineData(GoalStatus.AcceptanceFailed)]
+    [Xunit.InlineData(GoalStatus.Failed)]
+    public void Recovery_NonActiveGoal_DoesNotInspectOrRequeue(GoalStatus status)
+    {
+        var (kernel, goal, _, runner) = InterruptedDispatch();
+        kernel = WithGoalStatus(kernel, goal.Id, status);
+        var reads = 0;
+
+        var recovered = runner.RequeueInterruptedDispatches(
+            kernel,
+            (_, _) =>
+            {
+                reads++;
+                return new InterruptedDispatchStateRead(GoalStatus.Active, WorkTaskStatus.Running);
+            });
+
+        Assert.Equal(0, recovered);
+        Assert.Equal(0, reads);
+        Assert.DoesNotContain(
+            kernel.GetGoal(goal.Id).Timeline,
+            evt => evt.Kind is ProgressKind.TaskRetried or ProgressKind.TaskRequeueSkipped);
+    }
+
     [Xunit.Fact]
     public void Launch_TerminalStateAfterRequeue_DoesNotSpawn()
     {
@@ -90,6 +124,7 @@ public sealed class InterruptedDispatchRequeueTests
             new TaskDispatchRecord("paid-worker", "claude --print prompt", Path.GetTempPath(), DateTimeOffset.UtcNow));
 
         var spawnCount = 0;
+        var checkpointCount = 0;
         var runner = new BackgroundDispatchRunner(
             disableProcessStart: false,
             startProcess: _ =>
@@ -105,15 +140,32 @@ public sealed class InterruptedDispatchRequeueTests
                 goal.Id,
                 task.Id,
                 logRoot,
+                checkpointBeforeWorkerStart: (_, _, _) => checkpointCount++,
                 readCurrentState: (_, _) =>
                     new InterruptedDispatchStateRead(GoalStatus.Active, WorkTaskStatus.Cancelled));
 
             Assert.True(result.RequeueSkipped);
             Assert.Equal(0, spawnCount);
+            Assert.Equal(0, checkpointCount);
             Assert.Null(task.LastProcess);
+            Assert.Equal(WorkTaskStatus.Cancelled, task.Status);
+            Assert.Null(task.InterruptedDispatchRecoveryId);
             Assert.Contains(goal.Timeline, evt =>
                 evt.Kind == ProgressKind.TaskRequeueSkipped &&
                 evt.RequeueSkipped?.TerminalState == nameof(WorkTaskStatus.Cancelled));
+            var retry = Assert.Throws<InvalidOperationException>(() =>
+                runner.TryStartLatestDispatch(
+                    kernel,
+                    goal.Id,
+                    task.Id,
+                    logRoot,
+                    checkpointBeforeWorkerStart: (_, _, _) => checkpointCount++,
+                    readCurrentState: (_, _) =>
+                        new InterruptedDispatchStateRead(GoalStatus.Active, WorkTaskStatus.Cancelled)));
+            Assert.Contains("status is Cancelled", retry.Message, StringComparison.Ordinal);
+            Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.TaskRequeueSkipped));
+            Assert.Equal(0, spawnCount);
+            Assert.Equal(0, checkpointCount);
         }
         finally
         {
@@ -122,7 +174,7 @@ public sealed class InterruptedDispatchRequeueTests
     }
 
     [Xunit.Fact]
-    public void ManualRetry_CancelledTask_ClearsAutomaticMarker()
+    public void ManualRetry_CancelledTask_ReachesProcessSpawn()
     {
         var (kernel, goal, task, runner) = InterruptedDispatch();
         runner.RequeueInterruptedDispatches(
@@ -131,9 +183,46 @@ public sealed class InterruptedDispatchRequeueTests
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled, "operator cancelled");
 
         kernel.RetryTask(goal.Id, task.Id, "operator explicitly retries");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("paid-worker", "claude --print prompt", Path.GetTempPath(), DateTimeOffset.UtcNow));
 
-        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(WorkTaskStatus.Running, task.Status);
         Assert.Null(task.InterruptedDispatchRecoveryId);
+
+        var spawnCount = 0;
+        var stateReadCount = 0;
+        var manualRunner = new BackgroundDispatchRunner(
+            disableProcessStart: false,
+            startProcess: _ =>
+            {
+                spawnCount++;
+                return null;
+            });
+        var logRoot = Path.Combine(Path.GetTempPath(), $"mcg-manual-retry-{Guid.NewGuid():N}");
+        try
+        {
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                manualRunner.TryStartLatestDispatch(
+                    kernel,
+                    goal.Id,
+                    task.Id,
+                    logRoot,
+                    readCurrentState: (_, _) =>
+                    {
+                        stateReadCount++;
+                        return new InterruptedDispatchStateRead(GoalStatus.Active, WorkTaskStatus.Cancelled);
+                    }));
+
+            Assert.Contains("Failed to start background dispatch process", error.Message, StringComparison.Ordinal);
+            Assert.Equal(1, spawnCount);
+            Assert.Equal(0, stateReadCount);
+        }
+        finally
+        {
+            if (Directory.Exists(logRoot)) Directory.Delete(logRoot, recursive: true);
+        }
     }
 
     [Xunit.Fact]
@@ -216,4 +305,18 @@ public sealed class InterruptedDispatchRequeueTests
             AgentRole.Tester,
             new ModelProfile("test", "test", ModelCapability.Text, SubscriptionMode.ApiKey))
     ];
+
+    private static AgentOrchestratorKernel WithGoalStatus(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        GoalStatus status)
+    {
+        var snapshot = kernel.ExportSnapshot();
+        return AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Select(goal => goal.Id == goalId.Value ? goal with { Status = status } : goal)
+                .ToList()
+        });
+    }
 }
