@@ -19,6 +19,9 @@ public interface IGoalLifecycleEventWriter
     void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch);
     void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha);
     void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source);
+    void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, GoalStatus status, string reason, string source) =>
+        AppendGoalEscalated(goalId, state, reason, source);
+    void AppendGoalEvictedFromConductor(GoalId goalId, GoalStatus status, string trigger) { }
     void AppendCleanedUp(GoalId goalId);
     void AppendProgressiveReviewGlanceReceipt(
         GoalId goalId,
@@ -58,6 +61,8 @@ public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
     public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
     public void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha) { }
     public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }
+    public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, GoalStatus status, string reason, string source) { }
+    public void AppendGoalEvictedFromConductor(GoalId goalId, GoalStatus status, string trigger) { }
     public void AppendCleanedUp(GoalId goalId) { }
     public void AppendProgressiveReviewGlanceReceipt(
         GoalId goalId,

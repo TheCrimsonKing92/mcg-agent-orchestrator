@@ -194,7 +194,8 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
-            if (IsTerminalGoalStatus(goal.Status))
+            if (goal.Status == GoalStatus.Completed ||
+                GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status))
             {
                 _goals.Remove(goal.Id);
                 TrackTerminalGoalMetadata(goal.ToTerminalGoalMetadata());

@@ -155,11 +155,32 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         });
 
     public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) =>
+        AppendGoalEscalated(
+            goalId,
+            state,
+            _kernel?.Goals.FirstOrDefault(goal => goal.Id == goalId)?.Status ?? GoalStatus.Active,
+            reason,
+            source);
+
+    public void AppendGoalEscalated(
+        GoalId goalId,
+        GoalLifecycleState state,
+        GoalStatus status,
+        string reason,
+        string source) =>
         Append(goalId, "GoalEscalated", obj =>
         {
             obj["state"] = state.ToString();
+            obj["status"] = status.ToString();
             obj["reason"] = reason;
             obj["source"] = source;
+        });
+
+    public void AppendGoalEvictedFromConductor(GoalId goalId, GoalStatus status, string trigger) =>
+        Append(goalId, "GoalEvictedFromConductor", obj =>
+        {
+            obj["status"] = status.ToString();
+            obj["trigger"] = trigger;
         });
 
     public void AppendCleanedUp(GoalId goalId)

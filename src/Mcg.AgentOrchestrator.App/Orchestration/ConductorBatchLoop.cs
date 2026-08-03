@@ -46,6 +46,7 @@ internal sealed class ConductorBatchLoop
     private readonly AcceptanceEngineCircuitBreaker? _acceptanceEngineCircuit;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
     private static readonly object ParallelAcceptanceFairnessGate = new();
     private static string? s_parallelAcceptanceOldestWaiter;
@@ -68,7 +69,8 @@ internal sealed class ConductorBatchLoop
         Func<ConductorSelfRelaunchRequest, ConductorSelfRelaunchResult>? selfRelaunch = null,
         bool selfRelaunchEnabled = DefaultSelfRelaunchEnabled,
         PostLandingCanaryCoordinator? postLandingCanary = null,
-        AcceptanceEngineCircuitBreaker? acceptanceEngineCircuit = null)
+        AcceptanceEngineCircuitBreaker? acceptanceEngineCircuit = null,
+        Func<string, GoalStatus?>? evictedGoalStatusLookup = null)
     {
         _sweep = measuredSweep ?? (kernel =>
         {
@@ -90,6 +92,7 @@ internal sealed class ConductorBatchLoop
         _acceptanceEngineCircuit = postLandingCanary?.CircuitBreaker ?? acceptanceEngineCircuit;
         _conductEventLogWriter = conductEventLogWriter;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _evictedGoalStatusLookup = evictedGoalStatusLookup ?? (_ => null);
     }
 
     public BatchLoopSummary Run(
@@ -405,12 +408,19 @@ internal sealed class ConductorBatchLoop
                 {
                     if (!scopedGoalsById.TryGetValue(actionableGoalId, out var scopedGoal))
                     {
-                        var reason = kernel.Goals.Any(goal => goal.Id.Value == actionableGoalId)
+                        var isOutsideScope = kernel.Goals.Any(goal => goal.Id.Value == actionableGoalId);
+                        var evictedStatus = isOutsideScope ? null : _evictedGoalStatusLookup(actionableGoalId);
+                        var reason = isOutsideScope
                             ? $"goal is outside conductor scope {ShortGoalId(onlyGoalId!)}"
-                            : "goal was not found in conductor state";
+                            : evictedStatus is not null
+                                ? $"goal was evicted from the conductor working set because its stored status is {evictedStatus}; the intent was not applicable"
+                                : "goal was not found in conductor state";
+                        var reasonCode = evictedStatus is not null
+                            ? OperatorIntentCoordinator.TerminalGoalEvictedReasonCode
+                            : null;
                         try
                         {
-                            var rejectedLines = _operatorIntents.RejectPending(actionableGoalId, reason);
+                            var rejectedLines = _operatorIntents.RejectPending(actionableGoalId, reason, reasonCode);
                             preWalkIntentLines.AddRange(rejectedLines);
                             preWalkIntentProcessed |= rejectedLines.Count > 0;
                         }
@@ -2787,7 +2797,7 @@ internal sealed class ConductorBatchLoop
         goal.Status == GoalStatus.Parked || IsPreWalkExcludedTerminalGoal(goal);
 
     private static bool IsPreWalkExcludedTerminalGoal(Goal goal) =>
-        goal.Status is GoalStatus.Cancelled or GoalStatus.Superseded or GoalStatus.Failed
+        GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status)
         || IsStaleTerminalGoalWithAssignedWork(goal);
 
     private static bool IsLoopEligibleGoal(Goal goal, ConductorDriver driver, GoalProjectionCache goalProjectionCache)

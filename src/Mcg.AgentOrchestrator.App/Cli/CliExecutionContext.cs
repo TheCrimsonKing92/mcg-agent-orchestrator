@@ -22,11 +22,15 @@ internal sealed class CliExecutionContext(
     Action? reacquireConductLoopLease = null,
     Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null,
-    Action<OrchestratorStateOutboxMessage>? registerStateOutboxMessage = null)
+    Action<OrchestratorStateOutboxMessage>? registerStateOutboxMessage = null,
+    Func<IReadOnlyCollection<string>, AgentOrchestratorKernel>? reloadKernelForGoals = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
 public AgentOrchestratorKernel ReloadKernel() => reloadKernel?.Invoke() ?? Kernel;
+
+public AgentOrchestratorKernel ReloadKernel(IReadOnlyCollection<string> additionalHydratedGoalIds) =>
+    reloadKernelForGoals?.Invoke(additionalHydratedGoalIds) ?? ReloadKernel();
 
 public AgentOrchestratorKernel ReloadParkedGoalSafetyNetKernel() =>
     reloadParkedGoalSafetyNetKernel?.Invoke() ?? new AgentOrchestratorKernel();

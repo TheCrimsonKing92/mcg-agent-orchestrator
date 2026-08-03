@@ -59,6 +59,7 @@ internal static class LandingExecutor
             eventWriter?.AppendGoalEscalated(
                 goal.Id,
                 GoalLifecycleState.Verified,
+                goal.Status,
                 diffDecision.Reason,
                 IntegrationBranchName);
             return new LandingResult(
@@ -113,7 +114,7 @@ internal static class LandingExecutor
         {
             var conflictReason = $"merge conflict integrating {goalBranch} into {IntegrationBranchName}";
             OperatorInbox.RecordLandingEscalation(workspace, goal, conflictReason, IntegrationBranchName, channel);
-            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, conflictReason, IntegrationBranchName);
+            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, conflictReason, IntegrationBranchName);
             var conflictDecision = new LandingDecision.Escalate(conflictReason);
             return new LandingResult(goal.Id.Value, goalPrefix, conflictDecision, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {conflictReason}");
@@ -124,7 +125,7 @@ internal static class LandingExecutor
         {
             var acceptanceDecision = new LandingDecision.Escalate("acceptance verification not passed");
             OperatorInbox.RecordLandingEscalation(workspace, goal, acceptanceDecision.Reason, IntegrationBranchName, channel);
-            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, acceptanceDecision.Reason, IntegrationBranchName);
+            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, acceptanceDecision.Reason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, acceptanceDecision, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {acceptanceDecision.Reason}");
         }
@@ -138,7 +139,7 @@ internal static class LandingExecutor
                 OperatorInbox.RecordOwnershipHolds(workspace, goal, holdRequests, channel);
                 var reason = $"{OwnershipHoldReasonPrefix}: {holdRequests.Count} task(s) touched RequiresOperatorApproval path(s)";
                 var holdDecision = new LandingDecision.Escalate(reason);
-                eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, reason, "ownership-hold");
+                eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, reason, "ownership-hold");
                 return new LandingResult(goal.Id.Value, goalPrefix, holdDecision, IntegrationBranchName,
                     false, $"Parked on {IntegrationBranchName}: {reason}");
             }
@@ -146,7 +147,7 @@ internal static class LandingExecutor
             var unknownReason = "ownership-denylist diff touched RequiresOperatorApproval path(s), but no writing task attribution was available";
             var unknownDecision = new LandingDecision.Escalate(unknownReason);
             OperatorInbox.RecordLandingEscalation(workspace, goal, unknownReason, IntegrationBranchName, channel);
-            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, unknownReason, IntegrationBranchName);
+            eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, unknownReason, IntegrationBranchName);
             return new LandingResult(goal.Id.Value, goalPrefix, unknownDecision, IntegrationBranchName,
                 false, $"Parked on {IntegrationBranchName}: {unknownReason}");
         }
@@ -186,7 +187,7 @@ internal static class LandingExecutor
                     $"integration->main fast-forward failed after landing intent write: {merge.Error}");
                 var unexpectedReason = $"integration->main fast-forward failed: {merge.Error}";
                 OperatorInbox.RecordLandingEscalation(workspace, goal, unexpectedReason, IntegrationBranchName, channel);
-                eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, unexpectedReason, IntegrationBranchName);
+                eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, unexpectedReason, IntegrationBranchName);
                 var fallback = new LandingDecision.Escalate(unexpectedReason);
                 return new LandingResult(goal.Id.Value, goalPrefix, fallback, IntegrationBranchName,
                     false, $"Parked on {IntegrationBranchName}: {unexpectedReason}");
@@ -203,7 +204,7 @@ internal static class LandingExecutor
 
         var escalate = (LandingDecision.Escalate)decision;
         OperatorInbox.RecordLandingEscalation(workspace, goal, escalate.Reason, IntegrationBranchName, channel);
-        eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, escalate.Reason, IntegrationBranchName);
+        eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, escalate.Reason, IntegrationBranchName);
         return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
             false, $"Parked on {IntegrationBranchName}: {escalate.Reason}");
     }

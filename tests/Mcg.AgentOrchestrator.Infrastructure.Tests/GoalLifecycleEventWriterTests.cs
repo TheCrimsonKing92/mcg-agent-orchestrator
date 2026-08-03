@@ -233,6 +233,15 @@ public sealed class GoalLifecycleEventWriterTests
 
             Xunit.Assert.IsType<ConductorAdvanceOutcome.Escalated>(escalation.Outcome);
             Xunit.Assert.Contains("GoalEscalated", EventTypes(workspace, escalatedGoal.Id));
+            using var escalationEvent = JsonDocument.Parse(File.ReadLines(
+                    Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{escalatedGoal.Id.Value}.jsonl"))
+                .Single(line => EventType(line) == "GoalEscalated"));
+            Xunit.Assert.Equal(
+                Xunit.Assert.IsType<ConductorAdvanceOutcome.Escalated>(escalation.Outcome).State.ToString(),
+                escalationEvent.RootElement.GetProperty("state").GetString());
+            Xunit.Assert.Equal(
+                escalatedGoal.Status.ToString(),
+                escalationEvent.RootElement.GetProperty("status").GetString());
         }
         finally
         {

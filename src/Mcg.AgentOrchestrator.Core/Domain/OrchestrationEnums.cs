@@ -36,6 +36,12 @@ public enum GoalStatus
     Superseded
 }
 
+public static class GoalStatusSemantics
+{
+    public static bool ExcludesFromConductorWorkingSet(GoalStatus status) =>
+        status is GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
+}
+
 public enum WorkTaskStatus
 {
     Pending,

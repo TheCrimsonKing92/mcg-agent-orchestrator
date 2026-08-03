@@ -769,10 +769,15 @@ internal static class CliPersistentStateRunner
         var operatorIntentStore = SqliteOperatorIntentStore.ForDirectories(
             workspace.OrchestratorDirectory,
             workspace.LogDirectory);
-        AgentOrchestratorKernel LoadLoopKernel() =>
+        AgentOrchestratorKernel LoadLoopKernel() => LoadLoopKernelForGoals([]);
+
+        AgentOrchestratorKernel LoadLoopKernelForGoals(IReadOnlyCollection<string> trackedGoalIds) =>
             LoadConductLoopKernel(
                 stateRepository,
-                operatorIntentStore.ListActionableGoalIdsAsync().GetAwaiter().GetResult(),
+                operatorIntentStore.ListActionableGoalIdsAsync().GetAwaiter().GetResult()
+                    .Concat(trackedGoalIds)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray(),
                 workspace.ExecutionDirectory);
         var kernel = LoadLoopKernel();
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
@@ -889,7 +894,8 @@ internal static class CliPersistentStateRunner
             releaseConductLoopLease: conductLoopLease.Release,
             reacquireConductLoopLease: conductLoopLease.Reacquire,
             reloadResolvedParkedHumanWaitKernel: () => LoadConductLoopResolvedParkedHumanWaitKernel(stateRepository),
-            reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository));
+            reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository),
+            reloadKernelForGoals: LoadLoopKernelForGoals);
 
         // A successful handoff has transferred the lease and authority to the successor. All incumbent
         // tick state was persisted before handoff; do not write once the successor owns the loop.
