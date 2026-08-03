@@ -84,6 +84,28 @@ public static HumanInputRequest ResolveHumanInputRequest(AgentOrchestratorKernel
     throw new KeyNotFoundException($"Human input request or goal '{idOrPrefix}' was not found.");
 }
 
+public static (Goal Goal, string SourceRecordId) ResolveOperatorTaskNoteGateSource(
+    AgentOrchestratorKernel kernel,
+    string idOrPrefix)
+{
+    var matches = kernel.Goals
+        .SelectMany(goal => goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.OperatorTaskNote)
+            .SelectMany(evt => evt.OperatorGates ?? [])
+            .Where(gate => gate.SourceRecordId.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
+            .Select(gate => (Goal: goal, gate.SourceRecordId)))
+        .Distinct()
+        .ToArray();
+    return matches.Length switch
+    {
+        1 => matches[0],
+        0 => throw new KeyNotFoundException($"Operator task-note gate source '{idOrPrefix}' was not found."),
+        _ => throw new InvalidOperationException(
+            $"Operator task-note gate source '{idOrPrefix}' is ambiguous. Candidates: " +
+            string.Join(", ", matches.Select(match => match.SourceRecordId)))
+    };
+}
+
 private static InvalidOperationException BuildAmbiguousHumanInputException(
     string idOrPrefix,
     IReadOnlyList<HumanInputRequest> requests) =>

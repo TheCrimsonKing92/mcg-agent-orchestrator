@@ -1282,14 +1282,72 @@ public sealed partial class AgentOrchestratorKernel
                 throw new KeyNotFoundException($"Human input request '{requestId}' was not found.");
             }
 
-            request.MarkOperatorGateSatisfied(deliverableId, evidence, _clock.UtcNow);
+            var satisfiedGate = request.MarkOperatorGateSatisfied(deliverableId, evidence, _clock.UtcNow);
             var goal = GetGoal(request.GoalId);
             Append(
                 goal,
                 request.TaskId,
                 ProgressKind.OperatorGateSatisfied,
-                $"Operator gate satisfied: source=clarification:{request.Id.Value}; deliverable={deliverableId.Trim()}; evidence={evidence.Trim()}");
+                $"Operator gate satisfied: source=clarification:{request.Id.Value}; deliverable={deliverableId.Trim()}; evidence={evidence.Trim()}",
+                [satisfiedGate]);
         }
+    }
+
+    public void MarkOperatorGateSatisfied(
+        GoalId goalId,
+        string sourceRecordId,
+        string deliverableId,
+        string evidence)
+    {
+        var goal = GetGoal(goalId);
+        var normalizedSource = string.IsNullOrWhiteSpace(sourceRecordId)
+            ? throw new ArgumentException("Gate source record id cannot be empty.", nameof(sourceRecordId))
+            : sourceRecordId.Trim();
+        var normalizedDeliverable = string.IsNullOrWhiteSpace(deliverableId)
+            ? throw new ArgumentException("Gate deliverable id cannot be empty.", nameof(deliverableId))
+            : deliverableId.Trim();
+        var normalizedEvidence = string.IsNullOrWhiteSpace(evidence)
+            ? throw new ArgumentException("Gate satisfaction evidence cannot be empty.", nameof(evidence))
+            : evidence.Trim();
+        var matches = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.OperatorTaskNote)
+            .SelectMany(evt => (evt.OperatorGates ?? []).Select(gate => (evt, gate)))
+            .Where(item =>
+                string.Equals(item.gate.SourceRecordId, normalizedSource, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.gate.DeliverableId, normalizedDeliverable, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (matches.Length == 0)
+        {
+            throw new KeyNotFoundException(
+                $"Operator task-note gate '{normalizedDeliverable}' from '{normalizedSource}' was not found on goal '{goal.Id.Value[..8]}'.");
+        }
+
+        var alreadySatisfied = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.OperatorGateSatisfied)
+            .SelectMany(evt => evt.OperatorGates ?? [])
+            .Any(gate =>
+                !gate.IsActive &&
+                string.Equals(gate.SourceRecordId, normalizedSource, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(gate.DeliverableId, normalizedDeliverable, StringComparison.OrdinalIgnoreCase));
+        if (alreadySatisfied)
+        {
+            throw new InvalidOperationException(
+                $"Operator task-note gate '{normalizedDeliverable}' from '{normalizedSource}' is already satisfied.");
+        }
+
+        var satisfiedAt = _clock.UtcNow;
+        var satisfiedGate = matches[0].gate with
+        {
+            SatisfiedAt = satisfiedAt,
+            SatisfactionEvidence = normalizedEvidence
+        };
+        Append(
+            goal,
+            matches[0].evt.TaskId,
+            ProgressKind.OperatorGateSatisfied,
+            $"Operator gate satisfied: source={normalizedSource}; deliverable={normalizedDeliverable}; evidence={normalizedEvidence}",
+            [satisfiedGate],
+            satisfiedAt);
     }
 
     private void RestoreTaskAfterHumanInput(Goal goal, TaskSpec task)

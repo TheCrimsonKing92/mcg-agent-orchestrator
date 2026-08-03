@@ -392,14 +392,14 @@ Transcript tail:
             triggerDetail,
             BoundBlock(goal.Objective, _options.ObjectiveCharacterLimit),
             BoundBlock(task.Description, _options.TaskBriefCharacterLimit),
-            BuildAcceptanceSection(goal, task, _options.AcceptanceCharacterLimit),
+            BuildAcceptanceSection(goal, task),
             BoundList(
                 FormatCriteriaCorrectionOverlay(goal.EffectiveAcceptanceCriteriaCorrections),
                 _options.CriteriaCorrectionOverlayItemLimit,
                 _options.CriteriaCorrectionOverlayCharacterLimit,
                 CriteriaCorrectionLabel),
             BoundChangedFiles(snapshot),
-            BoundBlock(_diffReader(task.LastDispatch.WorkingDirectory, task.LastDispatch.BaseCommit), _options.DiffCharacterLimit),
+            _diffReader(task.LastDispatch.WorkingDirectory, task.LastDispatch.BaseCommit),
             BoundTail(_transcriptReader(task.LastProcess), _options.TranscriptCharacterLimit),
             scope.Includes,
             scope.Confidence,
@@ -1143,7 +1143,7 @@ Corrective direction:
             .ToArray();
     }
 
-    private static string BuildAcceptanceSection(Goal goal, TaskSpec task, int limit)
+    private static string BuildAcceptanceSection(Goal goal, TaskSpec task)
     {
         if (goal.RefinedSpec?.AcceptanceCriteria is { Count: > 0 } criteria)
         {
@@ -1152,11 +1152,11 @@ Corrective direction:
                 goal.EffectiveAcceptanceCriteriaCorrections);
             var section = "Current amended acceptance criteria:" + Environment.NewLine +
                 string.Join(Environment.NewLine, effective.Select(criterion => $"- {criterion}"));
-            return BoundBlock(section, limit);
+            return section;
         }
 
         return "Task acceptance excerpt:" + Environment.NewLine +
-            ExtractAcceptanceSection(task.Description, limit);
+            ExtractAcceptanceSection(task.Description);
     }
 
     private static OperatorContextBuildResult BuildOperatorRecords(
@@ -1179,6 +1179,12 @@ Corrective direction:
                 $"Question:\n{request.Question}\nAnswer:\n{request.Answer}",
                 request.AnsweredAt!.Value,
                 request.OperatorGates.ToArray()));
+        var satisfiedNoteGates = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.OperatorGateSatisfied)
+            .SelectMany(evt => evt.OperatorGates ?? [])
+            .Where(gate => !gate.IsActive)
+            .GroupBy(gate => BuildGateKey(gate.SourceRecordId, gate.DeliverableId), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(gate => gate.SatisfiedAt).First(), StringComparer.OrdinalIgnoreCase);
         var notes = goal.Timeline
             .Where(evt => evt.Kind == ProgressKind.OperatorTaskNote)
             .Select(evt => new ProgressiveReviewOperatorRecord(
@@ -1186,7 +1192,11 @@ Corrective direction:
                 "operator-task-note",
                 evt.Message,
                 evt.OccurredAt,
-                evt.OperatorGates ?? []));
+                (evt.OperatorGates ?? [])
+                    .Select(gate => satisfiedNoteGates.GetValueOrDefault(
+                        BuildGateKey(gate.SourceRecordId, gate.DeliverableId),
+                        gate))
+                    .ToArray()));
         var ordered = clarifications
             .Concat(notes)
             .OrderByDescending(record => record.RecordedAt)
@@ -1214,7 +1224,10 @@ Corrective direction:
         return new OperatorContextBuildResult(bounded, truncated);
     }
 
-    private static string ExtractAcceptanceSection(string description, int limit)
+    private static string BuildGateKey(string sourceRecordId, string deliverableId) =>
+        sourceRecordId + "\n" + deliverableId;
+
+    private static string ExtractAcceptanceSection(string description)
     {
         var markers = new[] { "## Acceptance", "ACCEPTANCE", "Acceptance criteria:", "Acceptance Criteria:" };
         var start = markers
@@ -1222,7 +1235,7 @@ Corrective direction:
             .Where(index => index >= 0)
             .DefaultIfEmpty(0)
             .Min();
-        return BoundBlock(description[start..], limit);
+        return description[start..];
     }
 
     internal static string ReadDiff(string workingDirectory, string? baseCommit)

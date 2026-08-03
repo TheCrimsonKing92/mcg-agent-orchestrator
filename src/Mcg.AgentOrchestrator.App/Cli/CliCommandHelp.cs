@@ -15,7 +15,7 @@ internal static class CliCommandHelp
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
     public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
-    public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id> <deliverable-id> <evidence> | gate-satisfied <request-id> <deliverable-id> --text-file <path>";
+    public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
     public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss <goal-id-prefix> | attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
     public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";

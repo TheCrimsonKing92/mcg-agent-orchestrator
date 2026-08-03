@@ -225,6 +225,39 @@ public sealed class GoalLifecycleTests
     Assert.Equal(gate.SatisfactionEvidence, restoredGate.SatisfactionEvidence);
 }
 
+    [Xunit.Fact]
+    public void OperatorTaskNoteGateCanBeExplicitlySatisfiedAndRoundTrips()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Gate a task-note deliverable");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+    kernel.RecordOperatorTaskNote(goal.Id, task.Id, "Wait for correlation evidence.", ["correlation-evidence"]);
+    var sourceGate = Assert.Single(goal.Timeline.Single(evt => evt.Kind == ProgressKind.OperatorTaskNote).OperatorGates!);
+
+    clock.Advance();
+    kernel.MarkOperatorGateSatisfied(goal.Id, sourceGate.SourceRecordId, sourceGate.DeliverableId, "operator confirmed three handoffs");
+
+    var satisfaction = Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.OperatorGateSatisfied));
+    var satisfiedGate = Assert.Single(satisfaction.OperatorGates!);
+    Assert.False(satisfiedGate.IsActive);
+    Assert.Equal(sourceGate.SourceRecordId, satisfiedGate.SourceRecordId);
+    Assert.Equal("operator confirmed three handoffs", satisfiedGate.SatisfactionEvidence);
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredSatisfaction = Assert.Single(restored.GetGoal(goal.Id).Timeline.Where(evt => evt.Kind == ProgressKind.OperatorGateSatisfied));
+    Assert.False(Assert.Single(restoredSatisfaction.OperatorGates!).IsActive);
+}
+
+    [Xunit.Fact]
+    public void OperatorProgressKindsUseUnclaimedPersistedValues()
+{
+    Assert.Equal(28, (int)ProgressKind.PreReviewMappingEscalationSuppressed);
+    Assert.Equal(29, (int)ProgressKind.OperatorTaskNote);
+    Assert.Equal(30, (int)ProgressKind.OperatorGateSatisfied);
+}
+
     [Xunit.Fact(DisplayName = "RecordTaskNote_with_criteria_correction_stores_effective_acceptance_overlay_with_provenance")]
     public void RecordTaskNoteWithCriteriaCorrectionStoresEffectiveAcceptanceOverlayWithProvenance()
 {

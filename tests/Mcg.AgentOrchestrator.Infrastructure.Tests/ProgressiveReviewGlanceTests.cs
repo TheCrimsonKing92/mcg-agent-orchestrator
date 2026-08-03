@@ -583,7 +583,45 @@ public sealed class ProgressiveReviewGlanceTests
     }
 
     [Xunit.Fact]
-    public void AmendedAcceptanceSection_OverBudget_IsLoudlyBounded()
+    public void InputAssembly_AppliesExplicitTaskNoteGateSatisfaction()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var clock = new TestClock(now);
+        var (kernel, goal, task) = RunningDeveloperRound(now, clock: clock);
+        kernel.RecordOperatorTaskNote(
+            goal.Id,
+            task.Id,
+            "Gate the correlation evidence until the operator confirms it.",
+            ["correlation-evidence"]);
+        var sourceGate = Xunit.Assert.Single(goal.Timeline
+            .Single(evt => evt.Kind == ProgressKind.OperatorTaskNote)
+            .OperatorGates!);
+        clock.UtcNow = now.AddMinutes(1);
+        kernel.MarkOperatorGateSatisfied(
+            goal.Id,
+            sourceGate.SourceRecordId,
+            sourceGate.DeliverableId,
+            "operator confirmed three consecutive handoffs");
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "ok",
+            "gate expired"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            utcNow: () => clock.UtcNow,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a", "b", "c"], ["a", "b", "c"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var gate = Xunit.Assert.Single(Xunit.Assert.Single(runner.Calls).EffectiveOperatorRecords.SelectMany(record => record.Gates));
+        Xunit.Assert.False(gate.IsActive);
+        Xunit.Assert.Equal("operator confirmed three consecutive handoffs", gate.SatisfactionEvidence);
+    }
+
+    [Xunit.Fact]
+    public void AmendedAcceptanceSection_OverBudget_IsNotTruncated()
     {
         var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
         var (kernel, goal, task) = RunningDeveloperRound(now);
@@ -615,8 +653,8 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains("Current amended acceptance criteria", section, StringComparison.Ordinal);
         Xunit.Assert.Contains("amended", section, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("superseded acceptance requirement", section, StringComparison.Ordinal);
-        Xunit.Assert.Contains("...(truncated at 100 chars)", section, StringComparison.Ordinal);
-        Xunit.Assert.True(section.Length < 150);
+        Xunit.Assert.DoesNotContain("...(truncated", section, StringComparison.Ordinal);
+        Xunit.Assert.Contains(new string('x', 300), section, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -898,7 +936,7 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains("src/File05.cs", inputs.ChangedFiles);
         Xunit.Assert.DoesNotContain("src/File06.cs", inputs.ChangedFiles);
         Xunit.Assert.Contains(inputs.ChangedFiles, item => item.Contains("more changed file", StringComparison.Ordinal));
-        Xunit.Assert.True(inputs.DiffExcerpt.Length < 90);
+        Xunit.Assert.Equal(new string('d', 100), inputs.DiffExcerpt);
         Xunit.Assert.True(inputs.TranscriptTail.Length < 90);
 
         var lightDelivery = await CaptureGlancePromptDeliveryAsync(WorkerProfileCatalog.Default(), inputs);

@@ -550,14 +550,28 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "gate-satisfied":
-            const string gateSatisfiedUsage = "gate-satisfied <request-id> <deliverable-id> <evidence> | gate-satisfied <request-id> <deliverable-id> --text-file <path>";
+            const string gateSatisfiedUsage = "gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
             CliArgumentParser.RequirePartCount(parts, 4, gateSatisfiedUsage);
-            var gateRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(context.Kernel, parts[1]);
-            context.Kernel.MarkOperatorGateSatisfied(
-                gateRequest.Id,
-                parts[2],
-                ResolveTextArgument(parts, inlineIndex: 3, gateSatisfiedUsage, "--text-file"));
-            context.CurrentGoal = context.Kernel.GetGoal(gateRequest.GoalId);
+            var gateEvidence = ResolveTextArgument(parts, inlineIndex: 3, gateSatisfiedUsage, "--text-file");
+            if (parts[1].StartsWith("task-note:", StringComparison.OrdinalIgnoreCase))
+            {
+                var gateSource = OrchestratorEntityResolver.ResolveOperatorTaskNoteGateSource(context.Kernel, parts[1]);
+                context.Kernel.MarkOperatorGateSatisfied(
+                    gateSource.Goal.Id,
+                    gateSource.SourceRecordId,
+                    parts[2],
+                    gateEvidence);
+                context.CurrentGoal = gateSource.Goal;
+            }
+            else
+            {
+                var gateRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(context.Kernel, parts[1]);
+                context.Kernel.MarkOperatorGateSatisfied(
+                    gateRequest.Id,
+                    parts[2],
+                    gateEvidence);
+                context.CurrentGoal = context.Kernel.GetGoal(gateRequest.GoalId);
+            }
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 

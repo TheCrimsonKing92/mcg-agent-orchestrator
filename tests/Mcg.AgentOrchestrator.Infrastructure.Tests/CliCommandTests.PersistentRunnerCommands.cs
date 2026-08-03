@@ -987,6 +987,20 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 providers,
                 ref profiles,
                 ref currentGoal));
+            var noteGateSource = currentGoal!.Timeline
+                .Single(evt => evt.Kind == ProgressKind.OperatorTaskNote && evt.Message == "Gate the correlation work")
+                .OperatorGates!
+                .Single()
+                .SourceRecordId;
+            Xunit.Assert.True(CliPersistentStateRunner.ExecuteCommand(
+                CliArgumentParser.SplitCommand(
+                    $"gate-satisfied {noteGateSource} correlation-evidence Operator confirmed the correlation"),
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
             Xunit.Assert.True(CliPersistentStateRunner.ExecuteCommand(
                 CliArgumentParser.SplitCommand(
                     $"gate-satisfied {request.Id.Value[..8]} hidden-console-spawn Operator confirmed the observation"),
@@ -1005,7 +1019,12 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             var clarificationGate = Xunit.Assert.Single(restored.GetHumanInputRequest(request.Id).OperatorGates);
             Xunit.Assert.False(clarificationGate.IsActive);
             Xunit.Assert.Equal("Operator confirmed the observation", clarificationGate.SatisfactionEvidence);
-            Xunit.Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.OperatorGateSatisfied);
+            var satisfactionEvents = restoredGoal.Timeline.Where(evt => evt.Kind == ProgressKind.OperatorGateSatisfied).ToArray();
+            Xunit.Assert.Equal(2, satisfactionEvents.Length);
+            Xunit.Assert.Contains(satisfactionEvents.SelectMany(evt => evt.OperatorGates ?? []), gate =>
+                gate.SourceRecordId == noteGateSource &&
+                !gate.IsActive &&
+                gate.SatisfactionEvidence == "Operator confirmed the correlation");
         }
         finally
         {

@@ -139,7 +139,7 @@ public sealed class HumanInputRequest
 
     internal void IncrementSuppressionCount() => SuppressionCount++;
 
-    internal void MarkOperatorGateSatisfied(
+    internal OperatorGateRecord MarkOperatorGateSatisfied(
         string deliverableId,
         string evidence,
         DateTimeOffset satisfiedAt)
@@ -158,6 +158,7 @@ public sealed class HumanInputRequest
                 ? throw new ArgumentException("Gate satisfaction evidence cannot be empty.", nameof(evidence))
                 : evidence.Trim()
         };
+        return _operatorGates[index];
     }
 
     internal void CompleteAsSuperseded(
