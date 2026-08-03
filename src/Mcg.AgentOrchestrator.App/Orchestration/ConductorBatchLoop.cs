@@ -719,7 +719,7 @@ internal sealed class ConductorBatchLoop
                         TrackGoalHold(
                             kernel,
                             goal,
-                            GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)).ToString(),
+                            TryResolveLifecycleState(goalProjectionCache, driver, goal),
                             depHoldReason,
                             _utcNow(),
                             effectiveGoalStallThreshold,
@@ -750,7 +750,7 @@ internal sealed class ConductorBatchLoop
                     TrackGoalHold(
                         kernel,
                         goal,
-                        GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)).ToString(),
+                        TryResolveLifecycleState(goalProjectionCache, driver, goal),
                         holdReason,
                         _utcNow(),
                         effectiveGoalStallThreshold,
@@ -2849,6 +2849,21 @@ internal sealed class ConductorBatchLoop
         try
         {
             return GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)).ToString();
+        }
+        catch
+        {
+            return "LifecycleState=unknown";
+        }
+    }
+
+    private static string TryResolveLifecycleState(
+        GoalProjectionCache goalProjectionCache,
+        ConductorDriver driver,
+        Goal goal)
+    {
+        try
+        {
+            return goalProjectionCache.ResolveState(goal, driver).ToString();
         }
         catch
         {

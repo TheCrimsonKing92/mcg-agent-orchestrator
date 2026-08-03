@@ -9115,6 +9115,84 @@ public sealed class ConductorBatchLoopTests
     }
 
     [Xunit.Fact]
+    public void GoalStall_DependencyStateReadFailure_DoesNotStopLoop()
+    {
+        var dependencyId = GoalId.New();
+        var kernel = new AgentOrchestratorKernel();
+        var active = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "hold through a state read failure");
+        kernel.ReplaceWithSnapshot(kernel.ExportSnapshot() with
+        {
+            Goals = kernel.ExportSnapshot().Goals
+                .Select(goal => goal.Id == active.Id.Value
+                    ? goal with { DependsOn = [dependencyId.Value] }
+                    : goal)
+                .ToArray()
+        });
+        kernel.MarkKnownDependencyGoalStatuses([
+            new KeyValuePair<GoalId, string>(dependencyId, GoalStatus.Active.ToString())
+        ]);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(getFacts: _ => throw SqliteBusy()),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        var hold = Assert.IsType<GoalHoldSnapshot>(kernel.GetGoal(active.Id).CurrentHold);
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Held);
+        Assert.Equal("LifecycleState=unknown", hold.State);
+        Assert.Contains("waiting on dependency", hold.Blocker, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void GoalStall_InvalidatedAttemptStateReadFailure_DoesNotStopLoop()
+    {
+        var root = CreateTempDirectory("mcg-goal-stall-invalidated-state-read");
+        var (kernel, goal) = SimpleGoal("hold invalidated acceptance through a state read failure");
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(root, "attempts"),
+            isProcessAlive: _ => true,
+            launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7301));
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["src/Retry.cs"],
+            "branch-a",
+            "main-a");
+
+        try
+        {
+            var started = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                PassingRun);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
+            Assert.True(coordinator.InvalidateCurrent(goal.Id.Value, "retry invalidated attempt"));
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                MakeDriver(
+                    getFacts: _ => throw SqliteBusy(),
+                    parallelAcceptanceAttemptCoordinator: coordinator),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            var hold = Assert.IsType<GoalHoldSnapshot>(goal.CurrentHold);
+            Assert.Equal(1, summary.Ticks);
+            Assert.Equal(1, summary.Held);
+            Assert.Equal("LifecycleState=unknown", hold.State);
+            Assert.Contains("invalidated acceptance attempt", hold.Blocker, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
     public void GoalStall_ChangedBlocker_DoesNotEmit()
     {
         var root = CreateTempDirectory("mcg-goal-stall-change");
