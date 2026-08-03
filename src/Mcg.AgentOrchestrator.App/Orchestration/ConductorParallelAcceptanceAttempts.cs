@@ -869,9 +869,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate)
     {
+        var purpose = string.Equals(attempt.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal)
+            ? "pre-review-evidence"
+            : "parallel-acceptance";
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(
             candidate.Goal.Id,
-            $"parallel-acceptance-{attempt.AttemptId}");
+            $"{purpose}-{attempt.AttemptId}");
         var acquisition = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
             environment,
             TimeSpan.Zero);

@@ -820,7 +820,8 @@ internal sealed class ConductorDriver
         _focusedEvidenceAttemptCoordinator = focusedEvidenceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(Path.GetTempPath(), "mcg-conductor-focused-evidence-attempts", Guid.NewGuid().ToString("N")),
-                runInline: true);
+                runInline: true,
+                acquireStableSlotLease: (_, _) => null);
     }
 
     internal ConductorParallelAcceptanceAttemptCoordinator ParallelAcceptanceAttemptCoordinator =>
@@ -2286,7 +2287,11 @@ internal sealed class ConductorDriver
             return true;
         }
 
-        if (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun)
+        if (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun ||
+            attemptDecision.Run?.Exception is
+                DotnetBuildSlotsBusyException or
+                BuildLockBlockedException or
+                OperationCanceledException)
         {
             _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
             result = MakeResult(
