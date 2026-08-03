@@ -918,6 +918,7 @@ public sealed class ProgressiveReviewSteeringTests
         var coordinator = NewCoordinator(
             root,
             store,
+            new FakeCollaborationItemStore(),
             cancelProcess: CancelWithTerminalProof(now),
             startProcess: (_, _, _) =>
             {
@@ -929,7 +930,7 @@ public sealed class ProgressiveReviewSteeringTests
 
         var result = coordinator.ExecutePending(kernel, goal);
 
-        Assert.True(result.MutatedTaskState);
+        Assert.True(result.MutatedTaskState, string.Join(Environment.NewLine, result.ProgressLines));
         Assert.False(started);
         var receipt = Assert.Single(store.Receipts);
         Assert.Contains("dispatch preparation failed", receipt.Outcome, StringComparison.Ordinal);
