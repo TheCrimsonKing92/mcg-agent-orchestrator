@@ -79,10 +79,7 @@ public sealed class AgentHarnessDocsDriftTests
         RequireContains(agentsContract.Rule, "update BOTH AGENTS.md and CLAUDE.md", "Contract rule must require updating both files.");
         RequireContains(agentsContract.Rule, "move the content to docs/operator-runbook.md or another shared home", "Contract rule must name the shared-home escape hatch.");
 
-        var expectedAnchors = SharedSections
-            .Select(section => section.Anchor)
-            .Concat(SharedHomeSections.Select(section => section.Anchor))
-            .ToArray();
+        var expectedAnchors = SharedSections.Select(section => section.Anchor).ToArray();
         RequireSequenceEqual(expectedAnchors, agentsContract.SharedAnchors, "AGENTS.md shared-anchor list changed.");
         RequireSequenceEqual(agentsContract.SharedAnchors, claudeContract.SharedAnchors, "Shared anchor lists must match.");
 
