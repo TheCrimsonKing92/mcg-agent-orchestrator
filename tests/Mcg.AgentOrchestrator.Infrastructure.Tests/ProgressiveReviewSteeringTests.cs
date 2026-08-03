@@ -24,7 +24,9 @@ public sealed class ProgressiveReviewSteeringTests
             [],
             []));
         Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
-        File.WriteAllText(task.LastDispatch.PromptPath!, kernel.BuildTaskBrief(goal.Id, task.Id).Content);
+        var originalPrompt = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+        var cancelledPromptPath = task.LastDispatch.PromptPath!;
+        File.WriteAllText(cancelledPromptPath, originalPrompt);
         kernel.WaiveAcceptanceCriterion(
             goal.Id,
             "use a conductor-owned measurement",
@@ -82,7 +84,8 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("NoCriteriaCorrectionSinceCapture:Passed:", StringComparison.Ordinal));
         Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("SameGoal:Passed:", StringComparison.Ordinal));
-        Assert.Equal(308, receipt.CancelledInputTokens);
+        var expectedCancelledInputTokens = Math.Max(1, File.ReadAllText(cancelledPromptPath).Length / 4);
+        Assert.Equal(expectedCancelledInputTokens, receipt.CancelledInputTokens);
         Assert.True(receipt.SteeredInputTokens > 0);
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
     }
