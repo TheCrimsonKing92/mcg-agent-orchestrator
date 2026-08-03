@@ -1891,7 +1891,7 @@ public sealed class DispatchProcessHostTests
             "-PassThru -ErrorAction Stop " +
             "} catch { " +
             "$exception = $_.Exception; while ($exception -and -not ($exception -is [System.ComponentModel.Win32Exception])) { $exception = $exception.InnerException }; " +
-            "$nativeCode = if ($exception) { $exception.NativeErrorCode } else { $_.Exception.HResult -band 0xffff }; " +
+            "$nativeCode = if ($exception) { $exception.NativeErrorCode } elseif (!(Test-Path -LiteralPath $env:MCG_GRANDCHILD_EXECUTABLE -PathType Leaf)) { 2 } else { $_.Exception.HResult -band 0xffff }; " +
             "$message = 'Grandchild launch failed: Win32 error 0x{0:x8}; command: {1}; detail: {2}' -f $nativeCode,$env:MCG_GRANDCHILD_COMMAND_LINE,$_.Exception.Message; " +
             "Set-Content -LiteralPath $env:MCG_GRANDCHILD_LAUNCH_FAILURE -Value $message; exit 125 }; " +
             "Set-Content -LiteralPath $env:MCG_GRANDCHILD_PID -Value $child.Id; " +
