@@ -5736,7 +5736,8 @@ public sealed class ConductorBatchLoopTests
 
         Assert.Equal(2, summary.Ticks);
         Assert.Equal(1, summary.Escalated);
-        Assert.Equal(1, summary.Done);
+        Assert.Equal(1, summary.Advanced);
+        Assert.Equal(0, summary.Done);
         Assert.Equal(3, rebaseChecks);
         Assert.Equal(1, landAttempts);
         Assert.Contains(goal.Timeline, evt =>
@@ -5782,7 +5783,9 @@ public sealed class ConductorBatchLoopTests
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: 2);
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
 
         Assert.Equal(1, summary.Ticks);
         Assert.Equal(1, summary.Escalated);
