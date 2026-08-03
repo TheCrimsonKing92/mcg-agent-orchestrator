@@ -821,6 +821,7 @@ public sealed class ProgressiveReviewSteeringTests
         store.EnqueueIntentAsync(Intent(goal, task, now, "do not start without terminal proof")).GetAwaiter().GetResult();
         var attentionStore = new FakeCollaborationItemStore();
         var started = false;
+        File.WriteAllText(Path.Combine(root, "worker-edit.cs"), "valuable worker edit");
 
         var coordinator = NewCoordinator(
             root,
@@ -849,6 +850,9 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal("operator-attention", receipt.Decision);
         Assert.Contains("exit artifact missing", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output));
+        Assert.Contains("worker-edit.cs", GitCli.Run(root, "stash", "show", "--include-untracked", "--name-only", "stash@{0}").Output, StringComparison.Ordinal);
     }
 
     [Fact(DisplayName = "ProgressiveReviewSteering_records_receipt_and_attention_when_steer_start_throws")]
@@ -861,6 +865,7 @@ public sealed class ProgressiveReviewSteeringTests
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(Intent(goal, task, now, "start throws")).GetAwaiter().GetResult();
         var attentionStore = new FakeCollaborationItemStore();
+        File.WriteAllText(Path.Combine(root, "worker-edit.cs"), "valuable worker edit");
 
         var coordinator = NewCoordinator(
             root,
@@ -886,6 +891,9 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.Contains("dispatch start failed", receipt.Outcome, StringComparison.Ordinal);
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output));
+        Assert.Contains("worker-edit.cs", GitCli.Run(root, "stash", "show", "--include-untracked", "--name-only", "stash@{0}").Output, StringComparison.Ordinal);
     }
 
     private static ProgressiveReviewSteeringCoordinator NewCoordinator(

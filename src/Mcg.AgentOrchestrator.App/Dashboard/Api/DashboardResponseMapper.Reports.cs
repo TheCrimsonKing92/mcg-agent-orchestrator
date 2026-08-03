@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
@@ -315,11 +316,77 @@ public static GoalWorkSummaryDto ToGoalWorkSummaryDto(
         DashboardMonitoringEvents.StreamPath(goal.Id.Value),
         ToParallelExecutionPlanDto(GoalManagementCommandService.BuildReadyTaskParallelPlan(goal, agents)),
         testImpact,
-        operatorIntents?.Select(ToOperatorIntentDto).ToList())
+        operatorIntents?.Select(ToOperatorIntentDto).ToList(),
+        ReadProgressiveReviewGlanceGuards(goal, executionDirectory))
     {
         StatusText = GoalStatusText(goal.Status, lifecycle)
     };
 }
+
+private static IReadOnlyList<ProgressiveReviewGlanceGuardReceiptDto> ReadProgressiveReviewGlanceGuards(
+    Goal goal,
+    string? executionDirectory)
+{
+    if (string.IsNullOrWhiteSpace(executionDirectory))
+        return [];
+
+    var eventPath = Path.Combine(
+        OrchestratorWorkspace.ForDirectory(executionDirectory).GoalLifecycleEventsDirectory,
+        $"{goal.Id.Value}.jsonl");
+    if (!File.Exists(eventPath))
+        return [];
+
+    var receipts = new List<ProgressiveReviewGlanceGuardReceiptDto>();
+    try
+    {
+        foreach (var line in File.ReadLines(eventPath))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+                if (!root.TryGetProperty("eventType", out var eventType) ||
+                    !string.Equals(eventType.GetString(), "ProgressiveReviewGlanceGuardReceipt", StringComparison.Ordinal))
+                    continue;
+
+                receipts.Add(new ProgressiveReviewGlanceGuardReceiptDto(
+                    root.GetProperty("timestamp").GetDateTimeOffset(),
+                    root.GetProperty("taskId").GetString() ?? string.Empty,
+                    root.GetProperty("scopeConfidence").GetString() ?? "Unknown",
+                    ReadStringArray(root, "trustedScopePaths"),
+                    ReadStringArray(root, "changedFiles"),
+                    root.GetProperty("note").GetString() ?? string.Empty,
+                    root.GetProperty("evidenceLine").GetString() ?? string.Empty,
+                    root.GetProperty("reasonCode").GetString() ?? "absent",
+                    root.GetProperty("legacyPhraseHintMatched").GetBoolean(),
+                    root.GetProperty("originalVerdict").GetString() ?? string.Empty,
+                    root.GetProperty("finalVerdict").GetString() ?? string.Empty,
+                    root.GetProperty("downgraded").GetBoolean(),
+                    root.GetProperty("downgradeReason").GetString() ?? string.Empty,
+                    root.GetProperty("structuralComparison").GetString() ?? string.Empty));
+            }
+            catch (JsonException)
+            {
+                // A malformed historical line must not hide later valid receipts.
+            }
+        }
+    }
+    catch (IOException)
+    {
+        return [];
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return [];
+    }
+
+    return receipts;
+}
+
+private static IReadOnlyList<string> ReadStringArray(JsonElement root, string propertyName) =>
+    root.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.Array
+        ? property.EnumerateArray().Select(item => item.GetString() ?? string.Empty).ToArray()
+        : [];
 
 public static OperatorIntentDto ToOperatorIntentDto(OperatorIntentRecord intent) =>
     new(

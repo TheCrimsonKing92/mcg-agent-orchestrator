@@ -21,6 +21,15 @@ internal enum ProgressiveReviewGlanceVerdict
     Invalid
 }
 
+internal enum ProgressiveReviewGlanceReasonCode
+{
+    ScopeDeviation,
+    Approach,
+    Subsystem,
+    UnmentionedWork,
+    Unknown
+}
+
 internal static class ProgressiveReviewGlanceLimits
 {
     public const int DefaultTranscriptTailByteLimit = 32 * 1024;
@@ -73,7 +82,12 @@ internal sealed record ProgressiveReviewGlanceDispatchResult(
     int? InputTokens = null,
     int? OutputTokens = null,
     string? Model = null,
-    string? Profile = null);
+    string? Profile = null,
+    ProgressiveReviewGlanceReasonCode? ReasonCode = null);
+
+internal sealed record ProgressiveReviewGlanceGuardEvaluation(
+    ProgressiveReviewGlanceDispatchResult Result,
+    ProgressiveReviewGlanceGuardReceipt? Receipt);
 
 internal interface IProgressiveReviewGlanceRunner
 {
@@ -214,7 +228,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
 You are a progressive review glance for an in-flight Developer dispatch.
 
 Return only JSON:
-{"verdict":"on-track|concern|fundamental-misdirection","note":"short evidence-grounded note","evidenceLine":"single strongest evidence line"}
+{"verdict":"on-track|concern|fundamental-misdirection","reasonCode":"scope-deviation|approach|subsystem|unmentioned-work","note":"short evidence-grounded note","evidenceLine":"single strongest evidence line"}
 
 High bar: use fundamental-misdirection only for a defective criterion, forbidden scope, or provably impossible task. Concerns are queued advisory evidence only. Never ask to cancel unless the evidence is fundamental.
 The current task brief and trusted scope below are authoritative over generated intake fallback text. Unknown scope is absence of evidence: it must never justify a scope-deviation verdict.
@@ -262,8 +276,8 @@ Transcript tail:
             }
 
             var verdict = NormalizeVerdict(dto.Verdict);
-            var note = BoundSingleLine(dto.Note, 500);
-            var evidence = BoundSingleLine(dto.EvidenceLine, 300);
+            var note = BoundReceiptField(dto.Note);
+            var evidence = BoundReceiptField(dto.EvidenceLine);
             if (verdict == ProgressiveReviewGlanceVerdict.Invalid)
             {
                 return Invalid("unrecognized glance verdict", estimatedInputTokens);
@@ -276,7 +290,8 @@ Transcript tail:
                 dto.InputTokens ?? estimatedInputTokens,
                 dto.OutputTokens,
                 dto.Model,
-                dto.Profile);
+                dto.Profile,
+                NormalizeReasonCode(dto.ReasonCode));
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {
@@ -413,12 +428,14 @@ Transcript tail:
 
             _running.RemoveAt(index);
             running.Stopwatch.Stop();
-            var result = GuardUnsupportedScopeVerdict(running.Inputs, Complete(running));
+            var evaluation = EvaluateUnsupportedScopeVerdict(running.Inputs, Complete(running));
+            var result = evaluation.Result;
             var inputTokens = result.InputTokens ?? EstimateTokens(BuildPrompt(running.Inputs));
             var outputTokens = result.OutputTokens ?? EstimateTokens(result.Note + result.EvidenceLine);
             var totalTokens = inputTokens + outputTokens;
 
             TryAppendReceipt(running, result, inputTokens, outputTokens, totalTokens, lines);
+            TryAppendGuardReceipt(running, evaluation.Receipt, lines);
 
             UpdateSummary(running, result, totalTokens);
             var summary = _summaries[running.GoalId.Value];
@@ -437,6 +454,31 @@ Transcript tail:
         }
 
         return mutated;
+    }
+
+    private void TryAppendGuardReceipt(
+        RunningGlance running,
+        ProgressiveReviewGlanceGuardReceipt? receipt,
+        List<string> lines)
+    {
+        if (receipt is null)
+            return;
+
+        try
+        {
+            _eventWriter.AppendProgressiveReviewGlanceGuardReceipt(running.GoalId, running.TaskId, receipt);
+        }
+        catch (Exception ex)
+        {
+            lines.Add($"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=guard-receipt-write-failed error={BoundSingleLine(ex.Message, 300)}");
+        }
+
+        lines.Add(
+            $"GLANCE goal={Short(running.GoalId.Value)} task={Short(running.TaskId.Value)} result=guard-evaluated " +
+            $"original={receipt.OriginalVerdict} final={receipt.FinalVerdict} reason_code={receipt.ReasonCode} " +
+            $"scope_confidence={receipt.ScopeConfidence} comparison={receipt.StructuralComparison} " +
+            $"legacy_hint={receipt.LegacyPhraseHintMatched.ToString().ToLowerInvariant()} downgraded={receipt.Downgraded.ToString().ToLowerInvariant()} " +
+            $"reason={BoundToken(receipt.DowngradeReason, 240)}");
     }
 
     private void TryAppendReceipt(
@@ -539,12 +581,16 @@ Transcript tail:
 
     internal static ProgressiveReviewGlanceDispatchResult GuardUnsupportedScopeVerdict(
         ProgressiveReviewGlanceInputs inputs,
+        ProgressiveReviewGlanceDispatchResult result) =>
+        EvaluateUnsupportedScopeVerdict(inputs, result).Result;
+
+    internal static ProgressiveReviewGlanceGuardEvaluation EvaluateUnsupportedScopeVerdict(
+        ProgressiveReviewGlanceInputs inputs,
         ProgressiveReviewGlanceDispatchResult result)
     {
-        if (result.Verdict != ProgressiveReviewGlanceVerdict.FundamentalMisdirection ||
-            !LooksLikeScopeDeviation(result.Note + " " + result.EvidenceLine))
+        if (result.Verdict != ProgressiveReviewGlanceVerdict.FundamentalMisdirection)
         {
-            return result;
+            return new ProgressiveReviewGlanceGuardEvaluation(result, null);
         }
 
         var changedFiles = inputs.ChangedFiles
@@ -557,27 +603,64 @@ Transcript tail:
             changedFiles.All(changed => inputs.TrustedScopePaths.Any(scope =>
                 changed.Equals(scope, StringComparison.OrdinalIgnoreCase) ||
                 changed.StartsWith(scope.TrimEnd('/') + "/", StringComparison.OrdinalIgnoreCase)));
-        if (inputs.ScopeConfidence != RepositoryScopeConfidence.Unknown && !allChangesWithinTrustedScope)
-        {
-            return result;
-        }
-
-        var reason = inputs.ScopeConfidence == RepositoryScopeConfidence.Unknown
-            ? "scope is unknown"
-            : "changed files are within the authoritative task scope";
-        return result with
-        {
-            Verdict = ProgressiveReviewGlanceVerdict.Concern,
-            Note = $"Scope-only fundamental verdict downgraded because {reason}: {result.Note}"
-        };
+        var positivelyNonScope = result.ReasonCode is
+            ProgressiveReviewGlanceReasonCode.Approach or
+            ProgressiveReviewGlanceReasonCode.Subsystem or
+            ProgressiveReviewGlanceReasonCode.UnmentionedWork;
+        var shouldDowngrade = !positivelyNonScope &&
+            (inputs.ScopeConfidence == RepositoryScopeConfidence.Unknown || allChangesWithinTrustedScope);
+        var structuralComparison = inputs.ScopeConfidence == RepositoryScopeConfidence.Unknown
+            ? "scope-unknown"
+            : allChangesWithinTrustedScope
+                ? "all-changes-within-trusted-scope"
+                : "changes-not-proven-within-trusted-scope";
+        var reason = positivelyNonScope
+            ? $"typed non-scope reason {result.ReasonCode} preserves the kill verdict"
+            : inputs.ScopeConfidence == RepositoryScopeConfidence.Unknown
+                ? "scope confidence is Unknown and no typed non-scope reason was supplied"
+                : allChangesWithinTrustedScope
+                    ? "all changed files are within the trusted scope"
+                    : "changed files are not all within the precise trusted scope";
+        var guarded = shouldDowngrade
+            ? result with
+            {
+                Verdict = ProgressiveReviewGlanceVerdict.Concern,
+                Note = $"Scope-based fundamental verdict downgraded because {reason}: {result.Note}"
+            }
+            : result;
+        var receipt = new ProgressiveReviewGlanceGuardReceipt(
+            inputs.ScopeConfidence.ToString(),
+            inputs.TrustedScopePaths.ToArray(),
+            changedFiles,
+            BoundReceiptField(result.Note),
+            BoundReceiptField(result.EvidenceLine),
+            result.ReasonCode?.ToString() ?? "absent",
+            LooksLikeScopeDeviationHint(result.Note + " " + result.EvidenceLine),
+            result.Verdict.ToString(),
+            guarded.Verdict.ToString(),
+            shouldDowngrade,
+            reason,
+            structuralComparison);
+        return new ProgressiveReviewGlanceGuardEvaluation(guarded, receipt);
     }
 
-    private static bool LooksLikeScopeDeviation(string text) =>
+    private static bool LooksLikeScopeDeviationHint(string text) =>
         text.Contains("scope deviation", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("outside scope", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("outside the scope", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("forbidden scope", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("target file", StringComparison.OrdinalIgnoreCase);
+
+    private static string BoundReceiptField(string? value)
+    {
+        const int limit = 4096;
+        const string marker = "...[truncated at 4096 chars]";
+        var text = value ?? string.Empty;
+        return text.Length <= limit ? text : text[..(limit - marker.Length)] + marker;
+    }
+
+    private static string BoundToken(string value, int limit) =>
+        BoundSingleLine(value, limit).Replace(' ', '-');
 
     private void RaiseMisdirectionAttention(RunningGlance running, ProgressiveReviewGlanceDispatchResult result)
     {
@@ -1198,6 +1281,22 @@ Corrective direction:
         };
     }
 
+    private static ProgressiveReviewGlanceReasonCode? NormalizeReasonCode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = value.Trim().Replace("_", "-", StringComparison.Ordinal).ToLowerInvariant();
+        return normalized switch
+        {
+            "scope-deviation" => ProgressiveReviewGlanceReasonCode.ScopeDeviation,
+            "approach" => ProgressiveReviewGlanceReasonCode.Approach,
+            "subsystem" => ProgressiveReviewGlanceReasonCode.Subsystem,
+            "unmentioned-work" => ProgressiveReviewGlanceReasonCode.UnmentionedWork,
+            _ => ProgressiveReviewGlanceReasonCode.Unknown
+        };
+    }
+
     private static ProgressiveReviewGlanceDispatchResult Invalid(string note, int? estimatedInputTokens) =>
         new(
             ProgressiveReviewGlanceVerdict.Invalid,
@@ -1257,6 +1356,7 @@ Corrective direction:
         public string? Verdict { get; set; }
         public string? Note { get; set; }
         public string? EvidenceLine { get; set; }
+        public string? ReasonCode { get; set; }
         public int? InputTokens { get; set; }
         public int? OutputTokens { get; set; }
         public string? Model { get; set; }

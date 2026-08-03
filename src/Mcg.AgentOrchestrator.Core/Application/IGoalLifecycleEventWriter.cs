@@ -1,5 +1,19 @@
 namespace Mcg.AgentOrchestrator.Core;
 
+public sealed record ProgressiveReviewGlanceGuardReceipt(
+    string ScopeConfidence,
+    IReadOnlyList<string> TrustedScopePaths,
+    IReadOnlyList<string> ChangedFiles,
+    string Note,
+    string EvidenceLine,
+    string ReasonCode,
+    bool LegacyPhraseHintMatched,
+    string OriginalVerdict,
+    string FinalVerdict,
+    bool Downgraded,
+    string DowngradeReason,
+    string StructuralComparison);
+
 public interface IGoalLifecycleEventWriter
 {
     void AppendTimelineEvent(ProgressEvent progressEvent);
@@ -36,6 +50,10 @@ public interface IGoalLifecycleEventWriter
         TimeSpan wallTime,
         string? model,
         string? profile);
+    void AppendProgressiveReviewGlanceGuardReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceGuardReceipt receipt) { }
     void AppendProgressiveReviewGlanceSummary(
         GoalId goalId,
         int totalGlances,
@@ -77,6 +95,10 @@ public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
         TimeSpan wallTime,
         string? model,
         string? profile) { }
+    public void AppendProgressiveReviewGlanceGuardReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceGuardReceipt receipt) { }
     public void AppendProgressiveReviewGlanceSummary(
         GoalId goalId,
         int totalGlances,

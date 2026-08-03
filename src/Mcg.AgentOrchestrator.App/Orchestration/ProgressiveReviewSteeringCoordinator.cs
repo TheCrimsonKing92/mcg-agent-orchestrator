@@ -112,8 +112,9 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         {
             var now = _utcNow();
             var reason = $"steering exception: {ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(ex.Message, 300)}";
+            var disposition = EnsureCancelledDispatchIsRecoverable(kernel, intent, "steering-exception");
             AppendFailSafeReceipt(intent, reason, "operator-attention", now);
-            RaiseAttention(intent, reason);
+            RaiseAttention(intent, $"{reason}. Cancel disposition: {disposition}");
             _store.CompleteIntentAsync(intent.Id, now).GetAwaiter().GetResult();
             lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result=operator-attention reason=exception");
             return new ProgressiveReviewSteeringResult(true, lines);
@@ -161,12 +162,17 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         var originalProcess = task.LastProcess;
         var cancelTimeOwnedProcessSet = CaptureCancelTimeOwnedProcessSet(originalProcess);
         var cancelled = _cancelProcess(kernel, goal.Id, taskId);
+        kernel.RecordTaskNote(
+            goal.Id,
+            taskId,
+            "ProgressiveReviewSteerCancelPath path=progressive-review-steering disposition=restart-pending preservation=live-worktree");
         EnsureTerminalCancelProofArtifacts(cancelled, cancelTimeOwnedProcessSet, now);
         var cancelConfirmation = ConfirmTreeDead(cancelled, cancelTimeOwnedProcessSet);
         if (!cancelConfirmation.Confirmed)
         {
+            var disposition = EnsureCancelledDispatchIsRecoverable(kernel, intent, "tree-death-unconfirmed");
             AppendFailSafeReceipt(intent, cancelConfirmation.Proof, "operator-attention", now);
-            RaiseAttention(intent, $"Progressive-review steer suppressed because tree-death confirmation failed: {cancelConfirmation.Proof}");
+            RaiseAttention(intent, $"Progressive-review steer suppressed because tree-death confirmation failed: {cancelConfirmation.Proof}. Cancel disposition: {disposition}");
             _store.CompleteIntentAsync(intent.Id, now).GetAwaiter().GetResult();
             lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result=operator-attention reason=tree-death-unconfirmed");
             return new ProgressiveReviewSteeringResult(true, lines);
@@ -200,6 +206,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         }
         catch (Exception ex)
         {
+            var disposition = EnsureCancelledDispatchIsRecoverable(kernel, effectiveIntent, "restart-failed");
             var failureReceipt = BuildReceipt(
                 effectiveIntent,
                 cancelConfirmation.Proof,
@@ -209,10 +216,10 @@ internal sealed class ProgressiveReviewSteeringCoordinator
                 originalProcess,
                 startedDispatch,
                 null,
-                $"steer-restart-failed: {ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(ex.Message, 300)}",
+                $"steer-restart-failed: {ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(ex.Message, 300)}; {disposition}",
                 _utcNow());
             _store.AppendReceiptAsync(failureReceipt).GetAwaiter().GetResult();
-            RaiseAttention(intent, $"Progressive-review steer restart failed after confirmed cancel ({decision}): {ex.Message}");
+            RaiseAttention(intent, $"Progressive-review steer restart failed after confirmed cancel ({decision}): {ex.Message}. Cancel disposition: {disposition}");
             _store.CompleteIntentAsync(intent.Id, _utcNow()).GetAwaiter().GetResult();
             lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result=operator-attention reason=restart-failed receipt={failureReceipt.Id}");
             return new ProgressiveReviewSteeringResult(true, lines);
@@ -234,6 +241,91 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result={decision} receipt={receipt.Id}");
         return new ProgressiveReviewSteeringResult(true, lines);
     }
+
+    private string EnsureCancelledDispatchIsRecoverable(
+        AgentOrchestratorKernel kernel,
+        ProgressiveReviewSteerIntent intent,
+        string cancelPath)
+    {
+        TaskSpec task;
+        try
+        {
+            task = kernel.GetTask(new GoalId(intent.GoalId), new TaskId(intent.TaskId));
+        }
+        catch (Exception ex)
+        {
+            return $"path=progressive-review-steering/{cancelPath} disposition=task-unavailable error={Bound(ex.Message)}";
+        }
+
+        if (task.Status == WorkTaskStatus.Running)
+            return $"path=progressive-review-steering/{cancelPath} disposition=not-cancelled";
+
+        var workingDirectory = task.LastDispatch?.WorkingDirectory ?? _workspace.ExecutionDirectory;
+        var preservation = PreserveWorktreeEdits(workingDirectory, intent, cancelPath);
+        if (task.Status == WorkTaskStatus.Cancelled)
+        {
+            try
+            {
+                kernel.RequeueInterruptedDispatch(
+                    new GoalId(intent.GoalId),
+                    new TaskId(intent.TaskId),
+                    $"ProgressiveReviewSteer: cancellation path {cancelPath} did not restart; preserved edits and requeued.");
+                task = kernel.GetTask(new GoalId(intent.GoalId), new TaskId(intent.TaskId));
+            }
+            catch (Exception ex)
+            {
+                preservation += $" requeue-failed={Bound(ex.Message)}";
+            }
+        }
+
+        var disposition = $"path=progressive-review-steering/{cancelPath} preservation={preservation} disposition={task.Status}";
+        try
+        {
+            kernel.RecordTaskNote(new GoalId(intent.GoalId), new TaskId(intent.TaskId), $"ProgressiveReviewSteerCancelPath {disposition}");
+        }
+        catch
+        {
+            // The returned disposition is also written to the steering receipt and operator attention.
+        }
+        return disposition;
+    }
+
+    private static string PreserveWorktreeEdits(
+        string workingDirectory,
+        ProgressiveReviewSteerIntent intent,
+        string cancelPath)
+    {
+        try
+        {
+            var status = GitCli.Run(workingDirectory, "status", "--porcelain", "--untracked-files=all");
+            if (!status.Succeeded)
+                return $"failed=status:{Bound(status.Error)}";
+            if (string.IsNullOrWhiteSpace(status.Output))
+                return "clean-no-edits";
+
+            var message = $"progressive-review-stranded-{Short(intent.GoalId)}-{Short(intent.TaskId)}-{cancelPath}";
+            var stash = GitCli.Run(workingDirectory, "stash", "push", "--include-untracked", "-m", message);
+            if (!stash.Succeeded)
+                return $"failed=stash:{Bound(stash.Error)}";
+
+            var clean = GitCli.Run(workingDirectory, "status", "--porcelain", "--untracked-files=all");
+            if (!clean.Succeeded || !string.IsNullOrWhiteSpace(clean.Output))
+                return $"failed=worktree-not-clean:{Bound(clean.Error + clean.Output)}";
+
+            var reference = GitCli.Run(workingDirectory, "stash", "list", "-1", "--format=%gd");
+            var stashRef = reference.Succeeded && !string.IsNullOrWhiteSpace(reference.Output)
+                ? reference.Output.Trim()
+                : "stash-created-ref-unavailable";
+            return $"preserved={stashRef}";
+        }
+        catch (Exception ex)
+        {
+            return $"failed=exception:{Bound(ex.Message)}";
+        }
+    }
+
+    private static string Bound(string? value) =>
+        ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(value, 240).Replace(' ', '-');
 
     private InquiryAdmissionDecision BuildAdmission(
         Goal goal,
