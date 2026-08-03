@@ -57,7 +57,7 @@ internal static class PostLandingCanaryFailureClassifier
             PostLandingCanaryFailureReason.Reject => PostLandingCanaryFaultDisposition.VerdictFailure,
             PostLandingCanaryFailureReason.EvaluatedArtifactFailure =>
                 PostLandingCanaryFaultDisposition.VerdictFailure,
-            PostLandingCanaryFailureReason.EmptyReceipt or
+            PostLandingCanaryFailureReason.EmptyReceipt => PostLandingCanaryFaultDisposition.VerdictFailure,
             PostLandingCanaryFailureReason.Timeout or
             PostLandingCanaryFailureReason.InfrastructureError => PostLandingCanaryFaultDisposition.EnvironmentFault,
             null when outcome.Green => throw new InvalidOperationException(

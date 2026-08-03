@@ -151,6 +151,16 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 PostLandingCanaryFailureReason.EvaluatedArtifactFailure,
                 "landed artifact failed to build")));
         Assert.Equal(
+            PostLandingCanaryFaultDisposition.VerdictFailure,
+            PostLandingCanaryFailureClassifier.Classify(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.EmptyReceipt,
+                "evaluation reported green without executing tests")));
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.EnvironmentFault,
+            PostLandingCanaryFailureClassifier.Classify(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.Timeout,
+                "evaluation timed out")));
+        Assert.Equal(
             PostLandingCanaryFaultDisposition.EnvironmentFault,
             PostLandingCanaryFailureClassifier.Classify(PostLandingCanaryOutcome.Failed(
                 PostLandingCanaryFailureReason.InfrastructureError,
