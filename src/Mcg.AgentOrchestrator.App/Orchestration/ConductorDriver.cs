@@ -976,7 +976,8 @@ internal sealed class ConductorDriver
 
             var flakedTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
-                t.LastVerification is { } latest && DispatchFailureClassifier.Classify(t, latest).Kind == DispatchOutcomeKind.EmptyOutputFlake &&
+                t.LastVerification is { } latest && DispatchFailureClassifier.Classify(t, latest).Kind is
+                    DispatchOutcomeKind.LaunchFailure or DispatchOutcomeKind.EmptyOutputFlake &&
                 t.EmptyOutputRetryCount > 0);
             if (flakedTask is not null)
             {
@@ -996,12 +997,15 @@ internal sealed class ConductorDriver
 
                 var attemptInCycle = ((flakedTask.EmptyOutputRetryCount - 1) % policy.MaxEmptyOutputDispatchRetries) + 1;
                 var cycle = ((flakedTask.EmptyOutputRetryCount - 1) / policy.MaxEmptyOutputDispatchRetries) + 1;
+                var launchFailure = DispatchFailureClassifier.Classify(flakedTask, flakedTask.LastVerification!).Kind == DispatchOutcomeKind.LaunchFailure;
+                var failureLabel = launchFailure ? "silent launch failure" : "empty-output dispatch flake";
+                var failureEvidence = launchFailure
+                    ? $"task produced zero bytes on both streams with root exit {flakedTask.LastVerification!.ExitCode}"
+                    : $"task produced zero-byte stdout with exit {flakedTask.LastVerification!.ExitCode}";
                 var note = attemptInCycle == policy.MaxEmptyOutputDispatchRetries
-                    ? $"Auto-recover+re-admit empty-output dispatch flake cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; " +
-                        $"task produced zero-byte stdout with exit {flakedTask.LastVerification!.ExitCode}"
-                    : $"Auto-retry empty-output dispatch flake {attemptInCycle}/{policy.MaxEmptyOutputDispatchRetries} " +
-                        $"in recovery cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; " +
-                        $"task produced zero-byte stdout with exit {flakedTask.LastVerification!.ExitCode}";
+                    ? $"Auto-recover+re-admit {failureLabel} cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; {failureEvidence}"
+                    : $"Auto-retry {failureLabel} {attemptInCycle}/{policy.MaxEmptyOutputDispatchRetries} " +
+                        $"in recovery cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; {failureEvidence}";
                 _retryTask(goal.Id, flakedTask.Id, note, null);
                 // Immediately dispatch in the same tick after recovery, bypassing the next-tick
                 // WorkspaceReady path. If ownership blocks dispatch under Conservative policy,

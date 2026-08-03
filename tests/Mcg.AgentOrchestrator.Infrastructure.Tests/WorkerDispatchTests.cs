@@ -321,7 +321,8 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
         string command = "codex exec prompt",
         ProviderKind workerProviderKind = ProviderKind.Unknown,
         string? providerName = null,
-        bool includePlannerContract = true)
+        bool includePlannerContract = true,
+        int? childExitCode = null)
 {
     var kernel = new AgentOrchestratorKernel();
     var taskSpec = new TaskSpec(TaskId.New(), taskDescription ?? $"{role} task.", role, verificationPlan);
@@ -351,9 +352,18 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
     var stdout = Path.Combine(logs, $"{role}.out.log");
     var stderr = Path.Combine(logs, $"{role}.err.log");
     var exit = Path.Combine(logs, $"{role}.exit.txt");
+    var childExit = childExitCode is null ? null : Path.Combine(logs, $"{role}.child-exit.json");
     File.WriteAllText(stdout, standardOutput);
     File.WriteAllText(stderr, standardError);
     File.WriteAllText(exit, "0");
+    if (childExit is not null)
+    {
+        File.WriteAllText(
+            childExit,
+            JsonSerializer.Serialize(
+                new DispatchProcessHost.DispatchChildExitRecord(888888, childExitCode!.Value, clock.UtcNow),
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+    }
 
     var task = goal.Tasks.Single(candidate => candidate.RequiredRole == role);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
@@ -364,7 +374,17 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
         providerName,
         SandboxLowIntegrity: sandboxLowIntegrity,
         WorkerProviderKind: workerProviderKind));
-    var process = new TaskProcessRecord(999999, command, worktree, stdout, stderr, exit, clock.UtcNow, null, null);
+    var process = new TaskProcessRecord(
+        999999,
+        command,
+        worktree,
+        stdout,
+        stderr,
+        exit,
+        clock.UtcNow,
+        null,
+        null,
+        ChildExitRecordPath: childExit);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     return (kernel, goal, task, process);
 }

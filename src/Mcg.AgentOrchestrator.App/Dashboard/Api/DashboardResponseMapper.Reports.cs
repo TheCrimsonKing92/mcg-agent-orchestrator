@@ -523,6 +523,8 @@ public static TaskWorkSummaryDto ToTaskWorkSummaryDto(Goal goal, TaskSpec task)
                 task.LastProcess.ProcessId,
                 task.LastProcess.IsRunning,
                 task.LastProcess.ExitCode,
+                task.LastProcess.ChildProcessId,
+                task.LastProcess.ChildExitCode,
                 task.LastProcess.WasCancelled,
                 task.LastProcess.StandardOutputPath,
                 task.LastProcess.StandardErrorPath,

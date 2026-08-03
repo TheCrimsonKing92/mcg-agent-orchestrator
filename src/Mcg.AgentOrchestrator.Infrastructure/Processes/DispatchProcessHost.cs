@@ -85,7 +85,16 @@ public static class DispatchProcessHost
         string? PrepTaskId = null,
         string? PrepRecordPath = null,
         string? PrepHeartbeatPath = null,
-        string? PrepExitCodePath = null);
+        string? PrepExitCodePath = null,
+        string? ChildExitRecordPath = null,
+        string? HostDiagnosticPath = null,
+        int HeartbeatIntervalMilliseconds = 15_000);
+
+    public sealed record DispatchChildExitRecord(
+        int ProcessId,
+        int? ExitCode,
+        DateTimeOffset RecordedAt,
+        string State = "exited");
 
     public sealed record DispatchPrepRecord(
         string Kind,
@@ -115,6 +124,16 @@ public static class DispatchProcessHost
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
         using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
+        using var writer = new StreamWriter(stream);
+        writer.Write(payload);
+        writer.Flush();
+        stream.Flush(flushToDisk: true);
+    }
+
+    private static void AppendAllTextDurable(string path, string payload)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough);
         using var writer = new StreamWriter(stream);
         writer.Write(payload);
         writer.Flush();
@@ -961,6 +980,134 @@ public static void DropToLow() {
         Process? worker = null;
         OwnedProcessGroup? workerGroup = null;
         CodexEgressProxy? egressProxy = null;
+        Process? selectedChild = null;
+        var selectedChildLock = new object();
+        string? hostDiagnosticWriteFailure = null;
+        var heartbeatInterval = parameters.HeartbeatIntervalMilliseconds > 0
+            ? TimeSpan.FromMilliseconds(parameters.HeartbeatIntervalMilliseconds)
+            : HeartbeatInterval;
+
+        void RecordFallbackDiagnostic(string diagnostic)
+        {
+            hostDiagnosticWriteFailure = diagnostic;
+            if (string.IsNullOrWhiteSpace(parameters.HostDiagnosticPath))
+            {
+                return;
+            }
+
+            try
+            {
+                AppendAllTextDurable(parameters.HostDiagnosticPath, diagnostic + Environment.NewLine);
+            }
+            catch (Exception fallbackFailure)
+            {
+                hostDiagnosticWriteFailure +=
+                    $"; fallback diagnostic write failed: {fallbackFailure.GetType().Name}: {fallbackFailure.Message}";
+            }
+        }
+
+        void ObserveSelectedChild(int? candidatePid)
+        {
+            if (candidatePid is null || worker is null || candidatePid.Value == worker.Id)
+            {
+                return;
+            }
+
+            lock (selectedChildLock)
+            {
+                if (selectedChild?.Id == candidatePid.Value)
+                {
+                    return;
+                }
+
+                try
+                {
+                    // Opening the Process while it is alive retains an OS handle, so ExitCode remains
+                    // available after the selected CLI child disappears from process enumeration.
+                    var observedChild = Process.GetProcessById(candidatePid.Value);
+                    try
+                    {
+                        _ = observedChild.SafeHandle;
+                        selectedChild?.Dispose();
+                        selectedChild = observedChild;
+                    }
+                    catch
+                    {
+                        observedChild.Dispose();
+                        throw;
+                    }
+                }
+                catch
+                {
+                    // The next watchdog/heartbeat observation can retry if the candidate raced exit.
+                }
+            }
+        }
+
+        void WriteSelectedChildExitRecord()
+        {
+            if (string.IsNullOrWhiteSpace(parameters.ChildExitRecordPath))
+            {
+                return;
+            }
+
+            lock (selectedChildLock)
+            {
+                try
+                {
+                    var childProcessId = selectedChild?.Id ?? 0;
+                    int? childExitCode = null;
+                    var state = "not-observed";
+                    if (selectedChild is not null)
+                    {
+                        if (!selectedChild.HasExited)
+                        {
+                            selectedChild.WaitForExit(1000);
+                        }
+
+                        if (selectedChild.HasExited)
+                        {
+                            childExitCode = selectedChild.ExitCode;
+                            state = "exited";
+                        }
+                        else
+                        {
+                            state = "running-after-root-exit";
+                        }
+                    }
+
+                    WriteAllTextDurable(
+                        parameters.ChildExitRecordPath,
+                        JsonSerializer.Serialize(
+                            new DispatchChildExitRecord(
+                                childProcessId,
+                                childExitCode,
+                                DateTimeOffset.UtcNow,
+                                state),
+                            JsonOptions));
+                }
+                catch (Exception ex)
+                {
+                    RecordFallbackDiagnostic(
+                        $"[dispatch-host] selected child exit record failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+        }
+
+        void RecordHostFailure(Exception failure)
+        {
+            var diagnostic = $"[dispatch-host] worker launch/run failed: {failure}\n";
+            try
+            {
+                File.AppendAllText(parameters.StderrPath, diagnostic);
+            }
+            catch (Exception appendFailure)
+            {
+                RecordFallbackDiagnostic(
+                    $"[dispatch-host] stderr diagnostic append failed: {appendFailure.GetType().Name}: {appendFailure.Message}; " +
+                    $"original failure: {failure.GetType().Name}: {failure.Message}");
+            }
+        }
 
         void WriteHeartbeat(string state)
         {
@@ -973,6 +1120,8 @@ public static void DropToLow() {
             var stderrBytes = FileLength(parameters.StderrPath);
             var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
             var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
+            var childPid = SelectHeartbeatChildPid(worker, ownedPids);
+            ObserveSelectedChild(childPid);
             providerSessionId ??= TryCaptureProviderSessionId(
                 parameters.Provider,
                 parameters.StdoutPath,
@@ -997,7 +1146,7 @@ public static void DropToLow() {
             {
                 kind = string.IsNullOrWhiteSpace(parameters.Kind) ? WorkerDispatchKind : parameters.Kind,
                 pid = Environment.ProcessId,
-                childPid = SelectHeartbeatChildPid(worker, ownedPids),
+                childPid,
                 ownedPids,
                 startedAt = startedAt.ToString("o"),
                 lastObservedAt = DateTimeOffset.UtcNow.ToString("o"),
@@ -1012,6 +1161,7 @@ public static void DropToLow() {
                 sessionCaptureGaveUp = stderrSessionCapture.GaveUp,
                 worktreeHeadSha = parameters.WorktreeHeadSha,
                 dirtyStateHash = parameters.DirtyStateHash,
+                hostDiagnosticWriteFailure,
                 exitFileExists = File.Exists(parameters.ExitCodePath)
             };
 
@@ -1114,7 +1264,7 @@ public static void DropToLow() {
             {
                 prepStarted = true;
                 WritePrepHeartbeat("preparing-sandbox");
-                prepHeartbeatTimer.Change(HeartbeatInterval, HeartbeatInterval);
+                prepHeartbeatTimer.Change(heartbeatInterval, heartbeatInterval);
             }
 
             var sandboxPrepStartedAt = DateTimeOffset.UtcNow;
@@ -1156,7 +1306,7 @@ public static void DropToLow() {
             var copyOut = worker.StandardOutput.BaseStream.CopyToAsync(stdout, drainCts.Token);
             var copyErr = worker.StandardError.BaseStream.CopyToAsync(stderr, drainCts.Token);
 
-            heartbeatTimer.Change(HeartbeatInterval, HeartbeatInterval);
+            heartbeatTimer.Change(heartbeatInterval, heartbeatInterval);
 
             // Bounded supervision instead of an unbounded WaitForExit: reap the whole tree when
             // ShouldReapWorker says so (runtime cap, or idle/stall cap once the worker has streamed).
@@ -1164,6 +1314,8 @@ public static void DropToLow() {
             var maxIdle = ResolveWatchdogTimeout("MCG_DISPATCH_MAX_IDLE_MIN", DefaultMaxIdle);
             while (!worker.WaitForExit((int)WatchdogProbeInterval.TotalMilliseconds))
             {
+                var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
+                ObserveSelectedChild(SelectHeartbeatChildPid(worker, ownedPids));
                 var now = DateTimeOffset.UtcNow;
                 var runFor = now - startedAt;
                 var idleFor = now - lastProgressAt;
@@ -1207,8 +1359,7 @@ public static void DropToLow() {
             CompletePrep(1);
             // Capture launch/setup failures (e.g. launch-as-user under the OS sandbox) — otherwise the
             // worker never starts and nothing explains why (no worker means no redirected stderr).
-            try { File.AppendAllText(parameters.StderrPath, $"[dispatch-host] worker launch/run failed: {ex}\n"); }
-            catch { /* diagnostics are best-effort */ }
+            RecordHostFailure(ex);
         }
         finally
         {
@@ -1220,10 +1371,16 @@ public static void DropToLow() {
                 TryShutdownBuildServer(parameters.WorkingDirectory);
             }
 
-            TryWriteExitCode(parameters.ExitCodePath, exitCode);
+            // One final heartbeat synchronizes the selected-child handle with the childPid receipt.
+            // Freeze that selection into the child record before publishing the completion signal.
+            WriteHeartbeat("exited");
+            WriteSelectedChildExitRecord();
             WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
             egressProxy?.Dispose();
-            WriteHeartbeat("exited");
+            // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
+            // only after every child/diagnostic artifact the completion path reads is durable.
+            TryWriteExitCode(parameters.ExitCodePath, exitCode);
+            selectedChild?.Dispose();
         }
 
         return exitCode;

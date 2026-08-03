@@ -4363,18 +4363,26 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_Failed_nonzero_empty_output_flake_auto_recovers_instead_of_escalating")]
-    public void ConductorDriverFailedNonzeroEmptyOutputFlakeAutoRecoversInsteadOfEscalating()
+    [Xunit.Fact(DisplayName = "ConductorDriver_short_silent_launch_failure_auto_recovers_without_review_round")]
+    public void ConductorDriverSilentLaunchFailureAutoRecoversWithoutReviewRound()
     {
         var (kernel, goal) = SimpleGoal();
         var task = goal.Tasks.Single();
         DispatchTask(kernel, goal, task);
-        // Worker exited non-zero but produced zero bytes of stdout: this is a CLI startup/API flake,
+        // The root exited non-zero but both redirected streams stayed empty: this is a launch failure,
         // not a worker verdict, so the conductor should re-admit it instead of escalating.
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
-            new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+            new TaskVerificationRecord(
+                "test.exe",
+                "C:\\tmp",
+                1,
+                "",
+                "",
+                DateTimeOffset.UtcNow,
+                DispatchStartedAt: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(30)));
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(1, task.EmptyOutputRetryCount);
+        Assert.Equal(0, task.CriterionRetryCount);
 
         var retried = false;
         var escalated = false;
@@ -4388,9 +4396,10 @@ public sealed class ConductorDriverTests
 
         Assert.True(retried);
         Assert.False(escalated);
-        Assert.Contains("zero-byte stdout with exit 1", retryMessage!);
+        Assert.Contains("zero bytes on both streams with root exit 1", retryMessage!);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(0, task.CriterionRetryCount);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_sandbox_preflight_failure_auto_retries_on_shared_dispatch_flake_budget")]
@@ -4551,7 +4560,14 @@ public sealed class ConductorDriverTests
         var task = goal.Tasks.Single();
         DispatchTask(kernel, goal, task);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
-            new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+            new TaskVerificationRecord(
+                "test.exe",
+                "C:\\tmp",
+                1,
+                "",
+                "",
+                DateTimeOffset.UtcNow,
+                DispatchStartedAt: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(30)));
         kernel.RetryTask(goal.Id, task.Id, "retry transient empty output");
         DispatchTask(kernel, goal, task);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
@@ -4581,7 +4597,14 @@ public sealed class ConductorDriverTests
         {
             DispatchTask(kernel, goal, task);
             kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
-                new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+                new TaskVerificationRecord(
+                    "test.exe",
+                    "C:\\tmp",
+                    1,
+                    "",
+                    "",
+                    DateTimeOffset.UtcNow,
+                    DispatchStartedAt: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(30)));
             if (i == 0)
             {
                 kernel.RetryTask(goal.Id, task.Id, "previous empty output retry");
@@ -4608,7 +4631,14 @@ public sealed class ConductorDriverTests
 
         DispatchTask(kernel, goal, task);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
-            new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+            new TaskVerificationRecord(
+                "test.exe",
+                "C:\\tmp",
+                1,
+                "",
+                "",
+                DateTimeOffset.UtcNow,
+                DispatchStartedAt: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(30)));
 
         result = driver.AdvanceOnce(goal, policy);
 
@@ -4625,7 +4655,14 @@ public sealed class ConductorDriverTests
         {
             DispatchTask(kernel, goal, task);
             kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
-                new TaskVerificationRecord("test.exe", "C:\\tmp", 1, "", "", DateTimeOffset.UtcNow));
+                new TaskVerificationRecord(
+                    "test.exe",
+                    "C:\\tmp",
+                    1,
+                    "",
+                    "",
+                    DateTimeOffset.UtcNow,
+                    DispatchStartedAt: DateTimeOffset.UtcNow - TimeSpan.FromSeconds(30)));
             if (i == 0)
             {
                 kernel.RetryTask(goal.Id, task.Id, "previous empty output retry");

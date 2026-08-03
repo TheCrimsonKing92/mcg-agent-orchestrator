@@ -134,7 +134,10 @@ public sealed record TaskVerificationSnapshot(
     string? ReviewedCommit = null,
     IReadOnlyList<ReviewFinding>? MergedReviewFindings = null,
     bool WorkerResultPresent = false,
-    ReviewFindingContractViolation? ReviewFindingContractViolation = null)
+    ReviewFindingContractViolation? ReviewFindingContractViolation = null,
+    DateTimeOffset? DispatchStartedAt = null,
+    int? ChildProcessId = null,
+    int? ChildExitCode = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -179,7 +182,10 @@ public sealed record TaskProcessSnapshot(
     bool WasCancelled = false,
     IReadOnlyList<int>? OwnedProcessIds = null,
     TaskProcessResourceAccountingSnapshot? ResourceAccounting = null,
-    bool WasCancelledByConductor = false);
+    bool WasCancelledByConductor = false,
+    string? ChildExitRecordPath = null,
+    int? ChildProcessId = null,
+    int? ChildExitCode = null);
 
 public sealed record TaskProcessResourceAccountingSnapshot(
     long CpuMilliseconds,
