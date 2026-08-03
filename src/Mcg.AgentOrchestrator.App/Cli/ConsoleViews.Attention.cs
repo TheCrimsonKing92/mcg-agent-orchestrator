@@ -45,7 +45,10 @@ internal static partial class ConsoleViews
         PrintCollaborationItems(items, includeHistory: false);
     }
 
-    public static void PrintCollaborationItems(IReadOnlyList<CollaborationItem> items, bool includeHistory)
+    public static void PrintCollaborationItems(
+        IReadOnlyList<CollaborationItem> items,
+        bool includeHistory,
+        Func<CollaborationItem, string?>? itemId = null)
     {
         Console.WriteLine();
         Console.WriteLine(includeHistory
@@ -62,7 +65,10 @@ internal static partial class ConsoleViews
         foreach (var item in items)
         {
             var goal = item.GoalId is null ? "cross-goal" : item.GoalId[..Math.Min(8, item.GoalId.Length)];
-            Console.WriteLine($"  [{item.Type}] {item.Id[..8]} status={item.Status} goal={goal}");
+            var renderedId = itemId?.Invoke(item);
+            if (string.IsNullOrWhiteSpace(renderedId))
+                renderedId = item.Id[..8];
+            Console.WriteLine($"  [{item.Type}] {renderedId} status={item.Status} goal={goal}");
             Console.WriteLine($"    subject: {item.Subject}");
             if (!string.IsNullOrWhiteSpace(item.Body))
                 Console.WriteLine($"    body: {item.Body}");

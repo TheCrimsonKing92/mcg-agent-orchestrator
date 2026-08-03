@@ -341,6 +341,33 @@ public sealed class GoalRefinementTests
         Xunit.Assert.StartsWith(GoalRefinementService.CorrelationKeyPrefix, collab.Items[0].CorrelationKey);
     }
 
+    [Xunit.Fact]
+    public async Task ClarificationBodyPreservesFullTopicKey()
+    {
+        var json = """
+            {
+              "behavioralContract": "Preserve stranded edits.",
+              "acceptanceCriteria": ["Disposition is explicit"],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [{"kind": "scope", "topicKey": "stranded-edits-preservation-mechanism", "refinerConfidence": "low", "blastRadius": "high", "question": "How are stranded edits preserved?", "choice": "", "rationale": "Operator decision required."}]
+            }
+            """;
+        var (service, kernel, goalId, collab) = BuildScenario(responseJson: json);
+
+        var result = await service.RefineAsync(kernel, goalId);
+        var clarification = Xunit.Assert.Single(collab.Items);
+
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        Xunit.Assert.Contains(
+            "Topic key: stranded-edits-preservation-mechanism",
+            clarification.Body,
+            StringComparison.Ordinal);
+        Xunit.Assert.True(
+            DiscordInteractionHandler.BuildAnswerCustomId(clarification.CorrelationKey!).Length <= 100,
+            "The persisted correlation key must remain safe for a Discord answer custom id.");
+    }
+
     // --- Resolve clarification and record precedent ---
 
     [Xunit.Fact(DisplayName = "GoalRefinementService_resolving_clarification_records_precedent")]
