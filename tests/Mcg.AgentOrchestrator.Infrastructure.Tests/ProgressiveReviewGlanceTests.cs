@@ -81,36 +81,44 @@ public sealed class ProgressiveReviewGlanceTests
     public void GuardReceipt_DashboardWorkSummary_SurfacesExactInputs()
     {
         var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-dto-{Guid.NewGuid():N}");
-        var now = new DateTimeOffset(2026, 8, 3, 1, 2, 3, TimeSpan.Zero);
-        var (kernel, goal, task) = RunningDeveloperRound(now, workingDirectory: root);
-        var receipt = new ProgressiveReviewGlanceGuardReceipt(
-            "Precise",
-            ["docs/test-design-discipline.md"],
-            ["docs/test-design-discipline.md"],
-            IncidentScopeNote,
-            string.Empty,
-            "absent",
-            false,
-            "FundamentalMisdirection",
-            "Concern",
-            true,
-            "all changed files are within the trusted scope",
-            "all-changes-within-trusted-scope");
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
-        new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, new TestClock(now))
-            .AppendProgressiveReviewGlanceGuardReceipt(goal.Id, task.Id, receipt);
+        try
+        {
+            var now = new DateTimeOffset(2026, 8, 3, 1, 2, 3, TimeSpan.Zero);
+            var (kernel, goal, task) = RunningDeveloperRound(now, workingDirectory: root);
+            var receipt = new ProgressiveReviewGlanceGuardReceipt(
+                "Precise",
+                ["docs/test-design-discipline.md"],
+                ["docs/test-design-discipline.md"],
+                IncidentScopeNote,
+                string.Empty,
+                "absent",
+                false,
+                "FundamentalMisdirection",
+                "Concern",
+                true,
+                "all changed files are within the trusted scope",
+                "all-changes-within-trusted-scope");
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, new TestClock(now))
+                .AppendProgressiveReviewGlanceGuardReceipt(goal.Id, task.Id, receipt);
 
-        var dto = DashboardResponseMapper.ToGoalWorkSummaryDto(
-            kernel,
-            goal,
-            WorkerProfileCatalog.Default(),
-            executionDirectory: root);
+            var dto = DashboardResponseMapper.ToGoalWorkSummaryDto(
+                kernel,
+                goal,
+                WorkerProfileCatalog.Default(),
+                executionDirectory: root);
 
-        var visible = Xunit.Assert.Single(dto.ProgressiveReviewGlanceGuards!);
-        Xunit.Assert.Equal(receipt.Note, visible.Note);
-        Xunit.Assert.Equal(receipt.EvidenceLine, visible.EvidenceLine);
-        Xunit.Assert.Equal(receipt.ChangedFiles, visible.ChangedFiles);
-        Xunit.Assert.True(visible.Downgraded);
+            var visible = Xunit.Assert.Single(dto.ProgressiveReviewGlanceGuards!);
+            Xunit.Assert.Equal(receipt.Note, visible.Note);
+            Xunit.Assert.Equal(receipt.EvidenceLine, visible.EvidenceLine);
+            Xunit.Assert.Equal(receipt.ChangedFiles, visible.ChangedFiles);
+            Xunit.Assert.True(visible.Downgraded);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Fact]
@@ -149,10 +157,56 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Equal(IncidentScopeNote, receipt.Note);
         Xunit.Assert.Equal(string.Empty, receipt.EvidenceLine);
         Xunit.Assert.Equal("absent", receipt.ReasonCode);
+        Xunit.Assert.Equal(["docs/test-design-discipline.md"], receipt.TrustedScopePaths);
+        Xunit.Assert.Equal(["docs/test-design-discipline.md"], receipt.ChangedFiles);
+        Xunit.Assert.Equal("FundamentalMisdirection", receipt.OriginalVerdict);
+        Xunit.Assert.Equal("Concern", receipt.FinalVerdict);
         Xunit.Assert.True(receipt.Downgraded);
+        Xunit.Assert.Equal("all changed files are within the trusted scope", receipt.DowngradeReason);
         Xunit.Assert.Contains(observed.ProgressLines, line =>
             line.Contains("result=guard-evaluated", StringComparison.Ordinal) &&
             line.Contains("downgraded=true", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void FundamentalMisdirection_NotDowngraded_EmitsGuardReceiptAndVisibleEvent()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 1, 2, 3, TimeSpan.Zero);
+        var description = """
+            Implement the test discipline update.
+
+            Target files/scopes
+            Includes:
+            - docs/test-design-discipline.md
+            """;
+        var (kernel, goal, _) = RunningDeveloperRound(now, description);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            IncidentScopeNote,
+            string.Empty,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.ScopeDeviation));
+        var events = new RecordingGlanceEvents();
+        var coordinator = NewCoordinator(
+            runner,
+            events,
+            new ProgressiveReviewGlanceOptions(ChangedFileThreshold: 1),
+            () => now,
+            (_, _) => new DispatchLiveChangeSnapshot(
+                ["src/Other.cs"],
+                ["docs/test-design-discipline.md"],
+                0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+        var observed = coordinator.Observe(kernel, [goal]);
+
+        var receipt = Xunit.Assert.Single(events.GuardReceipts);
+        Xunit.Assert.False(receipt.Downgraded);
+        Xunit.Assert.Equal("FundamentalMisdirection", receipt.FinalVerdict);
+        Xunit.Assert.Equal("changed-files-outside-trusted-scope", receipt.StructuralComparison);
+        Xunit.Assert.Contains(observed.ProgressLines, line =>
+            line.Contains("result=guard-evaluated", StringComparison.Ordinal) &&
+            line.Contains("downgraded=false", StringComparison.Ordinal));
     }
 
     private static ProgressiveReviewGlanceInputs Inputs(

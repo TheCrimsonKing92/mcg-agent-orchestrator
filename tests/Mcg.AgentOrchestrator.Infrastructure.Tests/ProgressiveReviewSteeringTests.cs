@@ -850,9 +850,11 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal("operator-attention", receipt.Decision);
         Assert.Contains("exit artifact missing", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
-        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
-        Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output));
-        Assert.Contains("worker-edit.cs", GitCli.Run(root, "stash", "show", "--include-untracked", "--name-only", "stash@{0}").Output, StringComparison.Ordinal);
+        var retained = kernel.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Cancelled, retained.Status);
+        Assert.NotNull(retained.LastProcess);
+        Assert.Contains("worker-edit.cs", GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output, StringComparison.Ordinal);
+        Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "stash", "list").Output));
     }
 
     [Fact(DisplayName = "ProgressiveReviewSteering_records_receipt_and_attention_when_steer_start_throws")]
@@ -891,6 +893,43 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.Contains("dispatch start failed", receipt.Outcome, StringComparison.Ordinal);
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
+        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output));
+        Assert.Contains("worker-edit.cs", GitCli.Run(root, "stash", "show", "--include-untracked", "--name-only", "stash@{0}").Output, StringComparison.Ordinal);
+        Assert.Matches("preserved=[0-9a-f]{40}", receipt.Outcome);
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_requeues_and_preserves_goal_worktree_when_restart_preparation_throws")]
+    public void RequeuesAndPreservesGoalWorktreeWhenRestartPreparationThrows()
+    {
+        var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-prepare-throws");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: null);
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "restart preparation throws")).GetAwaiter().GetResult();
+        File.WriteAllText(Path.Combine(root, "worker-edit.cs"), "valuable worker edit");
+        var started = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (_, _, _) =>
+            {
+                started = true;
+                throw new InvalidOperationException("start must not run");
+            },
+            prepareFreshDispatch: (_, _, _, _) => throw new InvalidOperationException("dispatch preparation failed"),
+            currentHead: head);
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState);
+        Assert.False(started);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Contains("dispatch preparation failed", receipt.Outcome, StringComparison.Ordinal);
+        Assert.Matches("preserved=[0-9a-f]{40}", receipt.Outcome);
         Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
         Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output));
         Assert.Contains("worker-edit.cs", GitCli.Run(root, "stash", "show", "--include-untracked", "--name-only", "stash@{0}").Output, StringComparison.Ordinal);

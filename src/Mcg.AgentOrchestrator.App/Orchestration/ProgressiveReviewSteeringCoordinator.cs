@@ -162,15 +162,17 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         var originalProcess = task.LastProcess;
         var cancelTimeOwnedProcessSet = CaptureCancelTimeOwnedProcessSet(originalProcess);
         var cancelled = _cancelProcess(kernel, goal.Id, taskId);
-        kernel.RecordTaskNote(
+        TryRecordCancelPathNote(
+            kernel,
             goal.Id,
             taskId,
-            "ProgressiveReviewSteerCancelPath path=progressive-review-steering disposition=restart-pending preservation=live-worktree");
+            "path=progressive-review-steering disposition=restart-pending preservation=live-worktree");
         EnsureTerminalCancelProofArtifacts(cancelled, cancelTimeOwnedProcessSet, now);
         var cancelConfirmation = ConfirmTreeDead(cancelled, cancelTimeOwnedProcessSet);
         if (!cancelConfirmation.Confirmed)
         {
-            var disposition = EnsureCancelledDispatchIsRecoverable(kernel, intent, "tree-death-unconfirmed");
+            var disposition = "path=progressive-review-steering/tree-death-unconfirmed disposition=cancelled-live-tree preservation=live-worktree";
+            TryRecordCancelPathNote(kernel, goal.Id, taskId, disposition);
             AppendFailSafeReceipt(intent, cancelConfirmation.Proof, "operator-attention", now);
             RaiseAttention(intent, $"Progressive-review steer suppressed because tree-death confirmation failed: {cancelConfirmation.Proof}. Cancel disposition: {disposition}");
             _store.CompleteIntentAsync(intent.Id, now).GetAwaiter().GetResult();
@@ -257,12 +259,17 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             return $"path=progressive-review-steering/{cancelPath} disposition=task-unavailable error={Bound(ex.Message)}";
         }
 
-        if (task.Status == WorkTaskStatus.Running)
+        var restartFailedAfterConfirmedCancel =
+            string.Equals(cancelPath, "restart-failed", StringComparison.Ordinal) &&
+            (task.Status == WorkTaskStatus.Assigned || task.Status == WorkTaskStatus.Running) &&
+            task.LastProcess is null;
+        if (task.Status != WorkTaskStatus.Cancelled && !restartFailedAfterConfirmedCancel)
             return $"path=progressive-review-steering/{cancelPath} disposition=not-cancelled";
 
-        var workingDirectory = task.LastDispatch?.WorkingDirectory ?? _workspace.ExecutionDirectory;
+        var workingDirectory = task.LastDispatch?.WorkingDirectory ??
+            _workspace.ResolveExecutionDirectory(new GoalId(intent.GoalId));
         var preservation = PreserveWorktreeEdits(workingDirectory, intent, cancelPath);
-        if (task.Status == WorkTaskStatus.Cancelled)
+        if (task.Status is WorkTaskStatus.Cancelled or WorkTaskStatus.Running)
         {
             try
             {
@@ -312,7 +319,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             if (!clean.Succeeded || !string.IsNullOrWhiteSpace(clean.Output))
                 return $"failed=worktree-not-clean:{Bound(clean.Error + clean.Output)}";
 
-            var reference = GitCli.Run(workingDirectory, "stash", "list", "-1", "--format=%gd");
+            var reference = GitCli.Run(workingDirectory, "stash", "list", "-1", "--format=%H");
             var stashRef = reference.Succeeded && !string.IsNullOrWhiteSpace(reference.Output)
                 ? reference.Output.Trim()
                 : "stash-created-ref-unavailable";
@@ -326,6 +333,22 @@ internal sealed class ProgressiveReviewSteeringCoordinator
 
     private static string Bound(string? value) =>
         ProgressiveReviewGlanceCoordinator.BoundSingleLineForSteering(value, 240).Replace(' ', '-');
+
+    private static void TryRecordCancelPathNote(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        string disposition)
+    {
+        try
+        {
+            kernel.RecordTaskNote(goalId, taskId, $"ProgressiveReviewSteerCancelPath {disposition}");
+        }
+        catch
+        {
+            // Steering receipts and operator attention retain the disposition if task-note persistence fails.
+        }
+    }
 
     private InquiryAdmissionDecision BuildAdmission(
         Goal goal,
