@@ -268,10 +268,27 @@ internal sealed record GoalWorkSummaryDto(
     string? MonitoringStreamPath = null,
     ParallelExecutionPlanDto? ParallelPlan = null,
     GoalTestImpactDto? TestImpact = null,
-    IReadOnlyList<OperatorIntentDto>? OperatorIntents = null)
+    IReadOnlyList<OperatorIntentDto>? OperatorIntents = null,
+    IReadOnlyList<ProgressiveReviewGlanceGuardReceiptDto>? ProgressiveReviewGlanceGuards = null)
 {
     public string StatusText { get; init; } = DashboardDisplayNames.Display(Status);
 }
+
+internal sealed record ProgressiveReviewGlanceGuardReceiptDto(
+    DateTimeOffset Timestamp,
+    string TaskId,
+    string ScopeConfidence,
+    IReadOnlyList<string> TrustedScopePaths,
+    IReadOnlyList<string> ChangedFiles,
+    string Note,
+    string EvidenceLine,
+    string ReasonCode,
+    bool LegacyPhraseHintMatched,
+    string OriginalVerdict,
+    string FinalVerdict,
+    bool Downgraded,
+    string DowngradeReason,
+    string StructuralComparison);
 
 internal sealed record OperatorIntentDto(
     string Id,

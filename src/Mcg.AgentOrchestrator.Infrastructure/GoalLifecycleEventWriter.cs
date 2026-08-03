@@ -263,6 +263,27 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["profile"] = profile;
         });
 
+    public void AppendProgressiveReviewGlanceGuardReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        ProgressiveReviewGlanceGuardReceipt receipt) =>
+        Append(goalId, "ProgressiveReviewGlanceGuardReceipt", obj =>
+        {
+            obj["taskId"] = taskId.Value;
+            obj["scopeConfidence"] = receipt.ScopeConfidence;
+            obj["trustedScopePaths"] = new JsonArray(receipt.TrustedScopePaths.Select(path => JsonValue.Create(path)).ToArray());
+            obj["changedFiles"] = new JsonArray(receipt.ChangedFiles.Select(path => JsonValue.Create(path)).ToArray());
+            obj["note"] = receipt.Note;
+            obj["evidenceLine"] = receipt.EvidenceLine;
+            obj["reasonCode"] = receipt.ReasonCode;
+            obj["legacyPhraseHintMatched"] = receipt.LegacyPhraseHintMatched;
+            obj["originalVerdict"] = receipt.OriginalVerdict;
+            obj["finalVerdict"] = receipt.FinalVerdict;
+            obj["downgraded"] = receipt.Downgraded;
+            obj["downgradeReason"] = receipt.DowngradeReason;
+            obj["structuralComparison"] = receipt.StructuralComparison;
+        });
+
     public void AppendProgressiveReviewGlanceSummary(
         GoalId goalId,
         int totalGlances,

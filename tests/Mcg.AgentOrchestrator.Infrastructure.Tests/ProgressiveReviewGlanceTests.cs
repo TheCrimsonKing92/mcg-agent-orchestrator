@@ -2,9 +2,232 @@ using System.Text;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 public sealed class ProgressiveReviewGlanceTests
 {
+    private const string IncidentScopeNote = "Scope is violated: work is spread across core/app/domain/reporting/dashboard/test files, while the authoritative trusted scope is limited to docs/test-design-discipline.md";
+
+    [Xunit.Fact]
+    public void ParseResult_TypedReasonCode_MapsWithoutProseInference()
+    {
+        var result = ProgressiveReviewGlanceCoordinator.ParseResult(
+            """{"verdict":"fundamental-misdirection","reasonCode":"subsystem","note":"wrong area","evidenceLine":"unmentioned implementation"}""");
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.FundamentalMisdirection, result.Verdict);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceReasonCode.Subsystem, result.ReasonCode);
+    }
+
+    [Xunit.Fact]
+    public void ScopeWordingWithoutLegacyPhrase_InsideScope_Downgrades()
+    {
+        var evaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(
+            Inputs(["docs/test-design-discipline.md"], RepositoryScopeConfidence.Precise),
+            new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+                IncidentScopeNote,
+                string.Empty));
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Concern, evaluation.Result.Verdict);
+        Xunit.Assert.False(evaluation.Receipt!.LegacyPhraseHintMatched);
+        Xunit.Assert.Equal("all-changes-within-trusted-scope", evaluation.Receipt.StructuralComparison);
+    }
+
+    [Xunit.Fact]
+    public void ScopeWordingWithoutLegacyPhrase_UnknownScope_Downgrades()
+    {
+        var evaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(
+            Inputs([], RepositoryScopeConfidence.Unknown),
+            new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+                IncidentScopeNote,
+                string.Empty));
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Concern, evaluation.Result.Verdict);
+        Xunit.Assert.Equal("scope-unknown", evaluation.Receipt!.StructuralComparison);
+    }
+
+    [Xunit.Fact]
+    public void PreciseScope_OutsideChangedFile_PreservesKill()
+    {
+        var evaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(
+            Inputs(["docs/test-design-discipline.md"], RepositoryScopeConfidence.Precise, "src/Other.cs"),
+            new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+                IncidentScopeNote,
+                string.Empty,
+                ReasonCode: ProgressiveReviewGlanceReasonCode.ScopeDeviation));
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.FundamentalMisdirection, evaluation.Result.Verdict);
+        Xunit.Assert.False(evaluation.Receipt!.Downgraded);
+    }
+
+    [Xunit.Fact]
+    public void TypedNonScopeReason_InsideScope_PreservesKill()
+    {
+        var evaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(
+            Inputs(["docs/test-design-discipline.md"], RepositoryScopeConfidence.Precise),
+            new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+                "Work targets a subsystem the objective never mentions.",
+                "Diff implements unrelated scheduling behavior.",
+                ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem));
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.FundamentalMisdirection, evaluation.Result.Verdict);
+        Xunit.Assert.Equal("Subsystem", evaluation.Receipt!.ReasonCode);
+    }
+
+    [Xunit.Fact]
+    public void GuardReceipt_DashboardWorkSummary_SurfacesExactInputs()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-dto-{Guid.NewGuid():N}");
+        try
+        {
+            var now = new DateTimeOffset(2026, 8, 3, 1, 2, 3, TimeSpan.Zero);
+            var (kernel, goal, task) = RunningDeveloperRound(now, workingDirectory: root);
+            var receipt = new ProgressiveReviewGlanceGuardReceipt(
+                "Precise",
+                ["docs/test-design-discipline.md"],
+                ["docs/test-design-discipline.md"],
+                IncidentScopeNote,
+                string.Empty,
+                "absent",
+                false,
+                "FundamentalMisdirection",
+                "Concern",
+                true,
+                "all changed files are within the trusted scope",
+                "all-changes-within-trusted-scope");
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, new TestClock(now))
+                .AppendProgressiveReviewGlanceGuardReceipt(goal.Id, task.Id, receipt);
+
+            var dto = DashboardResponseMapper.ToGoalWorkSummaryDto(
+                kernel,
+                goal,
+                WorkerProfileCatalog.Default(),
+                executionDirectory: root);
+
+            var visible = Xunit.Assert.Single(dto.ProgressiveReviewGlanceGuards!);
+            Xunit.Assert.Equal(receipt.Note, visible.Note);
+            Xunit.Assert.Equal(receipt.EvidenceLine, visible.EvidenceLine);
+            Xunit.Assert.Equal(receipt.ChangedFiles, visible.ChangedFiles);
+            Xunit.Assert.True(visible.Downgraded);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void FundamentalMisdirection_Downgraded_EmitsCompleteGuardReceipt()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 1, 2, 3, TimeSpan.Zero);
+        var description = """
+            Implement the test discipline update.
+
+            Target files/scopes
+            Includes:
+            - docs/test-design-discipline.md
+            """;
+        var (kernel, goal, _) = RunningDeveloperRound(now, description);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            IncidentScopeNote,
+            string.Empty));
+        var events = new RecordingGlanceEvents();
+        var coordinator = NewCoordinator(
+            runner,
+            events,
+            new ProgressiveReviewGlanceOptions(ChangedFileThreshold: 1),
+            () => now,
+            (_, _) => new DispatchLiveChangeSnapshot(
+                ["docs/test-design-discipline.md"],
+                ["docs/test-design-discipline.md"],
+                0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+        var observed = coordinator.Observe(kernel, [goal]);
+
+        var receipt = Xunit.Assert.Single(events.GuardReceipts);
+        Xunit.Assert.Equal("Precise", receipt.ScopeConfidence);
+        Xunit.Assert.Equal(IncidentScopeNote, receipt.Note);
+        Xunit.Assert.Equal(string.Empty, receipt.EvidenceLine);
+        Xunit.Assert.Equal("absent", receipt.ReasonCode);
+        Xunit.Assert.Equal(["docs/test-design-discipline.md"], receipt.TrustedScopePaths);
+        Xunit.Assert.Equal(["docs/test-design-discipline.md"], receipt.ChangedFiles);
+        Xunit.Assert.Equal("FundamentalMisdirection", receipt.OriginalVerdict);
+        Xunit.Assert.Equal("Concern", receipt.FinalVerdict);
+        Xunit.Assert.True(receipt.Downgraded);
+        Xunit.Assert.Equal("all changed files are within the trusted scope", receipt.DowngradeReason);
+        Xunit.Assert.Contains(observed.ProgressLines, line =>
+            line.Contains("result=guard-evaluated", StringComparison.Ordinal) &&
+            line.Contains("downgraded=true", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void FundamentalMisdirection_NotDowngraded_EmitsGuardReceiptAndVisibleEvent()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 1, 2, 3, TimeSpan.Zero);
+        var description = """
+            Implement the test discipline update.
+
+            Target files/scopes
+            Includes:
+            - docs/test-design-discipline.md
+            """;
+        var (kernel, goal, _) = RunningDeveloperRound(now, description);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            IncidentScopeNote,
+            string.Empty,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.ScopeDeviation));
+        var events = new RecordingGlanceEvents();
+        var coordinator = NewCoordinator(
+            runner,
+            events,
+            new ProgressiveReviewGlanceOptions(ChangedFileThreshold: 1),
+            () => now,
+            (_, _) => new DispatchLiveChangeSnapshot(
+                ["src/Other.cs"],
+                ["docs/test-design-discipline.md"],
+                0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+        var observed = coordinator.Observe(kernel, [goal]);
+
+        var receipt = Xunit.Assert.Single(events.GuardReceipts);
+        Xunit.Assert.False(receipt.Downgraded);
+        Xunit.Assert.Equal("FundamentalMisdirection", receipt.FinalVerdict);
+        Xunit.Assert.Equal("changes-not-proven-within-trusted-scope", receipt.StructuralComparison);
+        Xunit.Assert.Contains(observed.ProgressLines, line =>
+            line.Contains("result=guard-evaluated", StringComparison.Ordinal) &&
+            line.Contains("downgraded=false", StringComparison.Ordinal));
+    }
+
+    private static ProgressiveReviewGlanceInputs Inputs(
+        IReadOnlyList<string> trustedScope,
+        RepositoryScopeConfidence confidence,
+        string changedFile = "docs/test-design-discipline.md") =>
+        new(
+            "goal-guard",
+            "task-guard",
+            ProgressiveReviewGlanceTriggerKind.ChangedFiles,
+            "changed_files=1",
+            "Objective",
+            "Brief",
+            "Acceptance",
+            [],
+            [changedFile],
+            "diff",
+            "transcript",
+            trustedScope,
+            confidence);
+
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_goal_625_core_first_scope_does_not_steer_from_canned_intake")]
     public void Goal625CoreFirstScopeDoesNotSteerFromCannedIntake()
     {
@@ -388,7 +611,8 @@ public sealed class ProgressiveReviewGlanceTests
             "Acceptance criterion B appears untouched.",
             "diff lacks criterion B",
             5,
-            5));
+            5,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem));
         var coordinator = NewCoordinator(
             runner,
             new RecordingGlanceEvents(),
@@ -423,7 +647,8 @@ public sealed class ProgressiveReviewGlanceTests
             "Acceptance criterion B appears untouched.",
             "diff lacks criterion B",
             5,
-            5));
+            5,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem));
         var coordinator = NewCoordinator(
             runner,
             new RecordingGlanceEvents(),
@@ -544,13 +769,15 @@ public sealed class ProgressiveReviewGlanceTests
             "Task asks for forbidden session resume work.",
             "diff adds session resume primitive",
             5,
-            5));
+            5,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem));
         runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
             ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
             "Task still asks for forbidden session resume work.",
             "diff adds second session resume primitive",
             5,
-            5));
+            5,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem));
         var coordinator = new ProgressiveReviewGlanceCoordinator(
             runner,
             new RecordingGlanceEvents(),
@@ -585,7 +812,8 @@ public sealed class ProgressiveReviewGlanceTests
             "Correct toward the scoped implementation.",
             "diff edits the forbidden surface",
             5,
-            5));
+            5,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem));
         var coordinator = new ProgressiveReviewGlanceCoordinator(
             runner,
             new RecordingGlanceEvents(),
@@ -634,7 +862,8 @@ public sealed class ProgressiveReviewGlanceTests
             "Task asks for forbidden session resume work.",
             "diff adds session resume primitive",
             5,
-            5));
+            5,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem));
         var coordinator = new ProgressiveReviewGlanceCoordinator(
             runner,
             new RecordingGlanceEvents { ThrowOnProgressiveWrites = true },
@@ -716,7 +945,8 @@ public sealed class ProgressiveReviewGlanceTests
             "Correct toward the scoped implementation.",
             "diff edits the forbidden surface",
             5,
-            5));
+            5,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem));
         var events = new RecordingGlanceEvents();
         var coordinator = new ProgressiveReviewGlanceCoordinator(
             runner,
@@ -837,6 +1067,7 @@ public sealed class ProgressiveReviewGlanceTests
     {
         public List<Receipt> Receipts { get; } = [];
         public List<Summary> Summaries { get; } = [];
+        public List<ProgressiveReviewGlanceGuardReceipt> GuardReceipts { get; } = [];
         public bool ThrowOnProgressiveWrites { get; init; }
 
         public void AppendTimelineEvent(ProgressEvent progressEvent) { }
@@ -872,6 +1103,16 @@ public sealed class ProgressiveReviewGlanceTests
             }
 
             Receipts.Add(new Receipt(trigger, inputsHash, verdict, note, inputTokens, outputTokens, totalTokens, wallTime, model, profile));
+        }
+
+        public void AppendProgressiveReviewGlanceGuardReceipt(
+            GoalId goalId,
+            TaskId taskId,
+            ProgressiveReviewGlanceGuardReceipt receipt)
+        {
+            if (ThrowOnProgressiveWrites)
+                throw new InvalidOperationException("guard receipt sink unavailable");
+            GuardReceipts.Add(receipt);
         }
 
         public void AppendProgressiveReviewGlanceSummary(
