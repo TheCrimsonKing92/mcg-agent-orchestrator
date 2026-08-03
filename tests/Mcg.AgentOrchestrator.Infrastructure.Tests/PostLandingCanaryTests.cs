@@ -878,6 +878,66 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         }
     }
 
+    [Xunit.Theory(DisplayName = "Post-landing repository invariant accepts clean unchanged and fast-forwarded main")]
+    [InlineData("baseline-sha")]
+    [InlineData("other-goal-landing-sha")]
+    public void RepositoryInvariantAcceptsCleanUnchangedOrFastForwardedMain(string currentSha)
+    {
+        var verdict = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            currentSha,
+            [],
+            [],
+            currentIsDescendantOfBaseline: true);
+
+        Assert.True(verdict.Green, verdict.Detail);
+        Assert.False(verdict.PreconditionFailure);
+        Assert.Contains("Baseline SHA: baseline-sha", verdict.Detail, StringComparison.Ordinal);
+        Assert.Contains($"Current SHA: {currentSha}", verdict.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Post-landing repository invariant rejects history rewrites with diagnosable state")]
+    public void RepositoryInvariantRejectsHistoryRewrite()
+    {
+        var verdict = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "rewritten-sha",
+            [],
+            [],
+            currentIsDescendantOfBaseline: false);
+
+        Assert.False(verdict.Green);
+        Assert.False(verdict.PreconditionFailure);
+        Assert.Contains("Baseline SHA: baseline-sha", verdict.Detail, StringComparison.Ordinal);
+        Assert.Contains("Current SHA: rewritten-sha", verdict.Detail, StringComparison.Ordinal);
+        Assert.Contains("Current is at or ahead of baseline: False", verdict.Detail, StringComparison.Ordinal);
+        Assert.Contains("Current dirty paths: <none>", verdict.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Post-landing repository invariant distinguishes dirty precondition from run dirtiness")]
+    public void RepositoryInvariantDistinguishesDirtyPreconditionFromRunDirtiness()
+    {
+        var precondition = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "baseline-sha",
+            ["operator-note.txt"],
+            ["operator-note.txt"],
+            currentIsDescendantOfBaseline: true);
+        var runDirtiness = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "other-goal-landing-sha",
+            [],
+            ["generated-by-canary.txt"],
+            currentIsDescendantOfBaseline: true);
+
+        Assert.False(precondition.Green);
+        Assert.True(precondition.PreconditionFailure);
+        Assert.Contains("operator-note.txt", precondition.Detail, StringComparison.Ordinal);
+        Assert.False(runDirtiness.Green);
+        Assert.False(runDirtiness.PreconditionFailure);
+        Assert.Contains("generated-by-canary.txt", runDirtiness.Detail, StringComparison.Ordinal);
+    }
+
     private static string FindRepoRoot(
         [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
