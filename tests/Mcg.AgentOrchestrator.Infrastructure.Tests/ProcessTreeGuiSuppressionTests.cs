@@ -124,9 +124,25 @@ public sealed class ProcessTreeGuiSuppressionTests
             "Mcg.AgentOrchestrator.Infrastructure",
             "Workspaces",
             "GoalAcceptanceVerifier.cs"));
-
         Assert.Contains("worker = ProcessTreeGuiSuppression.Start(startInfo);", dispatchHost, StringComparison.Ordinal);
         Assert.Contains("using var process = ProcessTreeGuiSuppression.Start(startInfo);", gateVerifier, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GrandchildFixtureLaunchUsesGuiSuppression()
+    {
+        var root = FindRepoRoot();
+        var dispatchHostTests = File.ReadAllText(Path.Combine(
+            root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "DispatchProcessHostTests.cs"));
+
+        Assert.Contains(
+            "StartGrandchildReapWrapper(startInfo, ProcessTreeGuiSuppression.Start);",
+            dispatchHostTests,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("burn" + "-cpu.ps1", dispatchHostTests, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FindRepoRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")

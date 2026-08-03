@@ -1220,12 +1220,22 @@ public sealed class DispatchProcessHostTests
 
         var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-grandchild-tests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(dir);
-        var childScriptPath = Path.Combine(dir, "burn-cpu.ps1");
+        var childScriptPath = Path.Combine(dir, "grandchild-reap-probe.ps1");
         var childPidPath = Path.Combine(dir, "child.pid");
         var startMarkerPath = Path.Combine(dir, "start.marker");
+        var launchFailurePath = Path.Combine(dir, "launch-failure.txt");
+        var waitFailurePath = Path.Combine(dir, "wait-failure.txt");
+        var probeStdoutPath = Path.Combine(dir, "grandchild-reap-probe.stdout.log");
+        var probeStderrPath = Path.Combine(dir, "grandchild-reap-probe.stderr.log");
+        var probeIdentityPath = Path.Combine(dir, "grandchild-reap-probe.log");
+        var fixtureTimeout = TimeSpan.FromSeconds(30);
         File.WriteAllText(
             childScriptPath,
             """
+            $identity = 'Dispatch-host process-tree-reaping test fixture; safe to terminate.'
+            try { $Host.UI.RawUI.WindowTitle = $identity } catch { }
+            Add-Content -LiteralPath (Join-Path $PSScriptRoot 'grandchild-reap-probe.log') -Value $identity
+            try { Write-Output $identity } catch { }
             $deadline = [DateTime]::UtcNow.AddSeconds(6)
             while ([DateTime]::UtcNow -lt $deadline) {
                 for ($i = 0; $i -lt 50000; $i++) {
@@ -1237,34 +1247,43 @@ public sealed class DispatchProcessHostTests
 
         Process? wrapper = null;
         OwnedProcessGroup? group = null;
+        int? childPid = null;
         try
         {
-            var command =
-                $"while (!(Test-Path -LiteralPath '{EscapePowerShellSingleQuoted(startMarkerPath)}')) " +
-                "{ Start-Sleep -Milliseconds 25 }; " +
-                "$child = Start-Process " +
-                $"-FilePath '{EscapePowerShellSingleQuoted(WorkerShell.Executable)}' " +
-                "-ArgumentList @(" +
-                "'-NoProfile','-NonInteractive','-InputFormat','None'," +
-                "'-ExecutionPolicy','Bypass','-File'," +
-                $"'{EscapePowerShellSingleQuoted(childScriptPath)}') " +
-                "-PassThru; " +
-                $"Set-Content -LiteralPath '{EscapePowerShellSingleQuoted(childPidPath)}' -Value $child.Id; " +
-                "Wait-Process -Id $child.Id";
-            wrapper = Process.Start(new ProcessStartInfo
-            {
-                FileName = WorkerShell.Executable,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true
-            }.WithArguments(WorkerShell.BaseArguments().Concat([command])))
-                ?? throw new InvalidOperationException("Failed to start wrapper process.");
+            var startInfo = BuildGrandchildReapWrapperStartInfo(
+                dir,
+                childScriptPath,
+                childPidPath,
+                startMarkerPath,
+                launchFailurePath,
+                waitFailurePath,
+                probeStdoutPath,
+                probeStderrPath,
+                WorkerShell.Executable,
+                fixtureTimeout);
+            wrapper = StartGrandchildReapWrapper(startInfo, ProcessTreeGuiSuppression.Start);
 
             group = OwnedProcessGroup.Attach(wrapper);
             File.WriteAllText(startMarkerPath, "go");
-            var childPid = WaitForPidFile(childPidPath);
-            Assert.NotEqual(wrapper.Id, childPid);
+            childPid = WaitForGrandchildLaunch(
+                childPidPath,
+                launchFailurePath,
+                waitFailurePath,
+                wrapper,
+                fixtureTimeout);
+            Assert.NotEqual(wrapper.Id, childPid.Value);
+
+            using var child = Process.GetProcessById(childPid.Value);
+            child.Refresh();
+            Assert.False(child.HasExited, $"Grandchild reap probe exited before its window state could be checked. pid={childPid}");
+            Assert.Equal(IntPtr.Zero, child.MainWindowHandle);
+            Assert.True(
+                WaitUntil(() => File.Exists(probeIdentityPath), fixtureTimeout),
+                $"Grandchild identity marker timed out after {fixtureTimeout.TotalSeconds:0} seconds: '{probeIdentityPath}'.");
+            Assert.Contains(
+                "Dispatch-host process-tree-reaping test fixture; safe to terminate.",
+                File.ReadAllText(probeIdentityPath),
+                StringComparison.Ordinal);
 
             IReadOnlyList<int> lastOwnedPids = [];
             long lastOwnedCpuMs = 0;
@@ -1278,20 +1297,102 @@ public sealed class DispatchProcessHostTests
                 lastSelectedChildPid = DispatchProcessHost.SelectHeartbeatChildPid(wrapper, ownedPids);
                 return ownedCpuMs > 100 &&
                     ownedPids.Contains(wrapper.Id) &&
-                    ownedPids.Contains(childPid) &&
-                    lastSelectedChildPid == childPid;
-            }, TimeSpan.FromSeconds(5));
+                    ownedPids.Contains(childPid.Value) &&
+                    lastSelectedChildPid == childPid.Value;
+            }, fixtureTimeout);
 
             Assert.True(
                 sawGrandchildCpu,
                 $"Expected live job accounting and heartbeat PIDs to include the CPU-burning grandchild. wrapper={wrapper.Id} child={childPid} selected={lastSelectedChildPid?.ToString() ?? "null"} cpuMs={lastOwnedCpuMs} ownedPids=[{string.Join(",", lastOwnedPids)}]");
+
+            wrapper.Kill(entireProcessTree: true);
+            Assert.True(
+                child.WaitForExit((int)fixtureTimeout.TotalMilliseconds),
+                $"Grandchild reap after wrapper termination timed out after {fixtureTimeout.TotalSeconds:0} seconds. wrapper={wrapper.Id} child={childPid}");
         }
         finally
         {
-            try { group?.Kill(); } catch { }
-            try { wrapper?.Kill(entireProcessTree: true); } catch { }
-            try { wrapper?.Dispose(); } catch { }
-            try { Directory.Delete(dir, recursive: true); } catch { }
+            CleanupGrandchildReapFixture(dir, childPid, group, wrapper, TimeSpan.FromSeconds(30));
+        }
+    }
+
+    [Xunit.Fact]
+    public void GrandchildSpawnUsesGuiSuppression()
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        var invoked = false;
+
+        var exception = Assert.Throws<GrandchildFixtureStartSentinel>(() =>
+            StartGrandchildReapWrapper(startInfo, request =>
+            {
+                invoked = true;
+                Assert.Same(startInfo, request);
+                Assert.False(request.UseShellExecute);
+                Assert.True(request.CreateNoWindow);
+                throw new GrandchildFixtureStartSentinel();
+            }));
+
+        Assert.NotNull(exception);
+        Assert.True(invoked, "The fixture did not route its wrapper spawn through the console-suppression seam.");
+    }
+
+    [Xunit.Fact]
+    public void GrandchildLaunchFailureReportsCommand()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-grandchild-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        var missingExecutable = Path.Combine(dir, "missing-pwsh.exe");
+        var childScriptPath = Path.Combine(dir, "grandchild-reap-probe.ps1");
+        var childPidPath = Path.Combine(dir, "child.pid");
+        var startMarkerPath = Path.Combine(dir, "start.marker");
+        var launchFailurePath = Path.Combine(dir, "launch-failure.txt");
+        var waitFailurePath = Path.Combine(dir, "wait-failure.txt");
+        Process? wrapper = null;
+        OwnedProcessGroup? group = null;
+        try
+        {
+            File.WriteAllText(childScriptPath, "exit 0", new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            var startInfo = BuildGrandchildReapWrapperStartInfo(
+                dir,
+                childScriptPath,
+                childPidPath,
+                startMarkerPath,
+                launchFailurePath,
+                waitFailurePath,
+                Path.Combine(dir, "probe.stdout.log"),
+                Path.Combine(dir, "probe.stderr.log"),
+                missingExecutable,
+                TimeSpan.FromSeconds(30));
+            wrapper = StartGrandchildReapWrapper(startInfo, ProcessTreeGuiSuppression.Start);
+            group = OwnedProcessGroup.Attach(wrapper);
+            File.WriteAllText(startMarkerPath, "go");
+
+            var failure = Assert.Throws<InvalidOperationException>(() =>
+                WaitForGrandchildLaunch(
+                    childPidPath,
+                    launchFailurePath,
+                    waitFailurePath,
+                    wrapper,
+                    TimeSpan.FromSeconds(30)));
+
+            Assert.Contains("Grandchild launch failed", failure.Message, StringComparison.Ordinal);
+            Assert.Contains("Win32 error 0x00000002", failure.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(missingExecutable, failure.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(childScriptPath, failure.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupGrandchildReapFixture(dir, null, group, wrapper, TimeSpan.FromSeconds(30));
         }
     }
 
@@ -1761,6 +1862,188 @@ public sealed class DispatchProcessHostTests
             .Where(line => line.Contains("\"event\":\"sandbox-prep\"", StringComparison.Ordinal))
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
             .ToArray();
+    }
+
+    private static ProcessStartInfo BuildGrandchildReapWrapperStartInfo(
+        string fixtureRoot,
+        string childScriptPath,
+        string childPidPath,
+        string startMarkerPath,
+        string launchFailurePath,
+        string waitFailurePath,
+        string probeStdoutPath,
+        string probeStderrPath,
+        string childExecutable,
+        TimeSpan timeout)
+    {
+        var timeoutSeconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalSeconds));
+        var commandLine = FormatGrandchildCommandLine(childExecutable, childScriptPath);
+        var command =
+            "$startDeadline = [DateTime]::UtcNow.AddSeconds([int]$env:MCG_GRANDCHILD_TIMEOUT_SECONDS); " +
+            "while (!(Test-Path -LiteralPath $env:MCG_GRANDCHILD_START_MARKER)) { " +
+            "if ([DateTime]::UtcNow -ge $startDeadline) { " +
+            "Set-Content -LiteralPath $env:MCG_GRANDCHILD_WAIT_FAILURE -Value 'Grandchild start gate timed out'; exit 124 }; " +
+            "Start-Sleep -Milliseconds 25 }; " +
+            "try { " +
+            "$child = Start-Process -FilePath $env:MCG_GRANDCHILD_EXECUTABLE " +
+            "-ArgumentList @('-NoProfile','-NonInteractive','-InputFormat','None','-ExecutionPolicy','Bypass','-File',$env:MCG_GRANDCHILD_SCRIPT) " +
+            "-RedirectStandardOutput $env:MCG_GRANDCHILD_STDOUT -RedirectStandardError $env:MCG_GRANDCHILD_STDERR " +
+            "-PassThru -ErrorAction Stop " +
+            "} catch { " +
+            "$exception = $_.Exception; while ($exception -and -not ($exception -is [System.ComponentModel.Win32Exception])) { $exception = $exception.InnerException }; " +
+            "$nativeCode = if ($exception) { $exception.NativeErrorCode } else { $_.Exception.HResult -band 0xffff }; " +
+            "$message = 'Grandchild launch failed: Win32 error 0x{0:x8}; command: {1}; detail: {2}' -f $nativeCode,$env:MCG_GRANDCHILD_COMMAND_LINE,$_.Exception.Message; " +
+            "Set-Content -LiteralPath $env:MCG_GRANDCHILD_LAUNCH_FAILURE -Value $message; exit 125 }; " +
+            "Set-Content -LiteralPath $env:MCG_GRANDCHILD_PID -Value $child.Id; " +
+            "try { Wait-Process -Id $child.Id -Timeout ([int]$env:MCG_GRANDCHILD_TIMEOUT_SECONDS) -ErrorAction Stop } catch { " +
+            "$message = 'Grandchild reap probe exit timed out: pid={0}; command: {1}' -f $child.Id,$env:MCG_GRANDCHILD_COMMAND_LINE; " +
+            "Set-Content -LiteralPath $env:MCG_GRANDCHILD_WAIT_FAILURE -Value $message; exit 124 }";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            WorkingDirectory = fixtureRoot,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        }.WithArguments(WorkerShell.BaseArguments().Concat([command]));
+        startInfo.Environment["MCG_GRANDCHILD_EXECUTABLE"] = childExecutable;
+        startInfo.Environment["MCG_GRANDCHILD_SCRIPT"] = childScriptPath;
+        startInfo.Environment["MCG_GRANDCHILD_PID"] = childPidPath;
+        startInfo.Environment["MCG_GRANDCHILD_START_MARKER"] = startMarkerPath;
+        startInfo.Environment["MCG_GRANDCHILD_LAUNCH_FAILURE"] = launchFailurePath;
+        startInfo.Environment["MCG_GRANDCHILD_WAIT_FAILURE"] = waitFailurePath;
+        startInfo.Environment["MCG_GRANDCHILD_STDOUT"] = probeStdoutPath;
+        startInfo.Environment["MCG_GRANDCHILD_STDERR"] = probeStderrPath;
+        startInfo.Environment["MCG_GRANDCHILD_COMMAND_LINE"] = commandLine;
+        startInfo.Environment["MCG_GRANDCHILD_TIMEOUT_SECONDS"] = timeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return startInfo;
+    }
+
+    private static Process StartGrandchildReapWrapper(
+        ProcessStartInfo startInfo,
+        Func<ProcessStartInfo, Process> startWithConsoleSuppression)
+    {
+        ArgumentNullException.ThrowIfNull(startWithConsoleSuppression);
+        return startWithConsoleSuppression(startInfo);
+    }
+
+    private static int WaitForGrandchildLaunch(
+        string childPidPath,
+        string launchFailurePath,
+        string waitFailurePath,
+        Process wrapper,
+        TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (File.Exists(launchFailurePath))
+            {
+                throw new InvalidOperationException(File.ReadAllText(launchFailurePath).Trim());
+            }
+
+            if (File.Exists(waitFailurePath))
+            {
+                throw new TimeoutException(File.ReadAllText(waitFailurePath).Trim());
+            }
+
+            if (File.Exists(childPidPath) &&
+                int.TryParse(File.ReadAllText(childPidPath).Trim(), out var processId) &&
+                processId > 0)
+            {
+                return processId;
+            }
+
+            if (wrapper.HasExited)
+            {
+                throw new InvalidOperationException(
+                    $"Grandchild reap wrapper exited with code {wrapper.ExitCode} before publishing a pid or named launch failure.");
+            }
+
+            Thread.Sleep(25);
+        }
+
+        throw new TimeoutException(
+            $"Grandchild launch result timed out after {timeout.TotalSeconds:0} seconds while waiting for pid file '{childPidPath}' or failure file '{launchFailurePath}'.");
+    }
+
+    private static string FormatGrandchildCommandLine(string executable, string scriptPath) =>
+        $"\"{executable}\" -NoProfile -NonInteractive -InputFormat None -ExecutionPolicy Bypass -File \"{scriptPath}\"";
+
+    private static void CleanupGrandchildReapFixture(
+        string fixtureRoot,
+        int? childPid,
+        OwnedProcessGroup? group,
+        Process? wrapper,
+        TimeSpan timeout)
+    {
+        if (childPid is { } pid)
+        {
+            TryKillProcess(pid);
+        }
+
+        try { group?.Kill(); } catch { }
+        try { wrapper?.Kill(entireProcessTree: true); } catch { }
+        try { wrapper?.Dispose(); } catch { }
+
+        Assert.True(
+            ProcessCommandLines.Read([Environment.ProcessId]).ContainsKey(Environment.ProcessId),
+            "Grandchild fixture teardown could not enumerate process command lines; orphan verification did not run.");
+
+        foreach (var fixtureProcessId in FindFixturePwshProcessIds(fixtureRoot))
+        {
+            TryKillProcess(fixtureProcessId);
+        }
+
+        var reaped = WaitUntil(
+            () => FindFixturePwshProcessIds(fixtureRoot).Count == 0,
+            timeout);
+        Assert.True(
+            reaped,
+            $"Grandchild fixture teardown timed out after {timeout.TotalSeconds:0} seconds; pwsh processes still reference fixture root '{fixtureRoot}': [{string.Join(",", FindFixturePwshProcessIds(fixtureRoot))}]");
+        try { Directory.Delete(fixtureRoot, recursive: true); } catch { }
+    }
+
+    private static IReadOnlyList<int> FindFixturePwshProcessIds(string fixtureRoot)
+    {
+        var processName = Path.GetFileNameWithoutExtension(WorkerShell.Executable);
+        var processes = Process.GetProcessesByName(processName);
+
+        try
+        {
+            var processIds = processes.Select(process => process.Id).ToArray();
+            var commandLines = ProcessCommandLines.Read(processIds);
+            return commandLines
+                .Where(pair => pair.Value.Contains(fixtureRoot, StringComparison.OrdinalIgnoreCase))
+                .Select(pair => pair.Key)
+                .ToArray();
+        }
+        finally
+        {
+            foreach (var process in processes)
+            {
+                process.Dispose();
+            }
+        }
+    }
+
+    private static void TryKillProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // The process may have exited between the scoped command-line snapshot and the kill.
+        }
+    }
+
+    private sealed class GrandchildFixtureStartSentinel : Exception
+    {
     }
 
     private static bool WaitUntil(Func<bool> condition, TimeSpan timeout)
