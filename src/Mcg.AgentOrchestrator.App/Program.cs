@@ -321,7 +321,7 @@ Console.WriteLine("  park-goal <goal-id> <reason> [--confirm-goal-park]");
 Console.WriteLine("  rollback-goal <goal-id> <reason> [--confirm-goal-rollback]");
 Console.WriteLine("  abandon-goal <goal-id> <reason> [--confirm-goal-abandon]");
 Console.WriteLine("  task <task-number|task-id-prefix>, tasks [status <status>] [role <role>] [id <id>] [evidence <kind>] [event <kind>]");
-Console.WriteLine("  add-task <role> <description>, verification-plan <task-number> [plan], brief <task-number>");
+Console.WriteLine("  add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>], verification-plan <task-number> [plan], brief <task-number>");
 Console.WriteLine("  timeline [goal-id], task-timeline <task-number>, pending");
 Console.WriteLine("  goal-events <goal-id-prefix> [--follow]");
 Console.WriteLine("  run <task-number> [--confirm-paid-api-run] [--autonomy <policy>]");

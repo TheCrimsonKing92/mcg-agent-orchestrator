@@ -67,6 +67,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, string, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
+    private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
     private readonly Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRequestReceived;
@@ -501,6 +502,8 @@ internal sealed class ConductorDriver
             kernel.RecordReviewerEvidenceRunRecorded(goalId, taskId, message);
         _recordPreReviewEvidence = (goalId, taskId, receipt) =>
             kernel.RecordPreReviewEvidence(goalId, taskId, receipt);
+        _recordPreReviewMappingEscalationSuppressed = (goalId, taskId, candidateSha, suppressedCount) =>
+            kernel.RecordPreReviewMappingEscalationSuppressed(goalId, taskId, candidateSha, suppressedCount);
         _recordCriterionRetryFeedback = kernel.RecordCriterionRetryFeedback;
         _clearCriterionRetryFeedback = kernel.ClearCriterionRetryFeedback;
         _recordAcceptanceFailure = (
@@ -716,7 +719,8 @@ internal sealed class ConductorDriver
         TimeSpan? buildServerShutdownTimeout = null,
         Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null,
         Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
-        Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null)
+        Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null,
+        Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -749,6 +753,7 @@ internal sealed class ConductorDriver
                 NoApplicableTests: true,
                 MappingNeedsInput: false));
         _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
+        _recordPreReviewMappingEscalationSuppressed = recordPreReviewMappingEscalationSuppressed ?? ((_, _, _, _) => { });
         _retryTask = retryTaskWithRoundKind
             ?? (retryTask is not null
                 ? ((goalId, taskId, message, _) => retryTask(goalId, taskId, message))
@@ -2165,7 +2170,8 @@ internal sealed class ConductorDriver
         }
 
         var round = GetCurrentReviewerRoundNumber(goal, reviewerTask);
-        if (reviewerTask.PreReviewEvidenceReceipt is { } current &&
+        var currentReceipt = reviewerTask.PreReviewEvidenceReceipt;
+        if (currentReceipt is { } current &&
             current.MatchesCurrentCandidate(goal.Id.Value, context.CandidateSha, context.SelectedFocusedTests))
         {
             if (current.Disposition is PreReviewEvidenceDisposition.Green or PreReviewEvidenceDisposition.NoApplicableTests)
@@ -2260,7 +2266,7 @@ internal sealed class ConductorDriver
 
         if (evidence.Passed)
         {
-            if (evidence.Checks.Count != context.SelectedFocusedTests.Count)
+            if (!TryValidatePreReviewEvidenceCoverage(context, evidence, out var mappingFailure, out var advisories))
             {
                 RecordPreReviewReceipt(
                     goal,
@@ -2270,10 +2276,10 @@ internal sealed class ConductorDriver
                     PreReviewEvidenceDisposition.MappingNeedsInput,
                     evidence.Checks,
                     [],
-                    evidencePointer);
-                var mismatch =
-                    $"pre-review evidence cardinality mismatch for candidate {context.CandidateSha}: " +
-                    $"planned={context.SelectedFocusedTests.Count} actual={evidence.Checks.Count}";
+                    evidencePointer,
+                    evidence.Coverage,
+                    advisories);
+                var mismatch = $"pre-review evidence mapping failure for candidate {context.CandidateSha}: {mappingFailure}";
                 if (TryRoutePreReviewEvidenceToTester(
                         goal,
                         reviewerTask,
@@ -2285,12 +2291,39 @@ internal sealed class ConductorDriver
                     return true;
                 }
 
+                if (currentReceipt is { Disposition: PreReviewEvidenceDisposition.MappingNeedsInput } &&
+                    string.Equals(currentReceipt.CandidateSha, context.CandidateSha, StringComparison.OrdinalIgnoreCase))
+                {
+                    var suppressedCount = 1 + goal.Timeline.Count(evt =>
+                        evt.Kind == ProgressKind.PreReviewMappingEscalationSuppressed &&
+                        evt.TaskId == reviewerTask.Id &&
+                        evt.Message.Contains($"candidate_sha={context.CandidateSha}", StringComparison.OrdinalIgnoreCase) &&
+                        evt.Message.Contains(
+                            $"disposition={PreReviewEvidenceDisposition.MappingNeedsInput}",
+                            StringComparison.Ordinal));
+                    _recordPreReviewMappingEscalationSuppressed(
+                        goal.Id,
+                        reviewerTask.Id,
+                        context.CandidateSha,
+                        suppressedCount);
+                    result = MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(
+                            fromState,
+                            $"PRE_REVIEW_MAPPING_NEEDS_INPUT repeat suppressed for candidate {context.CandidateSha}; " +
+                            $"suppressed_count={suppressedCount}."));
+                    return true;
+                }
+
                 result = Escalate(
                     goal,
                     goalPrefix,
                     policy,
                     fromState,
-                    $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}; no Tester task is available.");
+                    $"PRE_REVIEW_MAPPING_NEEDS_INPUT: {mismatch}; no Tester task is available. " +
+                    $"Add one with: {BuildAddTesterCommand(goalPrefix, context.CandidateSha)}");
                 return true;
             }
 
@@ -2302,7 +2335,9 @@ internal sealed class ConductorDriver
                 PreReviewEvidenceDisposition.Green,
                 evidence.Checks,
                 [],
-                evidencePointer);
+                evidencePointer,
+                evidence.Coverage,
+                advisories);
             return false;
         }
 
@@ -2485,7 +2520,7 @@ internal sealed class ConductorDriver
 
         return new PreReviewEvidenceContext(
             candidateSha,
-            selected,
+            requests,
             string.Join("; ", requests),
             plan.Summary,
             NoApplicableTests: false,
@@ -2500,7 +2535,9 @@ internal sealed class ConductorDriver
         PreReviewEvidenceDisposition disposition,
         IReadOnlyList<AcceptanceCheckResult> checks,
         IReadOnlyList<string> failingTests,
-        string? evidencePointer)
+        string? evidencePointer,
+        FocusedEvidenceCoverage? coverage = null,
+        IReadOnlyList<string>? advisories = null)
     {
         var receipt = new PreReviewEvidenceReceipt(
             goal.Id.Value,
@@ -2512,9 +2549,7 @@ internal sealed class ConductorDriver
             checks.Count(check => !check.Passed),
             checks.Select((check, index) => new PreReviewEvidenceCheckReceipt(
                 check.Name,
-                checks.Count == context.SelectedFocusedTests.Count
-                    ? context.SelectedFocusedTests[index]
-                    : "(unmapped: check/command cardinality mismatch)",
+                ResolvePreReviewReceiptTarget(context, coverage, check, index, checks.Count),
                 check.Passed,
                 check.ExitCode,
                 check.ArtifactsPath,
@@ -2522,10 +2557,91 @@ internal sealed class ConductorDriver
             failingTests,
             context.MappingReason,
             evidencePointer,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            advisories);
         _recordPreReviewEvidence(goal.Id, reviewerTask.Id, receipt);
         return receipt;
     }
+
+    private static bool TryValidatePreReviewEvidenceCoverage(
+        PreReviewEvidenceContext context,
+        FocusedEvidenceRunResult evidence,
+        out string failure,
+        out IReadOnlyList<string> advisories)
+    {
+        failure = string.Empty;
+        advisories = [];
+        if (evidence.Coverage is not { CollapseEngaged: true } coverage)
+        {
+            if (evidence.Checks.Count == context.SelectedFocusedTests.Count)
+            {
+                return true;
+            }
+
+            failure = $"cardinality mismatch: planned={context.SelectedFocusedTests.Count} actual={evidence.Checks.Count}";
+            return false;
+        }
+
+        var actualCheckNames = evidence.Checks
+            .Select(check => check.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var missingTargets = context.SelectedFocusedTests
+            .Where(target => !coverage.TargetToChecks.Any(mapping =>
+                string.Equals(mapping.Target, target, StringComparison.Ordinal) &&
+                mapping.CheckNames.Count > 0 &&
+                mapping.CheckNames.All(actualCheckNames.Contains)))
+            .ToArray();
+        var mappedCheckNames = coverage.TargetToChecks
+            .SelectMany(mapping => mapping.CheckNames)
+            .ToHashSet(StringComparer.Ordinal);
+        var orphanChecks = evidence.Checks
+            .Where(check => !mappedCheckNames.Contains(check.Name))
+            .Select(check => check.Name)
+            .ToArray();
+        if (orphanChecks.Length > 0)
+        {
+            advisories =
+            [
+                $"Collapsed evidence produced {orphanChecks.Length} check(s) covering no selected focused target: " +
+                string.Join(", ", orphanChecks)
+            ];
+        }
+
+        if (missingTargets.Length == 0)
+        {
+            return true;
+        }
+
+        failure = $"collapsed coverage omitted {missingTargets.Length} selected target(s): {string.Join(", ", missingTargets)}";
+        return false;
+    }
+
+    private static string ResolvePreReviewReceiptTarget(
+        PreReviewEvidenceContext context,
+        FocusedEvidenceCoverage? coverage,
+        AcceptanceCheckResult check,
+        int index,
+        int checkCount)
+    {
+        if (coverage is { CollapseEngaged: true })
+        {
+            var targets = coverage.TargetToChecks
+                .Where(mapping => mapping.CheckNames.Contains(check.Name, StringComparer.Ordinal))
+                .Select(mapping => mapping.Target)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            return targets.Length == 0
+                ? "(advisory: check covers no selected focused target)"
+                : string.Join(" | ", targets);
+        }
+
+        return checkCount == context.SelectedFocusedTests.Count
+            ? context.SelectedFocusedTests[index]
+            : "(unmapped: check/command cardinality mismatch)";
+    }
+
+    private static string BuildAddTesterCommand(string goalPrefix, string candidateSha) =>
+        $"add-task --goal {goalPrefix} Tester Resolve pre-review mapping for candidate {candidateSha} --before-role Reviewer";
 
     private static IReadOnlyList<TaskSpec> TasksBefore(Goal goal, TaskSpec task)
         => goal.Tasks.TakeWhile(candidate => candidate.Id != task.Id).ToArray();

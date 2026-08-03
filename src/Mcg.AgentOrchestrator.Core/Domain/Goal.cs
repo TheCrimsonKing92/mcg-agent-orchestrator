@@ -213,6 +213,17 @@ public sealed class Goal
 
     internal void AddTask(TaskSpec task) => _tasks.Add(task);
 
+    internal void AddTaskBeforeRole(TaskSpec task, AgentRole beforeRole)
+    {
+        var index = _tasks.FindIndex(candidate => candidate.RequiredRole == beforeRole);
+        if (index < 0)
+        {
+            throw new InvalidOperationException($"Cannot insert a task before missing role {beforeRole}.");
+        }
+
+        _tasks.Insert(index, task);
+    }
+
     internal void AddDependency(GoalId dependencyId) => _dependsOn.Add(dependencyId);
 
     internal bool RemoveDependency(GoalId dependencyId) => _dependsOn.Remove(dependencyId);

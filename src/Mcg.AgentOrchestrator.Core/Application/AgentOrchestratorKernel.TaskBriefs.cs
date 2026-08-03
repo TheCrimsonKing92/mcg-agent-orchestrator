@@ -910,6 +910,11 @@ public sealed partial class AgentOrchestratorKernel
                 lines.Add($"Failing tests: {string.Join(", ", preReview.FailingTestIdentities)}");
             }
 
+            foreach (var advisory in preReview.Advisories ?? [])
+            {
+                lines.Add($"Advisory: {PromptContextFormatter.TrimPromptBlock(advisory)}");
+            }
+
             lines.Add($"Evidence pointer: {preReview.EvidencePointer ?? "none"}");
             lines.Add(string.Empty);
         }

@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
@@ -23,6 +24,19 @@ public sealed class ConductorDriverTests
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, DefaultAgents(), objective);
+        return (kernel, goal);
+    }
+
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) ReviewGoalWithoutTester()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Collapsed pre-review evidence goal",
+            [
+                new TaskSpec(TaskId.New(), "Implement the change", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Review the change", AgentRole.Reviewer)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
         return (kernel, goal);
     }
 
@@ -308,7 +322,8 @@ public sealed class ConductorDriverTests
         TimeSpan? buildServerShutdownTimeout = null,
         Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null,
         Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
-        Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null)
+        Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null,
+        Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -349,7 +364,8 @@ public sealed class ConductorDriverTests
             buildServerShutdownTimeout: buildServerShutdownTimeout,
             writeEscalationWithResult: writeEscalationWithResult,
             getPreReviewEvidenceContext: getPreReviewEvidenceContext,
-            recordPreReviewEvidence: recordPreReviewEvidence);
+            recordPreReviewEvidence: recordPreReviewEvidence,
+            recordPreReviewMappingEscalationSuppressed: recordPreReviewMappingEscalationSuppressed);
     }
 
     private static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>
@@ -397,6 +413,24 @@ public sealed class ConductorDriverTests
                     ArtifactsPath: "C:\\receipts\\green",
                     TestResultPaths: ["C:\\receipts\\green\\result.trx"])
             ]);
+
+    private static FocusedEvidenceRunResult CollapsedPreReviewEvidence(
+        string request,
+        IReadOnlyList<string> targets,
+        IReadOnlyList<string> checkNames) =>
+        new(
+            request,
+            Accepted: true,
+            Passed: true,
+            Summary: $"focused evidence passed: {checkNames.Count} collapsed check(s)",
+            Checks: checkNames
+                .Select(name => new AcceptanceCheckResult(name, true, 0, "Passed"))
+                .ToArray(),
+            Coverage: new FocusedEvidenceCoverage(
+                CollapseEngaged: true,
+                TargetToChecks: targets
+                    .Select(target => new FocusedEvidenceTargetCoverage(target, checkNames))
+                    .ToArray()));
 
     private static PreReviewEvidenceReceipt GreenPreReviewReceipt(Goal goal, string sha) =>
         new(
@@ -3539,6 +3573,234 @@ public sealed class ConductorDriverTests
         Assert.All(
             recordedReceipt?.Checks ?? [],
             check => Assert.Equal("(unmapped: check/command cardinality mismatch)", check.Command));
+    }
+
+    [Xunit.Fact]
+    public void PreReview_CollapsedLaneCoverage_DispatchesReviewer()
+    {
+        var (kernel, goal) = ReviewGoalWithoutTester();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        PassVerification(kernel, goal, developer);
+        var target = "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests";
+        var laneChecks = Enumerable.Range(1, 18).Select(index => $"infrastructure-lane-{index}").ToArray();
+        var reviewerDispatches = 0;
+        var testerRetries = 0;
+        var escalations = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "c48b3be5",
+                [target],
+                target,
+                "One focused request maps to Infrastructure.Tests.",
+                NoApplicableTests: false,
+                MappingNeedsInput: false),
+            runFocusedEvidence: (_, request) => CollapsedPreReviewEvidence(request, [target], laneChecks) with
+            {
+                Coverage = new FocusedEvidenceCoverage(
+                    CollapseEngaged: true,
+                    TargetToChecks: [new FocusedEvidenceTargetCoverage(target, [laneChecks[0]])])
+            },
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            retryTaskWithRoundKind: (_, _, _, _) =>
+            {
+                testerRetries++;
+                throw new InvalidOperationException("Collapsed coverage must not route to Tester.");
+            },
+            dispatchAndStart: _ =>
+            {
+                reviewerDispatches++;
+                return DispatchStartOutcome.Started();
+            },
+            writeEscalation: (_, _, _) => escalations++);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, reviewerDispatches);
+        Assert.Equal(0, testerRetries);
+        Assert.Equal(0, escalations);
+        Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Contains(reviewer.PreReviewEvidenceReceipt?.Advisories ?? [], advisory => advisory.Contains("17 check(s)", StringComparison.Ordinal));
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+    }
+
+    [Xunit.Fact]
+    public void PreReview_ManyTargetsOneLane_DispatchesReviewer()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var targets = new[] { "Infrastructure.Tests: AlphaTests", "Infrastructure.Tests: BetaTests" };
+        var dispatches = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "shared-lane-sha",
+                targets,
+                string.Join("; ", targets),
+                "Two focused targets collapse to one project lane.",
+                NoApplicableTests: false,
+                MappingNeedsInput: false),
+            runFocusedEvidence: (_, request) => CollapsedPreReviewEvidence(request, targets, ["shared-lane"]),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            dispatchAndStart: _ =>
+            {
+                dispatches++;
+                return DispatchStartOutcome.Started();
+            });
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, dispatches);
+        Assert.Equal("Infrastructure.Tests: AlphaTests | Infrastructure.Tests: BetaTests", reviewer.PreReviewEvidenceReceipt?.Checks.Single().Command);
+    }
+
+    [Xunit.Fact]
+    public void PreReview_MissingCollapsedTarget_RetriesTester()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var target = "Infrastructure.Tests: MissingTests";
+        TaskId? retriedTask = null;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "missing-coverage-sha",
+                [target],
+                target,
+                "Focused target should map to a lane.",
+                NoApplicableTests: false,
+                MappingNeedsInput: false),
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: true,
+                Summary: "wrong lane ran",
+                Checks: [new AcceptanceCheckResult("orphan-lane", true, 0, "Passed")],
+                Coverage: new FocusedEvidenceCoverage(
+                    CollapseEngaged: true,
+                    TargetToChecks: [new FocusedEvidenceTargetCoverage(target, ["missing-lane"])])),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTask = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started());
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(tester.Id, retriedTask);
+        Assert.Equal(PreReviewEvidenceDisposition.MappingNeedsInput, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Contains(reviewer.PreReviewEvidenceReceipt?.Advisories ?? [], advisory => advisory.Contains("orphan-lane", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void PreReview_EmptyCollapsedEvidence_RetriesTester()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var target = "Infrastructure.Tests: MissingTests";
+        TaskId? retriedTask = null;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "empty-coverage-sha",
+                [target],
+                target,
+                "Focused target should map to a lane.",
+                NoApplicableTests: false,
+                MappingNeedsInput: false),
+            runFocusedEvidence: (_, request) => CollapsedPreReviewEvidence(request, [target], []),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTask = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started());
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(tester.Id, retriedTask);
+    }
+
+    [Xunit.Fact]
+    public void PreReview_NoTester_DeduplicatesEscalationPerSha()
+    {
+        var (kernel, goal) = ReviewGoalWithoutTester();
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        PassVerification(kernel, goal, developer);
+        var target = "Infrastructure.Tests: MissingTests";
+        var candidateSha = "d8061f95";
+        var escalations = new List<string>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                candidateSha,
+                [target],
+                target,
+                "Focused target should map to a lane.",
+                NoApplicableTests: false,
+                MappingNeedsInput: false),
+            runFocusedEvidence: (_, request) => CollapsedPreReviewEvidence(request, [target], []),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            recordPreReviewMappingEscalationSuppressed: (goalId, taskId, sha, count) =>
+                kernel.RecordPreReviewMappingEscalationSuppressed(goalId, taskId, sha, count),
+            writeEscalation: (_, _, message) => escalations.Add(message));
+
+        var first = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        var second = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+        candidateSha = "c48b3be5";
+        var third = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(first.Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Held>(second.Outcome);
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(third.Outcome);
+        Assert.Equal(2, escalations.Count);
+        var suppressed = Assert.Single(goal.Timeline.Where(evt =>
+            evt.Kind == ProgressKind.PreReviewMappingEscalationSuppressed));
+        Assert.Contains("candidate_sha=d8061f95", suppressed.Message, StringComparison.Ordinal);
+        Assert.Contains("suppressed_count=1", suppressed.Message, StringComparison.Ordinal);
+
+        const string commandMarker = "Add one with: ";
+        var commandStart = escalations[0].IndexOf(commandMarker, StringComparison.Ordinal);
+        Assert.True(commandStart >= 0);
+        var command = escalations[0][(commandStart + commandMarker.Length)..];
+        Assert.Equal(
+            [
+                "add-task",
+                "--goal",
+                goal.Id.Value[..8],
+                "Tester",
+                "Resolve pre-review mapping for candidate d8061f95",
+                "--before-role",
+                "Reviewer"
+            ],
+            CliArgumentParser.SplitCommand(command));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_contract_violation_mechanically_retries_the_same_reviewer")]
