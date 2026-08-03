@@ -148,6 +148,7 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Task note message cannot be empty.", nameof(message));
         }
 
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskNote, noteMessage);
         Append(goal, taskId, ProgressKind.TaskNote, noteMessage);
         return task;
     }
@@ -1286,7 +1287,7 @@ public sealed partial class AgentOrchestratorKernel
             Append(
                 goal,
                 request.TaskId,
-                ProgressKind.GoalPolicyDecision,
+                ProgressKind.OperatorGateSatisfied,
                 $"Operator gate satisfied: source=clarification:{request.Id.Value}; deliverable={deliverableId.Trim()}; evidence={evidence.Trim()}");
         }
     }

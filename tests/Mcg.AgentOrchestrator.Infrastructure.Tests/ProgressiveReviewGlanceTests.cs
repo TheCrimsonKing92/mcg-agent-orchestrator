@@ -97,7 +97,10 @@ public sealed class ProgressiveReviewGlanceTests
                 "Concern",
                 true,
                 "all changed files are within the trusted scope",
-                "all-changes-within-trusted-scope");
+                "all-changes-within-trusted-scope",
+                ["gate=console; record=clarification:gate"],
+                OperatorContextTruncated: true,
+                CancellationWithheld: true);
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, new TestClock(now))
                 .AppendProgressiveReviewGlanceGuardReceipt(goal.Id, task.Id, receipt);
@@ -113,6 +116,9 @@ public sealed class ProgressiveReviewGlanceTests
             Xunit.Assert.Equal(receipt.EvidenceLine, visible.EvidenceLine);
             Xunit.Assert.Equal(receipt.ChangedFiles, visible.ChangedFiles);
             Xunit.Assert.True(visible.Downgraded);
+            Xunit.Assert.Equal(receipt.GateAnnotations, visible.GateAnnotations);
+            Xunit.Assert.True(visible.OperatorContextTruncated);
+            Xunit.Assert.True(visible.CancellationWithheld);
         }
         finally
         {
@@ -343,6 +349,39 @@ public sealed class ProgressiveReviewGlanceTests
                 result).Verdict);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void UncoveredFindingWithUnrelatedOperatorTextPreservesFault(bool fundamental)
+    {
+        var verdict = fundamental
+            ? ProgressiveReviewGlanceVerdict.FundamentalMisdirection
+            : ProgressiveReviewGlanceVerdict.Concern;
+        var recordedAt = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var inputs = Inputs(
+            [],
+            RepositoryScopeConfidence.Precise,
+            changedFile: "src/Other.cs",
+            operatorRecords:
+            [
+                new ProgressiveReviewOperatorRecord(
+                    "clarification:unrelated",
+                    "answered-clarification",
+                    "Use the existing serializer.",
+                    recordedAt,
+                    [])
+            ]);
+        var result = new ProgressiveReviewGlanceDispatchResult(
+            verdict,
+            "database migration targets the wrong subsystem",
+            "database",
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem);
+
+        var guarded = ProgressiveReviewGlanceCoordinator.GuardUnsupportedScopeVerdict(inputs, result);
+
+        Xunit.Assert.Equal(verdict, guarded.Verdict);
+    }
+
     [Xunit.Fact]
     public void TruncatedOperatorContext_WithholdsContextSensitiveCancellation()
     {
@@ -401,8 +440,10 @@ public sealed class ProgressiveReviewGlanceTests
         var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
         var (kernel, goal, task) = RunningDeveloperRound(now);
         var answered = kernel.RequestHumanInput(goal.Id, null, "Should console suppression ship?");
+        var synthetic = kernel.RequestHumanInput(goal.Id, null, "Synthetic parked wait?");
         _ = kernel.RequestHumanInput(goal.Id, null, "Is the correlation complete?");
         kernel.SubmitHumanInput(answered.Id, "Not until the hypothesis is confirmed.", ["hidden-console-spawn"]);
+        kernel.SubmitHumanInput(synthetic.Id, "Goal parked: system-authored completion");
         kernel.RecordTaskNote(goal.Id, task.Id, "worker-authored note must be inert");
         kernel.RecordOperatorTaskNote(goal.Id, task.Id, "INCONCLUSIVE: retain the hypothesis gate.");
         var runner = new ControlledGlanceRunner();
@@ -422,7 +463,45 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record => record.Text.Contains("INCONCLUSIVE", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record => record.Text.Contains("Not until", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record => record.Text.Contains("correlation complete", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record => record.Text.Contains("system-authored", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record => record.Text.Contains("worker-authored", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords.SelectMany(record => record.Gates), gate =>
+            gate.DeliverableId == "hidden-console-spawn");
+    }
+
+    [Xunit.Fact]
+    public void OperatorContextBudgetOmitsOlderTextBeforeNewerAndRetainsStructuredGates()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var clock = new TestClock(now);
+        var (kernel, goal, task) = RunningDeveloperRound(now, clock: clock);
+        kernel.RecordOperatorTaskNote(goal.Id, task.Id, "older short note");
+        clock.UtcNow = now.AddMinutes(1);
+        kernel.RecordOperatorTaskNote(
+            goal.Id,
+            task.Id,
+            "newest governing ruling is intentionally larger than the entire text budget",
+            ["hidden-console-spawn"]);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "ok",
+            "bounded"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            options: new ProgressiveReviewGlanceOptions(OperatorContextCharacterLimit: 20),
+            utcNow: () => clock.UtcNow,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a", "b", "c"], ["a", "b", "c"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var inputs = Xunit.Assert.Single(runner.Calls);
+        Xunit.Assert.True(inputs.OperatorContextTruncated);
+        Xunit.Assert.All(inputs.EffectiveOperatorRecords, record =>
+            Xunit.Assert.Contains("omitted due to operator-context budget", record.Text, StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record =>
+            record.Text.Contains("older short note", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.EffectiveOperatorRecords.SelectMany(record => record.Gates), gate =>
             gate.DeliverableId == "hidden-console-spawn");
     }
@@ -649,9 +728,9 @@ public sealed class ProgressiveReviewGlanceTests
         _ = coordinator.Observe(kernel, [goal]);
 
         var inputs = runner.Calls.Single();
-        Xunit.Assert.Contains("Current refined acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Current amended acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains("Use refined acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
-        Xunit.Assert.Contains("ACCEPTANCE", inputs.AcceptanceSection, StringComparison.Ordinal);
+        Xunit.Assert.Contains("operator rationale", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("Correct criterion B", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("status=amended", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain("criterion B", inputs.AcceptanceSection, StringComparison.Ordinal);
@@ -680,7 +759,7 @@ public sealed class ProgressiveReviewGlanceTests
             Xunit.Assert.False(string.IsNullOrWhiteSpace(delivery.StandardInput));
             Xunit.Assert.Contains("Progressive review goal objective", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("Use refined acceptance criteria", delivery.StandardInput!, StringComparison.Ordinal);
-            Xunit.Assert.Contains("ACCEPTANCE", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("operator rationale", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("Correct criterion B", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("status=amended", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("supersedes=\"criterion B\"", delivery.StandardInput!, StringComparison.Ordinal);

@@ -25,13 +25,13 @@ internal static partial class DashboardEndpoints
         string inputId,
         DashboardEndpointServices services)
     {
-        var answer = DashboardRequestParser.ParseAnswerSubmission(await ReadRequestBodyAsync(context.Request));
+        var submission = DashboardRequestParser.ParseAnswerSubmission(await ReadRequestBodyAsync(context.Request));
         return await MutateAsync(
             services,
             current =>
             {
                 var request = OrchestratorEntityResolver.ResolveHumanInputRequest(current, inputId);
-                current.SubmitHumanInput(request.Id, answer);
+                current.SubmitHumanInput(request.Id, submission.Answer, submission.GatedDeliverableIds);
                 return Task.FromResult(Json(DashboardResponseMapper.ToHumanInputDto(current, current.GetHumanInputRequest(request.Id))));
             },
             context.RequestAborted);

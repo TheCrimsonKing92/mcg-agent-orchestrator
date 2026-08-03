@@ -101,7 +101,8 @@ public enum ProgressKind
     TaskRequeueSkipped = 26,
     DuplicateHumanInputSuppressed = 27,
     PreReviewMappingEscalationSuppressed = 28,
-    OperatorTaskNote = 29
+    OperatorTaskNote = 29,
+    OperatorGateSatisfied = 30
 }
 
 public enum TaskAttentionKind

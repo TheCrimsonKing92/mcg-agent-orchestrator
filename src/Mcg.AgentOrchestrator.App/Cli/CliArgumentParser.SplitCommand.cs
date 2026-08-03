@@ -27,7 +27,8 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("note", StringComparison.OrdinalIgnoreCase))
     {
-        return SplitTaskTargetCommandWithTextFileFlag(command, remainder, 1);
+        var (noteRemainder, gateFlags) = ExtractRepeatedValueFlag(remainder, "--gate-deliverable");
+        return [.. SplitTaskTargetCommandWithTextFileFlag(command, noteRemainder, 1), .. gateFlags];
     }
 
     if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
@@ -78,6 +79,11 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return [command, remainder];
     }
 
+    if (command.Equals("gate-satisfied", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitGateSatisfiedCommand(command, remainder);
+    }
+
     if (command.Equals("ask", StringComparison.OrdinalIgnoreCase) || command.Equals("answer", StringComparison.OrdinalIgnoreCase))
     {
         if (command.Equals("ask", StringComparison.OrdinalIgnoreCase))
@@ -85,7 +91,8 @@ public static IReadOnlyList<string> SplitCommand(string line)
             return SplitTaskTargetCommand(command, remainder, 1);
         }
 
-        return SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file");
+        var (answerRemainder, gateFlags) = ExtractRepeatedValueFlag(remainder, "--gate-deliverable");
+        return [.. SplitTargetTextCommandWithFileFlags(command, answerRemainder, "--text-file"), .. gateFlags];
     }
 
     if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
@@ -360,6 +367,36 @@ private static IReadOnlyList<string> SplitTaskTargetCommandWithTextFileFlag(stri
     return string.IsNullOrWhiteSpace(beforeFlag)
         ? [command, .. flags]
         : [.. SplitTaskTargetCommand(command, beforeFlag, trailingArgumentCount), .. flags];
+}
+
+private static IReadOnlyList<string> SplitGateSatisfiedCommand(string command, string remainder)
+{
+    var parts = remainder.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+    if (parts.Length < 3)
+    {
+        return [command, .. parts];
+    }
+
+    var evidence = parts[2].Trim();
+    if (evidence.StartsWith("--text-file ", StringComparison.OrdinalIgnoreCase))
+    {
+        return [command, parts[0], parts[1], .. evidence.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
+    }
+
+    return [command, parts[0], parts[1], evidence];
+}
+
+private static (string Remainder, IReadOnlyList<string> Flags) ExtractRepeatedValueFlag(
+    string remainder,
+    string flag)
+{
+    var pattern = $@"(?i)(?:^|\s){System.Text.RegularExpressions.Regex.Escape(flag)}\s+(?<value>[^\s]+)";
+    var matches = System.Text.RegularExpressions.Regex.Matches(remainder, pattern);
+    var flags = matches
+        .SelectMany(match => new[] { flag, match.Groups["value"].Value })
+        .ToArray();
+    var stripped = System.Text.RegularExpressions.Regex.Replace(remainder, pattern, " ").Trim();
+    return (stripped, flags);
 }
 
 private static IReadOnlyList<string> SplitRetryCommand(string command, string remainder)

@@ -16,10 +16,16 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return NormalizeTaskTargetArgs(args, trailingArgumentCount: 2, allowTextFile: true);
     }
 
-    if (command.Equals("retry", StringComparison.OrdinalIgnoreCase) ||
-        command.Equals("note", StringComparison.OrdinalIgnoreCase))
+    if (command.Equals("retry", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1, allowTextFile: true);
+    }
+
+    if (command.Equals("note", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("answer", StringComparison.OrdinalIgnoreCase) ||
+        command.Equals("gate-satisfied", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitCommand(string.Join(' ', args));
     }
 
     if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
@@ -60,13 +66,6 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
     if (command.Equals("ask", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1);
-    }
-
-    if (command.Equals("answer", StringComparison.OrdinalIgnoreCase))
-    {
-        return args.Length >= 3
-            ? NormalizeTargetTextCommandWithFileFlags(args, 1, "--text-file")
-            : args;
     }
 
     if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))

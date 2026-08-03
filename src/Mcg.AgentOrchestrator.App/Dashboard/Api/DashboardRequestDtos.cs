@@ -51,6 +51,8 @@ internal sealed record AskSubmissionDto(string Question);
 
 internal sealed record ProfileDispatchReadySubmissionDto(string ProfileName);
 
-internal sealed record AnswerSubmissionDto(string Answer);
+internal sealed record AnswerSubmissionDto(
+    string Answer,
+    IReadOnlyList<string>? GatedDeliverableIds = null);
 
 

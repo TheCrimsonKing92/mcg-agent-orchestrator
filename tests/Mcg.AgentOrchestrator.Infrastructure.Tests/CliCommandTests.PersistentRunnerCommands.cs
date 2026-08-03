@@ -915,7 +915,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         {
             var changed = CliPersistentStateRunner.ExecuteCommand(
                 CliArgumentParser.SplitCommand(
-                    $"goal-amend {goal.Id.Value[..8]} --waive 2 --reason-file {reasonPath} --actor operator:miles"),
+                    $"goal-amend {goal.Id.Value[..8]} --waive 2 --reason-file {reasonPath} --actor miles"),
                 repository,
                 workspace,
                 ref agents,
@@ -944,11 +944,73 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains("- [WAIVED] measure unavailable makespan", brief);
         Xunit.Assert.Contains("Reason: requires conductor evidence: no worker substitute is acceptable", brief);
         Xunit.Assert.Equal("measure unavailable makespan", auditEvent.RootElement.GetProperty("criterion").GetString());
-        Xunit.Assert.Equal("operator:miles", auditEvent.RootElement.GetProperty("actor").GetString());
+        Xunit.Assert.Equal("miles", auditEvent.RootElement.GetProperty("actor").GetString());
         Xunit.Assert.Equal("requires conductor evidence: no worker substitute is acceptable", auditEvent.RootElement.GetProperty("reason").GetString());
         Xunit.Assert.True(auditEvent.RootElement.TryGetProperty("recordedAt", out _));
         Xunit.Assert.Equal(waiver.CapturedAcceptanceCriteriaHash, auditEvent.RootElement.GetProperty("capturedAcceptanceCriteriaHash").GetString());
         Xunit.Assert.All(restoredGoal.Tasks, task => Xunit.Assert.Null(task.LastDispatch));
+    }
+
+    [Xunit.Fact]
+    public async Task OperatorCommandsCreateAndExplicitlySatisfyStructuredGates()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Exercise operator gate commands");
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+            var request = kernel.RequestHumanInput(goal.Id, task.Id, "Should console suppression ship?");
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            Xunit.Assert.True(CliPersistentStateRunner.ExecuteCommand(
+                CliArgumentParser.SplitCommand(
+                    $"note {goal.Id.Value[..8]} 3 Gate the correlation work --gate-deliverable correlation-evidence"),
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+            Xunit.Assert.True(CliPersistentStateRunner.ExecuteCommand(
+                CliArgumentParser.SplitCommand(
+                    $"answer {request.Id.Value[..8]} Wait for confirmation --gate-deliverable hidden-console-spawn"),
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+            Xunit.Assert.True(CliPersistentStateRunner.ExecuteCommand(
+                CliArgumentParser.SplitCommand(
+                    $"gate-satisfied {request.Id.Value[..8]} hidden-console-spawn Operator confirmed the observation"),
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            var restored = await repository.LoadAsync();
+            var restoredGoal = restored.GetGoal(goal.Id);
+            var taskNote = restoredGoal.Timeline.Single(evt =>
+                evt.Kind == ProgressKind.OperatorTaskNote && evt.Message == "Gate the correlation work");
+            Xunit.Assert.Contains(taskNote.OperatorGates!, gate => gate.DeliverableId == "correlation-evidence");
+            var clarificationGate = Xunit.Assert.Single(restored.GetHumanInputRequest(request.Id).OperatorGates);
+            Xunit.Assert.False(clarificationGate.IsActive);
+            Xunit.Assert.Equal("Operator confirmed the observation", clarificationGate.SatisfactionEvidence);
+            Xunit.Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.OperatorGateSatisfied);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_ignores_volatile_snapshot_churn")]

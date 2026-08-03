@@ -53,6 +53,7 @@ internal static class DashboardDisplayNames
         ProgressKind.TaskVerificationPlanUpdated => "Verification plan updated",
         ProgressKind.TaskNote => "Task note",
         ProgressKind.OperatorTaskNote => "Operator task note",
+        ProgressKind.OperatorGateSatisfied => "Operator gate satisfied",
         ProgressKind.TaskSubscriptionLimitReviewAcknowledged => "Subscription limit reviewed",
         ProgressKind.ReviewerEvidenceRequestReceived => "Reviewer evidence requested",
         ProgressKind.ReviewerEvidenceRunRecorded => "Reviewer evidence run recorded",

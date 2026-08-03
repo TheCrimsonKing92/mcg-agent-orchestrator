@@ -58,6 +58,28 @@ private static IReadOnlyList<string> GetFlagValues(IReadOnlyList<string> parts, 
     return results;
 }
 
+private static IReadOnlyList<string> GetOperatorGateDeliverableIds(IReadOnlyList<string> parts)
+{
+    for (var index = 0; index < parts.Count; index++)
+    {
+        if (!parts[index].Equals("--gate-deliverable", StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        if (index + 1 >= parts.Count || parts[index + 1].StartsWith("--", StringComparison.Ordinal))
+        {
+            throw new ArgumentException("--gate-deliverable requires a non-empty deliverable id.");
+        }
+    }
+
+    return GetFlagValues(parts, "--gate-deliverable")
+        .Select(value => value.Trim())
+        .Where(value => value.Length > 0)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+}
+
 private static List<string> RemoveFlagWithValue(IReadOnlyList<string> parts, string flag)
 {
     var result = new List<string>(parts.Count);

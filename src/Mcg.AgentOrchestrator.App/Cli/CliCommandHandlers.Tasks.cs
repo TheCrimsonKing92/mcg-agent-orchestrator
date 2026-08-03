@@ -14,7 +14,8 @@ internal sealed record GoalScopedTaskMutationCommand(
     WorkTaskStatus? ProgressStatus,
     TaskVerificationRecord? ManualVerification,
     RetryRoundKind? RetryRoundKind,
-    AutonomyPolicy RetryPolicy);
+    AutonomyPolicy RetryPolicy,
+    IReadOnlyList<string>? GatedDeliverableIds = null);
 
 internal enum GoalScopedTaskMutationRenderKind
 {
@@ -110,7 +111,8 @@ internal static GoalScopedTaskMutationOutcome ExecuteGoalScopedTaskMutationWitho
             context.Kernel.RecordOperatorTaskNote(
                 context.CurrentGoal!.Id,
                 noteTarget.Task.Id,
-                command.Text ?? throw new InvalidOperationException("Prepared note command is missing text."));
+                command.Text ?? throw new InvalidOperationException("Prepared note command is missing text."),
+                command.GatedDeliverableIds);
             return new GoalScopedTaskMutationOutcome(true, context.CurrentGoal!, noteTarget.Task, GoalScopedTaskMutationRenderKind.NoteAcknowledgement);
 
         default:
@@ -236,18 +238,21 @@ private static GoalScopedTaskMutationCommand PrepareVerificationPlanMutation(IRe
 
 private static GoalScopedTaskMutationCommand PrepareNoteMutation(IReadOnlyList<string> parts, bool hasInlineGoalPrefix)
 {
-    var usage = "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>|note <task-number> --text-file <path>";
-    var taskIndex = ResolveGoalScopedTaskArgumentIndex(parts, hasInlineGoalPrefix, usage);
+    var usage = "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...]|note <task-number> --text-file <path> [--gate-deliverable <id>...]";
+    var gatedDeliverableIds = GetOperatorGateDeliverableIds(parts);
+    var noteParts = RemoveFlagWithValue(parts, "--gate-deliverable");
+    var taskIndex = ResolveGoalScopedTaskArgumentIndex(noteParts, hasInlineGoalPrefix, usage);
     var messageIndex = taskIndex + 1;
-    RequireRemainingArgument(parts, messageIndex, usage);
+    RequireRemainingArgument(noteParts, messageIndex, usage);
     return new GoalScopedTaskMutationCommand(
         "note",
-        parts,
-        ResolveTextArgument(parts, messageIndex, usage, "--text-file"),
+        noteParts,
+        ResolveTextArgument(noteParts, messageIndex, usage, "--text-file"),
         ProgressStatus: null,
         ManualVerification: null,
         RetryRoundKind: null,
-        RetryPolicy: AutonomyPolicy.Default);
+        RetryPolicy: AutonomyPolicy.Default,
+        gatedDeliverableIds);
 }
 
 private static int ResolveGoalScopedTaskArgumentIndex(IReadOnlyList<string> parts, bool hasInlineGoalPrefix, string usage)
@@ -444,11 +449,17 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "note":
-            var noteUsage = "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>|note <task-number> --text-file <path>";
-            var noteTarget = ResolveCommandTaskTarget(parts, context, noteUsage);
-            RequireRemainingArgument(parts, noteTarget.NextIndex, noteUsage);
+            var noteUsage = "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...]|note <task-number> --text-file <path> [--gate-deliverable <id>...]";
+            var noteGateIds = GetOperatorGateDeliverableIds(parts);
+            var noteParts = RemoveFlagWithValue(parts, "--gate-deliverable");
+            var noteTarget = ResolveCommandTaskTarget(noteParts, context, noteUsage);
+            RequireRemainingArgument(noteParts, noteTarget.NextIndex, noteUsage);
             var noteTask = noteTarget.Task;
-            context.Kernel.RecordOperatorTaskNote(context.CurrentGoal!.Id, noteTask.Id, ResolveTextArgument(parts, noteTarget.NextIndex, noteUsage, "--text-file"));
+            context.Kernel.RecordOperatorTaskNote(
+                context.CurrentGoal!.Id,
+                noteTask.Id,
+                ResolveTextArgument(noteParts, noteTarget.NextIndex, noteUsage, "--text-file"),
+                noteGateIds);
             Console.WriteLine($"Note added to task {noteTask.Id}");
             return true;
 
@@ -525,10 +536,28 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "answer":
-            CliArgumentParser.RequirePartCount(parts, 3, "answer <request-id> <answer> | answer <request-id> --text-file <path>");
-            var resolvedRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(context.Kernel, parts[1]);
-            context.Kernel.SubmitHumanInput(resolvedRequest.Id, ResolveTextArgument(parts, inlineIndex: 2, "answer <request-id> <answer> | answer <request-id> --text-file <path>", "--text-file"));
+            const string answerUsage = "answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
+            var answerGateIds = GetOperatorGateDeliverableIds(parts);
+            var answerParts = RemoveFlagWithValue(parts, "--gate-deliverable");
+            CliArgumentParser.RequirePartCount(answerParts, 3, answerUsage);
+            var resolvedRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(context.Kernel, answerParts[1]);
+            context.Kernel.SubmitHumanInput(
+                resolvedRequest.Id,
+                ResolveTextArgument(answerParts, inlineIndex: 2, answerUsage, "--text-file"),
+                answerGateIds);
             context.CurrentGoal = context.Kernel.GetGoal(resolvedRequest.GoalId);
+            ConsoleViews.PrintGoal(context.CurrentGoal);
+            return true;
+
+        case "gate-satisfied":
+            const string gateSatisfiedUsage = "gate-satisfied <request-id> <deliverable-id> <evidence> | gate-satisfied <request-id> <deliverable-id> --text-file <path>";
+            CliArgumentParser.RequirePartCount(parts, 4, gateSatisfiedUsage);
+            var gateRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(context.Kernel, parts[1]);
+            context.Kernel.MarkOperatorGateSatisfied(
+                gateRequest.Id,
+                parts[2],
+                ResolveTextArgument(parts, inlineIndex: 3, gateSatisfiedUsage, "--text-file"));
+            context.CurrentGoal = context.Kernel.GetGoal(gateRequest.GoalId);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 

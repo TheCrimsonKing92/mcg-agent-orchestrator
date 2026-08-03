@@ -756,7 +756,7 @@ Transcript tail:
             ProgressiveReviewGlanceReasonCode.UnmentionedWork or
             ProgressiveReviewGlanceReasonCode.Unknown or null;
         var uncertainCoverage = result.Verdict == ProgressiveReviewGlanceVerdict.FundamentalMisdirection &&
-            ((records.Count > 0 && findings.Length == 0) ||
+            ((activeGates.Length > 0 && findings.Length == 0) ||
                 (inputs.OperatorContextTruncated && cancellationGroundIsContextSensitive));
         if (!uncertainCoverage)
         {
@@ -1169,6 +1169,7 @@ Corrective direction:
                 request.Kind == HumanWaitKind.SpecClarification &&
                 request.IsCompleted &&
                 !request.WasDismissed &&
+                !request.IsSyntheticParkedHumanWaitCompletion &&
                 request.AnsweredAt is not null &&
                 request.Answer is not null)
             .Select(request => new ProgressiveReviewOperatorRecord(
@@ -1194,7 +1195,7 @@ Corrective direction:
         var bounded = new List<ProgressiveReviewOperatorRecord>(ordered.Length);
         foreach (var record in ordered)
         {
-            if (record.Text.Length <= remaining)
+            if (!truncated && record.Text.Length <= remaining)
             {
                 bounded.Add(record);
                 remaining -= record.Text.Length;
@@ -1204,7 +1205,7 @@ Corrective direction:
             truncated = true;
             bounded.Add(record with
             {
-                Text = "[older operator record text omitted due to operator-context budget]"
+                Text = "[operator record text omitted due to operator-context budget; structured gates retained]"
             });
         }
 
