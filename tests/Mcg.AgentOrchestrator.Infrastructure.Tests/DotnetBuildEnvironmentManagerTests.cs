@@ -2511,6 +2511,94 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Contains("-p:BuildInParallel=false", configuredArguments);
     }
 
+    [Xunit.Fact]
+    public void FocusedRunner_InvalidMethodToken_RemainsPreLease()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var validation = source.IndexOf("if ($FocusedTest) {", StringComparison.Ordinal);
+        var repositoryRoot = source.IndexOf("$RepositoryRoot = (Get-Location).Path", StringComparison.Ordinal);
+        var strictGrammar = source.IndexOf(
+            @"\AFullyQualifiedName~[A-Za-z_][A-Za-z0-9_]*(?:\|FullyQualifiedName~[A-Za-z_][A-Za-z0-9_]*)*\z",
+            StringComparison.Ordinal);
+
+        Assert.True(validation >= 0 && strictGrammar > validation && strictGrammar < repositoryRoot);
+        Assert.DoesNotContain("[A-Za-z0-9_.]*", source[validation..repositoryRoot], StringComparison.Ordinal);
+        Assert.Contains("exit 4", source[validation..repositoryRoot], StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_WorkerGrant_UsesPersistedDeveloperRole()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var mode = FocusedModeSource(source);
+        var authorization = mode.IndexOf("Get-FocusedWorkerAuthorization", StringComparison.Ordinal);
+        var lease = mode.IndexOf("Enter-FocusedBuildSlot", StringComparison.Ordinal);
+
+        Assert.Contains("json_each(goals.snapshot_json, '$.Tasks')", source, StringComparison.Ordinal);
+        Assert.Contains("json_extract(task.value, '$.RequiredRole')", source, StringComparison.Ordinal);
+        Assert.Contains("[string]::Equals($role, 'Developer'", source, StringComparison.Ordinal);
+        Assert.True(authorization >= 0 && lease > authorization);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_ReceiptNamesExecutedIsolatedCommand()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var mode = FocusedModeSource(source);
+        var arguments = mode.IndexOf("$testArguments = @(", StringComparison.Ordinal);
+        var receipt = mode.IndexOf("$receipt.testArguments = @($testArguments)", StringComparison.Ordinal);
+        var invocation = mode.IndexOf("Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath", StringComparison.Ordinal);
+
+        Assert.Contains(@"Join-Path $runRoot ""focused-artifacts\$($slotLease.Id)""", mode, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"Join-Path $runRoot ""artifacts""", mode, StringComparison.Ordinal);
+        Assert.Contains("Get-FocusedMtpFilterArguments -Filter $FocusedTestFilter", mode, StringComparison.Ordinal);
+        Assert.True(arguments >= 0 && receipt > arguments && invocation > receipt);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_FreshnessIncludesUntrackedContent()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var stateStart = source.IndexOf("function Get-FocusedWorktreeState", StringComparison.Ordinal);
+        var stateEnd = source.IndexOf("function ConvertTo-DeclaredMutationPath", stateStart, StringComparison.Ordinal);
+        var freshnessStart = source.IndexOf("function Test-FocusedBuildIsCurrent", StringComparison.Ordinal);
+        var freshnessEnd = source.IndexOf("function Write-FocusedReceipt", freshnessStart, StringComparison.Ordinal);
+        var state = source[stateStart..stateEnd];
+        var freshness = source[freshnessStart..freshnessEnd];
+
+        Assert.Contains("ls-files --others --exclude-standard", state, StringComparison.Ordinal);
+        Assert.Contains("Get-FileHash -LiteralPath $path -Algorithm SHA256", state, StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-Item", freshness, StringComparison.Ordinal);
+        Assert.DoesNotContain("ls-files", freshness, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_LeaseHeartbeatLeavesGateDeadlineMargin()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var mode = FocusedModeSource(source);
+
+        Assert.Contains("activity-$slot.heartbeat.json", source, StringComparison.Ordinal);
+        Assert.Contains("lastObservedAt", source, StringComparison.Ordinal);
+        Assert.Contains("lastProgressAt", source, StringComparison.Ordinal);
+        Assert.Contains("state = \"running\"", source, StringComparison.Ordinal);
+        Assert.Contains("$runDeadline.AddSeconds(-$cleanupMarginSeconds)", mode, StringComparison.Ordinal);
+        Assert.Contains("-HeartbeatPath $slotLease.HeartbeatPath", mode, StringComparison.Ordinal);
+        Assert.Contains("$slotLease.Stream.Dispose()", mode, StringComparison.Ordinal);
+        Assert.Contains("Write-FocusedReceipt -Receipt $receipt", mode, StringComparison.Ordinal);
+    }
+
+    private static string ReadIsolatedDotnetScript() =>
+        File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
+
+    private static string FocusedModeSource(string source)
+    {
+        var start = source.IndexOf("function Invoke-FocusedTestMode", StringComparison.Ordinal);
+        var end = source.IndexOf("if ($FocusedTest) {", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        return source[start..end];
+    }
+
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_forwards_args_when_operator_sandbox_config_is_inherited")]
     public void InvokeIsolatedDotnetForwardsArgsWhenOperatorSandboxConfigIsInherited()
     {

@@ -137,7 +137,7 @@ if ($FocusedTest) {
     $validFocusedFilter = -not [string]::IsNullOrWhiteSpace($FocusedTestFilter) -and
         [System.Text.RegularExpressions.Regex]::IsMatch(
             $FocusedTestFilter,
-            '\AFullyQualifiedName~[A-Za-z_][A-Za-z0-9_.]*(?:\|FullyQualifiedName~[A-Za-z_][A-Za-z0-9_.]*)*\z',
+            '\AFullyQualifiedName~[A-Za-z_][A-Za-z0-9_]*(?:\|FullyQualifiedName~[A-Za-z_][A-Za-z0-9_]*)*\z',
             [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
     if (-not $validFocusedFilter -or
         $FocusedBudgetSeconds -lt 1 -or $FocusedBudgetSeconds -gt 300 -or
@@ -786,7 +786,7 @@ function Get-FocusedWorktreeState {
         throw "Focused tests could not resolve the git worktree root."
     }
 
-    $dirtyFiles = @(& git -C $script:RepositoryRoot diff --no-ext-diff --name-only HEAD -- 2>$null) |
+    $trackedDirtyFiles = @(& git -C $script:RepositoryRoot diff --no-ext-diff --name-only HEAD -- 2>$null) |
         ForEach-Object { ([string]$_).Trim().Replace('\', '/') } |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         Sort-Object -Unique
@@ -794,11 +794,31 @@ function Get-FocusedWorktreeState {
         throw "Focused tests could not inspect tracked-file state."
     }
 
+    $untrackedFiles = @(& git -C $script:RepositoryRoot ls-files --others --exclude-standard -- 2>$null) |
+        ForEach-Object { ([string]$_).Trim().Replace('\', '/') } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Sort-Object -Unique
+    if ($LASTEXITCODE -ne 0) {
+        throw "Focused tests could not inspect untracked-file state."
+    }
+
+    $dirtyFiles = @($trackedDirtyFiles) + @($untrackedFiles) | Sort-Object -Unique
     $dirtyPatch = @(& git -C $script:RepositoryRoot diff --no-ext-diff --binary HEAD -- 2>$null)
     if ($LASTEXITCODE -ne 0) {
         throw "Focused tests could not hash tracked-file state."
     }
-    $digestInput = ($dirtyPatch -join "`n")
+    $untrackedIdentity = @($untrackedFiles | ForEach-Object {
+        $relativePath = [string]$_
+        $path = Join-Path $topLevel $relativePath
+        $hash = if (Test-Path -LiteralPath $path -PathType Leaf) {
+            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        else {
+            "missing"
+        }
+        "untracked:$relativePath`0$hash"
+    })
+    $digestInput = (@($dirtyPatch) + @($untrackedIdentity)) -join "`n"
     return [pscustomobject]@{
         Root = [System.IO.Path]::GetFullPath($topLevel)
         Commit = $head
@@ -925,8 +945,96 @@ function Get-FocusedRequest {
         ProjectPath = [System.IO.Path]::GetFullPath($projectPath)
         Configuration = $configuration
         Framework = $framework
-        TestArguments = $testArguments.ToArray()
+        ArtifactProbeArguments = $testArguments.ToArray()
         BuildArguments = $buildArguments.ToArray()
+    }
+}
+
+function Get-FocusedMtpFilterArguments {
+    param([string]$Filter)
+
+    $result = [System.Collections.Generic.List[string]]::new()
+    foreach ($clause in $Filter.Split('|')) {
+        $match = [System.Text.RegularExpressions.Regex]::Match(
+            $clause,
+            '\AFullyQualifiedName~(?<token>[A-Za-z_][A-Za-z0-9_]*)\z',
+            [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
+        if (-not $match.Success) {
+            throw "Focused test filter contains an unvalidated clause."
+        }
+
+        $result.Add("--filter-class")
+        $result.Add("*$($match.Groups['token'].Value)*")
+    }
+
+    if ($result.Count -eq 0) {
+        throw "Focused test filter produced no MTP arguments."
+    }
+    return $result.ToArray()
+}
+
+function Get-FocusedWorkerAuthorization {
+    $isWorkerDispatch = $env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "1" -or
+        $env:MCG_ORCHESTRATOR_WORKER_DISPATCH -eq "true"
+    if (-not $isWorkerDispatch) {
+        return [pscustomobject]@{ Allowed = $true; Reason = $null; GoalId = $null; TaskId = $null; Role = "Operator" }
+    }
+
+    try {
+        $startGatePath = [string]$env:MCG_DISPATCH_HOST_START_GATE
+        if ([string]::IsNullOrWhiteSpace($startGatePath) -or
+            -not $startGatePath.EndsWith('.start-gate', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The host-issued dispatch start gate is unavailable."
+        }
+        $dispatchPath = $startGatePath.Substring(0, $startGatePath.Length - '.start-gate'.Length) + '.dispatch.json'
+        $orchestratorRepositoryRoot = [string]$env:MCG_ORCHESTRATOR_REPOSITORY_ROOT
+        if ([string]::IsNullOrWhiteSpace($orchestratorRepositoryRoot)) {
+            throw "The orchestrator repository root is unavailable."
+        }
+        $orchestratorRepositoryRoot = [System.IO.Path]::GetFullPath($orchestratorRepositoryRoot)
+        $dispatchPath = [System.IO.Path]::GetFullPath($dispatchPath)
+        $dispatchLogPrefix = (Join-Path $orchestratorRepositoryRoot '.orchestrator\logs').TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+        if (-not $dispatchPath.StartsWith($dispatchLogPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The host dispatch record is outside the canonical log store."
+        }
+        $dispatch = Get-Content -LiteralPath $dispatchPath -Raw | ConvertFrom-Json
+        $goalId = [string]$dispatch.prepGoalId
+        $taskId = [string]$dispatch.prepTaskId
+        if ($goalId -notmatch '\A[a-fA-F0-9]{32}\z' -or $taskId -notmatch '\A[a-fA-F0-9]{32}\z') {
+            throw "The host dispatch record has no canonical goal/task identity."
+        }
+        if (-not [string]::Equals(
+                [System.IO.Path]::GetFullPath([string]$dispatch.workingDirectory).TrimEnd('\', '/'),
+                [System.IO.Path]::GetFullPath($script:RepositoryRoot).TrimEnd('\', '/'),
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The host dispatch record belongs to a different worktree."
+        }
+        if (-not [string]::IsNullOrWhiteSpace($GoalPrefix) -and
+            -not $goalId.StartsWith($GoalPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The requested goal prefix does not identify the dispatched goal."
+        }
+
+        $statePath = Join-Path $orchestratorRepositoryRoot '.orchestrator\state.db'
+        if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+            throw "The canonical state database is unavailable."
+        }
+        $sqlite = Get-Command sqlite3 -CommandType Application -ErrorAction Stop
+        $query = "SELECT json_extract(task.value, '$.RequiredRole') FROM goals, json_each(goals.snapshot_json, '$.Tasks') AS task WHERE goals.id = '$goalId' AND json_extract(task.value, '$.Id') = '$taskId' LIMIT 1;"
+        $role = @(& $sqlite.Source -readonly -noheader $statePath $query 2>$null) | Select-Object -First 1
+        if ($LASTEXITCODE -ne 0) {
+            throw "The canonical task role lookup failed."
+        }
+        $role = ([string]$role).Trim()
+        return [pscustomobject]@{
+            Allowed = [string]::Equals($role, 'Developer', [System.StringComparison]::Ordinal)
+            Reason = if ([string]::Equals($role, 'Developer', [System.StringComparison]::Ordinal)) { $null } else { "focused-test-role-not-authorized" }
+            GoalId = $goalId
+            TaskId = $taskId
+            Role = $role
+        }
+    }
+    catch {
+        return [pscustomobject]@{ Allowed = $false; Reason = "focused-test-authorization-failed"; Error = $_.Exception.Message; GoalId = $null; TaskId = $null; Role = $null }
     }
 }
 
@@ -935,7 +1043,8 @@ function Enter-FocusedBuildSlot {
         [string]$IsolatedRoot,
         [int]$SlotCount,
         [int]$PreferredSlot,
-        [DateTime]$Deadline
+        [DateTime]$Deadline,
+        [string]$GoalId
     )
 
     $lockDirectory = Join-Path $IsolatedRoot "build-slots"
@@ -947,11 +1056,37 @@ function Enter-FocusedBuildSlot {
             $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
             try {
                 $stream.Lock(0, 1)
+                $heartbeatPath = Join-Path $lockDirectory "activity-$slot.heartbeat.json"
+                try {
+                    $heartbeatTimestamp = [DateTime]::UtcNow.ToString('o')
+                    [ordered]@{
+                        goalId = $GoalId
+                        phase = "focused-test"
+                        currentTarget = $FocusedTestFilter
+                        slotIndex = $slot
+                        processId = $PID
+                        childPid = $null
+                        state = "running"
+                        startedAt = $heartbeatTimestamp
+                        lastObservedAt = $heartbeatTimestamp
+                        lastProgressAt = $heartbeatTimestamp
+                        stdoutBytes = 0
+                        stderrBytes = 0
+                        outputBytes = 0
+                    } | ConvertTo-Json | Set-Content -LiteralPath $heartbeatPath
+                }
+                catch {
+                    $heartbeatError = $_.Exception
+                    $stream.Unlock(0, 1)
+                    $stream.Dispose()
+                    throw [System.InvalidOperationException]::new("Focused slot heartbeat could not be created.", $heartbeatError)
+                }
                 return [pscustomobject]@{
                     Slot = $slot
                     Id = "build-$slot"
                     Path = $path
                     Stream = $stream
+                    HeartbeatPath = $heartbeatPath
                 }
             }
             catch [System.IO.IOException] {
@@ -969,7 +1104,8 @@ function Invoke-FocusedChildProcess {
     param(
         [string]$FileName,
         [string[]]$ProcessArguments,
-        [int]$BudgetMilliseconds
+        [DateTime]$Deadline,
+        [string]$HeartbeatPath
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -990,9 +1126,36 @@ function Invoke-FocusedChildProcess {
         if (-not $process.Start()) {
             throw "Could not start '$FileName'."
         }
+        if (-not [string]::IsNullOrWhiteSpace($HeartbeatPath)) {
+            try {
+                $heartbeat = Get-Content -LiteralPath $HeartbeatPath -Raw | ConvertFrom-Json
+                $heartbeat.childPid = $process.Id
+                $heartbeat.lastObservedAt = [DateTime]::UtcNow.ToString('o')
+                $heartbeat.lastProgressAt = $heartbeat.lastObservedAt
+                $heartbeat | ConvertTo-Json | Set-Content -LiteralPath $HeartbeatPath
+            }
+            catch {
+                # The file lock remains authoritative; heartbeat is best-effort visibility only.
+            }
+        }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        $completed = $process.WaitForExit([Math]::Max(1, $BudgetMilliseconds))
+        $completed = $false
+        while (-not $completed -and [DateTime]::UtcNow -lt $Deadline) {
+            $remainingMilliseconds = [int][Math]::Max(1, [Math]::Min(1000, ($Deadline - [DateTime]::UtcNow).TotalMilliseconds))
+            $completed = $process.WaitForExit($remainingMilliseconds)
+            if (-not $completed -and -not [string]::IsNullOrWhiteSpace($HeartbeatPath)) {
+                try {
+                    $heartbeat = Get-Content -LiteralPath $HeartbeatPath -Raw | ConvertFrom-Json
+                    $heartbeat.lastObservedAt = [DateTime]::UtcNow.ToString('o')
+                    $heartbeat.lastProgressAt = $heartbeat.lastObservedAt
+                    $heartbeat | ConvertTo-Json | Set-Content -LiteralPath $HeartbeatPath
+                }
+                catch {
+                    # The file lock remains authoritative; heartbeat is best-effort visibility only.
+                }
+            }
+        }
         if (-not $completed) {
             try {
                 $process.Kill($true)
@@ -1052,30 +1215,16 @@ function Test-FocusedBuildIsCurrent {
         return $false
     }
     $statePath = Join-Path $ArtifactsPath ".mcg-focused-build-state.json"
-    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
-        try {
-            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
-            if ([string]::Equals([string]$state.fingerprint, $Fingerprint, [System.StringComparison]::Ordinal)) {
-                return $true
-            }
-        }
-        catch {
-        }
-    }
-
-    $assembly = Get-Item -LiteralPath $Reuse.AssemblyPath
-    $trackedInputs = @(& git -C $script:RepositoryRoot ls-files -- '*.cs' '*.fs' '*.vb' '*.csproj' '*.fsproj' '*.vbproj' '*.props' '*.targets' 'global.json' 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $trackedInputs.Count -eq 0) {
+    if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
         return $false
     }
-    foreach ($relativePath in $trackedInputs) {
-        $inputPath = Join-Path $script:RepositoryRoot ([string]$relativePath)
-        if ((Test-Path -LiteralPath $inputPath -PathType Leaf) -and
-            (Get-Item -LiteralPath $inputPath).LastWriteTimeUtc -gt $assembly.LastWriteTimeUtc) {
-            return $false
-        }
+    try {
+        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+        return [string]::Equals([string]$state.fingerprint, $Fingerprint, [System.StringComparison]::Ordinal)
     }
-    return $true
+    catch {
+        return $false
+    }
 }
 
 function Write-FocusedReceipt {
@@ -1097,25 +1246,29 @@ function Read-FocusedTrx {
     param([string]$Path)
 
     [xml]$trx = Get-Content -LiteralPath $Path -Raw
-    $counters = $trx.TestRun.ResultSummary.Counters
-    if ($null -eq $counters) {
-        throw "TRX has no ResultSummary/Counters."
-    }
-    $failures = @($trx.TestRun.Results.UnitTestResult | Where-Object outcome -eq 'Failed')
+    $resultNodes = @($trx.SelectNodes("/*[local-name()='TestRun']/*[local-name()='Results']/*[local-name()='UnitTestResult']"))
+    $counters = $trx.SelectSingleNode("/*[local-name()='TestRun']/*[local-name()='ResultSummary']/*[local-name()='Counters']")
+    $failures = @($resultNodes | Where-Object { $_.GetAttribute('outcome') -eq 'Failed' })
     $maximumFailures = 8
     $failureSummaries = @($failures | Select-Object -First $maximumFailures | ForEach-Object {
-        $messageLines = @(([string]$_.Output.ErrorInfo.Message -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $messageNode = $_.SelectSingleNode("./*[local-name()='Output']/*[local-name()='ErrorInfo']/*[local-name()='Message']")
+        $messageText = if ($null -eq $messageNode) { $null } else { [string]$messageNode.InnerText }
+        $messageLines = @(($messageText -split "`r?`n") | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         $message = if ($messageLines.Count -eq 0) { $null } else { $messageLines[0].Trim() }
         if ($null -ne $message -and $message.Length -gt 512) {
             $message = $message.Substring(0, 512)
         }
-        [ordered]@{ name = [string]$_.testName; assertion = $message }
+        [ordered]@{ name = $_.GetAttribute('testName'); assertion = $message }
     })
+    $total = if ($null -ne $counters) { [int]$counters.GetAttribute('total') } else { $resultNodes.Count }
+    $passed = if ($null -ne $counters) { [int]$counters.GetAttribute('passed') } else { @($resultNodes | Where-Object { $_.GetAttribute('outcome') -eq 'Passed' }).Count }
+    $failed = if ($null -ne $counters) { [int]$counters.GetAttribute('failed') } else { $failures.Count }
+    $skipped = if ($null -ne $counters) { [int]$counters.GetAttribute('notExecuted') } else { @($resultNodes | Where-Object { $_.GetAttribute('outcome') -notin @('Passed', 'Failed') }).Count }
     return [pscustomobject]@{
-        Total = [int]$counters.total
-        Passed = [int]$counters.passed
-        Failed = [int]$counters.failed
-        Skipped = [int]$counters.notExecuted
+        Total = $total
+        Passed = $passed
+        Failed = $failed
+        Skipped = $skipped
         Failures = $failureSummaries
         OmittedFailures = [Math]::Max(0, $failures.Count - $maximumFailures)
     }
@@ -1123,7 +1276,13 @@ function Read-FocusedTrx {
 
 function Invoke-FocusedTestMode {
     $started = [DateTime]::UtcNow
+    $runDeadline = $started.AddSeconds($FocusedBudgetSeconds)
+    # Leave enough of the declared wall budget to persist evidence and release the lease before
+    # the acceptance lane's five-minute lock deadline can expire behind a focused run.
+    $cleanupMarginSeconds = [Math]::Min(5.0, [Math]::Max(0.1, $FocusedBudgetSeconds * 0.02))
+    $processDeadline = $runDeadline.AddSeconds(-$cleanupMarginSeconds)
     $slotLease = $null
+    $processTempPath = $null
     $isolatedRoot = Get-IsolatedRootBase
     $safeGoalPrefix = if ([string]::IsNullOrWhiteSpace($GoalPrefix)) { "focused-$PID" } else { ConvertTo-SafePathSegment -Value $GoalPrefix }
     $runRoot = Join-Path $isolatedRoot "goals\$safeGoalPrefix"
@@ -1154,14 +1313,28 @@ function Invoke-FocusedTestMode {
         outputLogPath = $null
         receiptPath = $receiptPath
         project = $null
+        testExecutable = $null
         testArguments = @()
         buildPerformed = $false
         buildReused = $false
     }
     try {
+        $authorization = Get-FocusedWorkerAuthorization
+        $receipt.authorization = [ordered]@{
+            goalId = $authorization.GoalId
+            taskId = $authorization.TaskId
+            role = $authorization.Role
+        }
+        if (-not $authorization.Allowed) {
+            $receipt.reason = $authorization.Reason
+            if ($null -ne $authorization.PSObject.Properties['Error']) {
+                $receipt.error = $authorization.Error
+            }
+            return $receipt
+        }
+
         $request = Get-FocusedRequest -Values $DotnetArguments
         $receipt.project = $request.Project
-        $receipt.testArguments = @($request.TestArguments)
         $worktree = Get-FocusedWorktreeState
         $receipt.worktreeRoot = $worktree.Root
         $receipt.commit = $worktree.Commit
@@ -1180,7 +1353,7 @@ function Invoke-FocusedTestMode {
         $preferredSlotName = Get-BuildSlotName -Value $safeGoalPrefix -SlotCount (Get-BuildConcurrencySlotCount)
         $preferredSlot = [int]$preferredSlotName.Substring("build-".Length)
         $leaseDeadline = $started.AddSeconds([Math]::Min($FocusedLeaseWaitSeconds, $FocusedBudgetSeconds))
-        $slotLease = Enter-FocusedBuildSlot -IsolatedRoot $isolatedRoot -SlotCount (Get-BuildConcurrencySlotCount) -PreferredSlot $preferredSlot -Deadline $leaseDeadline
+        $slotLease = Enter-FocusedBuildSlot -IsolatedRoot $isolatedRoot -SlotCount (Get-BuildConcurrencySlotCount) -PreferredSlot $preferredSlot -Deadline $leaseDeadline -GoalId $authorization.GoalId
 
         if (-not [string]::IsNullOrWhiteSpace($FocusedReceiptPath)) {
             $candidateReceiptPath = [System.IO.Path]::GetFullPath($FocusedReceiptPath)
@@ -1199,13 +1372,8 @@ function Invoke-FocusedTestMode {
         }
         $receipt.slotId = $slotLease.Id
 
-        $ownerToken = "goal-$safeGoalPrefix"
-        $artifactsPath = if ($slotLease.Slot -eq $preferredSlot) {
-            Join-Path $runRoot "artifacts"
-        }
-        else {
-            Join-Path $runRoot "focused-artifacts\$($slotLease.Id)"
-        }
+        $ownerToken = "focused-$safeGoalPrefix-$($slotLease.Id)"
+        $artifactsPath = Join-Path $runRoot "focused-artifacts\$($slotLease.Id)"
         Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $ownerToken -ForceClean $false
 
         $processTempPath = Join-Path (Get-HostTempBase) "pt\focused-$safeGoalPrefix\$PID"
@@ -1218,10 +1386,10 @@ function Invoke-FocusedTestMode {
         Remove-Item Env:MCG_WORKER_CREDENTIAL_TARGET -ErrorAction SilentlyContinue
         Remove-Item Env:MCG_ORCHESTRATOR_WORKER_DISPATCH -ErrorAction SilentlyContinue
 
-        $outputDirectory = Join-Path $processTempPath "results"
+        $outputDirectory = Join-Path $defaultReceiptDirectory "artifacts\$([Guid]::NewGuid().ToString('N'))"
         New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
         $fingerprint = Get-FocusedBuildFingerprint -WorktreeState $worktree -Request $request
-        $reuse = Get-ReusableTestArtifacts -ArtifactsPath $artifactsPath -OwnerToken $ownerToken -DotnetArguments $request.TestArguments
+        $reuse = Get-ReusableTestArtifacts -ArtifactsPath $artifactsPath -OwnerToken $ownerToken -DotnetArguments $request.ArtifactProbeArguments
         if (-not (Test-FocusedBuildIsCurrent -ArtifactsPath $artifactsPath -Reuse $reuse -Fingerprint $fingerprint)) {
             $receipt.buildPerformed = $true
             $buildArguments = @($request.BuildArguments) + @(
@@ -1229,13 +1397,12 @@ function Invoke-FocusedTestMode {
                 "-maxcpucount:$(Get-BuildMaxCpuCount)",
                 "-p:BuildInParallel=false"
             )
-            $remainingMilliseconds = [int][Math]::Floor(($started.AddSeconds($FocusedBudgetSeconds) - [DateTime]::UtcNow).TotalMilliseconds)
-            if ($remainingMilliseconds -le 0) {
+            if ([DateTime]::UtcNow -ge $processDeadline) {
                 $receipt.exitCode = 2
                 $receipt.reason = "budget-exceeded"
                 return $receipt
             }
-            $build = Invoke-FocusedChildProcess -FileName "dotnet" -ProcessArguments $buildArguments -BudgetMilliseconds $remainingMilliseconds
+            $build = Invoke-FocusedChildProcess -FileName "dotnet" -ProcessArguments $buildArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath
             $buildLogPath = Join-Path $outputDirectory "build.log"
             Write-FocusedLog -Path $buildLogPath -Stdout $build.Stdout -Stderr $build.Stderr
             $receipt.outputLogPath = $buildLogPath
@@ -1259,7 +1426,7 @@ function Invoke-FocusedTestMode {
                 framework = $request.Framework
                 builtAt = [DateTime]::UtcNow.ToString('o')
             } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $artifactsPath ".mcg-focused-build-state.json")
-            $reuse = Get-ReusableTestArtifacts -ArtifactsPath $artifactsPath -OwnerToken $ownerToken -DotnetArguments $request.TestArguments
+            $reuse = Get-ReusableTestArtifacts -ArtifactsPath $artifactsPath -OwnerToken $ownerToken -DotnetArguments $request.ArtifactProbeArguments
             if (-not $reuse.Success) {
                 $receipt.reason = "build-artifact-missing"
                 return $receipt
@@ -1276,14 +1443,15 @@ function Invoke-FocusedTestMode {
             "--results-directory", $outputDirectory,
             "--report-trx", "--report-trx-filename", $trxName,
             "--long-running", "120"
-        ) + @(ConvertTo-MtpFilterArguments -Filter $FocusedTestFilter)
-        $remainingMilliseconds = [int][Math]::Floor(($started.AddSeconds($FocusedBudgetSeconds) - [DateTime]::UtcNow).TotalMilliseconds)
-        if ($remainingMilliseconds -le 0) {
+        ) + @(Get-FocusedMtpFilterArguments -Filter $FocusedTestFilter)
+        $receipt.testExecutable = $reuse.ExecutablePath
+        $receipt.testArguments = @($testArguments)
+        if ([DateTime]::UtcNow -ge $processDeadline) {
             $receipt.exitCode = 2
             $receipt.reason = "budget-exceeded"
             return $receipt
         }
-        $testRun = Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath -ProcessArguments $testArguments -BudgetMilliseconds $remainingMilliseconds
+        $testRun = Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath -ProcessArguments $testArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath
         $testLogPath = Join-Path $outputDirectory "test.log"
         Write-FocusedLog -Path $testLogPath -Stdout $testRun.Stdout -Stderr $testRun.Stderr
         $receipt.outputLogPath = $testLogPath
@@ -1351,12 +1519,29 @@ function Invoke-FocusedTestMode {
         }
         if ($null -ne $slotLease) {
             try {
-                $slotLease.Stream.Unlock(0, 1)
-                $receipt.leaseReleased = $true
+                if (Test-Path -LiteralPath $slotLease.HeartbeatPath -PathType Leaf) {
+                    Remove-Item -LiteralPath $slotLease.HeartbeatPath -Force -ErrorAction SilentlyContinue
+                }
+                try {
+                    $slotLease.Stream.Unlock(0, 1)
+                }
+                catch {
+                    $receipt.leaseReleaseError = $_.Exception.Message
+                }
+                try {
+                    $slotLease.Stream.Dispose()
+                    $receipt.leaseReleased = $true
+                }
+                catch {
+                    $receipt.leaseReleaseError = $_.Exception.Message
+                }
             }
-            finally {
-                $slotLease.Stream.Dispose()
+            catch {
+                $receipt.leaseReleaseError = $_.Exception.Message
             }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($processTempPath)) {
+            Remove-Item -LiteralPath $processTempPath -Force -Recurse -ErrorAction SilentlyContinue
         }
         if (-not [string]::IsNullOrWhiteSpace($receiptPath)) {
             try {
