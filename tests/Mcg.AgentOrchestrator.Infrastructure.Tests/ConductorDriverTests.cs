@@ -811,6 +811,61 @@ public sealed class ConductorDriverTests
         Assert.Equal("skip-already-merged", secondSkip!.EarlyOutcome?.Kind);
     }
 
+    [Xunit.Fact]
+    public void PreReviewAttempt_FocusedKind_SkipsLandingPreSlot()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var (_, goal) = SoftwareGoal();
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                slotIndex: 0,
+                fileScopes: [],
+                branchHeadSha: "focused-sha",
+                mainHeadSha: null);
+            var preSlotRuns = 0;
+            var focusedRuns = 0;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"),
+                runInline: true,
+                tryRunPreSlot: (_, _) =>
+                {
+                    preSlotRuns++;
+                    return ConductorParallelAcceptanceRunResult.Early(
+                        candidate,
+                        new ConductorAdvanceResult(
+                            goal.Id.Value,
+                            goal.Id.Value[..8],
+                            ConductorAutonomyPolicy.Permissive.Name,
+                            new ConductorAdvanceOutcome.Done(GoalLifecycleState.Verified)));
+                },
+                acquireStableSlotLease: (_, _) => null);
+
+            var decision = coordinator.EvaluateFocusedEvidence(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                "Infrastructure.Tests: FocusedTests",
+                (_, request, _, _) =>
+                {
+                    focusedRuns++;
+                    return PassingPreReviewEvidence(request);
+                });
+
+            Assert.Equal(0, preSlotRuns);
+            Assert.Equal(1, focusedRuns);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+            Assert.NotNull(decision.Run?.FocusedEvidence);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_empty_batch_surfaces_operator_approval_reasons")]
     public void ConductorDriverEmptyBatchSurfacesOperatorApprovalReasons()
     {
@@ -3214,6 +3269,108 @@ public sealed class ConductorDriverTests
             Assert.Equal(1, focusedRuns);
             Assert.Equal(1, dispatches);
             Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void PreReviewEvidence_ProcessDiesAfterRestart_RelaunchesWithoutReceipt()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SoftwareGoal();
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+            {
+                PassVerification(kernel, goal, task);
+            }
+
+            var now = new DateTimeOffset(2026, 8, 3, 19, 0, 0, TimeSpan.Zero);
+            var attemptRoot = Path.Combine(root, "pre-review-evidence-attempts");
+            var launches = 0;
+            var focusedRuns = 0;
+            var dispatches = 0;
+            var startingCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                utcNow: () => now,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ =>
+                {
+                    launches++;
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7301);
+                });
+            var startingDriver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getPreReviewEvidenceContext: _ => FocusedPreReviewContext("restart-sha"),
+                runFocusedEvidence: (_, request) =>
+                {
+                    focusedRuns++;
+                    return PassingPreReviewEvidence(request);
+                },
+                recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                    kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+                dispatchAndStart: _ =>
+                {
+                    dispatches++;
+                    return DispatchStartOutcome.Started();
+                },
+                focusedEvidenceAttemptCoordinator: startingCoordinator);
+
+            var scheduled = startingDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.IsType<ConductorAdvanceOutcome.Held>(scheduled.Outcome);
+            Assert.Equal(1, launches);
+
+            now = now.AddMinutes(1);
+            var restartedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                utcNow: () => now,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ =>
+                {
+                    launches++;
+                    return new ConductorParallelAcceptanceOwnedProcessLaunchResult(7302);
+                },
+                recentHeartbeatGrace: TimeSpan.Zero);
+            var restartedDriver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getPreReviewEvidenceContext: _ => FocusedPreReviewContext("restart-sha"),
+                runFocusedEvidence: (_, request) =>
+                {
+                    focusedRuns++;
+                    return PassingPreReviewEvidence(request);
+                },
+                recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                    kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+                dispatchAndStart: _ =>
+                {
+                    dispatches++;
+                    return DispatchStartOutcome.Started();
+                },
+                focusedEvidenceAttemptCoordinator: restartedCoordinator);
+
+            var recovered = restartedDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(recovered.Outcome);
+            Assert.Contains("did not run (ProcessDied)", held.Reason, StringComparison.Ordinal);
+            Assert.Null(reviewer.PreReviewEvidenceReceipt);
+            Assert.Equal(1, launches);
+            Assert.Equal(0, focusedRuns);
+            Assert.Equal(0, dispatches);
+
+            var relaunched = restartedDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.IsType<ConductorAdvanceOutcome.Held>(relaunched.Outcome);
+            Assert.Equal(2, launches);
+            Assert.Null(reviewer.PreReviewEvidenceReceipt);
         }
         finally
         {

@@ -744,7 +744,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             WriteHeartbeat(attempt, "running");
             heartbeatTimer.Change(_heartbeatInterval, _heartbeatInterval);
-            run = _tryRunPreSlot?.Invoke(candidate, policy);
+            run = string.Equals(attempt.Kind, GateDispatchKind, StringComparison.Ordinal)
+                ? _tryRunPreSlot?.Invoke(candidate, policy)
+                : null;
             if (run is null)
             {
                 run = RunWithAttemptTelemetryContext(

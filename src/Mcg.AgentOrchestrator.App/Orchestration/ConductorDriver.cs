@@ -2286,6 +2286,21 @@ internal sealed class ConductorDriver
             return true;
         }
 
+        if (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun)
+        {
+            _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+            result = MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    fromState,
+                    $"Background pre-review evidence did not run ({attemptDecision.Attempt.Outcome}); " +
+                    $"retry on next conduct tick. attempt={attemptDecision.Attempt.AttemptId}: " +
+                    (attemptDecision.Attempt.Detail ?? "no result artifact was produced")));
+            return true;
+        }
+
         _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
         var evidence = attemptDecision.Run?.FocusedEvidence ?? new FocusedEvidenceRunResult(
             context.FocusedRequest,
