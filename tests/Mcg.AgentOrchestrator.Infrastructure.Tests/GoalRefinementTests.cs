@@ -342,7 +342,7 @@ public sealed class GoalRefinementTests
     }
 
     [Xunit.Fact]
-    public async Task ClarificationBodyPreservesFullTopicKey()
+    public async Task ClarificationBodyUsesPersistedTopicKey()
     {
         var json = """
             {
@@ -357,12 +357,14 @@ public sealed class GoalRefinementTests
 
         var result = await service.RefineAsync(kernel, goalId);
         var clarification = Xunit.Assert.Single(collab.Items);
+        var persistedTopicKey = clarification.CorrelationKey![
+            (clarification.CorrelationKey.LastIndexOf(':') + 1)..];
+        var displayedTopicLine = clarification.Body
+            .Split('\n', StringSplitOptions.TrimEntries)
+            .Single(line => line.StartsWith("Topic key:", StringComparison.Ordinal));
 
         Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
-        Xunit.Assert.Contains(
-            "Topic key: stranded-edits-preservation-mechanism",
-            clarification.Body,
-            StringComparison.Ordinal);
+        Xunit.Assert.Equal($"Topic key: {persistedTopicKey}", displayedTopicLine);
         Xunit.Assert.True(
             DiscordInteractionHandler.BuildAnswerCustomId(clarification.CorrelationKey!).Length <= 100,
             "The persisted correlation key must remain safe for a Discord answer custom id.");

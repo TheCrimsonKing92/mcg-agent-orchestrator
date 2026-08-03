@@ -592,7 +592,7 @@ internal sealed class GoalRefinementService
 
         Question: {fork.Question}
         Fork kind: {fork.Kind}
-        Topic key: {NormalizeTopicKeyForDisplay(fork.TopicKey, fork.Kind, fork.Question)}
+        Topic key: {NormalizeTopicKey(fork.TopicKey, fork.Kind, fork.Question)}
         Blast radius: {fork.BlastRadius}
         Refiner confidence: {fork.RefinerConfidence}
 
