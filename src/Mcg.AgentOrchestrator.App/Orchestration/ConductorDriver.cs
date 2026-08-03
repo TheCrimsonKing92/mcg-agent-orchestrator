@@ -83,6 +83,7 @@ internal sealed class ConductorDriver
         string?> _recordAcceptanceFailure;
     private readonly Action<Goal> _clearAcceptanceFailure;
     private readonly Func<Goal, GoalWorktreeRebaseResult> _rebaseOntoMain;
+    private readonly Func<Goal, LandingEscalationRecheckResult> _recheckPreLandingRebaseConflict;
     private readonly Func<Goal, ConductorAutonomyPolicy, LandingResult> _land;
     private readonly Action<Goal, LandingResult> _afterSuccessfulLanding;
     private readonly Action<Goal> _record;
@@ -556,6 +557,35 @@ internal sealed class ConductorDriver
         };
 
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
+        _recheckPreLandingRebaseConflict = goal =>
+        {
+            var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
+            if (worktreePath is null)
+            {
+                return new LandingEscalationRecheckResult(
+                    ConditionResolved: false,
+                    Status: "MissingWorktree",
+                    Observation: $"Goal branch {goal.Id.Value[..8]} has no registered worktree.",
+                    EvidenceFingerprint: "worktree=missing");
+            }
+
+            var evidence = ReadLandingRecheckEvidence(worktreePath);
+            var mergeTree = new WorkerGitContext().ReadReviewerMergeTreeStatus(
+                worktreePath,
+                evidence.MainHead,
+                evidence.BranchHead);
+            return mergeTree.IsClean
+                ? new LandingEscalationRecheckResult(
+                    ConditionResolved: true,
+                    Status: "MergeTreeClean",
+                    Observation: "Read-only merge-tree check found no conflict with main.",
+                    EvidenceFingerprint: evidence.Fingerprint)
+                : new LandingEscalationRecheckResult(
+                    ConditionResolved: false,
+                    Status: "MergeTreeConflict",
+                    Observation: $"Read-only merge-tree check still conflicts with main: {string.Join(", ", mergeTree.ConflictPaths)}",
+                    EvidenceFingerprint: evidence.Fingerprint);
+        };
 
         _land = (goal, policy) =>
         {
@@ -732,7 +762,8 @@ internal sealed class ConductorDriver
         Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
         Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null,
         Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null,
-        ConductorParallelAcceptanceAttemptCoordinator? focusedEvidenceAttemptCoordinator = null)
+        ConductorParallelAcceptanceAttemptCoordinator? focusedEvidenceAttemptCoordinator = null,
+        Func<Goal, LandingEscalationRecheckResult>? recheckPreLandingRebaseConflict = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -784,6 +815,12 @@ internal sealed class ConductorDriver
                     recordAcceptanceFailure(goal, checks, branch, main)));
         _clearAcceptanceFailure = clearAcceptanceFailure ?? (_ => { });
         _rebaseOntoMain = rebaseOntoMain;
+        _recheckPreLandingRebaseConflict = recheckPreLandingRebaseConflict ?? (_ =>
+            new LandingEscalationRecheckResult(
+                ConditionResolved: false,
+                Status: "NotConfigured",
+                Observation: "Landing escalation conflict recheck was not configured.",
+                EvidenceFingerprint: "recheck=not-configured"));
         _land = land;
         _afterSuccessfulLanding = afterSuccessfulLanding ?? ((_, _) => { });
         _record = record;
@@ -3149,6 +3186,27 @@ internal sealed class ConductorDriver
         return result.Succeeded ? result.Output.Trim() : null;
     }
 
+    private static (string BranchHead, string MainHead, string Fingerprint) ReadLandingRecheckEvidence(
+        string worktreePath)
+    {
+        var branchHead = ReadRequiredGitCommit(worktreePath, "HEAD");
+        var mainHead = ReadRequiredGitCommit(worktreePath, "main^{commit}");
+        return (branchHead, mainHead, $"branch={branchHead};main={mainHead}");
+    }
+
+    private static string ReadRequiredGitCommit(string worktreePath, string reference)
+    {
+        var result = GitCli.Run(worktreePath, 5_000, "rev-parse", "--verify", reference);
+        var commit = result.Output.Trim();
+        if (!result.Succeeded || !CandidateShaPattern.IsMatch(commit))
+        {
+            throw new InvalidOperationException(
+                $"Landing escalation recheck could not resolve git reference '{reference}'.");
+        }
+
+        return commit.ToLowerInvariant();
+    }
+
     private string? TryResolveAcceptanceBranchHead(Goal goal)
     {
         if (_executionDirectory is null)
@@ -3271,6 +3329,9 @@ internal sealed class ConductorDriver
         // acceptance finished. Re-check the branch immediately before the serialized merge.
         return RebaseOrRetire(goal, goalPrefix, policy, "pre-merge", applySideEffects: true, out _);
     }
+
+    internal LandingEscalationRecheckResult RecheckPreLandingRebaseConflict(Goal goal)
+        => _recheckPreLandingRebaseConflict(goal);
 
     private ConductorAdvanceResult? RebaseOrRetire(
         Goal goal,
@@ -3663,6 +3724,12 @@ internal sealed class ConductorDriver
             : $"{criterion.Name}: {summary.Trim()}";
     }
 }
+
+internal sealed record LandingEscalationRecheckResult(
+    bool ConditionResolved,
+    string Status,
+    string Observation,
+    string EvidenceFingerprint);
 
 internal sealed record ConductorLandingReceipt(
     string GoalId,
