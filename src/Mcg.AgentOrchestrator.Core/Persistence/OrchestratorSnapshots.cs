@@ -201,7 +201,11 @@ public sealed record HumanInputRequestSnapshot(
     bool IsCompleted = false,
     string? Answer = null,
     DateTimeOffset? AnsweredAt = null,
-    bool WasDismissed = false);
+    bool WasDismissed = false,
+    string? QuestionFingerprint = null,
+    string? BlockerFingerprint = null,
+    int SuppressionCount = 0,
+    string? SupersededByRequestId = null);
 
 public static class VerificationTextBounds
 {

@@ -922,63 +922,193 @@ public sealed partial class AgentOrchestratorKernel
         string? suggestedDefaultAnswer = null,
         string? resumeCommand = null)
     {
-        var goal = GetGoal(goalId);
-        var id = HumanInputRequestId.New();
-        var request = new HumanInputRequest(
-            id,
-            goal.Id,
+        return RequestHumanInputDeduplicated(
+            goalId,
             taskId,
             question,
-            _clock.UtcNow,
             kind,
             isAutoDefaultable,
             isDismissible,
             isAnswerRequired,
             isExternallyBlocked,
             suggestedDefaultAnswer,
-            resumeCommand ?? HumanInputRequest.BuildDefaultResumeCommand(id));
-        _humanInputRequests.Add(request.Id, request);
+            resumeCommand).Request;
+    }
 
+    public HumanInputRequestCreationResult RequestHumanInputDeduplicated(
+        GoalId goalId,
+        TaskId? taskId,
+        string question,
+        HumanWaitKind kind = HumanWaitKind.SpecClarification,
+        bool? isAutoDefaultable = null,
+        bool? isDismissible = null,
+        bool isAnswerRequired = true,
+        bool? isExternallyBlocked = null,
+        string? suggestedDefaultAnswer = null,
+        string? resumeCommand = null,
+        string? questionFingerprint = null,
+        string? blockerFingerprint = null)
+    {
+        var goal = GetGoal(goalId);
+        if (taskId is not null)
+        {
+            goal.FindTask(taskId);
+        }
+
+        var effectiveQuestionFingerprint = string.IsNullOrWhiteSpace(questionFingerprint)
+            ? HumanInputRequest.BuildQuestionFingerprint(question)
+            : questionFingerprint.Trim();
+
+        lock (_humanInputRequestLock)
+        {
+            var matches = _humanInputRequests.Values
+                .Where(candidate =>
+                    candidate.GoalId == goalId &&
+                    candidate.TaskId == taskId &&
+                    string.Equals(candidate.QuestionFingerprint, effectiveQuestionFingerprint, StringComparison.Ordinal))
+                .OrderBy(candidate => candidate.RequestedAt)
+                .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
+                .ToList();
+            var open = matches.FirstOrDefault(candidate => !candidate.IsCompleted);
+            if (open is not null)
+            {
+                open.IncrementSuppressionCount();
+                HoldTaskForExistingHumanInput(goal, taskId);
+                AppendDuplicateHumanInputSuppressed(goal, taskId, open, answered: false);
+                return new HumanInputRequestCreationResult(open, WasReused: true, WasSuppressedByAnswer: false);
+            }
+
+            if (!string.IsNullOrWhiteSpace(blockerFingerprint))
+            {
+                var answered = matches.FirstOrDefault(candidate =>
+                    candidate.IsCompleted &&
+                    !candidate.WasDismissed &&
+                    !string.IsNullOrWhiteSpace(candidate.Answer) &&
+                    string.Equals(candidate.BlockerFingerprint, blockerFingerprint, StringComparison.Ordinal));
+                if (answered is not null)
+                {
+                    answered.IncrementSuppressionCount();
+                    RestoreTaskAfterSuppressedAnsweredInput(goal, taskId);
+                    AppendDuplicateHumanInputSuppressed(goal, taskId, answered, answered: true);
+                    return new HumanInputRequestCreationResult(answered, WasReused: false, WasSuppressedByAnswer: true);
+                }
+            }
+
+            var id = HumanInputRequestId.New();
+            var request = new HumanInputRequest(
+                id,
+                goal.Id,
+                taskId,
+                question,
+                _clock.UtcNow,
+                kind,
+                isAutoDefaultable,
+                isDismissible,
+                isAnswerRequired,
+                isExternallyBlocked,
+                suggestedDefaultAnswer,
+                resumeCommand ?? HumanInputRequest.BuildDefaultResumeCommand(id),
+                effectiveQuestionFingerprint,
+                blockerFingerprint);
+            _humanInputRequests.Add(request.Id, request);
+
+            HoldTaskForExistingHumanInput(goal, taskId);
+            Append(goal, taskId, ProgressKind.HumanInputRequested, question);
+            return new HumanInputRequestCreationResult(request, WasReused: false, WasSuppressedByAnswer: false);
+        }
+    }
+
+    private void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId)
+    {
         if (taskId is not null)
         {
             goal.FindTask(taskId).SetStatus(WorkTaskStatus.WaitingForHuman);
         }
 
         goal.SetStatus(GoalStatus.WaitingForHuman);
-        Append(goal, taskId, ProgressKind.HumanInputRequested, question);
-        return request;
     }
 
-    public void SubmitHumanInput(HumanInputRequestId requestId, string answer)
+    private void RestoreTaskAfterSuppressedAnsweredInput(Goal goal, TaskId? taskId)
     {
-        if (!_humanInputRequests.TryGetValue(requestId, out var request))
+        if (taskId is not null)
         {
-            throw new KeyNotFoundException($"Human input request '{requestId}' was not found.");
-        }
-
-        if (request.IsCompleted)
-        {
-            throw new InvalidOperationException($"Human input request '{requestId}' has already been answered.");
-        }
-
-        var goal = GetGoal(request.GoalId);
-        request.Complete(answer, _clock.UtcNow);
-
-        if (request.TaskId is not null)
-        {
-            var task = goal.FindTask(request.TaskId);
-            if (!_humanInputRequests.Values.Any(candidate =>
-                    candidate.GoalId == goal.Id &&
-                    candidate.TaskId == task.Id &&
-                    !candidate.IsCompleted))
+            var task = goal.FindTask(taskId);
+            if (task.Status != WorkTaskStatus.Completed)
             {
-                RestoreTaskAfterHumanInput(goal, task);
+                task.SetStatus(WorkTaskStatus.Assigned);
             }
         }
 
         RefreshGoalStatus(goal);
+    }
 
-        Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer);
+    private void AppendDuplicateHumanInputSuppressed(
+        Goal goal,
+        TaskId? taskId,
+        HumanInputRequest request,
+        bool answered)
+    {
+        var thresholdReceipt = request.SuppressionCount == 3
+            ? "; repeated suppression threshold reached"
+            : string.Empty;
+        Append(
+            goal,
+            taskId,
+            ProgressKind.DuplicateHumanInputSuppressed,
+            $"kind=duplicate-human-input-suppressed request={request.Id.Value[..8]} " +
+            $"count={request.SuppressionCount} state={(answered ? "answered" : "open")}{thresholdReceipt}");
+    }
+
+    public void SubmitHumanInput(HumanInputRequestId requestId, string answer)
+    {
+        lock (_humanInputRequestLock)
+        {
+            if (!_humanInputRequests.TryGetValue(requestId, out var request))
+            {
+                throw new KeyNotFoundException($"Human input request '{requestId}' was not found.");
+            }
+
+            if (request.IsCompleted)
+            {
+                throw new InvalidOperationException($"Human input request '{requestId}' has already been answered.");
+            }
+
+            var goal = GetGoal(request.GoalId);
+            var answeredAt = _clock.UtcNow;
+            request.Complete(answer, answeredAt);
+            var siblings = _humanInputRequests.Values
+                .Where(candidate =>
+                    candidate.Id != request.Id &&
+                    candidate.GoalId == request.GoalId &&
+                    candidate.TaskId == request.TaskId &&
+                    !candidate.IsCompleted &&
+                    string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
+                .OrderBy(candidate => candidate.RequestedAt)
+                .ToList();
+            foreach (var sibling in siblings)
+            {
+                sibling.CompleteAsSuperseded(answer, answeredAt, request.Id);
+            }
+
+            if (request.TaskId is not null)
+            {
+                var task = goal.FindTask(request.TaskId);
+                if (!_humanInputRequests.Values.Any(candidate =>
+                        candidate.GoalId == goal.Id &&
+                        candidate.TaskId == task.Id &&
+                        !candidate.IsCompleted))
+                {
+                    RestoreTaskAfterHumanInput(goal, task);
+                }
+            }
+
+            RefreshGoalStatus(goal);
+
+            var siblingReceipt = siblings.Count == 0
+                ? string.Empty
+                : $" Resolved {siblings.Count} sibling duplicate request(s).";
+            Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer + siblingReceipt);
+        }
     }
 
     private void RestoreTaskAfterHumanInput(Goal goal, TaskSpec task)
@@ -1261,5 +1391,13 @@ public sealed partial class AgentOrchestratorKernel
             .Where(request => request.GoalId == goalId && !request.IsCompleted)
             .OrderBy(request => request.RequestedAt)
             .ToList();
+    }
+
+    public HumanInputRequestCounts GetHumanInputRequestCounts(GoalId goalId, TaskId? taskId)
+    {
+        var requests = _humanInputRequests.Values
+            .Where(request => request.GoalId == goalId && request.TaskId == taskId)
+            .ToList();
+        return new HumanInputRequestCounts(requests.Count, requests.Count(request => !request.IsCompleted));
     }
 }

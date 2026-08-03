@@ -594,7 +594,9 @@ public static HumanInputWorkItemDto ToHumanInputWorkItemDto(Goal goal, HumanInpu
         goal.Id.Value,
         item.ResumeCommand,
         TimelineText(item.SuggestedAction),
-        item.ResumeCommand);
+        item.ResumeCommand,
+        item.TotalRequestCount,
+        item.OpenRequestCount);
 }
 
 public static NextActionsDto ToNextActionsDto(
@@ -749,6 +751,7 @@ public static NextActionControlDto? ToNextActionControlDto(
 public static HumanInputDto ToHumanInputDto(AgentOrchestratorKernel kernel, HumanInputRequest request)
 {
     var goal = kernel.GetGoal(request.GoalId);
+    var counts = kernel.GetHumanInputRequestCounts(request.GoalId, request.TaskId);
     int? taskNumber = null;
     if (request.TaskId is not null)
     {
@@ -772,7 +775,9 @@ public static HumanInputDto ToHumanInputDto(AgentOrchestratorKernel kernel, Huma
         request.ResumeCommand,
         request.IsCompleted,
         request.Answer is null ? null : SummaryText(request.Answer),
-        request.AnsweredAt);
+        request.AnsweredAt,
+        counts.Total,
+        counts.Open);
 }
 
 private static string SummaryText(string? text) =>

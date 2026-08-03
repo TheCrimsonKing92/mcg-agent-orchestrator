@@ -118,12 +118,23 @@ public sealed partial class AgentOrchestratorKernel
             ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardError);
         if (humanInputQuestion is not null)
         {
-            if (WorkerResultBlockers.TryFindBlocker(verification, out var accompanyingBlocker))
+            var rawQuestion = humanInputQuestion;
+            string? accompanyingBlocker = null;
+            if (WorkerResultBlockers.TryFindBlocker(verification, out accompanyingBlocker))
             {
                 humanInputQuestion += $"{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {accompanyingBlocker}";
             }
 
-            RequestHumanInput(goal.Id, task.Id, humanInputQuestion);
+            RequestHumanInputDeduplicated(
+                goal.Id,
+                task.Id,
+                humanInputQuestion,
+                questionFingerprint: HumanInputRequest.BuildQuestionFingerprint(rawQuestion),
+                blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                    task.Id,
+                    task.RequiredRole,
+                    rawQuestion,
+                    accompanyingBlocker));
             return;
         }
 
@@ -133,11 +144,18 @@ public sealed partial class AgentOrchestratorKernel
             task.RequiredRole is AgentRole.Planner or AgentRole.Researcher &&
             WorkerResultBlockers.TryFindPremiseInvalidEvidence(verification, out var premiseEvidence))
         {
-            RequestHumanInput(
+            var question =
+                $"{task.RequiredRole} reported premise-invalid: {premiseEvidence}. " +
+                "Clarify, supersede, or abandon the goal before Developer dispatch.";
+            RequestHumanInputDeduplicated(
                 goal.Id,
                 task.Id,
-                $"{task.RequiredRole} reported premise-invalid: {premiseEvidence}. " +
-                "Clarify, supersede, or abandon the goal before Developer dispatch.");
+                question,
+                blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                    task.Id,
+                    task.RequiredRole,
+                    question,
+                    premiseEvidence));
             return;
         }
 

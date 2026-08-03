@@ -47,4 +47,6 @@ public sealed record HumanInputWorkItem(
     bool IsExternallyBlocked,
     long AgeSeconds,
     string ResumeCommand,
-    string SuggestedAction);
+    string SuggestedAction,
+    int TotalRequestCount = 0,
+    int OpenRequestCount = 0);

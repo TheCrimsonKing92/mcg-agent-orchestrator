@@ -832,10 +832,15 @@ public sealed class DashboardRenderingTests
         Assert.False(dto.IsAutoDefaultable);
         Assert.False(dto.IsDismissible);
         Assert.Equal("provider auth resume", dto.ResumeCommand);
+        Assert.Equal(1, dto.TotalRequestCount);
+        Assert.Equal(1, dto.OpenRequestCount);
         var item = worklist.Items.Single();
         Assert.Equal(request.Id.Value, item.WaitId);
         Assert.Equal(goal.Id.Value, item.GoalId);
         Assert.Equal("provider auth resume", item.ResumeCommand);
+        Assert.Equal(1, item.TotalRequestCount);
+        Assert.Equal(1, item.OpenRequestCount);
+        Assert.Contains("Requests: 1 open / 1 total", item.SuggestedAction, StringComparison.Ordinal);
         Assert.Contains("ProviderAuth", html, StringComparison.Ordinal);
         Assert.Contains("externally-blocked=True", html, StringComparison.Ordinal);
         Assert.Contains("provider auth resume", html, StringComparison.Ordinal);

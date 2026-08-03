@@ -10,6 +10,26 @@ using System.Text.Json;
 
 public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
 {
+    [Xunit.Fact]
+    public void Cli_pending_renders_open_and_total_request_counts()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Show request counts",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var answered = kernel.RequestHumanInput(goal.Id, task.Id, "Which branch?");
+        kernel.SubmitHumanInput(answered.Id, "Use main.");
+        kernel.RequestHumanInput(goal.Id, task.Id, "Which deployment target?");
+
+        var output = ExecuteCliAndCapture(["pending"], kernel, workspace);
+
+        Xunit.Assert.Contains("requests=1 open / 2 total", output, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_attention_normalizes_one_shot_subcommands")]
     public void CliAttentionNormalizesOneShotSubcommands()
     {

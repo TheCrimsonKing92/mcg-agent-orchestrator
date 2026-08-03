@@ -183,6 +183,7 @@ public sealed partial class AgentOrchestratorKernel
             task = goal.FindTask(request.TaskId);
         }
 
+        var counts = GetHumanInputRequestCounts(goal.Id, request.TaskId);
         return new HumanInputWorkItem(
             request.Id,
             request.TaskId,
@@ -198,19 +199,24 @@ public sealed partial class AgentOrchestratorKernel
             request.IsExternallyBlocked,
             Math.Max(0, (long)(_clock.UtcNow - request.CreatedAt).TotalSeconds),
             request.ResumeCommand,
-            BuildHumanWaitSuggestedAction(request));
+            BuildHumanWaitSuggestedAction(request, counts),
+            counts.Total,
+            counts.Open);
     }
 
-    private static string BuildHumanWaitSuggestedAction(HumanInputRequest request)
+    private static string BuildHumanWaitSuggestedAction(
+        HumanInputRequest request,
+        HumanInputRequestCounts counts)
     {
+        var countText = $"Requests: {counts.Open} open / {counts.Total} total. ";
         if (request.IsExternallyBlocked)
         {
-            return $"{request.Kind} is externally blocked; complete the external prerequisite, then resume with `{request.ResumeCommand}`.";
+            return $"{countText}{request.Kind} is externally blocked; complete the external prerequisite, then resume with `{request.ResumeCommand}`.";
         }
 
         return request.IsAnswerRequired
-            ? $"Answer required for {request.Kind}. Resume with `{request.ResumeCommand}`."
-            : $"{request.Kind} can be dismissed or resumed with `{request.ResumeCommand}`.";
+            ? $"{countText}Answer required for {request.Kind}. Resume with `{request.ResumeCommand}`."
+            : $"{countText}{request.Kind} can be dismissed or resumed with `{request.ResumeCommand}`.";
     }
 
     private static ProcessBatchPlanItem BuildProcessBatchPlanItem(TaskSpec task, ProcessBatchActionKind action)

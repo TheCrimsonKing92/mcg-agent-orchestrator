@@ -101,11 +101,13 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var request in GetPendingHumanInput(goalId).OrderBy(request => request.RequestedAt))
         {
+            var counts = GetHumanInputRequestCounts(goalId, request.TaskId);
             items.Add(new NextActionItem(
                 NextActionKind.AnswerHumanInput,
                 request.TaskId,
                 request.Id,
-                $"{request.Kind} wait age={FormatAge(_clock.UtcNow - request.CreatedAt)}: {request.Question}. Resume: {request.ResumeCommand}",
+                $"{request.Kind} wait age={FormatAge(_clock.UtcNow - request.CreatedAt)}: {request.Question}. " +
+                $"Requests: {counts.Open} open / {counts.Total} total. Resume: {request.ResumeCommand}",
                 request.ResumeCommand));
         }
 

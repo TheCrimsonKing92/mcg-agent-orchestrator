@@ -1,3 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+
 namespace Mcg.AgentOrchestrator.Core;
 
 public sealed class HumanInputRequest
@@ -14,7 +18,11 @@ public sealed class HumanInputRequest
         bool isAnswerRequired = true,
         bool? isExternallyBlocked = null,
         string? suggestedDefaultAnswer = null,
-        string? resumeCommand = null)
+        string? resumeCommand = null,
+        string? questionFingerprint = null,
+        string? blockerFingerprint = null,
+        int suppressionCount = 0,
+        HumanInputRequestId? supersededByRequestId = null)
     {
         Id = id;
         GoalId = goalId;
@@ -34,6 +42,12 @@ public sealed class HumanInputRequest
         ResumeCommand = string.IsNullOrWhiteSpace(resumeCommand)
             ? BuildDefaultResumeCommand(id)
             : resumeCommand.Trim();
+        QuestionFingerprint = string.IsNullOrWhiteSpace(questionFingerprint)
+            ? BuildQuestionFingerprint(Question)
+            : questionFingerprint.Trim();
+        BlockerFingerprint = string.IsNullOrWhiteSpace(blockerFingerprint) ? null : blockerFingerprint.Trim();
+        SuppressionCount = Math.Max(0, suppressionCount);
+        SupersededByRequestId = supersededByRequestId;
     }
 
     public HumanInputRequestId Id { get; }
@@ -61,6 +75,14 @@ public sealed class HumanInputRequest
     public string? SuggestedDefaultAnswer { get; }
 
     public string ResumeCommand { get; }
+
+    public string QuestionFingerprint { get; }
+
+    public string? BlockerFingerprint { get; }
+
+    public int SuppressionCount { get; private set; }
+
+    public HumanInputRequestId? SupersededByRequestId { get; private set; }
 
     public bool IsCompleted { get; private set; }
 
@@ -91,6 +113,17 @@ public sealed class HumanInputRequest
         WasDismissed = true;
     }
 
+    internal void IncrementSuppressionCount() => SuppressionCount++;
+
+    internal void CompleteAsSuperseded(
+        string answer,
+        DateTimeOffset answeredAt,
+        HumanInputRequestId answeredRequestId)
+    {
+        Complete(answer, answeredAt);
+        SupersededByRequestId = answeredRequestId;
+    }
+
     internal HumanInputRequestSnapshot ToSnapshot()
     {
         return new HumanInputRequestSnapshot(
@@ -109,7 +142,11 @@ public sealed class HumanInputRequest
             IsCompleted,
             Answer,
             AnsweredAt,
-            WasDismissed);
+            WasDismissed,
+            QuestionFingerprint,
+            BlockerFingerprint,
+            SuppressionCount,
+            SupersededByRequestId?.Value);
     }
 
     internal static HumanInputRequest FromSnapshot(HumanInputRequestSnapshot snapshot)
@@ -126,7 +163,11 @@ public sealed class HumanInputRequest
             snapshot.IsAnswerRequired,
             snapshot.IsExternallyBlocked,
             snapshot.SuggestedDefaultAnswer,
-            snapshot.ResumeCommand);
+            snapshot.ResumeCommand,
+            snapshot.QuestionFingerprint,
+            snapshot.BlockerFingerprint,
+            snapshot.SuppressionCount,
+            snapshot.SupersededByRequestId is null ? null : new HumanInputRequestId(snapshot.SupersededByRequestId));
 
         if (snapshot.IsCompleted)
         {
@@ -144,4 +185,37 @@ public sealed class HumanInputRequest
     }
 
     public static string BuildDefaultResumeCommand(HumanInputRequestId id) => $"answer {id.Value[..8]} <answer>";
+
+    public static string BuildQuestionFingerprint(string question) => BuildFingerprint(Normalize(question));
+
+    public static string BuildWorkerResultBlockerFingerprint(
+        TaskId taskId,
+        AgentRole role,
+        string question,
+        string? blocker)
+    {
+        ArgumentNullException.ThrowIfNull(taskId);
+        return BuildFingerprint(string.Join(
+            "\n",
+            taskId.Value,
+            role.ToString(),
+            Normalize(question),
+            Normalize(blocker ?? string.Empty)));
+    }
+
+    private static string Normalize(string value) =>
+        Regex.Replace(value.Trim(), @"\s+", " ").ToLowerInvariant();
+
+    private static string BuildFingerprint(string normalizedValue) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedValue))).ToLowerInvariant();
 }
+
+public sealed record HumanInputRequestCreationResult(
+    HumanInputRequest Request,
+    bool WasReused,
+    bool WasSuppressedByAnswer)
+{
+    public bool WasCreated => !WasReused && !WasSuppressedByAnswer;
+}
+
+public sealed record HumanInputRequestCounts(int Total, int Open);

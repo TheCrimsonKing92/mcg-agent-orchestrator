@@ -26,7 +26,9 @@ internal sealed record HumanInputDto(
     string ResumeCommand,
     bool IsCompleted,
     string? Answer,
-    DateTimeOffset? AnsweredAt);
+    DateTimeOffset? AnsweredAt,
+    int TotalRequestCount,
+    int OpenRequestCount);
 
 internal sealed record HumanInputWorklistDto(
     string GoalId,
@@ -54,7 +56,9 @@ internal sealed record HumanInputWorkItemDto(
     string GoalId,
     string ResumeCommand,
     string SuggestedAction,
-    string SuggestedCommand);
+    string SuggestedCommand,
+    int TotalRequestCount,
+    int OpenRequestCount);
 
 internal sealed record MonitorDto(
     string GoalId,

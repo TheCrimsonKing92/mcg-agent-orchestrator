@@ -1563,6 +1563,10 @@ public sealed class DispatchExecutionTests
         Assert.Equal(WorkTaskStatus.WaitingForHuman, developer.Status);
         Assert.Contains("Which supported behavior", request.Question, StringComparison.Ordinal);
         Assert.Contains("additional product blocker", request.Question, StringComparison.Ordinal);
+        Assert.Equal(
+            HumanInputRequest.BuildQuestionFingerprint("Which supported behavior should be authoritative?"),
+            request.QuestionFingerprint);
+        Assert.NotNull(request.BlockerFingerprint);
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == developer.Id && evt.Kind == ProgressKind.TaskFailed);
     }

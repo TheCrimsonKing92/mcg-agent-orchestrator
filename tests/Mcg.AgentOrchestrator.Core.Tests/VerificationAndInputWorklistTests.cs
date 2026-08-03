@@ -104,6 +104,9 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(1, blocked.PendingHumanInputCount);
     Assert.Contains(blocked.Blockers, item => item.Kind == GoalAcceptanceBlockerKind.PendingHumanInput && item.TaskId == needsInput.Id);
     Assert.Contains(blocked.Blockers, item => item.HumanInputRequestId == request.Id);
+    Assert.Contains(blocked.Blockers, item =>
+        item.HumanInputRequestId == request.Id &&
+        item.Message.Contains("Requests: 1 open / 1 total", StringComparison.Ordinal));
     Assert.Contains(blocked.Blockers, item => item.Kind == GoalAcceptanceBlockerKind.VerificationMissing && item.TaskId == missing.Id);
     Assert.Contains(blocked.Blockers, item => item.Kind == GoalAcceptanceBlockerKind.VerificationFailed && item.TaskId == failed.Id);
     Assert.Contains(blocked.Blockers, item => item.Kind == GoalAcceptanceBlockerKind.VerificationNotReady && item.TaskId == needsInput.Id);
@@ -709,5 +712,170 @@ public sealed class VerificationAndInputWorklistTests
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
 }
+
+    [Xunit.Fact]
+    public void RequestHumanInput_same_normalized_question_reuses_open_request()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Deduplicate human input",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+
+        var first = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Authorize expanding scope?",
+            blockerFingerprint: "same-blocker");
+        var second = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "  AUTHORIZE   expanding\tSCOPE?  ",
+            blockerFingerprint: "changed-blocker");
+
+        Assert.True(first.WasCreated);
+        Assert.True(second.WasReused);
+        Assert.Equal(first.Request.Id, second.Request.Id);
+        Assert.Equal(new HumanInputRequestCounts(1, 1), kernel.GetHumanInputRequestCounts(goal.Id, task.Id));
+        Assert.Equal(1, first.Request.SuppressionCount);
+        Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.HumanInputRequested));
+        Assert.Contains(goal.Timeline, item =>
+            item.Kind == ProgressKind.DuplicateHumanInputSuppressed &&
+            item.Message.Contains(first.Request.Id.Value[..8], StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task RequestHumanInput_concurrent_matches_persist_one_id()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Serialize human input",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        using var startGate = new ManualResetEventSlim(false);
+
+        var attempts = Enumerable.Range(0, 2)
+            .Select(_ => Task.Run(() =>
+            {
+                startGate.Wait();
+                return kernel.RequestHumanInputDeduplicated(
+                    goal.Id,
+                    task.Id,
+                    "Choose the integration scope.",
+                    blockerFingerprint: "same-blocker");
+            }))
+            .ToArray();
+        startGate.Set();
+
+        var results = await Task.WhenAll(attempts);
+
+        Assert.Single(results.Select(result => result.Request.Id).Distinct());
+        Assert.Equal(new HumanInputRequestCounts(1, 1), kernel.GetHumanInputRequestCounts(goal.Id, task.Id));
+        Assert.Equal(1, results.Count(result => result.WasCreated));
+        Assert.Equal(1, results.Count(result => result.WasReused));
+    }
+
+    [Xunit.Fact]
+    public void Answered_matching_blocker_is_suppressed_and_delivered_in_brief()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Reuse operator decision",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        var fingerprint = HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+            task.Id,
+            task.RequiredRole,
+            "Expand scope?",
+            "exact-blocker - production hook is outside scope");
+        var first = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: fingerprint);
+        kernel.SubmitHumanInput(first.Request.Id, "Authorize the production hook.");
+
+        var repeated = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            " expand   SCOPE? ",
+            blockerFingerprint: fingerprint);
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+        Assert.True(repeated.WasSuppressedByAnswer);
+        Assert.Equal(first.Request.Id, repeated.Request.Id);
+        Assert.Equal(new HumanInputRequestCounts(1, 0), kernel.GetHumanInputRequestCounts(goal.Id, task.Id));
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.NotEqual(GoalStatus.WaitingForHuman, goal.Status);
+        Assert.Contains("## Resolved Human Input", brief, StringComparison.Ordinal);
+        Assert.Contains("Authorize the production hook.", brief, StringComparison.Ordinal);
+
+        var changed = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Use a different deployment target?",
+            blockerFingerprint: "materially-different-blocker");
+        Assert.True(changed.WasCreated);
+        Assert.NotEqual(first.Request.Id, changed.Request.Id);
+    }
+
+    [Xunit.Fact]
+    public void SubmitHumanInput_resolves_historical_matching_siblings()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Resolve duplicate waits",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        var original = kernel.RequestHumanInput(goal.Id, task.Id, "Which branch?");
+        var snapshot = kernel.ExportSnapshot();
+        var firstSnapshot = snapshot.HumanInputRequests.Single();
+        var duplicateId = HumanInputRequestId.New();
+        var duplicate = firstSnapshot with
+        {
+            Id = duplicateId.Value,
+            Question = "  WHICH   branch? ",
+            ResumeCommand = HumanInputRequest.BuildDefaultResumeCommand(duplicateId)
+        };
+        var restored = AgentOrchestratorKernel.FromSnapshot(
+            snapshot with { HumanInputRequests = [firstSnapshot, duplicate] },
+            clock);
+
+        restored.SubmitHumanInput(original.Id, "Use main.");
+
+        var requests = restored.HumanInputRequests.OrderBy(item => item.Id.Value).ToList();
+        Assert.Equal(2, requests.Count);
+        Assert.All(requests, request => Assert.True(request.IsCompleted));
+        Assert.Equal(original.Id, restored.GetHumanInputRequest(duplicateId).SupersededByRequestId);
+        Assert.Equal("Use main.", restored.GetHumanInputRequest(duplicateId).Answer);
+        Assert.Empty(restored.GetPendingHumanInput(goal.Id));
+    }
+
+    [Xunit.Fact]
+    public void RequestHumanInput_five_identical_attempts_keep_one_request()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Replay repeated dispatch blocker",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        var ids = Enumerable.Range(0, 5)
+            .Select(_ => kernel.RequestHumanInputDeduplicated(
+                goal.Id,
+                task.Id,
+                "Authorize expanding scope to production hooks?",
+                blockerFingerprint: "unchanged-worker-result").Request.Id)
+            .ToList();
+
+        Assert.Single(ids.Distinct());
+        Assert.Equal(new HumanInputRequestCounts(1, 1), kernel.GetHumanInputRequestCounts(goal.Id, task.Id));
+        Assert.Equal(4, kernel.HumanInputRequests.Single().SuppressionCount);
+    }
 }
 
