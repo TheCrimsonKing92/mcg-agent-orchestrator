@@ -36,6 +36,10 @@ Motivating incidents: goal `6987f4eb` stabilized the flaky ProgressiveReviewStee
 
 **Enforcement (the point of this section — prevention, not cleanup):** these rules only hold if they are checked mechanically. Add a lint/analyzer that fails the build on: `Process.Start`/`Process.Kill`/`Process.GetProcesses`/`Process.GetProcessById` used directly in test code, `Thread.Sleep`/`Task.Delay` used as synchronization, assertions over `Stopwatch`/`DateTime.Now`/`DateTimeOffset.UtcNow`, and test classes touching `GitCli` or a real DB without an explicit serial-collection marker or documented isolation. For (k), the check is cheap enough to write first: a test that reflects over the test assemblies and fails on any method identifier longer than 80 characters, on a `DisplayName` that collapses to its own method name, and on a `DisplayName` that repeats its declaring class. Ratchet it with a frozen baseline of today's outliers that may only shrink, so the rule binds on new tests immediately instead of waiting for a full rename. Until that analyzer exists, the Reviewer checklist below is the enforcement.
 
+## Cross-Tick Conductor Tests
+
+Use the held-attempt cross-tick fixture only for invariants that are cross-tick by nature: counters, markers, live attempts, deferral bookkeeping, and requeue state that must survive a tick boundary. It is never for convenience and never a substitute for a narrower single-tick unit test. Every such test must carry the `CrossTick` category and a 30-second timeout as a hang detector; assert ordering and state, never elapsed time. `ParallelAcceptanceFairness_LiveOldest_AllowsDeclaredCapacityAcrossTicks` is the worked example. Follow-on coverage for post-loop-stop auto-requeue (`0b81147a`), recovery-marker clearing, stale-dispatch escalation recovery, and the max-duration handoff/rebuild race belongs with each corresponding fix rather than in this harness slice.
+
 ## Reviewer Checklist
 
 - Reviewers must check new and changed tests against the `test-design-discipline` guidance before judging residual risk and acceptance readiness.

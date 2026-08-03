@@ -99,6 +99,142 @@ internal delegate ConductorParallelAcceptanceRunResult? ConductorParallelAccepta
     ConductorParallelAcceptanceCandidate candidate,
     ConductorAutonomyPolicy policy);
 
+internal sealed class ConductorParallelAcceptanceAttemptCompletionGateViolationException(string message)
+    : InvalidOperationException(message);
+
+internal sealed class ConductorParallelAcceptanceAttemptCompletionGateForTests
+{
+    internal const int Capacity = 2;
+
+    private readonly object _gate = new();
+    private readonly Dictionary<string, HeldAttempt> _heldAttempts = new(StringComparer.Ordinal);
+
+    internal ConductorParallelAcceptanceAttemptCompletionGateForTests()
+    {
+        if (Capacity != ConductorBatchLoop.DefaultParallelAcceptanceCapacity)
+        {
+            throw new InvalidOperationException(
+                $"The test completion gate capacity {Capacity} no longer matches the production parallel-acceptance capacity " +
+                $"{ConductorBatchLoop.DefaultParallelAcceptanceCapacity}; widen the test gate deliberately with the production change.");
+        }
+    }
+
+    internal int HeldCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _heldAttempts.Count;
+            }
+        }
+    }
+
+    internal Handle HoldForTests(ConductorParallelAcceptanceAttempt attempt, Action complete)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
+        ArgumentNullException.ThrowIfNull(complete);
+
+        lock (_gate)
+        {
+            if (_heldAttempts.Count >= Capacity)
+            {
+                throw new ConductorParallelAcceptanceAttemptCompletionGateViolationException(
+                    $"Test acceptance-attempt completion gate capacity {Capacity} is exhausted.");
+            }
+
+            if (_heldAttempts.ContainsKey(attempt.AttemptId))
+            {
+                throw new ConductorParallelAcceptanceAttemptCompletionGateViolationException(
+                    $"Acceptance attempt '{attempt.AttemptId}' is already held by the test completion gate.");
+            }
+
+            _heldAttempts.Add(attempt.AttemptId, new HeldAttempt(attempt, complete));
+            return new Handle(this, attempt);
+        }
+    }
+
+    internal Handle RequiredHandleForTests(string goalId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
+
+        lock (_gate)
+        {
+            var match = _heldAttempts.Values.SingleOrDefault(held =>
+                string.Equals(held.Attempt.GoalId, goalId, StringComparison.Ordinal));
+            return match is null
+                ? throw new InvalidOperationException($"No held acceptance attempt exists for goal '{goalId}'.")
+                : new Handle(this, match.Attempt);
+        }
+    }
+
+    internal void CompleteAllForTests()
+    {
+        List<Exception>? failures = null;
+        while (true)
+        {
+            string? attemptId;
+            lock (_gate)
+            {
+                attemptId = _heldAttempts.Keys.FirstOrDefault();
+            }
+
+            if (attemptId is null)
+            {
+                break;
+            }
+
+            try
+            {
+                CompleteForTests(attemptId);
+            }
+            catch (Exception ex)
+            {
+                (failures ??= []).Add(ex);
+            }
+        }
+
+        if (failures is not null)
+        {
+            throw new AggregateException("One or more held test acceptance attempts failed during cleanup.", failures);
+        }
+    }
+
+    private void CompleteForTests(string attemptId)
+    {
+        HeldAttempt held;
+        lock (_gate)
+        {
+            if (!_heldAttempts.Remove(attemptId, out held!))
+            {
+                throw new InvalidOperationException(
+                    $"Acceptance attempt '{attemptId}' is not held or has already completed.");
+            }
+        }
+
+        held.Complete();
+    }
+
+    private sealed record HeldAttempt(ConductorParallelAcceptanceAttempt Attempt, Action Complete);
+
+    internal sealed class Handle
+    {
+        private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests _owner;
+
+        internal Handle(
+            ConductorParallelAcceptanceAttemptCompletionGateForTests owner,
+            ConductorParallelAcceptanceAttempt attempt)
+        {
+            _owner = owner;
+            Attempt = attempt;
+        }
+
+        internal ConductorParallelAcceptanceAttempt Attempt { get; }
+
+        internal void CompleteForTests() => _owner.CompleteForTests(Attempt.AttemptId);
+    }
+}
+
 internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
@@ -120,6 +256,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly TimeSpan _heartbeatInterval;
     private readonly TimeSpan _recentHeartbeatGrace;
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _heartbeatWritten;
+    private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests? _attemptCompletionGateForTests;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -131,8 +268,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceTryRunPreSlot? tryRunPreSlot = null,
         TimeSpan? heartbeatInterval = null,
         TimeSpan? recentHeartbeatGrace = null,
-        Action<ConductorParallelAcceptanceAttempt, string>? heartbeatWritten = null)
+        Action<ConductorParallelAcceptanceAttempt, string>? heartbeatWritten = null,
+        ConductorParallelAcceptanceAttemptCompletionGateForTests? attemptCompletionGateForTests = null)
     {
+        if (runInline && attemptCompletionGateForTests is not null)
+        {
+            throw new ArgumentException(
+                "The test completion gate can only hold attempts on the existing non-inline path.",
+                nameof(attemptCompletionGateForTests));
+        }
+
         _rootDirectory = rootDirectory;
         _executionDirectory = executionDirectory;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
@@ -143,6 +288,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _heartbeatInterval = heartbeatInterval ?? DefaultHeartbeatInterval;
         _recentHeartbeatGrace = recentHeartbeatGrace ?? DispatchRecoveryPolicy.DefaultRecentHeartbeatGrace;
         _heartbeatWritten = heartbeatWritten;
+        _attemptCompletionGateForTests = attemptCompletionGateForTests;
     }
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
@@ -344,6 +490,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                     ?? ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(completed);
             }
 
+            if (_attemptCompletionGateForTests is not null)
+            {
+                var held = TryPersistOwnerProcess(attempt, Environment.ProcessId);
+                if (held.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running)
+                {
+                    WriteHeartbeat(held, "running");
+                }
+
+                _attemptCompletionGateForTests.HoldForTests(
+                    held,
+                    () => RunAttempt(held, candidate, policy, runAcceptance));
+                return ConductorParallelAcceptanceAttemptDecision.Started(held);
+            }
+
             var launch = _launchOwnedProcess(new ConductorParallelAcceptanceOwnedProcessLaunch(
                 attempt,
                 childPid =>
@@ -363,6 +523,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             }
 
             return ConductorParallelAcceptanceAttemptDecision.Started(launched);
+        }
+        catch (ConductorParallelAcceptanceAttemptCompletionGateViolationException ex)
+        {
+            var rejected = attempt with
+            {
+                Outcome = ConductorParallelAcceptanceAttemptOutcome.LaunchFailed,
+                CompletedAt = _utcNow(),
+                LastHeartbeatAt = _utcNow(),
+                Detail = ex.Message
+            };
+            Persist(rejected);
+            TryAppend(attempt.StderrPath, $"test completion gate rejected attempt: {ex.Message}{Environment.NewLine}");
+            TryWriteExit(attempt.ExitCodePath, 1);
+            throw;
         }
         catch (Exception ex)
         {
