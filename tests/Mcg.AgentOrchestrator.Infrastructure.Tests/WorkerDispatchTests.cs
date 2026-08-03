@@ -1933,6 +1933,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
         public void AppendAcceptanceCriterionWaived(GoalId goalId, string criterion, string actor, DateTimeOffset recordedAt, string reason, string capturedAcceptanceCriteriaHash) { }
         public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
         public void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha) { }
+        public void AppendGoalLandedFromMergeEvidence(GoalId goalId, string goalBranch, string integrateSha, string mainSha) { }
         public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }
         public void AppendCleanedUp(GoalId goalId) { }
         public void AppendProgressiveReviewGlanceReceipt(

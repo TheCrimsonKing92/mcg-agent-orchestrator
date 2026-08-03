@@ -2963,11 +2963,20 @@ internal sealed class ConductorBatchLoop
         }
 
         if (goal.Status == GoalStatus.Completed &&
-            !string.IsNullOrWhiteSpace(driver.ExecutionDirectory) &&
-            GoalOperationJournal.HasMergeEvidenceTerminalDisposition(
-                GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id)))
+            !string.IsNullOrWhiteSpace(driver.ExecutionDirectory))
         {
-            return false;
+            try
+            {
+                if (GoalOperationJournal.HasMergeEvidenceTerminalDisposition(
+                        GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id)))
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+                // A transient journal read failure must not remove a goal from ordinary lifecycle evaluation.
+            }
         }
 
         if (goal.Status is GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed)

@@ -3314,6 +3314,53 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
+    public void GoalMarkLanded_MergedGoalBranchWithoutIntegrateSubject_CompletesWithoutForce()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Merged branch without conventional subject", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/merged-without-integrate-subject.txt", "goal work");
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            var branchTip = RunGitOutput(root, "rev-parse", branch).Trim();
+            RunGit(root, "merge", "--ff-only", branch);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Xunit.Assert.True(changed);
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            var journal = GoalOperationJournal.Read(root, goal.Id);
+            Xunit.Assert.True(GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal));
+            Xunit.Assert.Contains(journal.Entries, entry =>
+                entry.Operation == GoalOperationJournal.LandingIntentOperation &&
+                entry.Detail.Contains(branchTip, StringComparison.Ordinal));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact]
     public void GoalMarkLanded_NoBranchOrIntegrateCommit_ReportsBothSearches()
     {
         var root = CreateTempDirectory();

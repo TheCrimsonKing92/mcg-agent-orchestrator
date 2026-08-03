@@ -32,7 +32,7 @@ public interface IGoalLifecycleEventWriter
         string capturedAcceptanceCriteriaHash);
     void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch);
     void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha);
-    void AppendGoalLandedFromMergeEvidence(GoalId goalId, string goalBranch, string integrateSha, string mainSha) { }
+    void AppendGoalLandedFromMergeEvidence(GoalId goalId, string goalBranch, string integrateSha, string mainSha);
     void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source);
     void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, GoalStatus status, string reason, string source) =>
         AppendGoalEscalated(goalId, state, reason, source);

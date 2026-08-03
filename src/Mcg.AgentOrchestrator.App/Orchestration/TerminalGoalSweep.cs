@@ -358,21 +358,14 @@ internal static class TerminalGoalSweep
             kernel,
             onlyGoalId,
             integrationEvidenceResolver);
+        GoalId? mergeEvidenceBoundGoalId = null;
+        var mergeEvidenceCandidateCount = integrationEvidenceByGoal.Count;
         if (integrationEvidenceByGoal.Count > MaxMergeEvidenceTerminalizationsPerSweep)
         {
-            var firstGoal = integrationEvidenceByGoal.Keys.OrderBy(goalId => goalId.Value, StringComparer.Ordinal).First();
-            var prefix = firstGoal.Value[..Math.Min(8, firstGoal.Value.Length)];
-            return new TerminalGoalSweepResult(
-                [new TerminalGoalSweepGoalResult(
-                    firstGoal,
-                    prefix,
-                    [],
-                    [new TerminalGoalSweepBlocker(
-                        "merge-evidence-backfill-bound-exceeded",
-                        $"merge evidence matched {integrationEvidenceByGoal.Count} non-terminal goals; safety bound is {MaxMergeEvidenceTerminalizationsPerSweep}; no goals were terminalized",
-                        "inspect merge-evidence ancestry and rerun conduct")])],
-                SweptGoalIds: [],
-                ResolvedAttentionItemCount: resolvedAttentionItemCount);
+            mergeEvidenceBoundGoalId = integrationEvidenceByGoal.Keys
+                .OrderBy(goalId => goalId.Value, StringComparer.Ordinal)
+                .First();
+            integrationEvidenceByGoal.Clear();
         }
 
         foreach (var originalGoal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
@@ -400,6 +393,14 @@ internal static class TerminalGoalSweep
             var repairs = new List<TerminalGoalSweepRepair>();
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
+
+            if (originalGoal.Id == mergeEvidenceBoundGoalId)
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "merge-evidence-backfill-bound-exceeded",
+                    $"merge evidence matched {mergeEvidenceCandidateCount} non-terminal goals; safety bound is {MaxMergeEvidenceTerminalizationsPerSweep}; no goals were terminalized",
+                    "inspect merge-evidence ancestry and rerun conduct"));
+            }
 
             if (integrationEvidenceByGoal.TryGetValue(originalGoal.Id, out var integrationEvidence))
             {
@@ -431,7 +432,7 @@ internal static class TerminalGoalSweep
             var hasDurableLandingIntent = HasDurableLandingIntentForCleanup(executionDirectory, goal);
             var skipMergedCleanupThisPass = false;
 
-            if (HasStandingTerminalDisposition(executionDirectory, goal))
+            if (HasStandingTerminalDisposition(executionDirectory, goal, branchFacts))
             {
                 continue;
             }
@@ -445,7 +446,14 @@ internal static class TerminalGoalSweep
                     dirtyEvidence,
                     dirtyCommand));
             }
-            else if (branchFacts.BranchAlreadyLanded && goal.Status != GoalStatus.Verified)
+            else if (branchFacts.BranchAlreadyLanded && goal.Status == GoalStatus.Verified)
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "verified-merged-branch-missing-integrate-commit",
+                    $"verified goal branch {GoalWorktrees.BranchName(goal.Id)} is reachable from main, but no reachable Integrate commit identifies the landing",
+                    $"goal-mark-landed {prefix} --confirm-goal-mark-landed"));
+            }
+            else if (branchFacts.BranchAlreadyLanded)
             {
                 if (hasDurableLandingIntent)
                 {
@@ -731,7 +739,11 @@ internal static class TerminalGoalSweep
         GoalOperationJournal.RecordTerminalDisposition(
             executionDirectory,
             goal,
-            new GoalTerminalDisposition(GoalTerminalDispositionKind.Landed, detail));
+            new GoalTerminalDisposition(
+                GoalTerminalDispositionKind.Landed,
+                detail,
+                GoalTerminalDispositionSource.MergeEvidence));
+        GoalLifecycleEventWriter.RetireDispatchProviderSessions(kernel, goal.Id, DateTimeOffset.UtcNow);
         kernel.RecordGoalLandedFromMergeEvidence(
             goal.Id,
             GoalWorktrees.BranchName(goal.Id),
@@ -767,11 +779,15 @@ internal static class TerminalGoalSweep
 
     private static bool HasStandingTerminalDisposition(
         string executionDirectory,
-        Goal goal)
+        Goal goal,
+        GoalBranchFacts branchFacts)
     {
         var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
-        return (goal.Status == GoalStatus.Cancelled && GoalOperationJournal.HasRetiredTerminalDisposition(journal)) ||
-            (goal.Status == GoalStatus.Completed && GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal));
+        return ((goal.Status == GoalStatus.Cancelled || !branchFacts.HasGoalBranchArtifact) &&
+                GoalOperationJournal.HasRetiredTerminalDisposition(journal)) ||
+            (goal.Status == GoalStatus.Completed &&
+             !branchFacts.HasGoalBranchArtifact &&
+             GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal));
     }
 
     private static bool HasDurableLandingIntentForCleanup(string executionDirectory, Goal goal) =>
@@ -927,10 +943,15 @@ internal static class TerminalGoalSweep
         string detail)
     {
         kernel.CompleteGoal(goal.Id, detail);
+        var source = kind == GoalTerminalDispositionKind.Landed &&
+            GoalOperationJournal.HasMergeEvidenceTerminalDisposition(
+                GoalOperationJournal.Read(executionDirectory, goal.Id))
+            ? GoalTerminalDispositionSource.MergeEvidence
+            : GoalTerminalDispositionSource.General;
         GoalOperationJournal.RecordTerminalDisposition(
             executionDirectory,
             goal,
-            new GoalTerminalDisposition(kind, detail));
+            new GoalTerminalDisposition(kind, detail, source));
         GoalLifecycleEventWriter.RetireDispatchProviderSessions(kernel, goal.Id, DateTimeOffset.UtcNow);
     }
 

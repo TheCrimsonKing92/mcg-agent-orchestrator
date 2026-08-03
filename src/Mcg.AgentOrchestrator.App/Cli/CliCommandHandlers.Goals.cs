@@ -345,12 +345,25 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     "branch-local-check",
                     () => GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
                 var localExists = localBranch.ExitCode == 0;
-                var remoteExists = !localExists &&
-                    RunGoalMarkLandedStep(
+                GitCli.GitResult? remoteBranch = !localExists
+                    ? RunGoalMarkLandedStep(
                         "branch-remote-check",
-                        () => GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}")).ExitCode == 0;
+                        () => GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}"))
+                    : null;
+                var remoteExists = remoteBranch?.ExitCode == 0;
+                var branchRef = localExists
+                    ? $"refs/heads/{landedBranch}"
+                    : remoteExists
+                        ? $"refs/remotes/origin/{landedBranch}"
+                        : null;
+                var branchIsAncestor = branchRef is not null &&
+                    RunGoalMarkLandedStep(
+                        "branch-ancestry-check",
+                        () => GitCli.Run(landedDir, "merge-base", "--is-ancestor", branchRef, "HEAD")).ExitCode == 0;
                 var mergeEvidenceResolver = GoalIntegrationEvidenceResolver.Build(landedDir);
-                if (!mergeEvidenceResolver.TryResolve(landedId, out var mergeEvidence) || mergeEvidence is null)
+                var hasIntegrateCommit = mergeEvidenceResolver.TryResolve(landedId, out var mergeEvidence) &&
+                    mergeEvidence is not null;
+                if (!branchIsAncestor && !hasIntegrateCommit)
                 {
                     var branchEvidence = localExists
                         ? "local branch found"
@@ -363,7 +376,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         "Use --force only if you have manually confirmed the work is in main.");
                 }
 
-                landedMergeSha = mergeEvidence.IntegrateSha;
+                landedMergeSha = branchIsAncestor
+                    ? (localExists ? localBranch.Output : remoteBranch!.Value.Output).Trim()
+                    : mergeEvidence!.IntegrateSha;
             }
             else
             {
@@ -394,7 +409,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 landedGoal,
                 new GoalTerminalDisposition(
                     GoalTerminalDispositionKind.Landed,
-                    $"Goal {landedGp} was marked landed from merge evidence at {landedMergeSha} via goal-mark-landed."));
+                    $"Goal {landedGp} was marked landed from merge evidence at {landedMergeSha} via goal-mark-landed.",
+                    GoalTerminalDispositionSource.MergeEvidence));
             JournalAutoCloseSourceBacklogItem(context, landedGoal);
 
             var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
