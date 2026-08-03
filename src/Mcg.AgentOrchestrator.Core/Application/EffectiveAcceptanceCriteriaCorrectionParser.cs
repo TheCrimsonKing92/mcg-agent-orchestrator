@@ -52,7 +52,8 @@ internal static class EffectiveAcceptanceCriteriaCorrectionParser
     {
         foreach (var candidate in corrections.OrderByDescending(item => item.RecordedAt))
         {
-            if (MatchesSupersededCriterion(finding, candidate.SupersededCriterion))
+            if (MatchesSupersededCriterion(finding, candidate.SupersededCriterion) ||
+                (candidate.IsWaiver && MatchesWaivedCriterion(finding, candidate.SupersededCriterion)))
             {
                 correction = candidate;
                 return true;
@@ -143,6 +144,16 @@ internal static class EffectiveAcceptanceCriteriaCorrectionParser
         var findingTokens = SignificantTokens(normalizedFinding).ToHashSet(StringComparer.Ordinal);
         var requiredMatches = Math.Min(3, supersededTokens.Length);
         return supersededTokens.Count(findingTokens.Contains) >= requiredMatches;
+    }
+
+    private static bool MatchesWaivedCriterion(string finding, string waivedCriterion)
+    {
+        var normalizedFinding = NormalizeForMatch(finding);
+        var normalizedWaived = NormalizeForMatch(waivedCriterion);
+        return normalizedFinding.Length > 0 &&
+            normalizedWaived.Length > 0 &&
+            (normalizedFinding.Contains(normalizedWaived, StringComparison.Ordinal) ||
+             normalizedWaived.Contains(normalizedFinding, StringComparison.Ordinal));
     }
 
     private static IEnumerable<string> SignificantTokens(string value)

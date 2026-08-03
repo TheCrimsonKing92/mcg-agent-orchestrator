@@ -215,6 +215,52 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return true;
         }
 
+        case "goal-amend":
+        {
+            const string usage = "goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
+            CliArgumentParser.RequirePartCount(parts, 5, usage);
+            var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            var criterion = GetFlagValue(parts, "--waive")
+                ?? throw new ArgumentException($"--waive requires a criterion number or exact text. Usage: {usage}");
+            if (criterion.StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"--waive requires a criterion number or exact text. Usage: {usage}");
+            }
+
+            var inlineReason = GetFlagValue(parts, "--reason");
+            if (inlineReason?.StartsWith("--", StringComparison.Ordinal) == true)
+            {
+                inlineReason = null;
+            }
+
+            var hasReasonFile = HasCliConfirmation(parts, "--reason-file") || HasCliConfirmation(parts, "--text-file");
+            if (inlineReason is not null && hasReasonFile)
+            {
+                throw new ArgumentException("Provide either --reason <reason> or a reason file, not both.");
+            }
+
+            var reason = inlineReason ?? ResolveTextArgumentOrDefault(
+                parts,
+                inlineIndex: parts.Count,
+                defaultValue: null,
+                "--reason-file",
+                "--text-file") ?? throw new ArgumentException($"A waiver reason is required. Usage: {usage}");
+            var actor = GetFlagValue(parts, "--actor") ?? "operator";
+            if (actor.StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"--actor requires a name. Usage: {usage}");
+            }
+
+            var waiver = context.Kernel.WaiveAcceptanceCriterion(goal.Id, criterion, reason, actor);
+            context.CurrentGoal = goal;
+            var criterionNumber = Array.FindIndex(
+                goal.RefinedSpec!.AcceptanceCriteria.ToArray(),
+                item => string.Equals(item, waiver.SupersededCriterion, StringComparison.Ordinal)) + 1;
+            Console.WriteLine(
+                $"Acceptance criterion waived: goal={goal.Id.Value[..8]} criterion={criterionNumber} actor={waiver.Actor} reason={waiver.WaiverReason}");
+            return true;
+        }
+
         case "goal-plan":
             return HandleGoalPlan(context, parts);
 

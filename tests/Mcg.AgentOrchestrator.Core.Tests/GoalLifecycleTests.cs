@@ -216,6 +216,43 @@ public sealed class GoalLifecycleTests
     Assert.Equal(ProgressKind.TaskNote, correction.SourceKind);
 }
 
+    [Xunit.Fact]
+    public void WaiveCriterionRendersAuthorityAndSuppressesReviewerFinding()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement recoverable criteria", AgentRole.Developer);
+    var reviewer = new TaskSpec(TaskId.New(), "Review recoverable criteria", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Recover a bad acceptance criterion", [developer, reviewer]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Ship the corrected behavior",
+        ["focused tests pass", "record a real two-gate makespan"],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    var waiver = kernel.WaiveAcceptanceCriterion(
+        goal.Id,
+        "2",
+        "requires a conductor-owned cross-tick harness",
+        "operator:miles");
+    var reviewerBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+
+    Assert.Equal("record a real two-gate makespan", waiver.SupersededCriterion);
+    Assert.Equal("requires a conductor-owned cross-tick harness", waiver.WaiverReason);
+    Assert.Equal("operator:miles", waiver.Actor);
+    Assert.Equal(clock.UtcNow, waiver.RecordedAt);
+    Assert.Null(waiver.SourceTaskId);
+    Assert.Equal(ProgressKind.GoalPolicyDecision, waiver.SourceKind);
+    Assert.Contains("- [WAIVED] record a real two-gate makespan", reviewerBrief, StringComparison.Ordinal);
+    Assert.Contains("Reason: requires a conductor-owned cross-tick harness", reviewerBrief, StringComparison.Ordinal);
+    Assert.True(ReviewFindings.IsWaived("record a real two-gate makespan is unmet", goal.EffectiveAcceptanceCriteriaCorrections));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.Kind == ProgressKind.GoalPolicyDecision &&
+        evt.Message.Contains("Acceptance criterion waived", StringComparison.Ordinal));
+}
+
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_added_task")]
     public void SnapshotRoundtripPreservesAddedTask()
 {

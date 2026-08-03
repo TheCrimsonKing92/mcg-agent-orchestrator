@@ -202,7 +202,23 @@ public sealed partial class AgentOrchestratorKernel
                 "Acceptance criteria:"
             };
             foreach (var criterion in refinedSpec.AcceptanceCriteria)
-                specLines.Add($"- {criterion}");
+            {
+                var waiver = goal.EffectiveAcceptanceCriteriaCorrections
+                    .Where(correction =>
+                        correction.IsWaiver &&
+                        string.Equals(correction.SupersededCriterion, criterion, StringComparison.OrdinalIgnoreCase))
+                    .OrderByDescending(correction => correction.RecordedAt)
+                    .FirstOrDefault();
+                if (waiver is null)
+                {
+                    specLines.Add($"- {criterion}");
+                    continue;
+                }
+
+                specLines.Add($"- [WAIVED] {criterion}");
+                specLines.Add($"  Reason: {PromptContextFormatter.TrimPromptBlock(waiver.WaiverReason!)}");
+                specLines.Add($"  Waived by {PromptContextFormatter.TrimPromptBlock(waiver.Actor)} at {waiver.RecordedAt:u}.");
+            }
             if (refinedSpec.Decisions.Count > 0)
             {
                 specLines.Add(string.Empty);
@@ -816,7 +832,9 @@ public sealed partial class AgentOrchestratorKernel
         {
             var taskReference = correction.SourceTaskId is null ? "goal timeline" : $"task {correction.SourceTaskId.Value[..8]}";
             lines.Add($"- Supersedes: {PromptContextFormatter.TrimPromptBlock(correction.SupersededCriterion)}");
-            lines.Add($"  Effective criterion: {PromptContextFormatter.TrimPromptBlock(correction.Correction)}");
+            lines.Add(correction.IsWaiver
+                ? $"  Status: WAIVED — {PromptContextFormatter.TrimPromptBlock(correction.WaiverReason!)}"
+                : $"  Effective criterion: {PromptContextFormatter.TrimPromptBlock(correction.Correction)}");
             lines.Add($"  Provenance: {correction.Actor}; {correction.RecordedAt:u}; {correction.SourceKind}; {taskReference}.");
         }
 
