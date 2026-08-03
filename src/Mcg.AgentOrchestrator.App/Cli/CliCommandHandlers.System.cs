@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
@@ -235,6 +236,58 @@ internal static partial class CliCommandHandlers
             case "run-events-maintenance":
                 HandleRunEventsMaintenance(parts, context);
                 return false;
+
+            case "run-event":
+            {
+                if (parts.Count is < 3 or > 5 ||
+                    !parts[1].Equals("show", StringComparison.OrdinalIgnoreCase) ||
+                    !long.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence) ||
+                    sequence < 1)
+                {
+                    throw new ArgumentException(CliCommandHelp.RunEventUsage);
+                }
+
+                var format = "text";
+                if (parts.Count > 3)
+                {
+                    if (parts.Count != 5 ||
+                        !parts[3].Equals("--format", StringComparison.OrdinalIgnoreCase) ||
+                        (!parts[4].Equals("json", StringComparison.OrdinalIgnoreCase) &&
+                         !parts[4].Equals("text", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        throw new ArgumentException(CliCommandHelp.RunEventUsage);
+                    }
+
+                    format = parts[4].ToLowerInvariant();
+                }
+
+                var record = new SqliteRunEventStore(context.Workspace.RunEventStorePath)
+                    .ReadBySequenceAsync(sequence)
+                    .GetAwaiter()
+                    .GetResult();
+                if (record is null)
+                {
+                    throw new InvalidOperationException($"Run event run-event:{sequence} was not found.");
+                }
+
+                if (format == "json")
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(record, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+                }
+                else
+                {
+                    Console.WriteLine($"run-event:{record.Sequence}");
+                    Console.WriteLine($"occurred-at: {record.OccurredAt:O}");
+                    Console.WriteLine($"event-type: {record.EventType}");
+                    Console.WriteLine($"goal: {record.GoalId ?? "none"}");
+                    Console.WriteLine($"operation: {record.Operation ?? "none"}");
+                    Console.WriteLine($"status: {record.Status ?? "none"}");
+                    Console.WriteLine($"detail: {record.Detail ?? "none"}");
+                    Console.WriteLine($"payload-json: {record.PayloadJson ?? "none"}");
+                }
+
+                return false;
+            }
 
             case "cleanup-status":
                 PrintCleanupStatus(context.Workspace.ExecutionDirectory, context.CleanupHooks);

@@ -7,6 +7,8 @@ internal enum PostLandingCanaryDisposition
 {
     NotTriggered,
     AlreadyCompleted,
+    Deferred,
+    Abandoned,
     Passed,
     Failed
 }
@@ -16,7 +18,9 @@ internal sealed class PostLandingCanaryCoordinator
     private readonly PostLandingCanaryConfiguration _configuration;
     private readonly IPostLandingCanaryRunner _runner;
     private readonly PostLandingCanaryEventStore _events;
+    private readonly ICollaborationItemStore? _operatorItems;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delay;
     private readonly Action<string> _progress;
 
     internal PostLandingCanaryCoordinator(
@@ -24,18 +28,61 @@ internal sealed class PostLandingCanaryCoordinator
         IPostLandingCanaryRunner runner,
         PostLandingCanaryEventStore events,
         AcceptanceEngineCircuitBreaker circuitBreaker,
+        ICollaborationItemStore? operatorItems = null,
         Func<DateTimeOffset>? utcNow = null,
+        Func<TimeSpan, CancellationToken, Task>? delay = null,
         Action<string>? progress = null)
     {
         _configuration = configuration;
         _runner = runner;
         _events = events;
+        _operatorItems = operatorItems;
         CircuitBreaker = circuitBreaker;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _delay = delay ?? Task.Delay;
         _progress = progress ?? Console.WriteLine;
     }
 
     internal AcceptanceEngineCircuitBreaker CircuitBreaker { get; }
+
+    internal void ResumePending()
+    {
+        _ = ResumePendingAsync();
+    }
+
+    private async Task ResumePendingAsync()
+    {
+        try
+        {
+            var events = await _events.ReadProjectionEventsAsync(CancellationToken.None).ConfigureAwait(false);
+            var pending = events
+                .Where(item => !string.IsNullOrWhiteSpace(item.Payload.LandingSha))
+                .GroupBy(item => item.Payload.LandingSha!, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.OrderByDescending(item => item.Sequence).First())
+                .Where(item => item.Kind is
+                    PostLandingCanaryEventKind.Queued or
+                    PostLandingCanaryEventKind.Started or
+                    PostLandingCanaryEventKind.Deferred)
+                .OrderBy(item => item.Sequence)
+                .ToArray();
+            foreach (var item in pending)
+            {
+                ScheduleDeferredRetry(new PostLandingCanaryRequest(
+                    item.Payload.LandingSha!,
+                    item.Payload.TriggeringPaths));
+            }
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _progress($"CANARY_GATE result=resume-error detail={ex.GetType().Name}: {ex.Message}");
+            }
+            catch
+            {
+            }
+        }
+    }
 
     internal PostLandingCanaryDisposition HandleLanding(ConductorLandingReceipt landing)
         => LaunchLandingAsync(landing).GetAwaiter().GetResult();
@@ -91,7 +138,7 @@ internal sealed class PostLandingCanaryCoordinator
         PostLandingCanaryRequest request,
         CancellationToken cancellationToken)
     {
-        if (await _events.FindReceiptAsync(request.LandingSha, cancellationToken).ConfigureAwait(false) is { } existing)
+        if (await _events.FindTerminalAsync(request.LandingSha, cancellationToken).ConfigureAwait(false) is { } existing)
         {
             return (existing, false);
         }
@@ -108,7 +155,7 @@ internal sealed class PostLandingCanaryCoordinator
             cancellationToken).ConfigureAwait(false);
         if (queued.Appended)
         {
-            _progress(
+            ReportProgress(
                 $"CANARY_GATE sha={request.LandingSha} result=queued paths={string.Join(",", request.TriggeringPaths)}");
         }
 
@@ -121,29 +168,51 @@ internal sealed class PostLandingCanaryCoordinator
     {
         while (true)
         {
+            TimeSpan? retryDelay = null;
             using (await PostLandingCanarySerializationLease
                        .AcquireAsync(_events.Identity, cancellationToken)
                        .ConfigureAwait(false))
             {
-                if (await _events.FindReceiptAsync(request.LandingSha, cancellationToken)
+                if (await _events.FindTerminalAsync(request.LandingSha, cancellationToken)
                         .ConfigureAwait(false) is { } completed)
                 {
                     return ReceiptDisposition(completed);
                 }
 
-                var earliest = await _events.FindEarliestUnreceiptedQueueAsync(cancellationToken)
+                var landingEvents = await _events.ReadForLandingAsync(request.LandingSha, cancellationToken)
                     .ConfigureAwait(false);
+                var latest = landingEvents.LastOrDefault();
+                var now = _utcNow();
+                if (latest is { Kind: PostLandingCanaryEventKind.Deferred, Payload.NotBefore: { } notBefore } &&
+                    notBefore > now)
+                {
+                    retryDelay = notBefore - now;
+                }
+
+                var earliest = retryDelay is null
+                    ? await _events.FindEarliestRunnableQueueAsync(now, cancellationToken).ConfigureAwait(false)
+                    : null;
                 if (earliest is null ||
-                    string.Equals(
+                    retryDelay is null && string.Equals(
                         earliest.Payload.LandingSha,
                         request.LandingSha,
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    return await RunOwnedAsync(request, cancellationToken).ConfigureAwait(false);
+                    if (retryDelay is null)
+                    {
+                        return await RunOwnedAsync(request, cancellationToken).ConfigureAwait(false);
+                    }
                 }
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken).ConfigureAwait(false);
+            if (retryDelay is { } delay)
+            {
+                await _delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -151,22 +220,42 @@ internal sealed class PostLandingCanaryCoordinator
         PostLandingCanaryRequest request,
         CancellationToken cancellationToken)
     {
+        var priorEvents = await _events.ReadForLandingAsync(request.LandingSha, cancellationToken)
+            .ConfigureAwait(false);
+        var attempt = priorEvents.Count(item => item.Kind == PostLandingCanaryEventKind.Started) + 1;
         var startedAt = _utcNow();
-        await _events.AppendOnceAsync(
+        var started = await _events.AppendOnceAsync(
             PostLandingCanaryEventKind.Started,
-            Payload(request, "Post-landing canary process started.", startedAt: startedAt),
-            PostLandingCanaryEventIds.Started(request.LandingSha),
+            Payload(
+                request,
+                $"Post-landing canary attempt {attempt} started.",
+                startedAt: startedAt,
+                attemptCount: attempt),
+            PostLandingCanaryEventIds.Started(request.LandingSha, attempt),
             startedAt,
             cancellationToken).ConfigureAwait(false);
-        _progress(
-            $"CANARY_GATE sha={request.LandingSha} result=started paths={string.Join(",", request.TriggeringPaths)}");
+        if (!started.Appended)
+        {
+            return await DeferOrAbandonAsync(
+                    request,
+                    attempt,
+                    PostLandingCanaryFaultDisposition.EnvironmentFault,
+                    "InvalidOperationException: canary attempt start was already recorded without a terminal outcome.",
+                    startedAt,
+                    _utcNow())
+                .ConfigureAwait(false);
+        }
+        ReportProgress(
+            $"CANARY_GATE sha={request.LandingSha} result=started attempt={attempt} paths={string.Join(",", request.TriggeringPaths)}");
 
         PostLandingCanaryOutcome outcome;
+        Exception? runnerException = null;
         using (var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
         {
-            var runTask = _runner.RunAsync(request, timeoutCts.Token);
+            Task<PostLandingCanaryOutcome>? runTask = null;
             try
             {
+                runTask = _runner.RunAsync(request, timeoutCts.Token);
                 outcome = await runTask
                     .WaitAsync(_configuration.Timeout, cancellationToken)
                     .ConfigureAwait(false);
@@ -174,7 +263,10 @@ internal sealed class PostLandingCanaryCoordinator
             catch (TimeoutException)
             {
                 timeoutCts.Cancel();
-                await ConfirmRunnerTerminatedAsync(runTask).ConfigureAwait(false);
+                if (runTask is not null)
+                {
+                    await ConfirmRunnerTerminatedAsync(runTask).ConfigureAwait(false);
+                }
                 outcome = PostLandingCanaryOutcome.Failed(
                     PostLandingCanaryFailureReason.Timeout,
                     $"canary exceeded hard timeout of {_configuration.TimeoutSeconds} seconds");
@@ -182,20 +274,26 @@ internal sealed class PostLandingCanaryCoordinator
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 timeoutCts.Cancel();
-                await ConfirmRunnerTerminatedAsync(runTask).ConfigureAwait(false);
+                if (runTask is not null)
+                {
+                    await ConfirmRunnerTerminatedAsync(runTask).ConfigureAwait(false);
+                }
                 outcome = PostLandingCanaryOutcome.Failed(
                     PostLandingCanaryFailureReason.Timeout,
                     $"canary exceeded hard timeout of {_configuration.TimeoutSeconds} seconds");
             }
             catch (Exception ex)
             {
+                runnerException = ex;
                 outcome = PostLandingCanaryOutcome.Failed(
-                    PostLandingCanaryFailureReason.InfrastructureError,
+                    ex is PostLandingCanaryEvaluationException
+                        ? PostLandingCanaryFailureReason.EvaluatedArtifactFailure
+                        : PostLandingCanaryFailureReason.InfrastructureError,
                     $"{ex.GetType().Name}: {ex.Message}");
             }
             finally
             {
-                if (cancellationToken.IsCancellationRequested && !runTask.IsCompleted)
+                if (cancellationToken.IsCancellationRequested && runTask is { IsCompleted: false })
                 {
                     timeoutCts.Cancel();
                     await ConfirmRunnerTerminatedAsync(runTask).ConfigureAwait(false);
@@ -204,6 +302,24 @@ internal sealed class PostLandingCanaryCoordinator
         }
 
         var completedAt = _utcNow();
+        if (!outcome.Green)
+        {
+            var faultDisposition = runnerException is null
+                ? PostLandingCanaryFailureClassifier.Classify(outcome)
+                : PostLandingCanaryFailureClassifier.Classify(runnerException);
+            if (faultDisposition != PostLandingCanaryFaultDisposition.VerdictFailure)
+            {
+                return await DeferOrAbandonAsync(
+                        request,
+                        attempt,
+                        faultDisposition,
+                        outcome.Detail,
+                        startedAt,
+                        completedAt)
+                    .ConfigureAwait(false);
+            }
+        }
+
         var failureReason = FailureToken(outcome.FailureReason);
         var receiptKind = outcome.Green
             ? PostLandingCanaryEventKind.Passed
@@ -224,33 +340,193 @@ internal sealed class PostLandingCanaryCoordinator
 
         if (outcome.Green)
         {
-            _progress(
+            ReportProgress(
                 $"CANARY_GATE sha={request.LandingSha} result=passed executed={outcome.ExecutedTestCount} receipt={receiptReference}");
             return PostLandingCanaryDisposition.Passed;
+        }
+
+        var verdictFailureReason = failureReason ?? throw new InvalidOperationException(
+            "A failed canary verdict must carry a typed failure reason.");
+        try
+        {
+            await CircuitBreaker.RaiseUnhealthyEpisodeItemAsync(receipt.Event, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _progress(
+                    $"CANARY_GATE sha={request.LandingSha} result=operator-item-error " +
+                    $"receipt={receiptReference} detail={ex.GetType().Name}: {ex.Message}");
+            }
+            catch
+            {
+            }
         }
 
         var escalationPayload = Payload(
             request,
             $"CanaryGateFailure: {outcome.Detail}; receipt={receiptReference}",
-            failureReason ?? "infrastructure-error",
+            verdictFailureReason,
             outcome.ExecutedTestCount,
             startedAt,
             completedAt);
-        await _events.AppendOnceAsync(
-            PostLandingCanaryEventKind.Escalated,
-            escalationPayload,
-            PostLandingCanaryEventIds.Escalation(request.LandingSha),
-            completedAt,
-            CancellationToken.None).ConfigureAwait(false);
-        _progress(
-            $"CANARY_GATE sha={request.LandingSha} result=failed reason={failureReason ?? "infrastructure-error"} receipt={receiptReference} escalation=CanaryGateFailure");
+        try
+        {
+            await _events.AppendOnceAsync(
+                PostLandingCanaryEventKind.Escalated,
+                escalationPayload,
+                PostLandingCanaryEventIds.Escalation(request.LandingSha),
+                completedAt,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _progress(
+                    $"CANARY_GATE sha={request.LandingSha} result=escalation-error " +
+                    $"receipt={receiptReference} detail={ex.GetType().Name}: {ex.Message}");
+            }
+            catch
+            {
+            }
+        }
+
+        try
+        {
+            _progress(
+                $"CANARY_GATE sha={request.LandingSha} result=failed reason={verdictFailureReason} receipt={receiptReference} escalation=CanaryGateFailure");
+        }
+        catch
+        {
+        }
         return PostLandingCanaryDisposition.Failed;
     }
 
+    private async Task<PostLandingCanaryDisposition> DeferOrAbandonAsync(
+        PostLandingCanaryRequest request,
+        int attempt,
+        PostLandingCanaryFaultDisposition faultDisposition,
+        string detail,
+        DateTimeOffset startedAt,
+        DateTimeOffset completedAt)
+    {
+        var reason = faultDisposition == PostLandingCanaryFaultDisposition.ResourceBusy
+            ? "resource-busy"
+            : "environment-fault";
+        if (attempt >= _configuration.MaxAttempts)
+        {
+            var abandoned = await _events.AppendOnceAsync(
+                    PostLandingCanaryEventKind.Abandoned,
+                    Payload(
+                        request,
+                        detail,
+                        reason,
+                        startedAt: startedAt,
+                        completedAt: completedAt,
+                        attemptCount: attempt),
+                    PostLandingCanaryEventIds.Abandoned(request.LandingSha),
+                    completedAt,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+            var receiptReference = $"run-event:{abandoned.Event.Sequence}";
+            if (_operatorItems is not null)
+            {
+                try
+                {
+                    await _operatorItems.RaiseAsync(
+                            CollaborationItemType.Verify,
+                            goalId: null,
+                            subject: $"Post-landing canary never evaluated {request.LandingSha}",
+                            body:
+                                $"Landing {request.LandingSha} remains UNVERIFIED after {attempt} attempts.\n" +
+                                $"{detail}\n{receiptReference}",
+                            correlationKey: $"post-landing-canary:unverified:{request.LandingSha.ToLowerInvariant()}",
+                            cancellationToken: CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    try
+                    {
+                        _progress(
+                            $"CANARY_GATE sha={request.LandingSha} result=operator-item-error " +
+                            $"receipt={receiptReference} detail={ex.GetType().Name}: {ex.Message}");
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+
+            ReportProgress(
+                $"CANARY_GATE sha={request.LandingSha} result=unverified attempts={attempt} reason={reason} receipt={receiptReference}");
+            return PostLandingCanaryDisposition.Abandoned;
+        }
+
+        var notBefore = completedAt + _configuration.RetryDelay(attempt);
+        var deferred = await _events.AppendOnceAsync(
+                PostLandingCanaryEventKind.Deferred,
+                Payload(
+                    request,
+                    detail,
+                    reason,
+                    startedAt: startedAt,
+                    completedAt: completedAt,
+                    attemptCount: attempt,
+                    notBefore: notBefore),
+                PostLandingCanaryEventIds.Deferred(request.LandingSha, attempt),
+                completedAt,
+                CancellationToken.None)
+            .ConfigureAwait(false);
+        ReportProgress(
+            $"CANARY_GATE sha={request.LandingSha} result=deferred attempt={attempt} reason={reason} " +
+            $"not-before={notBefore:O} receipt=run-event:{deferred.Event.Sequence}");
+        ScheduleDeferredRetry(request);
+        return PostLandingCanaryDisposition.Deferred;
+    }
+
+    private void ScheduleDeferredRetry(PostLandingCanaryRequest request) =>
+        _ = ObserveDeferredRetryAsync(request);
+
+    private void ReportProgress(string message)
+    {
+        try
+        {
+            _progress(message);
+        }
+        catch
+        {
+            // Progress sinks are advisory and cannot change a persisted canary outcome.
+        }
+    }
+
+    private async Task ObserveDeferredRetryAsync(PostLandingCanaryRequest request)
+    {
+        try
+        {
+            await RunQueuedAsync(request, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _progress(
+                    $"CANARY_GATE sha={request.LandingSha} result=retry-scheduler-error " +
+                    $"detail={ex.GetType().Name}: {ex.Message}");
+            }
+            catch
+            {
+            }
+        }
+    }
+
     private static PostLandingCanaryDisposition ReceiptDisposition(PostLandingCanaryEvent receipt) =>
-        receipt.Kind == PostLandingCanaryEventKind.Passed
+        receipt.IsTerminal
             ? PostLandingCanaryDisposition.AlreadyCompleted
-            : PostLandingCanaryDisposition.AlreadyCompleted;
+            : throw new InvalidOperationException($"Canary event {receipt.EventId} is not terminal.");
 
     private async Task<PostLandingCanaryDisposition> ObservePostLandingTaskAsync(
         Task<PostLandingCanaryDisposition> task,
@@ -270,32 +546,55 @@ internal sealed class PostLandingCanaryCoordinator
         ConductorLandingReceipt landing,
         Exception exception)
     {
-        AcceptanceEngineHealthSnapshot? snapshot = null;
+        var now = _utcNow();
+        var durableLandingSha = string.IsNullOrWhiteSpace(landing.LandingSha)
+            ? $"missing-sha-{Guid.NewGuid():N}"
+            : landing.LandingSha.Trim();
+        var detail = $"{exception.GetType().Name}: {exception.Message}";
         try
         {
-            snapshot = CircuitBreaker.SignalPostLandingFailure(
-                landing.LandingSha,
-                landing.ChangedFiles,
-                exception);
+            var request = new PostLandingCanaryRequest(durableLandingSha, landing.ChangedFiles);
+            var priorEvents = _events.ReadForLandingAsync(durableLandingSha, CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
+            var attempt = priorEvents.Count(item => item.Kind == PostLandingCanaryEventKind.Started) + 1;
+            return DeferOrAbandonAsync(
+                    request,
+                    attempt,
+                    PostLandingCanaryFailureClassifier.Classify(exception),
+                    detail,
+                    now,
+                    now)
+                .GetAwaiter()
+                .GetResult();
         }
         catch
         {
-            // This is a post-main safety boundary. Reporting failure must never escape.
+            // If the run-event store itself is unavailable, preserve the non-verdict invariant
+            // and surface the unverified landing through the independent operator-item store.
         }
 
         try
         {
+            _operatorItems?.RaiseAsync(
+                    CollaborationItemType.Verify,
+                    goalId: null,
+                    subject: $"Post-landing canary could not evaluate {durableLandingSha}",
+                    body: $"Landing {durableLandingSha} is UNVERIFIED.\n{detail}",
+                    correlationKey: $"post-landing-canary:environment:{durableLandingSha.ToLowerInvariant()}",
+                    cancellationToken: CancellationToken.None)
+                .GetAwaiter()
+                .GetResult();
             _progress(
-                $"CANARY_GATE sha={landing.LandingSha ?? "unknown"} result=failed " +
-                $"reason=infrastructure-error receipt={snapshot?.ReceiptReference ?? "in-memory-emergency-circuit"} " +
-                $"detail={exception.GetType().Name}");
+                $"CANARY_GATE sha={durableLandingSha} result=deferred reason=environment-fault " +
+                $"detail={detail}");
         }
         catch
         {
             // Progress sinks are advisory after main has advanced.
         }
 
-        return PostLandingCanaryDisposition.Failed;
+        return PostLandingCanaryDisposition.Deferred;
     }
 
     private static PostLandingCanaryEventPayload Payload(
@@ -304,7 +603,9 @@ internal sealed class PostLandingCanaryCoordinator
         string? failureReason = null,
         int executedTestCount = 0,
         DateTimeOffset? startedAt = null,
-        DateTimeOffset? completedAt = null) =>
+        DateTimeOffset? completedAt = null,
+        int attemptCount = 0,
+        DateTimeOffset? notBefore = null) =>
         new(
             PostLandingCanaryEventPayload.CanaryTag,
             request.LandingSha,
@@ -313,7 +614,9 @@ internal sealed class PostLandingCanaryCoordinator
             executedTestCount,
             detail,
             startedAt,
-            completedAt);
+            completedAt,
+            AttemptCount: attemptCount,
+            NotBefore: notBefore);
 
     private static string? FailureToken(PostLandingCanaryFailureReason? reason) => reason switch
     {
@@ -322,6 +625,7 @@ internal sealed class PostLandingCanaryCoordinator
         PostLandingCanaryFailureReason.EmptyReceipt => "empty-receipt",
         PostLandingCanaryFailureReason.Timeout => "timeout",
         PostLandingCanaryFailureReason.InfrastructureError => "infrastructure-error",
+        PostLandingCanaryFailureReason.EvaluatedArtifactFailure => "evaluated-artifact-failure",
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown canary failure reason.")
     };
 
@@ -349,30 +653,37 @@ internal static class PostLandingCanaryFactory
         Action<string>? progress = null)
     {
         var events = CreateEventStore(workspace, ensureSchema: true);
-        var circuit = new AcceptanceEngineCircuitBreaker(events);
-        return new PostLandingCanaryCoordinator(
+        var operatorItems = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var circuit = new AcceptanceEngineCircuitBreaker(events, operatorItems);
+        var coordinator = new PostLandingCanaryCoordinator(
             PostLandingCanaryConfiguration.Load(AppContext.BaseDirectory),
             new PostLandingCanaryRunner(
                 workspace.ExecutionDirectory,
                 Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH")),
             events,
             circuit,
+            operatorItems,
             progress: progress);
+        coordinator.ResumePending();
+        return coordinator;
     }
 
     internal static AcceptanceEngineCircuitBreaker CreateCircuit(OrchestratorWorkspace workspace)
     {
         try
         {
-            return new AcceptanceEngineCircuitBreaker(CreateEventStore(
-                workspace,
-                ensureSchema: !File.Exists(workspace.RunEventStorePath)));
+            return new AcceptanceEngineCircuitBreaker(
+                CreateEventStore(
+                    workspace,
+                    ensureSchema: !File.Exists(workspace.RunEventStorePath)),
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
         }
-        catch when (PostLandingCanaryEmergencyCircuit.TryRead(workspace.RunEventStorePath) is not null)
+        catch
         {
-            // The emergency signal must remain readable even when the durable store cannot
-            // be opened. Defer all SQLite access; the circuit checks emergency state first.
-            return new AcceptanceEngineCircuitBreaker(CreateEventStore(workspace, ensureSchema: false));
+            // Defer SQLite access so Read() can surface the outage without blocking landings.
+            return new AcceptanceEngineCircuitBreaker(
+                CreateEventStore(workspace, ensureSchema: false),
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
         }
     }
 
@@ -389,13 +700,20 @@ internal static class PostLandingCanaryFactory
         {
             var detail =
                 $"Post-landing canary initialization failed after main advanced: {ex.GetType().Name}: {ex.Message}";
+            var landingIdentity = string.IsNullOrWhiteSpace(landing.LandingSha)
+                ? $"goal-{landing.GoalId}"
+                : landing.LandingSha.Trim();
             try
             {
-                PostLandingCanaryEmergencyCircuit.Signal(
-                    workspace.RunEventStorePath,
-                    landing.LandingSha,
-                    detail,
-                    DateTimeOffset.UtcNow);
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+                    .RaiseAsync(
+                        CollaborationItemType.Verify,
+                        goalId: null,
+                        subject: $"Post-landing canary could not initialize for {landingIdentity}",
+                        body: $"Landing {landingIdentity} is UNVERIFIED.\n{detail}",
+                        correlationKey: $"post-landing-canary:initialization:{landingIdentity.ToLowerInvariant()}")
+                    .GetAwaiter()
+                    .GetResult();
             }
             catch
             {
@@ -404,14 +722,14 @@ internal static class PostLandingCanaryFactory
             try
             {
                 progress?.Invoke(
-                    $"CANARY_GATE sha={landing.LandingSha ?? "unknown"} result=failed " +
-                    $"reason=infrastructure-error receipt=in-memory-emergency-circuit detail={ex.GetType().Name}");
+                    $"CANARY_GATE sha={landingIdentity} result=deferred " +
+                    $"reason=initialization-error detail={ex.GetType().Name}");
             }
             catch
             {
             }
 
-            return PostLandingCanaryDisposition.Failed;
+            return PostLandingCanaryDisposition.Deferred;
         }
     }
 
