@@ -2146,14 +2146,18 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 .ToArray();
             try
             {
+                var escalations = events.Where(document =>
+                    document.RootElement.GetProperty("eventType").GetString() == "GoalEscalated").ToArray();
+                Xunit.Assert.All(escalations, escalation => Xunit.Assert.Equal(
+                    "Goal is in Failed state; operator action required",
+                    escalation.RootElement.GetProperty("reason").GetString()));
+                Xunit.Assert.Empty(escalations);
                 var eviction = Xunit.Assert.Single(events.Where(document =>
                     document.RootElement.GetProperty("eventType").GetString() == "GoalEvictedFromConductor"));
                 Xunit.Assert.Equal(storedStatus.ToString(), eviction.RootElement.GetProperty("status").GetString());
                 Xunit.Assert.Equal(
                     enqueueIntent ? "operator-intent-forced-reload" : "scheduled-reload",
                     eviction.RootElement.GetProperty("trigger").GetString());
-                Xunit.Assert.DoesNotContain(events, document =>
-                    document.RootElement.GetProperty("eventType").GetString() == "GoalEscalated");
             }
             finally
             {
@@ -2256,8 +2260,14 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             Xunit.Assert.Equal(GoalStatus.Active, trackedGoal.Status);
             Xunit.Assert.Contains(repository.LoadGoalBatches, batch => batch.Contains(goal.Id.Value));
             var eventsPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
-            using var escalation = JsonDocument.Parse(Xunit.Assert.Single(File.ReadAllLines(eventsPath)));
+            var escalationLine = Xunit.Assert.Single(File.ReadLines(eventsPath).Where(line =>
+            {
+                using var document = JsonDocument.Parse(line);
+                return document.RootElement.GetProperty("eventType").GetString() == "GoalEscalated";
+            }));
+            using var escalation = JsonDocument.Parse(escalationLine);
             Xunit.Assert.Equal("GoalEscalated", escalation.RootElement.GetProperty("eventType").GetString());
+            Xunit.Assert.Equal(GoalStatus.Active.ToString(), escalation.RootElement.GetProperty("status").GetString());
         }
         finally
         {
