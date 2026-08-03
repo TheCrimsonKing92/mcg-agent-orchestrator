@@ -703,9 +703,11 @@ public sealed class LauncherScriptTests
 
         WaitForFile(stdoutPath, TimeSpan.FromSeconds(10));
         WaitForFile(stderrPath, TimeSpan.FromSeconds(10));
-        Assert.True(string.IsNullOrWhiteSpace(File.ReadAllText(stderrPath)), File.ReadAllText(stderrPath));
+        var childStdout = ReadAllTextShared(stdoutPath);
+        var childStderr = ReadAllTextShared(stderrPath);
+        Assert.True(string.IsNullOrWhiteSpace(childStderr), childStderr);
 
-        using var childDocument = JsonDocument.Parse(File.ReadAllText(stdoutPath));
+        using var childDocument = JsonDocument.Parse(childStdout);
         var childArgs = childDocument.RootElement.EnumerateArray().Select(argument => argument.GetString()).ToArray();
         Assert.Equal(ExpectedDoubleDashArguments, childArgs);
     }
@@ -1322,6 +1324,17 @@ public sealed class LauncherScriptTests
         }
 
         Assert.True(File.Exists(path), $"Expected file to exist: {path}");
+    }
+
+    private static string ReadAllTextShared(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private static bool IsProcessRunning(int processId)
