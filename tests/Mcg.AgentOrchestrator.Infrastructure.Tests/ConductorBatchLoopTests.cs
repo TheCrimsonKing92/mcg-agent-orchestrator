@@ -5690,6 +5690,109 @@ public sealed class ConductorBatchLoopTests
             evt.Message.Contains("re-admitted escalated goal after state changed", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void BatchLoopResolvedRebaseConflictReadmitsGoal()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Resolve landing conflict");
+        var rebaseChecks = 0;
+        var landAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            rebaseOntoMain: _ => ++rebaseChecks == 1
+                ? new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.Conflict,
+                    "goal/test",
+                    "Conflict remains.",
+                    ["docs/test-design-discipline.md"],
+                    "workspace rebase")
+                : new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.AlreadyFastForwardable,
+                    "goal/test",
+                    "Branch can fast-forward into main.",
+                    [],
+                    null),
+            runAcceptance: _ => true,
+            land: g =>
+            {
+                landAttempts++;
+                return new LandingResult(
+                    g.Id.Value,
+                    g.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, summary.Done);
+        Assert.Equal(3, rebaseChecks);
+        Assert.Equal(1, landAttempts);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal) &&
+            evt.Message.Contains("status=AlreadyFastForwardable", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopPersistingRebaseConflictStaysSetAside()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Keep landing conflict escalated");
+        var rebaseChecks = 0;
+        var landAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            rebaseOntoMain: _ =>
+            {
+                rebaseChecks++;
+                return new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.Conflict,
+                    "goal/test",
+                    "Conflict remains.",
+                    ["docs/test-design-discipline.md"],
+                    "workspace rebase");
+            },
+            runAcceptance: _ => true,
+            land: g =>
+            {
+                landAttempts++;
+                return new LandingResult(
+                    g.Id.Value,
+                    g.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2);
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(2, rebaseChecks);
+        Assert.Equal(0, landAttempts);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_applies_retry_intent_and_publishes_outcome_after_tick_persist")]
     public async Task BatchLoopAppliesRetryIntentAndPublishesOutcomeAfterTickPersist()
     {

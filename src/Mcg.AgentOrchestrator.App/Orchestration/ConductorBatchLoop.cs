@@ -2688,6 +2688,28 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
+            if (entry.Condition == BatchSetAsideCondition.PreLandingRebaseConflict)
+            {
+                var recheck = driver.RecheckPreLandingRebaseConflict(goal);
+                if (!recheck.ConditionResolved)
+                {
+                    continue;
+                }
+
+                goalProjectionCache.Invalidate(goal.Id);
+                setAsideGoals.Remove(entry.GoalId);
+                escalatedGoals.Remove(entry.GoalId);
+                reapedGoals.Remove(entry.GoalId);
+                var observation =
+                    $"status={recheck.Status}; message={Sanitize(recheck.Observation)}";
+                kernel.RecordGoalPolicyDecision(
+                    goal.Id,
+                    $"Landing escalation self-cleared: condition=pre-landing_rebase_conflict; observation={observation}.");
+                EmitProgress(
+                    $"ESCALATION_SELF_CLEARED goal={entry.GoalId[..8]} condition=pre-landing_rebase_conflict observation={Sanitize(observation)}");
+                continue;
+            }
+
             var currentFingerprint = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
             if (string.Equals(currentFingerprint, entry.StateFingerprint, StringComparison.Ordinal))
             {
@@ -2836,9 +2858,18 @@ internal sealed class ConductorBatchLoop
     }
 
     private static BatchSetAsideCondition GetSetAsideCondition(ConductorAdvanceResult result) =>
-        result.Outcome is ConductorAdvanceOutcome.Escalated { State: GoalLifecycleState.AwaitingClarification }
-            ? BatchSetAsideCondition.AwaitingClarification
-            : BatchSetAsideCondition.LifecycleEscalation;
+        result.Outcome switch
+        {
+            ConductorAdvanceOutcome.Escalated { State: GoalLifecycleState.AwaitingClarification } =>
+                BatchSetAsideCondition.AwaitingClarification,
+            ConductorAdvanceOutcome.Escalated
+            {
+                State: GoalLifecycleState.Verified,
+                Reason: var reason
+            } when reason.StartsWith("pre-landing rebase conflict", StringComparison.OrdinalIgnoreCase) =>
+                BatchSetAsideCondition.PreLandingRebaseConflict,
+            _ => BatchSetAsideCondition.LifecycleEscalation
+        };
 
     private static void SetAside(
         AgentOrchestratorKernel kernel,
@@ -3160,7 +3191,8 @@ internal enum BatchSetAsideCondition
     AwaitingClarification,
     DependencyEscalated,
     AdvanceFault,
-    LifecycleEscalation
+    LifecycleEscalation,
+    PreLandingRebaseConflict
 }
 
 internal enum WatchSleepResult

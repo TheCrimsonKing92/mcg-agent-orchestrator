@@ -3272,6 +3272,15 @@ internal sealed class ConductorDriver
         return RebaseOrRetire(goal, goalPrefix, policy, "pre-merge", applySideEffects: true, out _);
     }
 
+    internal LandingEscalationRecheckResult RecheckPreLandingRebaseConflict(Goal goal)
+    {
+        var rebase = _rebaseOntoMain(goal);
+        return new LandingEscalationRecheckResult(
+            rebase.UpdatedBranch,
+            rebase.Status,
+            rebase.Message);
+    }
+
     private ConductorAdvanceResult? RebaseOrRetire(
         Goal goal,
         string goalPrefix,
@@ -3663,6 +3672,11 @@ internal sealed class ConductorDriver
             : $"{criterion.Name}: {summary.Trim()}";
     }
 }
+
+internal sealed record LandingEscalationRecheckResult(
+    bool ConditionResolved,
+    GoalWorktreeRebaseStatus Status,
+    string Observation);
 
 internal sealed record ConductorLandingReceipt(
     string GoalId,
