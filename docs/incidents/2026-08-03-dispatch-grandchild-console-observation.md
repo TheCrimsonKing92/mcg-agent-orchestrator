@@ -11,13 +11,14 @@ pid 32264. The visible command named the fixture `burn-cpu.ps1`.
 
 ## Stdio diagnosis
 
-The broken handle was closed early, not absent from the inheritable-handle setup. Before this fix,
-the test host started the wrapper with `RedirectStandardOutput=true` and
-`RedirectStandardError=true`. The test host owned the anonymous-pipe read ends; the wrapper owned
-the corresponding standard-output/error write handles. Its later `Start-Process` call implicitly
-offered those standard handles to the grandchild. Cancellation, test-host exit, or operator
-intervention could close the owning read ends before that child launch, producing
-`ERROR_NO_DATA` from the pipe-backed standard handles.
+The captured incident establishes that the anonymous-pipe read end was unavailable when
+`Start-Process` validated the grandchild's inherited standard handle; it does not identify the
+event that closed it. Before this fix, the test host owned the anonymous-pipe read ends and the
+wrapper owned the corresponding standard-output/error write handles. Its later `Start-Process`
+call implicitly offered those standard handles to the grandchild. The evidence therefore supports
+"closed before grandchild launch," not "never marked inheritable"; whether cancellation, test-host
+exit, or operator intervention performed the close remains undetermined because no handle-lifetime
+trace was captured.
 
 The fixture now redirects the grandchild's stdout and stderr to separate files inside its unique
 fixture root. Its correctness no longer depends on the lifetime of a pipe owned by the test host.
@@ -28,12 +29,13 @@ Win32 code and full command line, so the test never waits for a process that did
 
 - The generated script is `grandchild-reap-probe.ps1`; no compatibility alias remains.
 - The CPU workload and `ownedCpuMs > 100` accounting assertion are unchanged.
-- The wrapper is launched through `ProcessTreeGuiSuppression.Start`, which supplies the inherited
-  hidden console used by the grandchild.
+- The wrapper is launched through `ProcessTreeGuiSuppression.Start`, which supplies an inherited
+  hidden console, and the grandchild's `Start-Process -NoNewWindow` request reuses that console.
 - The probe sets a self-identifying console title, appends the same identity to
   `grandchild-reap-probe.log`, and guards its stdout identity write.
-- Start-gate, launch-result, probe-exit, accounting, reap, and teardown waits are bounded at 30
-  seconds and report the resource whose wait expired.
+- Start-gate, launch-result, probe-exit, reap, and teardown waits default to 30 seconds through the
+  `MCG_GRANDCHILD_REAP_FIXTURE_TIMEOUT_SECONDS` override; CPU accounting retains its pre-existing
+  five-second bound. Every expiry reports the resource whose wait expired.
 - Teardown kills the recorded pid, terminates the owned process group, kills any `pwsh` whose
   command line references the unique fixture root, and asserts that the scoped match set is empty.
 - The live test checks `MainWindowHandle == IntPtr.Zero` and verifies that terminating the wrapper

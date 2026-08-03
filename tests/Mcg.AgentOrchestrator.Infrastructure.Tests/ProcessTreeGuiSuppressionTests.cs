@@ -142,6 +142,7 @@ public sealed class ProcessTreeGuiSuppressionTests
             "StartGrandchildReapWrapper(startInfo, ProcessTreeGuiSuppression.Start);",
             dispatchHostTests,
             StringComparison.Ordinal);
+        Assert.Contains("-NoNewWindow -PassThru -ErrorAction Stop", dispatchHostTests, StringComparison.Ordinal);
         Assert.DoesNotContain("burn" + "-cpu.ps1", dispatchHostTests, StringComparison.OrdinalIgnoreCase);
     }
 
