@@ -16,6 +16,11 @@ public sealed class AgentHarnessDocsDriftTests
         new("evidence", "## Evidence")
     ];
 
+    private static readonly SharedHomeSection[] SharedHomeSections =
+    [
+        new("dispositive-decision-discipline", "# Dispositive-Decision Discipline", "docs/dispositive-decision-discipline.md")
+    ];
+
     [Xunit.Fact(DisplayName = "Harness_docs_counterpart_contracts_stay_in_sync")]
     public void HarnessDocsCounterpartContractsStayInSync()
     {
@@ -74,7 +79,10 @@ public sealed class AgentHarnessDocsDriftTests
         RequireContains(agentsContract.Rule, "update BOTH AGENTS.md and CLAUDE.md", "Contract rule must require updating both files.");
         RequireContains(agentsContract.Rule, "move the content to docs/operator-runbook.md or another shared home", "Contract rule must name the shared-home escape hatch.");
 
-        var expectedAnchors = SharedSections.Select(section => section.Anchor).ToArray();
+        var expectedAnchors = SharedSections
+            .Select(section => section.Anchor)
+            .Concat(SharedHomeSections.Select(section => section.Anchor))
+            .ToArray();
         RequireSequenceEqual(expectedAnchors, agentsContract.SharedAnchors, "AGENTS.md shared-anchor list changed.");
         RequireSequenceEqual(agentsContract.SharedAnchors, claudeContract.SharedAnchors, "Shared anchor lists must match.");
 
@@ -85,6 +93,19 @@ public sealed class AgentHarnessDocsDriftTests
             RequireContains(agents, section.Heading, $"AGENTS.md must carry shared heading {section.Heading}.");
             RequireDoesNotContain(claude, marker, $"CLAUDE.md must not duplicate shared marker {marker}.");
             RequireDoesNotContain(claude, section.Heading, $"CLAUDE.md must not duplicate shared heading {section.Heading}.");
+        }
+
+        var root = FindRepositoryRoot();
+        foreach (var section in SharedHomeSections)
+        {
+            var marker = $"<!-- shared-discipline:{section.Anchor} -->";
+            var sharedHome = File.ReadAllText(Path.Combine(root, section.Path));
+            RequireContains(agents, section.Path, $"AGENTS.md must reference shared home {section.Path}.");
+            RequireContains(claude, section.Path, $"CLAUDE.md must reference shared home {section.Path}.");
+            RequireContains(sharedHome, marker, $"{section.Path} must carry shared marker {marker}.");
+            RequireContains(sharedHome, section.Heading, $"{section.Path} must carry shared heading {section.Heading}.");
+            RequireDoesNotContain(agents, marker, $"AGENTS.md must not duplicate shared marker {marker}.");
+            RequireDoesNotContain(claude, marker, $"CLAUDE.md must not duplicate shared marker {marker}.");
         }
     }
 
@@ -202,6 +223,8 @@ public sealed class AgentHarnessDocsDriftTests
     }
 
     private sealed record SharedSection(string Anchor, string Heading);
+
+    private sealed record SharedHomeSection(string Anchor, string Heading, string Path);
 
     private sealed record HarnessContract(
         string Owns,
