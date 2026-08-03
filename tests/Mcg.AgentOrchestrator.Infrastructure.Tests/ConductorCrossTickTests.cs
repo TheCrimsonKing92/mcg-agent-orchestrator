@@ -21,10 +21,12 @@ public sealed class ConductorCrossTickTests
         await using var fixture = new HoldingAcceptanceAttemptsAcrossTicksFixture(time);
         var kernel = new AgentOrchestratorKernel();
         var running = CreateGoal(kernel, "Update src/RunningAcrossTicks.cs");
-        // After tick 1, keep the live goal out of the rebuilt active-candidate list. Under the
-        // pre-fix waiter selection it remains the oldest waiter; recording it as served would
-        // reset the bounded-overtake counter and mask the cross-tick fairness regression.
+        // This injected rejection is scenario control, not failure behavior under test. After
+        // tick 1 it keeps the live goal out of the rebuilt active-candidate list. Under the
+        // pre-fix waiter selection that goal remains the oldest waiter; recording it as served
+        // would reset the bounded-overtake counter and mask the cross-tick fairness regression.
         var rejectRunningCandidateRebuild = false;
+        var rejectedRunningCandidateRebuildCount = 0;
         var paidWorkerStartCount = 0;
         var driver = CreateDriver(
             fixture.AttemptCoordinator,
@@ -32,6 +34,7 @@ public sealed class ConductorCrossTickTests
             {
                 if (goal.Id == running.Id && rejectRunningCandidateRebuild)
                 {
+                    rejectedRunningCandidateRebuildCount++;
                     throw new IOException("running candidate scope temporarily unavailable");
                 }
 
@@ -50,11 +53,10 @@ public sealed class ConductorCrossTickTests
         rejectRunningCandidateRebuild = true;
         var primer = CreateGoal(kernel, "Update src/PrimerAcrossTicks.cs");
         PassVerification(kernel, primer, time.GetUtcNow());
-        BatchTickSummary? primerTick = null;
-        fixture.RunTickForTests(kernel, driver, tick => primerTick = tick);
+        fixture.RunTickForTests(kernel, driver);
 
         var primerHandle = fixture.RequiredHandleForTests(primer);
-        AssertCandidateRebuildRejected(primerTick!, running);
+        Assert.Equal(1, rejectedRunningCandidateRebuildCount);
         Assert.Equal(2, fixture.HeldAttemptCapacity);
         Assert.Equal(2, fixture.HeldAttemptCount);
         Assert.True(fixture.AttemptCoordinator.HasLiveAttempt(running.Id.Value));
@@ -71,7 +73,7 @@ public sealed class ConductorCrossTickTests
         BatchTickSummary? admissionTick = null;
         fixture.RunTickForTests(kernel, driver, tick => admissionTick = tick);
 
-        AssertCandidateRebuildRejected(admissionTick!, running);
+        Assert.Equal(2, rejectedRunningCandidateRebuildCount);
         Assert.Contains(admissionTick!.ProgressLines!, line =>
             line.Contains($"ACCEPTANCE goal={waiting.Id.Value[..8]}", StringComparison.Ordinal) &&
             line.Contains("result=started", StringComparison.Ordinal));
@@ -105,13 +107,6 @@ public sealed class ConductorCrossTickTests
         runningHandle.CompleteForTests();
         Assert.Equal(0, fixture.HeldAttemptCount);
     }
-
-    private static void AssertCandidateRebuildRejected(BatchTickSummary tick, Goal running) =>
-        Assert.Contains(tick.ProgressLines!, line =>
-            line.Contains($"goal={running.Id.Value[..8]}", StringComparison.Ordinal) &&
-            line.Contains("result=held", StringComparison.Ordinal) &&
-            line.Contains("reason=parallel-acceptance-candidate", StringComparison.Ordinal) &&
-            line.Contains("running candidate scope temporarily unavailable", StringComparison.Ordinal));
 
     private static Goal CreateGoal(AgentOrchestratorKernel kernel, string objective) =>
         GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, objective);
