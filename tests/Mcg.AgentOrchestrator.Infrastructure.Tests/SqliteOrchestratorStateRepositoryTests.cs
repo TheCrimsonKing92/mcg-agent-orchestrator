@@ -756,6 +756,46 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             item.Message.Contains("suppression threshold 3 reached", StringComparison.Ordinal)));
     }
 
+    [Xunit.Fact]
+    public async Task TickMerge_stale_open_request_preserves_answer_and_max_count()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve an out-of-band answer", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: "unchanged-blocker").Request;
+        await repo.SaveAsync(kernel);
+
+        var staleKernel = await repo.LoadAsync();
+        var staleBaseline = staleKernel.ExportSnapshot();
+        var operatorKernel = await repo.LoadAsync();
+        operatorKernel.SubmitHumanInput(request.Id, "Authorized.");
+        await repo.SaveAsync(operatorKernel);
+
+        staleKernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: "unchanged-blocker");
+        var staleCurrent = staleKernel.ExportSnapshot();
+        await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(
+                staleBaseline.Goals.Single(),
+                staleCurrent.Goals.Single(),
+                staleCurrent.HumanInputRequests)]);
+
+        var restored = await repo.LoadAsync();
+        var restoredRequest = restored.GetHumanInputRequest(request.Id);
+        Assert.True(restoredRequest.IsCompleted);
+        Assert.Equal("Authorized.", restoredRequest.Answer);
+        Assert.Equal(1, restoredRequest.SuppressionCount);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_upsert_updates_existing_row")]
     public async Task HumanInputUpsertUpdatesExistingRow()
     {

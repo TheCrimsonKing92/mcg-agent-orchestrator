@@ -850,7 +850,7 @@ public sealed class VerificationAndInputWorklistTests
         Assert.True(repeated.WasCreated);
         Assert.NotEqual(first.Request.Id, repeated.Request.Id);
         Assert.Equal(new HumanInputRequestCounts(2, 1), kernel.GetHumanInputRequestCounts(goal.Id, task.Id));
-        Assert.DoesNotContain("Goal parked: wait for a later round", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("→ Goal parked: wait for a later round", brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

@@ -684,12 +684,21 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         var merged = stored.ToDictionary(request => request.Id, StringComparer.Ordinal);
         foreach (var request in current ?? [])
         {
-            if (!merged.TryGetValue(request.Id, out var existing) ||
-                (request.IsCompleted && !existing.IsCompleted) ||
-                request.SuppressionCount > existing.SuppressionCount)
+            if (!merged.TryGetValue(request.Id, out var existing))
             {
                 merged[request.Id] = request;
+                continue;
             }
+
+            var winner = existing.IsCompleted
+                ? existing
+                : request.IsCompleted || request.SuppressionCount > existing.SuppressionCount
+                    ? request
+                    : existing;
+            merged[request.Id] = winner with
+            {
+                SuppressionCount = Math.Max(existing.SuppressionCount, request.SuppressionCount)
+            };
         }
 
         return merged.Values.ToArray();
