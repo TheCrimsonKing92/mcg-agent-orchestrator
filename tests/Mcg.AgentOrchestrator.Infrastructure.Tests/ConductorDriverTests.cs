@@ -323,7 +323,8 @@ public sealed class ConductorDriverTests
         Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null,
         Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
         Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null,
-        Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null)
+        Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null,
+        ConductorParallelAcceptanceAttemptCoordinator? focusedEvidenceAttemptCoordinator = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -365,7 +366,8 @@ public sealed class ConductorDriverTests
             writeEscalationWithResult: writeEscalationWithResult,
             getPreReviewEvidenceContext: getPreReviewEvidenceContext,
             recordPreReviewEvidence: recordPreReviewEvidence,
-            recordPreReviewMappingEscalationSuppressed: recordPreReviewMappingEscalationSuppressed);
+            recordPreReviewMappingEscalationSuppressed: recordPreReviewMappingEscalationSuppressed,
+            focusedEvidenceAttemptCoordinator: focusedEvidenceAttemptCoordinator);
     }
 
     private static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>
@@ -3134,6 +3136,92 @@ public sealed class ConductorDriverTests
         Assert.Equal(1, focusedRuns);
         Assert.Equal(1, dispatches);
         Assert.Equal("abc123", reviewer.PreReviewEvidenceReceipt?.CandidateSha);
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void PreReviewEvidence_InFlightRun_ReturnsThenReconcilesAfterRestart()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SoftwareGoal();
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+            {
+                PassVerification(kernel, goal, task);
+            }
+
+            var completionGate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
+            var attemptRoot = Path.Combine(root, "pre-review-evidence-attempts");
+            var startingCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                attemptCompletionGateForTests: completionGate,
+                acquireStableSlotLease: (_, _) => null);
+            var focusedRuns = 0;
+            var dispatches = 0;
+            FocusedEvidenceRunResult RunEvidence(Goal _, string request)
+            {
+                focusedRuns++;
+                return PassingPreReviewEvidence(request);
+            }
+
+            var startingDriver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getPreReviewEvidenceContext: _ => FocusedPreReviewContext("async-sha"),
+                runFocusedEvidence: RunEvidence,
+                recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                    kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+                dispatchAndStart: _ =>
+                {
+                    dispatches++;
+                    return DispatchStartOutcome.Started();
+                },
+                focusedEvidenceAttemptCoordinator: startingCoordinator);
+
+            var scheduled = startingDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.IsType<ConductorAdvanceOutcome.Held>(scheduled.Outcome);
+            Assert.Equal(0, focusedRuns);
+            Assert.Equal(0, dispatches);
+            Assert.Equal(1, completionGate.HeldCount);
+
+            completionGate.RequiredHandleForTests(goal.Id.Value).CompleteForTests();
+            Assert.Equal(1, focusedRuns);
+
+            var restartedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => throw new InvalidOperationException("completed attempt must be reconciled"),
+                acquireStableSlotLease: (_, _) => null);
+            var restartedDriver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getPreReviewEvidenceContext: _ => FocusedPreReviewContext("async-sha"),
+                runFocusedEvidence: RunEvidence,
+                recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                    kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+                dispatchAndStart: _ =>
+                {
+                    dispatches++;
+                    return DispatchStartOutcome.Started();
+                },
+                focusedEvidenceAttemptCoordinator: restartedCoordinator);
+
+            var reconciled = restartedDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(reconciled.Outcome);
+            Assert.Equal(1, focusedRuns);
+            Assert.Equal(1, dispatches);
+            Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_pre_review_stale_sha_reruns_and_same_sha_green_is_idempotent")]

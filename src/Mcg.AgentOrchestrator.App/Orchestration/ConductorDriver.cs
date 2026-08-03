@@ -64,7 +64,7 @@ internal sealed class ConductorDriver
     private readonly TimeSpan _buildServerShutdownTimeout;
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
-    private readonly Func<Goal, string, FocusedEvidenceRunResult> _runFocusedEvidence;
+    private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
     private readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
@@ -102,6 +102,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
     private readonly string? _executionDirectory;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
+    private readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
     private readonly bool _parallelAcceptanceEnabled;
     private bool _buildServerShutdownRanThisTick;
 
@@ -129,6 +130,9 @@ internal sealed class ConductorDriver
             Path.Combine(workspace.OrchestratorDirectory, "acceptance-gate-attempts"),
             dir,
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot);
+        _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
+            dir);
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         kernel.SetEventWriter(eventWriter);
         _tryBuildAwaitingClarificationEscalationReason = goal =>
@@ -463,7 +467,7 @@ internal sealed class ConductorDriver
                 verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt));
         };
 
-        _runFocusedEvidence = (goal, request) =>
+        _runFocusedEvidence = (goal, request, stableSlotLease, cancellationToken) =>
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null)
@@ -477,7 +481,14 @@ internal sealed class ConductorDriver
             }
 
             GoalOperationJournal.Begin(dir, goal, "conductor:reviewer-evidence", $"Running focused reviewer evidence: {request}");
-            var result = acceptanceVerifier.RunFocusedEvidenceAsync(worktreePath, goal.Id, request).GetAwaiter().GetResult();
+            var result = acceptanceVerifier.RunFocusedEvidenceAsync(
+                    worktreePath,
+                    goal.Id,
+                    request,
+                    stableSlotLease: stableSlotLease,
+                    cancellationToken: cancellationToken)
+                .GetAwaiter()
+                .GetResult();
             if (result.Accepted && result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:reviewer-evidence", result.Summary);
@@ -720,7 +731,8 @@ internal sealed class ConductorDriver
         Func<Goal, GoalLifecycleState, string, LandingEscalationWriteResult>? writeEscalationWithResult = null,
         Func<Goal, PreReviewEvidenceContext>? getPreReviewEvidenceContext = null,
         Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null,
-        Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null)
+        Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null,
+        ConductorParallelAcceptanceAttemptCoordinator? focusedEvidenceAttemptCoordinator = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -738,12 +750,14 @@ internal sealed class ConductorDriver
                 ? ((goal, slot, _, _) => runAcceptanceVerificationWithSlot(goal, slot))
                 : ((goal, _, _, _) => runAcceptanceVerification(goal)));
         _runAdvisorySemanticAcceptance = runAdvisorySemanticAcceptance ?? ((_, _) => { });
-        _runFocusedEvidence = runFocusedEvidence ?? ((_, request) => new FocusedEvidenceRunResult(
-            request,
-            Accepted: false,
-            Passed: false,
-            Summary: "focused evidence runner was not configured",
-            Checks: []));
+        _runFocusedEvidence = runFocusedEvidence is null
+            ? ((_, request, _, _) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: false,
+                Passed: false,
+                Summary: "focused evidence runner was not configured",
+                Checks: []))
+            : ((goal, request, _, _) => runFocusedEvidence(goal, request));
         _getPreReviewEvidenceContext = getPreReviewEvidenceContext ??
             (_ => new PreReviewEvidenceContext(
                 CandidateSha: "test-constructor-candidate",
@@ -802,6 +816,10 @@ internal sealed class ConductorDriver
         _parallelAcceptanceAttemptCoordinator = parallelAcceptanceAttemptCoordinator
             ?? new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.Combine(Path.GetTempPath(), "mcg-conductor-acceptance-attempts", Guid.NewGuid().ToString("N")),
+                runInline: true);
+        _focusedEvidenceAttemptCoordinator = focusedEvidenceAttemptCoordinator
+            ?? new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(Path.GetTempPath(), "mcg-conductor-focused-evidence-attempts", Guid.NewGuid().ToString("N")),
                 runInline: true);
     }
 
@@ -1176,7 +1194,7 @@ internal sealed class ConductorDriver
                 return true;
             }
 
-            var evidence = _runFocusedEvidence(goal, evidenceRequest);
+            var evidence = _runFocusedEvidence(goal, evidenceRequest, null, CancellationToken.None);
             var evidenceMessage = FormatFocusedEvidenceResult(evidence);
             _recordReviewerEvidenceRunRecorded(
                 goal.Id,
@@ -1520,7 +1538,7 @@ internal sealed class ConductorDriver
             $"candidate_sha={candidateSha}; request='{request}'; " +
             $"attempt={priorSubstitutions + 1}/{MaxConductorEvidenceSubstitutionsPerRound}");
 
-        var evidence = _runFocusedEvidence(goal, request);
+        var evidence = _runFocusedEvidence(goal, request, null, CancellationToken.None);
         var evidenceMessage = FormatFocusedEvidenceResult(evidence);
         _recordReviewerEvidenceRunRecorded(
             goal.Id,
@@ -1799,6 +1817,15 @@ internal sealed class ConductorDriver
             return ConductorParallelAcceptanceRunResult.Fault(effectiveCandidate, ex);
         }
     }
+
+    internal ConductorParallelAcceptanceRunResult RunPreReviewFocusedEvidence(
+        ConductorParallelAcceptanceCandidate candidate,
+        string request,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken) =>
+        ConductorParallelAcceptanceRunResult.Focused(
+            candidate,
+            _runFocusedEvidence(candidate.Goal, request, stableSlotLease, cancellationToken));
 
     internal ConductorParallelAcceptanceRunResult? RunParallelLandingAcceptancePreSlot(
         ConductorParallelAcceptanceCandidate candidate,
@@ -2234,7 +2261,39 @@ internal sealed class ConductorDriver
             return true;
         }
 
-        var evidence = _runFocusedEvidence(goal, context.FocusedRequest);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            slotIndex: 0,
+            fileScopes: [],
+            branchHeadSha: context.CandidateSha,
+            mainHeadSha: null);
+        var attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+            candidate,
+            policy,
+            context.FocusedRequest,
+            _runFocusedEvidence);
+        if (attemptDecision.Kind is
+            ConductorParallelAcceptanceAttemptDecisionKind.Started or
+            ConductorParallelAcceptanceAttemptDecisionKind.Running)
+        {
+            result = MakeResult(
+                goal.Id.Value,
+                goalPrefix,
+                policy,
+                new ConductorAdvanceOutcome.Held(
+                    fromState,
+                    $"Pre-review focused evidence is running in background attempt {attemptDecision.Attempt.AttemptId}."));
+            return true;
+        }
+
+        _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+        var evidence = attemptDecision.Run?.FocusedEvidence ?? new FocusedEvidenceRunResult(
+            context.FocusedRequest,
+            Accepted: false,
+            Passed: false,
+            Summary: $"background pre-review evidence {attemptDecision.Attempt.Outcome}: " +
+                (attemptDecision.Attempt.Detail ?? "no result artifact was produced"),
+            Checks: []);
         var evidencePointer = BuildPreReviewEvidencePointer(evidence);
         if (!evidence.Accepted)
         {
