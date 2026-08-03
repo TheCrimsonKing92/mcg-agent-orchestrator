@@ -2302,6 +2302,18 @@ internal sealed class ConductorDriver
         }
 
         _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+        if (attemptDecision.Run?.Exception is { } backgroundFailure)
+        {
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                $"PRE_REVIEW_EVIDENCE_FAILED: background focused evidence run failed. " +
+                $"attempt={attemptDecision.Attempt.AttemptId}: {backgroundFailure.Message}");
+            return true;
+        }
+
         var evidence = attemptDecision.Run?.FocusedEvidence ?? new FocusedEvidenceRunResult(
             context.FocusedRequest,
             Accepted: false,
