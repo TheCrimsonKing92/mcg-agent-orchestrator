@@ -304,6 +304,12 @@ internal sealed record ConductLoopHandoffVerification(
 
 internal static partial class ConductorLoopHandoff
 {
+    internal const uint WindowsSuccessorCreationFlags =
+        (uint)WindowsCreationFlags.CreateBreakawayFromJob |
+        (uint)WindowsCreationFlags.CreateNewProcessGroup |
+        (uint)WindowsCreationFlags.CreateUnicodeEnvironment |
+        (uint)WindowsCreationFlags.ExtendedStartupInfoPresent;
+
     public const string RenewalCountFlag = "--handoff-renewals";
     public const int DefaultMaxRenewalsWithoutLanding = 6;
     public static readonly TimeSpan DefaultVerificationTimeout = TimeSpan.FromSeconds(120);
@@ -863,7 +869,11 @@ internal static partial class ConductorLoopHandoff
             "spawnPath=posix-shell-detached breakawayRequested=false breakawaySucceeded=not-applicable");
     }
 
-    internal static ConductLoopLaunchResult LaunchDetachedWindows(ConductLoopLaunchRequest request, IReadOnlyList<string> command)
+    internal static ConductLoopLaunchResult LaunchDetachedWindows(
+        ConductLoopLaunchRequest request,
+        IReadOnlyList<string> command,
+        Func<ProcessTreeGuiSuppression.ConsoleSpawnScope>? acquireConsoleSuppression = null,
+        Action? beforeCreateProcess = null)
     {
         var nativeCommand = ResolveWindowsNativeCommand(command, request.WorkingDirectory);
         var commandLine = new StringBuilder(BuildWindowsProcessCommandLine(nativeCommand));
@@ -887,48 +897,81 @@ internal static partial class ConductorLoopHandoff
 
             try
             {
-                var incumbentConsole = GetConsoleWindow() == IntPtr.Zero ? "absent" : "present";
-                TryAppendWindowsSpawnEvent(
-                    request,
-                    $"spawnPath=windows-createprocess incumbentConsole={incumbentConsole} suppression=not-applied");
-
-                if (!CreateProcessW(
-                        lpApplicationName: nativeCommand[0],
-                        lpCommandLine: commandLine,
-                        lpProcessAttributes: IntPtr.Zero,
-                        lpThreadAttributes: IntPtr.Zero,
-                        bInheritHandles: true,
-                        dwCreationFlags: WindowsCreationFlags.CreateBreakawayFromJob |
-                            WindowsCreationFlags.CreateNewProcessGroup |
-                            WindowsCreationFlags.CreateUnicodeEnvironment |
-                            WindowsCreationFlags.ExtendedStartupInfoPresent,
-                        lpEnvironment: environment,
-                        lpCurrentDirectory: request.WorkingDirectory,
-                        lpStartupInfo: ref startupInfo,
-                        lpProcessInformation: out var processInformation))
+                var incumbentConsole = ProbeWindowsConsoleState();
+                ProcessTreeGuiSuppression.ConsoleSpawnScope? suppressionScope = null;
+                Exception? suppressionFailure = null;
+                try
                 {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to start breakaway conduct loop successor.");
+                    suppressionScope = (acquireConsoleSuppression ?? ProcessTreeGuiSuppression.AcquireConsoleForChildSpawn)();
+                }
+                catch (Exception ex)
+                {
+                    suppressionFailure = ex;
+                    var nativeError = ex is Win32Exception win32Exception
+                        ? win32Exception.NativeErrorCode.ToString(CultureInfo.InvariantCulture)
+                        : "not-applicable";
+                    TryAppendWindowsSpawnEvent(
+                        request,
+                        $"spawnPath=windows-createprocess error={ex.GetType().Name} nativeError={nativeError} message={ex.Message}",
+                        eventKind: "loop-handoff-console-suppression-failed");
                 }
 
                 try
                 {
-                    var inJob = IsProcessInJob(processInformation.hProcess);
-                    if (inJob)
+                    var spawnConsole = ProbeWindowsConsoleState();
+                    var suppression = suppressionFailure is not null
+                        ? "acquisition-failed"
+                        : suppressionScope?.HiddenConsoleAcquired == true
+                            ? "hidden-console-acquired"
+                            : "existing-console-preserved";
+                    TryAppendWindowsSpawnEvent(
+                        request,
+                        $"spawnPath=windows-createprocess incumbentConsole={incumbentConsole.Window} " +
+                        $"incumbentConsoleAttached={ToLowerInvariant(incumbentConsole.Attached)} " +
+                        $"incumbentConsoleVisible={ToLowerInvariant(incumbentConsole.Visible)} " +
+                        $"spawnConsoleAttached={ToLowerInvariant(spawnConsole.Attached)} " +
+                        $"spawnConsoleVisible={ToLowerInvariant(spawnConsole.Visible)} suppression={suppression}");
+
+                    beforeCreateProcess?.Invoke();
+                    if (!CreateProcessW(
+                            lpApplicationName: nativeCommand[0],
+                            lpCommandLine: commandLine,
+                            lpProcessAttributes: IntPtr.Zero,
+                            lpThreadAttributes: IntPtr.Zero,
+                            bInheritHandles: true,
+                            dwCreationFlags: (WindowsCreationFlags)WindowsSuccessorCreationFlags,
+                            lpEnvironment: environment,
+                            lpCurrentDirectory: request.WorkingDirectory,
+                            lpStartupInfo: ref startupInfo,
+                            lpProcessInformation: out var processInformation))
                     {
-                        TerminateProcess(processInformation.hProcess, 1);
-                        throw new InvalidOperationException("Breakaway conduct loop successor remained in a Windows job.");
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to start breakaway conduct loop successor.");
                     }
 
-                    return new ConductLoopLaunchResult(
-                        (int)processInformation.dwProcessId,
-                        request.StdoutPath,
-                        request.StderrPath,
-                        "spawnPath=windows-createprocess hostResolution=native-executable breakawayRequested=true breakawaySucceeded=true");
+                    try
+                    {
+                        var inJob = IsProcessInJob(processInformation.hProcess);
+                        if (inJob)
+                        {
+                            TerminateProcess(processInformation.hProcess, 1);
+                            throw new InvalidOperationException("Breakaway conduct loop successor remained in a Windows job.");
+                        }
+
+                        return new ConductLoopLaunchResult(
+                            (int)processInformation.dwProcessId,
+                            request.StdoutPath,
+                            request.StderrPath,
+                            "spawnPath=windows-createprocess hostResolution=native-executable breakawayRequested=true breakawaySucceeded=true");
+                    }
+                    finally
+                    {
+                        CloseHandle(processInformation.hThread);
+                        CloseHandle(processInformation.hProcess);
+                    }
                 }
                 finally
                 {
-                    CloseHandle(processInformation.hThread);
-                    CloseHandle(processInformation.hProcess);
+                    suppressionScope?.Dispose();
                 }
             }
             finally
@@ -1301,13 +1344,26 @@ internal static partial class ConductorLoopHandoff
     private static string ConductEventsPath(ConductLoopHandoffOptions options) =>
         Path.Combine(options.LogDirectory, ConductEventLogWriter.CurrentFileName);
 
-    private static void TryAppendWindowsSpawnEvent(ConductLoopLaunchRequest request, string detail)
+    private static WindowsConsoleState ProbeWindowsConsoleState()
+    {
+        var consoleWindow = GetConsoleWindow();
+        var consoleProcessIds = new uint[1];
+        return new WindowsConsoleState(
+            consoleWindow == IntPtr.Zero ? "absent" : "present",
+            GetConsoleProcessList(consoleProcessIds, 1) > 0,
+            consoleWindow != IntPtr.Zero && IsWindowVisible(consoleWindow));
+    }
+
+    private static void TryAppendWindowsSpawnEvent(
+        ConductLoopLaunchRequest request,
+        string detail,
+        string eventKind = "loop-handoff-spawn")
     {
         try
         {
             var logDirectory = Path.GetDirectoryName(request.StdoutPath) ?? request.WorkingDirectory;
             var path = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);
-            new ConductEventLogWriter(path).Append("loop-handoff-spawn", null, detail);
+            new ConductEventLogWriter(path).Append(eventKind, null, detail);
         }
         catch (Exception ex)
         {
@@ -1319,6 +1375,8 @@ internal static partial class ConductorLoopHandoff
 
     private static string ToLowerInvariant(bool value) =>
         value ? "true" : "false";
+
+    private sealed record WindowsConsoleState(string Window, bool Attached, bool Visible);
 
     private static string QuoteCommandArgument(string value)
     {
@@ -1611,6 +1669,13 @@ internal static partial class ConductorLoopHandoff
 
     [DllImport("kernel32.dll")]
     private static extern IntPtr GetConsoleWindow();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint GetConsoleProcessList([Out] uint[] processList, uint processCount);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateFileW(

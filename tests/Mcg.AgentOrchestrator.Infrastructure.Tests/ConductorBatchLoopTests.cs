@@ -3921,6 +3921,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("bInheritHandles: true", source, StringComparison.Ordinal);
         Assert.Contains("ProcThreadAttributeHandleList", source, StringComparison.Ordinal);
         Assert.Contains("ExtendedStartupInfoPresent", source, StringComparison.Ordinal);
+        Assert.Equal(0x01080600u, ConductorLoopHandoff.WindowsSuccessorCreationFlags);
         Assert.DoesNotContain("WindowsCreationFlags.CreateNoWindow", source, StringComparison.Ordinal);
         Assert.DoesNotContain("WindowsCreationFlags.DetachedProcess", source, StringComparison.Ordinal);
 
@@ -3938,6 +3939,7 @@ public sealed class ConductorBatchLoopTests
 
         var root = CreateTempDirectory("mcg-conduct-loop-stdout-handoff");
         int? processId = null;
+        var suppressionScopeActive = false;
         try
         {
             var stdoutPath = Path.Combine(root, "successor.out.log");
@@ -3956,9 +3958,20 @@ public sealed class ConductorBatchLoopTests
                     "/d",
                     "/c",
                     scriptPath
-                ]);
+                ],
+                acquireConsoleSuppression: () =>
+                {
+                    suppressionScopeActive = true;
+                    return new ProcessTreeGuiSuppression.ConsoleSpawnScope(
+                        hiddenConsoleAcquired: true,
+                        onDispose: () => suppressionScopeActive = false);
+                },
+                beforeCreateProcess: () => Assert.True(
+                    suppressionScopeActive,
+                    "Hidden-console suppression was disposed before CreateProcessW."));
 
             Assert.True(result.ProcessId > 0);
+            Assert.False(suppressionScopeActive);
             processId = result.ProcessId;
             var conductEventsPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
             Assert.True(File.Exists(conductEventsPath), "Windows handoff did not journal its pre-spawn diagnostic.");
@@ -3966,6 +3979,8 @@ public sealed class ConductorBatchLoopTests
             Assert.Contains("\"eventKind\":\"loop-handoff-spawn\"", conductEvents, StringComparison.Ordinal);
             Assert.Contains("spawnPath=windows-createprocess", conductEvents, StringComparison.Ordinal);
             Assert.Matches("incumbentConsole=(present|absent)", conductEvents);
+            Assert.Matches("incumbentConsoleAttached=(true|false)", conductEvents);
+            Assert.Contains("suppression=hidden-console-acquired", conductEvents, StringComparison.Ordinal);
             Assert.True(WaitUntil(
                 () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(stdoutMarker, StringComparison.Ordinal),
                 TimeSpan.FromSeconds(10)),
@@ -3974,6 +3989,56 @@ public sealed class ConductorBatchLoopTests
                 () => File.Exists(stderrPath) && ReadAllTextShared(stderrPath).Contains(stderrMarker, StringComparison.Ordinal),
                 TimeSpan.FromSeconds(10)),
                 $"stderr did not contain marker. child={DescribeProcess(processId.Value)} stdout={TryReadAllTextShared(stdoutPath)} stderr={TryReadAllTextShared(stderrPath)}");
+        }
+        finally
+        {
+            if (processId is { } pid)
+            {
+                TryKillProcess(pid);
+            }
+
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ConductorLoopHandoffSuppressionFailureStillStartsSuccessor()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateTempDirectory("mcg-conduct-loop-suppression-failure");
+        int? processId = null;
+        try
+        {
+            var stdoutPath = Path.Combine(root, "successor.out.log");
+            var stderrPath = Path.Combine(root, "successor.err.log");
+            var marker = "handoff-fail-open-marker-" + Guid.NewGuid().ToString("N");
+            var scriptPath = Path.Combine(root, "write-marker.cmd");
+            File.WriteAllText(scriptPath, $"@echo {marker}{Environment.NewLine}");
+            var cmdPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "cmd.exe");
+
+            var result = ConductorLoopHandoff.LaunchDetachedWindows(
+                new ConductLoopLaunchRequest("batch1", [], stdoutPath, stderrPath, root, 0),
+                [cmdPath, "/d", "/c", scriptPath],
+                acquireConsoleSuppression: () => throw new System.ComponentModel.Win32Exception(5, "synthetic suppression failure"));
+
+            Assert.True(result.ProcessId > 0);
+            processId = result.ProcessId;
+            Assert.True(WaitUntil(
+                () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(marker, StringComparison.Ordinal),
+                TimeSpan.FromSeconds(10)),
+                $"successor did not start after suppression failure. stdout={TryReadAllTextShared(stdoutPath)} stderr={TryReadAllTextShared(stderrPath)}");
+
+            var conductEvents = File.ReadAllText(Path.Combine(root, ConductEventLogWriter.CurrentFileName));
+            Assert.Contains("\"eventKind\":\"loop-handoff-console-suppression-failed\"", conductEvents, StringComparison.Ordinal);
+            Assert.Contains("error=Win32Exception", conductEvents, StringComparison.Ordinal);
+            Assert.Contains("nativeError=5", conductEvents, StringComparison.Ordinal);
+            Assert.Contains("suppression=acquisition-failed", conductEvents, StringComparison.Ordinal);
         }
         finally
         {
