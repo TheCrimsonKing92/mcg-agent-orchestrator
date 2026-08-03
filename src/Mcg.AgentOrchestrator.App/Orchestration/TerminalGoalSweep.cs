@@ -29,7 +29,9 @@ internal sealed record TerminalGoalSweepResult(
     int ExcludedGoalCount = 0,
     int CacheHitCount = 0,
     int CacheMissCount = 0,
-    IReadOnlyList<GoalId>? SweptGoalIds = null)
+    IReadOnlyList<GoalId>? SweptGoalIds = null,
+    int TerminalizedGoalCount = 0,
+    int ResolvedAttentionItemCount = 0)
 {
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
@@ -43,11 +45,32 @@ internal sealed class TerminalGoalSweepCache
     private const string StoreFileName = "terminal-goal-sweep-cache.json";
     private static readonly JsonSerializerOptions JsonOptions = new();
     private readonly Dictionary<GoalId, TerminalGoalSweepCacheEntry> _terminalFingerprints = [];
+    private string? _integrationEvidenceDirectory;
+    private string? _integrationEvidenceMainSha;
+    private IGoalIntegrationEvidenceResolver? _integrationEvidenceResolver;
     private string? _loadedStorePath;
     private bool _loaded;
     private bool _dirty;
 
     internal int Count => _terminalFingerprints.Count;
+
+    internal IGoalIntegrationEvidenceResolver GetIntegrationEvidenceResolver(
+        string executionDirectory,
+        string? mainSha)
+    {
+        var fullDirectory = Path.GetFullPath(executionDirectory);
+        if (_integrationEvidenceResolver is not null &&
+            string.Equals(_integrationEvidenceDirectory, fullDirectory, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(_integrationEvidenceMainSha, mainSha, StringComparison.Ordinal))
+        {
+            return _integrationEvidenceResolver;
+        }
+
+        _integrationEvidenceDirectory = fullDirectory;
+        _integrationEvidenceMainSha = mainSha;
+        _integrationEvidenceResolver = GoalIntegrationEvidenceResolver.Build(fullDirectory, mainSha);
+        return _integrationEvidenceResolver;
+    }
 
     internal bool TryMarkHit(
         AgentOrchestratorKernel kernel,
@@ -293,20 +316,32 @@ internal sealed record TerminalGoalSweepCacheSweepFacts(
 
 internal static class TerminalGoalSweep
 {
+    internal const int MaxMergeEvidenceTerminalizationsPerSweep = 25;
+
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner
     {
         get => GoalGitFactIndex.GitRunner;
-        set => GoalGitFactIndex.GitRunner = value;
+        set
+        {
+            GoalGitFactIndex.GitRunner = value;
+            GoalIntegrationEvidenceResolver.GitRunner = value;
+        }
     }
 
     public static TerminalGoalSweepResult Run(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
         GoalId? onlyGoalId = null,
-        TerminalGoalSweepCache? cache = null)
+        TerminalGoalSweepCache? cache = null,
+        IGoalIntegrationEvidenceResolver? integrationEvidenceResolver = null,
+        ICollaborationItemStore? attentionStore = null)
     {
         var dispatchRunner = new BackgroundDispatchRunner();
         var branchFactIndex = GoalGitFactIndex.Build(executionDirectory);
+        integrationEvidenceResolver ??= cache?.GetIntegrationEvidenceResolver(executionDirectory, branchFactIndex.MainSha)
+            ?? GoalIntegrationEvidenceResolver.Build(executionDirectory, branchFactIndex.MainSha);
+        attentionStore ??= CollaborationItemStore.ForDirectory(
+            OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory);
         var cacheSweepFacts = new TerminalGoalSweepCacheSweepFacts(
             branchFactIndex,
             EnumerateEphemeralDirectories(executionDirectory));
@@ -314,6 +349,24 @@ internal static class TerminalGoalSweep
         var sweptGoalIds = new List<GoalId>();
         var cacheHits = 0;
         var cacheMisses = 0;
+        var terminalizedGoalCount = 0;
+        var resolvedAttentionItemCount = ResolveAttentionForExistingTerminalGoals(
+            kernel,
+            onlyGoalId,
+            attentionStore);
+        var integrationEvidenceByGoal = ResolveMergeEvidenceCandidates(
+            kernel,
+            onlyGoalId,
+            integrationEvidenceResolver);
+        GoalId? mergeEvidenceBoundGoalId = null;
+        var mergeEvidenceCandidateCount = integrationEvidenceByGoal.Count;
+        if (integrationEvidenceByGoal.Count > MaxMergeEvidenceTerminalizationsPerSweep)
+        {
+            mergeEvidenceBoundGoalId = integrationEvidenceByGoal.Keys
+                .OrderBy(goalId => goalId.Value, StringComparer.Ordinal)
+                .First();
+            integrationEvidenceByGoal.Clear();
+        }
 
         foreach (var originalGoal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
         {
@@ -341,6 +394,28 @@ internal static class TerminalGoalSweep
             var blockers = new List<TerminalGoalSweepBlocker>();
             var prefix = originalGoal.Id.Value[..Math.Min(8, originalGoal.Id.Value.Length)];
 
+            if (originalGoal.Id == mergeEvidenceBoundGoalId)
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "merge-evidence-backfill-bound-exceeded",
+                    $"merge evidence matched {mergeEvidenceCandidateCount} non-terminal goals; safety bound is {MaxMergeEvidenceTerminalizationsPerSweep}; no goals were terminalized",
+                    "inspect merge-evidence ancestry and rerun conduct"));
+            }
+
+            if (integrationEvidenceByGoal.TryGetValue(originalGoal.Id, out var integrationEvidence))
+            {
+                resolvedAttentionItemCount += TerminalizeFromMergeEvidence(
+                    kernel,
+                    executionDirectory,
+                    originalGoal,
+                    integrationEvidence,
+                    attentionStore,
+                    repairs);
+                terminalizedGoalCount++;
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                continue;
+            }
+
             var reconciled = dispatchRunner.SweepExitedProcesses(kernel, originalGoal.Id);
             if (reconciled > 0)
             {
@@ -356,32 +431,10 @@ internal static class TerminalGoalSweep
             var blockedByDirtyWorktree = false;
             var hasDurableLandingIntent = HasDurableLandingIntentForCleanup(executionDirectory, goal);
             var skipMergedCleanupThisPass = false;
-            var landedFromAncestryThisPass = false;
 
-            if (HasStandingRetiredDisposition(executionDirectory, goal, branchFacts))
+            if (HasStandingTerminalDisposition(executionDirectory, goal, branchFacts))
             {
                 continue;
-            }
-
-            if (TryReconcileVerifiedMissingBranchOrWorktree(
-                    kernel,
-                    executionDirectory,
-                    goal,
-                    branchFacts,
-                    prefix,
-                    repairs))
-            {
-                goal = kernel.GetGoal(originalGoal.Id);
-                branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
-                if (GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(executionDirectory, goal.Id)))
-                {
-                    if (repairs.Count > 0 || blockers.Count > 0)
-                    {
-                        results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
-                    }
-
-                    continue;
-                }
             }
 
             if (hasTerminalTaskDesync &&
@@ -392,6 +445,13 @@ internal static class TerminalGoalSweep
                     "terminal-dirty-worktree",
                     dirtyEvidence,
                     dirtyCommand));
+            }
+            else if (branchFacts.BranchAlreadyLanded && goal.Status == GoalStatus.Verified)
+            {
+                blockers.Add(new TerminalGoalSweepBlocker(
+                    "verified-merged-branch-missing-integrate-commit",
+                    $"verified goal branch {GoalWorktrees.BranchName(goal.Id)} is reachable from main, but no reachable Integrate commit identifies the landing",
+                    $"goal-mark-landed {prefix} --confirm-goal-mark-landed"));
             }
             else if (branchFacts.BranchAlreadyLanded)
             {
@@ -431,23 +491,6 @@ internal static class TerminalGoalSweep
                             $"goal-mark-landed {prefix} --confirm-goal-mark-landed"));
                     }
                 }
-            }
-
-            if (TryTerminalizeFromMainAncestry(
-                    kernel,
-                    executionDirectory,
-                    goal,
-                    branchFactIndex,
-                    prefix,
-                    repairs))
-            {
-                goal = kernel.GetGoal(originalGoal.Id);
-                branchFacts = branchFactIndex.BuildGoalBranchFacts(goal) with
-                {
-                    BranchAlreadyLanded = true
-                };
-                hasDurableLandingIntent = true;
-                landedFromAncestryThisPass = true;
             }
 
             if (!blockedByDirtyWorktree &&
@@ -544,21 +587,14 @@ internal static class TerminalGoalSweep
             if (!blockedByDirtyWorktree &&
                 hasDurableLandingIntent &&
                 !skipMergedCleanupThisPass &&
-                (branchFacts.IsCompletedGitGoal || (goal.Status == GoalStatus.Verified && branchFacts.BranchAlreadyLanded)))
+                branchFacts.IsCompletedGitGoal)
             {
-                var removeResult = goal.Status == GoalStatus.Verified
-                    ? GoalWorktrees.Remove(
-                        executionDirectory,
-                        goal.Id,
-                        kernel,
-                        branchFacts.HasRegisteredWorktree,
-                        branchFacts.HasGoalBranch)
-                    : GoalWorktrees.RemoveTerminal(
-                        executionDirectory,
-                        goal.Id,
-                        kernel,
-                        branchFacts.HasRegisteredWorktree,
-                        branchFacts.HasGoalBranch);
+                var removeResult = GoalWorktrees.RemoveTerminal(
+                    executionDirectory,
+                    goal.Id,
+                    kernel,
+                    branchFacts.HasRegisteredWorktree,
+                    branchFacts.HasGoalBranch);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
@@ -575,15 +611,12 @@ internal static class TerminalGoalSweep
                 }
                 else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (!landedFromAncestryThisPass)
-                    {
-                        RecordTerminalDisposition(
-                            kernel,
-                            executionDirectory,
-                            goal,
-                            GoalTerminalDispositionKind.Landed,
-                            $"Terminal sweep completed merged goal cleanup: {removeResult.Message}");
-                    }
+                    RecordTerminalDisposition(
+                        kernel,
+                        executionDirectory,
+                        goal,
+                        GoalTerminalDispositionKind.Landed,
+                        $"Terminal sweep completed merged goal cleanup: {removeResult.Message}");
 
                     repairs.Add(new TerminalGoalSweepRepair(
                         "merged-branch-cleanup",
@@ -635,7 +668,97 @@ internal static class TerminalGoalSweep
             CountGlobalStaleTerminalExclusions(results),
             cacheHits,
             cacheMisses,
-            sweptGoalIds);
+            sweptGoalIds,
+            terminalizedGoalCount,
+            resolvedAttentionItemCount);
+    }
+
+    private static Dictionary<GoalId, GoalIntegrationEvidence> ResolveMergeEvidenceCandidates(
+        AgentOrchestratorKernel kernel,
+        GoalId? onlyGoalId,
+        IGoalIntegrationEvidenceResolver resolver)
+    {
+        var matches = new Dictionary<GoalId, GoalIntegrationEvidence>();
+        foreach (var goal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId))
+        {
+            if (IsTerminalSweepStatus(goal.Status) ||
+                goal.Tasks.Any(task =>
+                    task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled or WorkTaskStatus.Failed) ||
+                    task.LastProcess is { IsRunning: true }) ||
+                !resolver.TryResolve(goal.Id, out var evidence) ||
+                evidence is null)
+            {
+                continue;
+            }
+
+            matches[goal.Id] = evidence;
+        }
+
+        return matches;
+    }
+
+    private static int ResolveAttentionForExistingTerminalGoals(
+        AgentOrchestratorKernel kernel,
+        GoalId? onlyGoalId,
+        ICollaborationItemStore store)
+    {
+        var openGoalIds = store.GetAttentionQueueAsync()
+            .GetAwaiter()
+            .GetResult()
+            .Where(item => !string.IsNullOrWhiteSpace(item.GoalId))
+            .Select(item => item.GoalId!)
+            .ToHashSet(StringComparer.Ordinal);
+        var resolved = 0;
+        foreach (var goal in kernel.Goals.Where(goal =>
+                     (onlyGoalId is null || goal.Id == onlyGoalId) &&
+                     IsTerminalSweepStatus(goal.Status) &&
+                     openGoalIds.Contains(goal.Id.Value)))
+        {
+            resolved += store.ResolveOpenForGoalAsync(
+                    goal.Id.Value,
+                    $"goal terminal state reconciled: {goal.Status}")
+                .GetAwaiter()
+                .GetResult();
+        }
+
+        return resolved;
+    }
+
+    private static int TerminalizeFromMergeEvidence(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        Goal goal,
+        GoalIntegrationEvidence evidence,
+        ICollaborationItemStore attentionStore,
+        List<TerminalGoalSweepRepair> repairs)
+    {
+        var priorStatus = goal.Status;
+        var detail =
+            $"Goal terminalized from merge evidence at {evidence.IntegrateSha}; mainSha={evidence.MainSha}; priorStatus={priorStatus}.";
+        kernel.CompleteGoalFromMergeEvidence(goal.Id, evidence.IntegrateSha, detail);
+        GoalOperationJournal.RecordTerminalDisposition(
+            executionDirectory,
+            goal,
+            new GoalTerminalDisposition(
+                GoalTerminalDispositionKind.Landed,
+                detail,
+                GoalTerminalDispositionSource.MergeEvidence));
+        GoalLifecycleEventWriter.RetireDispatchProviderSessions(kernel, goal.Id, DateTimeOffset.UtcNow);
+        kernel.RecordGoalLandedFromMergeEvidence(
+            goal.Id,
+            GoalWorktrees.BranchName(goal.Id),
+            evidence.IntegrateSha,
+            evidence.MainSha);
+
+        var resolution = $"goal terminalized from merge evidence at {evidence.IntegrateSha}";
+        var resolvedAttention = attentionStore.ResolveOpenForGoalAsync(goal.Id.Value, resolution)
+            .GetAwaiter()
+            .GetResult();
+        repairs.Add(new TerminalGoalSweepRepair(
+            "merge-evidence-terminalized",
+            $"integrateSha={evidence.IntegrateSha}; mainSha={evidence.MainSha}; priorStatus={priorStatus}; resolvedAttentionItems={resolvedAttention}",
+            "terminalized"));
+        return resolvedAttention;
     }
 
     private static IReadOnlyList<string> EnumerateEphemeralDirectories(string executionDirectory)
@@ -654,121 +777,17 @@ internal static class TerminalGoalSweep
         return directories;
     }
 
-    private static bool TryReconcileVerifiedMissingBranchOrWorktree(
-        AgentOrchestratorKernel kernel,
+    private static bool HasStandingTerminalDisposition(
         string executionDirectory,
         Goal goal,
-        GoalBranchFacts branchFacts,
-        string prefix,
-        List<TerminalGoalSweepRepair> repairs)
+        GoalBranchFacts branchFacts)
     {
-        if (goal.Status != GoalStatus.Verified ||
-            !branchFacts.IsAcceptedOrVerifiedGitGoal ||
-            branchFacts.BranchAlreadyLanded ||
-            !branchFacts.MissingBranchOrWorktree)
-        {
-            return false;
-        }
-
-        var missing = !branchFacts.HasGoalBranch
-            ? $"branch {GoalWorktrees.BranchName(goal.Id)} is missing"
-            : "registered worktree is missing";
-
-        if (TryBuildReachableCommitEvidence(executionDirectory, goal, out var landedEvidence))
-        {
-            RecordTerminalDisposition(
-                kernel,
-                executionDirectory,
-                goal,
-                GoalTerminalDispositionKind.Landed,
-                $"Terminal sweep reconciled missing goal artifact as landed: {landedEvidence}.");
-            repairs.Add(new TerminalGoalSweepRepair(
-                "missing-branch-landed-reconciled",
-                $"{missing}; {landedEvidence}",
-                $"conduct {prefix} --loop"));
-            return true;
-        }
-
-        RecordTerminalDisposition(
-            kernel,
-            executionDirectory,
-            goal,
-            GoalTerminalDispositionKind.Retired,
-            $"Terminal sweep retired missing goal artifact because landing could not be verified from recorded commits, integration commits, or dogfood log: {missing}.");
-        repairs.Add(new TerminalGoalSweepRepair(
-            "missing-branch-retired",
-            $"{missing}; landing not verifiable from recorded commits, integration commits, or dogfood log; record retired from future conduct sweeps",
-            "retired"));
-        return true;
-    }
-
-    private static bool HasStandingRetiredDisposition(
-        string executionDirectory,
-        Goal goal,
-        GoalBranchFacts branchFacts) =>
-        (goal.Status == GoalStatus.Cancelled || !branchFacts.HasGoalBranchArtifact) &&
-        GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(executionDirectory, goal.Id));
-
-    private static bool TryTerminalizeFromMainAncestry(
-        AgentOrchestratorKernel kernel,
-        string executionDirectory,
-        Goal goal,
-        GoalGitFactIndex branchFactIndex,
-        string prefix,
-        List<TerminalGoalSweepRepair> repairs)
-    {
-        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified) ||
-            !goal.Tasks.All(task => task.Status is WorkTaskStatus.Completed or WorkTaskStatus.Cancelled) ||
-            !branchFactIndex.TryResolveMainAncestry(goal.Id, out var ancestry) ||
-            ancestry is null)
-        {
-            return false;
-        }
-
-        var detail =
-            $"Terminal sweep landed goal from main ancestry: branchTip={ancestry.BranchTip}; mainSha={ancestry.MainSha}; source=ancestry.";
-        RecordTerminalDisposition(
-            kernel,
-            executionDirectory,
-            goal,
-            GoalTerminalDispositionKind.Landed,
-            detail);
-        kernel.RecordGoalLandedFromAncestry(
-            goal.Id,
-            GoalWorktrees.BranchName(goal.Id),
-            ancestry.BranchTip,
-            ancestry.MainSha);
-
-        var workspace = OrchestratorWorkspace.ForDirectory(executionDirectory);
-        var backlogMessages = new List<string>();
-        GoalLandingPostActions.AutoCloseSourceBacklogItem(
-            goal,
-            workspace.BacklogStorePath,
-            backlogMessages.Add,
-            kernel,
-            executionDirectory,
-            ancestry.MainSha);
-        repairs.AddRange(backlogMessages.Select(message => new TerminalGoalSweepRepair(
-            "ancestry-landing-backlog-post-action",
-            message,
-            $"backlog-list {prefix}")));
-        try
-        {
-            GoalLandingPostActions.RecordDogfoodEntry(goal, workspace.DogfoodLogStorePath);
-        }
-        catch (Exception ex)
-        {
-            repairs.Add(new TerminalGoalSweepRepair(
-                "ancestry-landing-post-action-failed",
-                $"dogfood log entry was not recorded: {ex.Message}",
-                $"dogfood-log add {prefix}"));
-        }
-
-        repairs.Add(new TerminalGoalSweepRepair(
-            "ancestry-derived-landing",
-            $"branchTip={ancestry.BranchTip}; mainSha={ancestry.MainSha}; source=ancestry",
-            $"conduct {prefix} --loop"));
-        return true;
+        var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
+        return ((goal.Status == GoalStatus.Cancelled || !branchFacts.HasGoalBranchArtifact) &&
+                GoalOperationJournal.HasRetiredTerminalDisposition(journal)) ||
+            (goal.Status == GoalStatus.Completed &&
+             !branchFacts.HasGoalBranchArtifact &&
+             GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal));
     }
 
     private static bool HasDurableLandingIntentForCleanup(string executionDirectory, Goal goal) =>
@@ -916,109 +935,6 @@ internal static class TerminalGoalSweep
 
     private readonly record struct RecoveredLandingMerge(string MergeCommitSha, DateTimeOffset CommitAtUtc);
 
-    private static bool TryBuildReachableCommitEvidence(
-        string executionDirectory,
-        Goal goal,
-        out string evidence)
-    {
-        var commits = goal.Tasks
-            .Select(task => task.LastDispatch?.ResultCommit)
-            .Where(commit => !string.IsNullOrWhiteSpace(commit))
-            .Select(commit => commit!.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        if (commits.Length > 0 &&
-            commits.All(commit => IsCommitReachableFromHead(executionDirectory, commit)))
-        {
-            evidence = $"reachableResultCommits={string.Join(",", commits)}";
-            return true;
-        }
-
-        if (TryBuildReachableIntegrationCommitEvidence(executionDirectory, goal, out evidence))
-        {
-            return true;
-        }
-
-        if (TryBuildDogfoodLogEvidence(executionDirectory, goal, out evidence))
-        {
-            return true;
-        }
-
-        evidence = string.Empty;
-        return false;
-    }
-
-    private static bool IsCommitReachableFromHead(string executionDirectory, string commit) =>
-        GitCli.Run(executionDirectory, "merge-base", "--is-ancestor", commit, "HEAD").ExitCode == 0;
-
-    private static bool TryBuildReachableIntegrationCommitEvidence(
-        string executionDirectory,
-        Goal goal,
-        out string evidence)
-    {
-        var goalPrefix = goal.Id.Value[..Math.Min(8, goal.Id.Value.Length)];
-        foreach (var pattern in new[] { goal.Id.Value, goalPrefix, GoalWorktrees.BranchName(goal.Id) })
-        {
-            var result = GitCli.Run(
-                executionDirectory,
-                "log",
-                "--format=%H",
-                "-n",
-                "1",
-                "--regexp-ignore-case",
-                $"--grep={pattern}",
-                "HEAD");
-            if (result.ExitCode == 0 && !string.IsNullOrWhiteSpace(result.Output))
-            {
-                var commit = result.Output
-                    .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                    .FirstOrDefault();
-                if (!string.IsNullOrWhiteSpace(commit))
-                {
-                    evidence = $"reachableIntegrationCommit={commit}; matched={pattern}";
-                    return true;
-                }
-            }
-        }
-
-        evidence = string.Empty;
-        return false;
-    }
-
-    private static bool TryBuildDogfoodLogEvidence(
-        string executionDirectory,
-        Goal goal,
-        out string evidence)
-    {
-        var dogfoodLogPath = Path.Combine(executionDirectory, ".orchestrator", "dogfood-log.db");
-        if (!File.Exists(dogfoodLogPath))
-        {
-            evidence = string.Empty;
-            return false;
-        }
-
-        try
-        {
-            var record = new DogfoodLogStore(dogfoodLogPath)
-                .GetByGoalIdAsync(goal.Id.Value)
-                .GetAwaiter()
-                .GetResult();
-            if (record is not null)
-            {
-                evidence = $"dogfoodLogSequence={record.Sequence}; recordedAt={record.RecordedAt:O}";
-                return true;
-            }
-        }
-        catch
-        {
-            // Sweep repair remains best-effort; unreadable evidence should not block the fallback path.
-        }
-
-        evidence = string.Empty;
-        return false;
-    }
-
     private static void RecordTerminalDisposition(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
@@ -1027,10 +943,15 @@ internal static class TerminalGoalSweep
         string detail)
     {
         kernel.CompleteGoal(goal.Id, detail);
+        var source = kind == GoalTerminalDispositionKind.Landed &&
+            GoalOperationJournal.HasMergeEvidenceTerminalDisposition(
+                GoalOperationJournal.Read(executionDirectory, goal.Id))
+            ? GoalTerminalDispositionSource.MergeEvidence
+            : GoalTerminalDispositionSource.General;
         GoalOperationJournal.RecordTerminalDisposition(
             executionDirectory,
             goal,
-            new GoalTerminalDisposition(kind, detail));
+            new GoalTerminalDisposition(kind, detail, source));
         GoalLifecycleEventWriter.RetireDispatchProviderSessions(kernel, goal.Id, DateTimeOffset.UtcNow);
     }
 

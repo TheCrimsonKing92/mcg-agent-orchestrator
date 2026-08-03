@@ -4644,8 +4644,8 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_cache_preserves_verified_missing_branch_repair")]
-    public void TerminalGoalSweepCachePreservesVerifiedMissingBranchRepair()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_cache_keeps_unintegrated_missing_branch_verified")]
+    public void TerminalGoalSweepCacheKeepsUnintegratedMissingBranchVerified()
     {
         var root = CreateSeededGitRepository();
         try
@@ -4657,9 +4657,9 @@ public sealed class ConductorBatchLoopTests
 
             var sweep = TerminalGoalSweep.Run(kernel, root, cache: cache);
 
-            Assert.Contains(sweep.Goals, goal =>
-                goal.GoalId == verified.Id &&
-                goal.Repairs.Any(repair => repair.Kind == "missing-branch-retired"));
+            Assert.Empty(sweep.Goals);
+            Assert.Equal(GoalStatus.Verified, verified.Status);
+            Assert.False(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, verified.Id)));
         }
         finally
         {
@@ -8807,10 +8807,12 @@ public sealed class ConductorBatchLoopTests
             var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Active conductor goal");
             PassVerification(kernel, retiredGoal, retiredGoal.Tasks.Single());
 
-            var sweep = TerminalGoalSweep.Run(kernel, root);
-            Assert.Contains(sweep.Goals, goal =>
-                goal.GoalId == retiredGoal.Id &&
-                goal.Repairs.Any(repair => repair.Kind == "missing-branch-retired"));
+            var retirementDetail = "Operator retired missing goal branch.";
+            GoalOperationJournal.RecordTerminalDisposition(
+                root,
+                retiredGoal,
+                new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, retirementDetail));
+            kernel.CompleteGoal(retiredGoal.Id, retirementDetail);
             Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, retiredGoal.Id)));
 
             GoalOperationJournal.Begin(root, retiredGoal, "conductor:cleanup", "Later interrupted cleanup must not erase retirement.");
@@ -8849,6 +8851,66 @@ public sealed class ConductorBatchLoopTests
             Assert.Contains("TICK tick=1 eligible=1", output);
             Assert.Contains(activeGoal.Id, advancedGoalIds);
             Assert.DoesNotContain(retiredGoal.Id, advancedGoalIds);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_goal_mark_landed_merge_disposition_is_excluded_by_typed_source")]
+    public void BatchLoopGoalMarkLandedMergeDispositionIsExcludedByTypedSource()
+    {
+        var root = CreateSeededGitRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var landedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Goal marked landed");
+            var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Active conductor goal");
+            PassVerification(kernel, landedGoal, landedGoal.Tasks.Single());
+            GoalOperationJournal.RecordTerminalDisposition(
+                root,
+                landedGoal,
+                new GoalTerminalDisposition(
+                    GoalTerminalDispositionKind.Landed,
+                    $"Goal {landedGoal.Id.Value[..8]} was marked landed via goal-mark-landed.",
+                    GoalTerminalDispositionSource.MergeEvidence));
+            kernel.CompleteGoal(landedGoal.Id, "Goal marked landed.");
+
+            var advancedGoalIds = new List<GoalId>();
+            var driver = MakeDriver(
+                getFacts: goal =>
+                {
+                    var journal = GoalOperationJournal.Read(root, goal.Id);
+                    return new GoalLifecycleFacts(
+                        IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(journal),
+                        IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(journal),
+                        IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(journal));
+                },
+                createWorkspace: goal =>
+                {
+                    advancedGoalIds.Add(goal.Id);
+                    return "/tmp/workspace";
+                },
+                dispatchAndStart: goal =>
+                {
+                    advancedGoalIds.Add(goal.Id);
+                    return DispatchStartOutcome.Started();
+                });
+
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                new ConductorBatchLoop().Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1);
+            });
+
+            Assert.Contains("TICK tick=1 eligible=1", output);
+            Assert.Contains(activeGoal.Id, advancedGoalIds);
+            Assert.DoesNotContain(landedGoal.Id, advancedGoalIds);
         }
         finally
         {

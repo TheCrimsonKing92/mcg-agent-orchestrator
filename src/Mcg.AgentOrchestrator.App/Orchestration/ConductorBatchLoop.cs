@@ -2166,8 +2166,9 @@ internal sealed class ConductorBatchLoop
 
         try
         {
-            return !GoalOperationJournal.HasRetiredTerminalDisposition(
-                GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id));
+            var journal = GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id);
+            return !GoalOperationJournal.HasRetiredTerminalDisposition(journal) &&
+                !GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal);
         }
         catch
         {
@@ -2959,6 +2960,23 @@ internal sealed class ConductorBatchLoop
         if (IsPreWalkExcludedGoal(goal))
         {
             return false;
+        }
+
+        if (goal.Status == GoalStatus.Completed &&
+            !string.IsNullOrWhiteSpace(driver.ExecutionDirectory))
+        {
+            try
+            {
+                if (GoalOperationJournal.HasMergeEvidenceTerminalDisposition(
+                        GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id)))
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+                // A transient journal read failure must not remove a goal from ordinary lifecycle evaluation.
+            }
         }
 
         if (goal.Status is GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed)

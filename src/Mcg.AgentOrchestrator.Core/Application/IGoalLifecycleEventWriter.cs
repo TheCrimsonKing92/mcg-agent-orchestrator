@@ -32,6 +32,7 @@ public interface IGoalLifecycleEventWriter
         string capturedAcceptanceCriteriaHash);
     void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch);
     void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha);
+    void AppendGoalLandedFromMergeEvidence(GoalId goalId, string goalBranch, string integrateSha, string mainSha);
     void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source);
     void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, GoalStatus status, string reason, string source) =>
         AppendGoalEscalated(goalId, state, reason, source);
@@ -78,6 +79,7 @@ public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
     public void AppendAcceptanceCriterionWaived(GoalId goalId, string criterion, string actor, DateTimeOffset recordedAt, string reason, string capturedAcceptanceCriteriaHash) { }
     public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
     public void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha) { }
+    public void AppendGoalLandedFromMergeEvidence(GoalId goalId, string goalBranch, string integrateSha, string mainSha) { }
     public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }
     public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, GoalStatus status, string reason, string source) { }
     public void AppendGoalEvictedFromConductor(GoalId goalId, GoalStatus status, string trigger) { }

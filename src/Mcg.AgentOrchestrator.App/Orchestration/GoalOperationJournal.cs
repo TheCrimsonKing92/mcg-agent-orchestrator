@@ -91,9 +91,16 @@ internal enum GoalTerminalDispositionKind
     Retired
 }
 
+internal enum GoalTerminalDispositionSource
+{
+    General,
+    MergeEvidence
+}
+
 internal sealed record GoalTerminalDisposition(
     GoalTerminalDispositionKind Kind,
-    string Detail);
+    string Detail,
+    GoalTerminalDispositionSource Source = GoalTerminalDispositionSource.General);
 
 internal sealed record GoalLandingIntent(
     string GoalId,
@@ -576,6 +583,13 @@ internal static class GoalOperationJournal
 
         return journal.LatestByOperation.Any(IsLegacyRetiredTerminalDispositionEntry);
     }
+
+    public static bool HasMergeEvidenceTerminalDisposition(GoalOperationJournalSummary journal) =>
+        TryGetLatestTerminalDisposition(journal) is
+        {
+            Kind: GoalTerminalDispositionKind.Landed,
+            Source: GoalTerminalDispositionSource.MergeEvidence
+        };
 
     public static bool HasDurableLandingIntent(GoalOperationJournalSummary journal)
     {

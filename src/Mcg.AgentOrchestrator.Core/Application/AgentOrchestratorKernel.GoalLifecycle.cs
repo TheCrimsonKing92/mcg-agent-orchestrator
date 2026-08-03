@@ -764,12 +764,80 @@ public sealed partial class AgentOrchestratorKernel
         return goal;
     }
 
+    public Goal CompleteGoalFromMergeEvidence(GoalId goalId, string integrateSha, string reason)
+    {
+        var goal = GetGoal(goalId);
+        var normalizedIntegrateSha = integrateSha?.Trim() ?? string.Empty;
+        var completeReason = reason?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalizedIntegrateSha))
+        {
+            throw new ArgumentException("Integrate commit SHA cannot be empty.", nameof(integrateSha));
+        }
+
+        if (string.IsNullOrWhiteSpace(completeReason))
+        {
+            throw new ArgumentException("Goal completion reason cannot be empty.", nameof(reason));
+        }
+
+        if (goal.Status == GoalStatus.Completed)
+        {
+            return goal;
+        }
+
+        if (IsTerminalGoalStatus(goal.Status))
+        {
+            throw new InvalidOperationException(
+                $"Goal '{goalId}' is already terminal as {goal.Status}; merge evidence cannot rewrite that terminal outcome.");
+        }
+
+        if (goal.Tasks.Any(task =>
+                task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Cancelled or WorkTaskStatus.Failed) ||
+                task.LastProcess is { IsRunning: true }))
+        {
+            throw new InvalidOperationException(
+                $"Goal '{goalId}' cannot complete from merge evidence while any task is non-terminal or has a live process.");
+        }
+
+        foreach (var task in goal.Tasks.Where(task => task.Status is WorkTaskStatus.Cancelled or WorkTaskStatus.Failed))
+        {
+            Append(
+                goal,
+                task.Id,
+                ProgressKind.GoalPolicyDecision,
+                $"MERGE_EVIDENCE_CONFLICT task={task.Id.Value} status={task.Status} " +
+                $"terminalization=landed integrateSha={normalizedIntegrateSha}");
+        }
+
+        if (goal.Status is not (GoalStatus.Verifying or GoalStatus.Verified))
+        {
+            Append(
+                goal,
+                null,
+                ProgressKind.GoalPolicyDecision,
+                $"MERGE_EVIDENCE_CONFLICT goalStatus={goal.Status} terminalization=landed " +
+                $"integrateSha={normalizedIntegrateSha}");
+        }
+
+        goal.SetStatus(GoalStatus.Completed);
+        Append(goal, null, ProgressKind.GoalPolicyDecision, completeReason);
+        return goal;
+    }
+
     public void RecordGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha)
     {
         _eventWriter.AppendGoalLandedFromAncestry(
             goalId,
             goalBranch,
             branchTip,
+            mainSha);
+    }
+
+    public void RecordGoalLandedFromMergeEvidence(GoalId goalId, string goalBranch, string integrateSha, string mainSha)
+    {
+        _eventWriter.AppendGoalLandedFromMergeEvidence(
+            goalId,
+            goalBranch,
+            integrateSha,
             mainSha);
     }
 

@@ -132,8 +132,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_reachable_from_main_reconciles_to_cleaned_up")]
-    public void TerminalGoalSweepVerifiedMissingBranchReachableFromMainReconcilesToCleanedUp()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_merged_branch_without_integrate_subject_stays_verified")]
+    public async Task TerminalGoalSweepMergedBranchWithoutIntegrateSubjectStaysVerified()
     {
         var root = CreateAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -167,21 +167,21 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 string.Empty,
                 DateTimeOffset.UtcNow));
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
-            _ = GoalWorktrees.Remove(root, goal.Id);
 
             var first = TerminalGoalSweep.Run(kernel, root);
+            var attentionStore = CollaborationItemStore.ForDirectory(
+                OrchestratorWorkspace.ForDirectory(root).OrchestratorDirectory);
+            var raisedAttention = await TerminalGoalSweepAttention.SurfaceAsync(kernel, first, attentionStore, goal.Id);
             var second = TerminalGoalSweep.Run(kernel, root);
-            var facts = new GoalLifecycleFacts(
-                WorkspaceExists: GoalWorktrees.TryResolve(root, goal.Id) is not null,
-                IsMerged: GoalOperationJournal.HasCompletedLandingEvidence(GoalOperationJournal.Read(root, goal.Id)),
-                IsRecorded: GoalOperationJournal.HasCompletedRecordEvidence(GoalOperationJournal.Read(root, goal.Id)),
-                IsCleanedUp: GoalOperationJournal.HasCompletedCleanupEvidence(GoalOperationJournal.Read(root, goal.Id)));
-
-            Xunit.Assert.True(first.Changed);
-            Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "missing-branch-landed-reconciled");
-            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
-            Xunit.Assert.Equal(GoalLifecycleState.CleanedUp, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
-            Xunit.Assert.Empty(second.Goals);
+            var blocker = Xunit.Assert.Single(Xunit.Assert.Single(first.Goals).Blockers);
+            Xunit.Assert.Equal("verified-merged-branch-missing-integrate-commit", blocker.Kind);
+            Xunit.Assert.Equal(1, raisedAttention);
+            Xunit.Assert.Single(await attentionStore.GetAttentionQueueAsync());
+            Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
+            Xunit.Assert.NotEqual(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
+            Xunit.Assert.False(GoalOperationJournal.HasCompletedLandingEvidence(GoalOperationJournal.Read(root, goal.Id)));
+            Xunit.Assert.Contains(second.Blockers, item => item.Kind == "verified-merged-branch-missing-integrate-commit");
         }
         finally
         {
@@ -190,8 +190,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_integration_commit_reconciles_to_landed")]
-    public void TerminalGoalSweepVerifiedMissingBranchIntegrationCommitReconcilesToLanded()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_arbitrary_goal_commit_without_integrate_subject_stays_verified")]
+    public void TerminalGoalSweepArbitraryGoalCommitWithoutIntegrateSubjectStaysVerified()
     {
         var root = CreateAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -214,12 +214,9 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             RunGit(root, "commit", "-m", $"Operator bridged landing for goal {goal.Id.Value[..8]}");
 
             var first = TerminalGoalSweep.Run(kernel, root);
-            var repair = first.Goals.Single().Repairs.Single();
-
-            Xunit.Assert.Equal("missing-branch-landed-reconciled", repair.Kind);
-            Xunit.Assert.Contains("reachableIntegrationCommit=", repair.Evidence, StringComparison.Ordinal);
-            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
-            Xunit.Assert.True(GoalOperationJournal.HasCompletedCleanupEvidence(GoalOperationJournal.Read(root, goal.Id)));
+            Xunit.Assert.Empty(first.Goals);
+            Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.False(GoalOperationJournal.HasCompletedLandingEvidence(GoalOperationJournal.Read(root, goal.Id)));
         }
         finally
         {
@@ -228,8 +225,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_dogfood_log_reconciles_to_landed")]
-    public async Task TerminalGoalSweepVerifiedMissingBranchDogfoodLogReconcilesToLanded()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_dogfood_log_without_integrate_subject_stays_verified")]
+    public async Task TerminalGoalSweepDogfoodLogWithoutIntegrateSubjectStaysVerified()
     {
         var root = CreateAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -257,12 +254,9 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 $"Landed goal {goal.Id.Value[..8]} via operator bridge."));
 
             var first = TerminalGoalSweep.Run(kernel, root);
-            var repair = first.Goals.Single().Repairs.Single();
-
-            Xunit.Assert.Equal("missing-branch-landed-reconciled", repair.Kind);
-            Xunit.Assert.Contains("dogfoodLogSequence=", repair.Evidence, StringComparison.Ordinal);
-            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
-            Xunit.Assert.True(GoalOperationJournal.HasCompletedCleanupEvidence(GoalOperationJournal.Read(root, goal.Id)));
+            Xunit.Assert.Empty(first.Goals);
+            Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.False(GoalOperationJournal.HasCompletedLandingEvidence(GoalOperationJournal.Read(root, goal.Id)));
         }
         finally
         {
@@ -271,8 +265,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_verified_missing_branch_unverifiable_is_retired_once")]
-    public void TerminalGoalSweepVerifiedMissingBranchUnverifiableIsRetiredOnce()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_missing_branch_without_integrate_subject_stays_verified")]
+    public void TerminalGoalSweepMissingBranchWithoutIntegrateSubjectStaysVerified()
     {
         var root = CreateAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -294,12 +288,10 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var first = TerminalGoalSweep.Run(kernel, root);
             var second = TerminalGoalSweep.Run(kernel, root);
 
-            Xunit.Assert.True(first.Changed);
-            var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "missing-branch-retired");
-            Xunit.Assert.Contains("record retired", repair.Evidence, StringComparison.Ordinal);
-            Xunit.Assert.Equal("retired", repair.Command);
-            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
-            Xunit.Assert.True(GoalOperationJournal.HasCompletedCleanupEvidence(GoalOperationJournal.Read(root, goal.Id)));
+            Xunit.Assert.False(first.Changed);
+            Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Xunit.Assert.False(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, goal.Id)));
+            Xunit.Assert.Empty(first.Goals);
             Xunit.Assert.Empty(second.Goals);
         }
         finally
@@ -922,6 +914,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             CommitGoalWork(root, goal.Id, "src/merged.txt", "goal work");
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
             GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
             var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
             var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
@@ -957,6 +950,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             CommitGoalWork(root, goal.Id, "src/transient-merged.txt", "goal work");
             var expectedMergeSha = RunGitOutput(root, "log", "--format=%H", "-n", "1", GoalWorktrees.BranchName(goal.Id)).Trim();
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
             var cache = new TerminalGoalSweepCache();
 
             var first = TerminalGoalSweep.Run(kernel, root, goal.Id, cache);
@@ -1022,6 +1016,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             RunGit(root, "merge", "--no-ff", goalBranch, "-m", "Main merge");
             var mainMergeSha = RunGitOutput(root, "rev-parse", "HEAD").Trim();
             RunGit(root, "checkout", "side");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
             var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
 
@@ -1124,10 +1119,105 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact]
+    public async Task Run_MergeEvidence_TerminalizesAndResolvesGoalAttention()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var backlogItem = await backlogStore.AddAsync("Keep source backlog unchanged");
+        var kernel = new AgentOrchestratorKernel();
+        kernel.SetEventWriter(new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory));
+        var task = new TaskSpec(TaskId.New(), "Do landed work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Merged goal", [task]);
+        var other = kernel.CreateGoal("Still-live goal", [new TaskSpec(TaskId.New(), "Keep working", AgentRole.Developer)]);
+        kernel.SetGoalSourceBacklogItemId(goal.Id, backlogItem.Id);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(other.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
+
+        await store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Decision", "body", "merged-decision");
+        await store.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value, "Clarification", "body", "merged-clarification");
+        await store.RaiseAsync(CollaborationItemType.Verify, other.Id.Value, "Other verify", "body", "other-verify");
+        var sentinelWorktree = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(sentinelWorktree);
+        File.WriteAllText(Path.Combine(sentinelWorktree, "sentinel.txt"), "keep");
+        var evidence = new GoalIntegrationEvidence("integrate-sha", "main-sha", $"Integrate goal/{goal.Id.Value[..8]}");
+        var resolver = new StubGoalIntegrationEvidenceResolver(goal.Id, evidence);
+
+        var first = TerminalGoalSweep.Run(
+            kernel,
+            root,
+            goal.Id,
+            integrationEvidenceResolver: resolver,
+            attentionStore: store);
+        var newlyRaisedOrResolved = await TerminalGoalSweepAttention.SurfaceAsync(kernel, first, store, goal.Id);
+        var second = TerminalGoalSweep.Run(
+            kernel,
+            root,
+            goal.Id,
+            integrationEvidenceResolver: resolver,
+            attentionStore: store);
+
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, kernel.GetTask(goal.Id, task.Id).Status);
+        Xunit.Assert.Equal(1, first.TerminalizedGoalCount);
+        Xunit.Assert.Equal(2, first.ResolvedAttentionItemCount);
+        Xunit.Assert.Equal(0, newlyRaisedOrResolved);
+        Xunit.Assert.Empty(Xunit.Assert.Single(first.Goals).Blockers);
+        Xunit.Assert.Equal(0, second.TerminalizedGoalCount);
+        Xunit.Assert.Equal(0, second.ResolvedAttentionItemCount);
+        Xunit.Assert.Equal(1, resolver.TargetCalls);
+        Xunit.Assert.True(File.Exists(Path.Combine(sentinelWorktree, "sentinel.txt")));
+        Xunit.Assert.Equal(BacklogItemStatus.Open, (await backlogStore.GetByExactIdAsync(backlogItem.Id))!.Status);
+
+        var open = await store.GetAttentionQueueAsync();
+        Xunit.Assert.Single(open);
+        Xunit.Assert.Equal(other.Id.Value, open[0].GoalId);
+        var resolved = await store.ListAsync(goal.Id.Value);
+        Xunit.Assert.Equal(2, resolved.Count(item => item.Status == CollaborationItemStatus.Resolved));
+        Xunit.Assert.All(resolved, item => Xunit.Assert.Contains("goal terminalized from merge evidence at integrate-sha", item.Resolution));
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        Xunit.Assert.Contains(journal.Entries, entry =>
+            entry.Operation == GoalOperationJournal.TerminalDispositionOperation &&
+            entry.Detail.Contains("\"kind\":\"Landed\"", StringComparison.Ordinal));
+        var eventLines = File.ReadAllLines(Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl"));
+        Xunit.Assert.Single(eventLines.Where(line => line.Contains("\"eventType\":\"GoalLanded\"", StringComparison.Ordinal)));
+        Xunit.Assert.Contains(eventLines, line => line.Contains("\"source\":\"merge-evidence\"", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void Run_MergeEvidenceWithCancelledTask_RecordsConflict()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review landed work", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Merged despite cancelled review", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled, "Cancelled.");
+        var evidence = new GoalIntegrationEvidence("integrate-sha", "main-sha", $"Integrate goal/{goal.Id.Value[..8]}");
+
+        var result = TerminalGoalSweep.Run(
+            kernel,
+            root,
+            goal.Id,
+            integrationEvidenceResolver: new StubGoalIntegrationEvidenceResolver(goal.Id, evidence));
+
+        Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+        Xunit.Assert.Equal(1, result.TerminalizedGoalCount);
+        Xunit.Assert.Contains(goal.Timeline, item =>
+            item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.Contains($"task={task.Id.Value} status=Cancelled", StringComparison.Ordinal));
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(GoalStatus.Verifying)]
     [Xunit.InlineData(GoalStatus.Verified)]
-    public async Task MergedMainAncestryTerminalizesPostVerificationGoal(GoalStatus status)
+    public async Task ReachableIntegrateCommitTerminalizesWithoutGoalBranch(GoalStatus status)
     {
         var root = CreateAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -1159,34 +1249,33 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var goalBranch = GoalWorktrees.BranchName(goal.Id);
             var branchTip = RunGitOutput(root, "rev-parse", goalBranch).Trim();
             RunGit(root, "branch", "side", "main");
-            RunGit(root, "merge", "--no-ff", goalBranch, "-m", "Integrate ancestry test goal");
+            RunGit(root, "merge", "--no-ff", goalBranch, "-m", $"Integrate {goalBranch}");
+            var integrateSha = RunGitOutput(root, "rev-parse", "refs/heads/main").Trim();
+            RunGit(root, "revert", "-m", "1", integrateSha, "--no-edit");
             var mainSha = RunGitOutput(root, "rev-parse", "refs/heads/main").Trim();
             RunGit(root, "checkout", "side");
-            Xunit.Assert.NotEqual(0, GitCli.Run(root, "merge-base", "--is-ancestor", branchTip, "HEAD").ExitCode);
-            Xunit.Assert.Equal(0, GitCli.Run(root, "merge-base", "--is-ancestor", branchTip, mainSha).ExitCode);
+            RunGit(root, "worktree", "remove", "--force", GoalWorktrees.WorktreePath(root, goal.Id));
+            RunGit(root, "branch", "-D", goalBranch);
+            Xunit.Assert.NotEqual(0, GitCli.Run(root, "rev-parse", "--verify", $"refs/heads/{goalBranch}").ExitCode);
+            Xunit.Assert.Equal(0, GitCli.Run(root, "merge-base", "--is-ancestor", integrateSha, mainSha).ExitCode);
 
             TerminalGoalSweepResult? result = null;
             var incidentalOutput = CaptureConsole(() => result = TerminalGoalSweep.Run(kernel, root, goal.Id));
 
             var goalResult = Xunit.Assert.Single(Xunit.Assert.IsType<TerminalGoalSweepResult>(result).Goals);
             Xunit.Assert.DoesNotContain("Closed backlog item", incidentalOutput, StringComparison.Ordinal);
-            Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "ancestry-derived-landing");
-            Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "ancestry-landing-backlog-post-action");
+            Xunit.Assert.Contains(goalResult.Repairs, repair => repair.Kind == "merge-evidence-terminalized");
             Xunit.Assert.Empty(goalResult.Blockers);
             Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
             var journal = GoalOperationJournal.Read(root, goal.Id);
-            Xunit.Assert.True(GoalOperationJournal.HasCompletedLandingEvidence(journal));
-            Xunit.Assert.True(GoalOperationJournal.HasCompletedRecordEvidence(journal));
-            Xunit.Assert.True(GoalOperationJournal.HasCompletedCleanupEvidence(journal));
             var terminalDispositionEntry = Xunit.Assert.Single(journal.Entries.Where(entry =>
                 entry.Operation == GoalOperationJournal.TerminalDispositionOperation));
             Xunit.Assert.Contains("\"kind\":\"Landed\"", terminalDispositionEntry.Detail, StringComparison.Ordinal);
-            Xunit.Assert.Contains("source=ancestry", terminalDispositionEntry.Detail, StringComparison.Ordinal);
+            Xunit.Assert.Contains($"merge evidence at {integrateSha}", terminalDispositionEntry.Detail, StringComparison.Ordinal);
 
-            var closedBacklogItem = await backlogStore.GetByExactIdAsync(backlogItem.Id);
-            Xunit.Assert.Equal(BacklogItemStatus.Done, closedBacklogItem!.Status);
-            Xunit.Assert.Contains($"integrateCommit={mainSha}", Xunit.Assert.Single(closedBacklogItem.Notes).Text);
-            Xunit.Assert.NotNull(await new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            var unchangedBacklogItem = await backlogStore.GetByExactIdAsync(backlogItem.Id);
+            Xunit.Assert.Equal(BacklogItemStatus.Open, unchangedBacklogItem!.Status);
+            Xunit.Assert.Null(await new DogfoodLogStore(workspace.DogfoodLogStorePath)
                 .GetByGoalIdAsync(goal.Id.Value));
 
             var eventsPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
@@ -1197,9 +1286,9 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             });
             using var landedEvent = JsonDocument.Parse(landedLine);
             Xunit.Assert.Equal(goalBranch, landedEvent.RootElement.GetProperty("goalBranch").GetString());
-            Xunit.Assert.Equal(branchTip, landedEvent.RootElement.GetProperty("branchTip").GetString());
+            Xunit.Assert.Equal(integrateSha, landedEvent.RootElement.GetProperty("integrateSha").GetString());
             Xunit.Assert.Equal(mainSha, landedEvent.RootElement.GetProperty("mainSha").GetString());
-            Xunit.Assert.Equal("ancestry", landedEvent.RootElement.GetProperty("source").GetString());
+            Xunit.Assert.Equal("merge-evidence", landedEvent.RootElement.GetProperty("source").GetString());
         }
         finally
         {
@@ -1298,6 +1387,189 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         {
             TerminalGoalSweep.GitRunner = originalRunner;
             CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+    [Xunit.Fact]
+    public void Resolver_RepeatedGoalAtSameMain_ProbesAncestryOnce()
+    {
+        var root = CreateTempDirectory();
+        var goalId = GoalId.New();
+        var originalRunner = GoalIntegrationEvidenceResolver.GitRunner;
+        var ancestryCalls = 0;
+        try
+        {
+            GoalIntegrationEvidenceResolver.GitRunner = (_, args) =>
+            {
+                var command = string.Join(' ', args);
+                if (args.Count > 0 && args[0] == "log")
+                {
+                    return new GitCli.GitResult(
+                        0,
+                        $"integrate-sha\tIntegrate goal/{goalId.Value[..8]}\n",
+                        string.Empty);
+                }
+
+                if (command == "merge-base --is-ancestor integrate-sha main-sha")
+                {
+                    ancestryCalls++;
+                    return new GitCli.GitResult(0, string.Empty, string.Empty);
+                }
+
+                return new GitCli.GitResult(1, string.Empty, $"unexpected git command: {command}");
+            };
+            var resolver = GoalIntegrationEvidenceResolver.Build(root, "main-sha");
+
+            Xunit.Assert.True(resolver.TryResolve(goalId, out var first));
+            Xunit.Assert.True(resolver.TryResolve(goalId, out var second));
+
+            Xunit.Assert.Equal(first, second);
+            Xunit.Assert.Equal(1, ancestryCalls);
+        }
+        finally
+        {
+            GoalIntegrationEvidenceResolver.GitRunner = originalRunner;
+        }
+    }
+
+    [Xunit.Fact]
+    public void MergeEvidenceTerminalizationDefersDestructiveCleanupUntilNextSweep()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Merged goal with cleanup artifacts", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/deferred-merge-cleanup.txt", "goal work");
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            RunGit(root, "merge", "--no-ff", branch, "-m", $"Integrate {branch}");
+            var worktree = GoalWorktrees.WorktreePath(root, goal.Id);
+
+            var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+            Xunit.Assert.Equal(1, first.TerminalizedGoalCount);
+            Xunit.Assert.True(Directory.Exists(worktree));
+            Xunit.Assert.NotEqual(string.Empty, RunGitOutput(root, "branch", "--list", branch).Trim());
+
+            var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+            Xunit.Assert.Contains(second.Goals.SelectMany(item => item.Repairs), repair =>
+                repair.Kind == "merged-branch-cleanup");
+            Xunit.Assert.False(Directory.Exists(worktree));
+            Xunit.Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", branch).Trim());
+            Xunit.Assert.True(GoalOperationJournal.HasMergeEvidenceTerminalDisposition(
+                GoalOperationJournal.Read(root, goal.Id)));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task Run_MixedGoals_LeavesNoTerminalGoalInAttentionQueue()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var terminalTask = new TaskSpec(TaskId.New(), "Completed work", AgentRole.Developer);
+        var terminalGoal = kernel.CreateGoal("Already terminal", [terminalTask]);
+        var activeGoal = kernel.CreateGoal("Still active", [new TaskSpec(TaskId.New(), "Active work", AgentRole.Developer)]);
+        kernel.ActivateGoal(terminalGoal.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(activeGoal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(terminalGoal.Id, terminalTask.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(terminalGoal.Id, terminalTask.Id, new TaskVerificationRecord(
+            "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        kernel.CompleteGoal(terminalGoal.Id, "Already completed.");
+        await store.RaiseAsync(CollaborationItemType.Decision, terminalGoal.Id.Value, "Terminal decision", "body", "terminal-decision");
+        await store.RaiseAsync(CollaborationItemType.Clarification, activeGoal.Id.Value, "Active clarification", "body", "active-clarification");
+        var neverMatchedGoal = GoalId.New();
+        var resolver = new StubGoalIntegrationEvidenceResolver(
+            neverMatchedGoal,
+            new GoalIntegrationEvidence("unused", "main-sha", $"Integrate goal/{neverMatchedGoal.Value[..8]}"));
+
+        var result = TerminalGoalSweep.Run(
+            kernel,
+            root,
+            integrationEvidenceResolver: resolver,
+            attentionStore: store);
+
+        Xunit.Assert.Equal(1, result.ResolvedAttentionItemCount);
+        var open = await store.GetAttentionQueueAsync();
+        Xunit.Assert.Single(open);
+        Xunit.Assert.Equal(activeGoal.Id.Value, open[0].GoalId);
+        Xunit.Assert.DoesNotContain(open, item => item.GoalId == terminalGoal.Id.Value);
+    }
+
+    [Xunit.Fact]
+    public async Task Run_BackfillExceedsBound_TerminalizesNoneAndRaisesOneBlocker()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        for (var index = 0; index <= TerminalGoalSweep.MaxMergeEvidenceTerminalizationsPerSweep; index++)
+        {
+            var task = new TaskSpec(TaskId.New(), $"Do work {index}", AgentRole.Developer);
+            var goal = kernel.CreateGoal($"Merged goal {index}", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        }
+
+        var result = TerminalGoalSweep.Run(
+            kernel,
+            root,
+            integrationEvidenceResolver: new AlwaysIntegratedEvidenceResolver(),
+            attentionStore: store);
+        await TerminalGoalSweepAttention.SurfaceAsync(kernel, result, store);
+
+        var blocker = Xunit.Assert.Single(result.Blockers.Where(item =>
+            item.Kind == "merge-evidence-backfill-bound-exceeded"));
+        Xunit.Assert.Equal("merge-evidence-backfill-bound-exceeded", blocker.Kind);
+        Xunit.Assert.Equal(0, result.TerminalizedGoalCount);
+        Xunit.Assert.Equal(kernel.Goals.Count, result.ExplicitlySweptGoalIds.Count);
+        Xunit.Assert.All(kernel.Goals, goal => Xunit.Assert.Equal(GoalStatus.Verified, goal.Status));
+        Xunit.Assert.All(kernel.Goals.SelectMany(goal => goal.Tasks), task => Xunit.Assert.Null(task.LastDispatch));
+        Xunit.Assert.Single(await store.GetAttentionQueueAsync());
+    }
+
+    private sealed class StubGoalIntegrationEvidenceResolver(
+        GoalId targetGoalId,
+        GoalIntegrationEvidence evidence) : IGoalIntegrationEvidenceResolver
+    {
+        public int TargetCalls { get; private set; }
+
+        public bool TryResolve(GoalId goalId, out GoalIntegrationEvidence? resolvedEvidence)
+        {
+            if (goalId == targetGoalId)
+            {
+                TargetCalls++;
+                resolvedEvidence = evidence;
+                return true;
+            }
+
+            resolvedEvidence = null;
+            return false;
+        }
+    }
+
+    private sealed class AlwaysIntegratedEvidenceResolver : IGoalIntegrationEvidenceResolver
+    {
+        public bool TryResolve(GoalId goalId, out GoalIntegrationEvidence? evidence)
+        {
+            evidence = new GoalIntegrationEvidence(
+                $"integrate-{goalId.Value[..8]}",
+                "main-sha",
+                $"Integrate goal/{goalId.Value[..8]}");
+            return true;
         }
     }
 

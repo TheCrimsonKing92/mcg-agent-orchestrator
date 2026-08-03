@@ -3207,8 +3207,8 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_retires_completed_goal_and_writes_cleanup_journal_entry")]
-    public void CliGoalMarkLandedRetiresCompletedGoalAndWritesCleanupJournalEntry()
+    [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_records_completed_goal_and_writes_cleanup_journal_entry")]
+    public void CliGoalMarkLandedRecordsCompletedGoalAndWritesCleanupJournalEntry()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -3242,7 +3242,9 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("cleanup: goal marked landed; cleanup-needed recorded", output);
         Xunit.Assert.Contains("Workspace cleanup deferred", output);
         var journal = GoalOperationJournal.Read(root, goal.Id);
-        Xunit.Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(journal));
+        Xunit.Assert.Contains(journal.Entries, entry =>
+            entry.Operation == GoalOperationJournal.TerminalDispositionOperation &&
+            entry.Detail.Contains("\"kind\":\"Landed\"", StringComparison.Ordinal));
         var cleanupEntry = journal.LatestByOperation.FirstOrDefault(e =>
             e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Failed);
         Xunit.Assert.NotNull(cleanupEntry);
@@ -3252,6 +3254,149 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
         Xunit.Assert.Empty(sweep.Goals);
         Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalMarkLanded_MissingBranchWithIntegrateCommit_CompletesAndResolvesAttention()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "config", "user.name", "Tests");
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        RunGit(root, "add", "seed.txt");
+        RunGit(root, "commit", "-m", "Seed");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Already integrated feature", [task]);
+        var other = kernel.CreateGoal("Live feature", [new TaskSpec(TaskId.New(), "Keep working", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ActivateGoal(other.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        File.WriteAllText(Path.Combine(root, "landed.txt"), "landed");
+        RunGit(root, "add", "landed.txt");
+        RunGit(root, "commit", "-m", $"Integrate {GoalWorktrees.BranchName(goal.Id)}");
+        var integrateSha = RunGitOutput(root, "rev-parse", "HEAD").Trim();
+        Xunit.Assert.NotEqual(0, GitCli.Run(root, "rev-parse", "--verify", $"refs/heads/{GoalWorktrees.BranchName(goal.Id)}").ExitCode);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        await store.RaiseAsync(CollaborationItemType.Decision, goal.Id.Value, "Landed decision", "body", "landed-decision");
+        await store.RaiseAsync(CollaborationItemType.Verify, goal.Id.Value, "Landed verify", "body", "landed-verify");
+        await store.RaiseAsync(CollaborationItemType.Clarification, other.Id.Value, "Live clarification", "body", "live-clarification");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        Xunit.Assert.Equal(GoalStatus.Completed, goal.Status);
+        Xunit.Assert.Null(task.LastDispatch);
+        Xunit.Assert.Contains("Resolved attention items: 2", output, StringComparison.Ordinal);
+        var open = await store.GetAttentionQueueAsync();
+        Xunit.Assert.Single(open);
+        Xunit.Assert.Equal(other.Id.Value, open[0].GoalId);
+        var resolved = await store.ListAsync(goal.Id.Value);
+        Xunit.Assert.All(resolved, item => Xunit.Assert.Contains(integrateSha, item.Resolution));
+    }
+
+    [Xunit.Fact]
+    public void GoalMarkLanded_MergedGoalBranchWithoutIntegrateSubject_CompletesWithoutForce()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Merged branch without conventional subject", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/merged-without-integrate-subject.txt", "goal work");
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            var branchTip = RunGitOutput(root, "rev-parse", branch).Trim();
+            RunGit(root, "merge", "--ff-only", branch);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+
+            Xunit.Assert.True(changed);
+            Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
+            var journal = GoalOperationJournal.Read(root, goal.Id);
+            Xunit.Assert.True(GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal));
+            Xunit.Assert.Contains(journal.Entries, entry =>
+                entry.Operation == GoalOperationJournal.LandingIntentOperation &&
+                entry.Detail.Contains(branchTip, StringComparison.Ordinal));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact]
+    public void GoalMarkLanded_NoBranchOrIntegrateCommit_ReportsBothSearches()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init", "-b", "main");
+        RunGit(root, "config", "user.email", "tests@example.invalid");
+        RunGit(root, "config", "user.name", "Tests");
+        File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+        RunGit(root, "add", "seed.txt");
+        RunGit(root, "commit", "-m", "Seed");
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement feature", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Not integrated feature", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal-mark-landed", goal.Id.Value[..8], "--confirm-goal-mark-landed"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("searched both artifacts", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("branch not found locally or remotely", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("no reachable 'Integrate goal/", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Use --force", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
     }
 
     [Xunit.Fact(DisplayName = "Cli_acceptance_build_lock_blocked_stays_ready_without_failure_history")]

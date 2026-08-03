@@ -330,49 +330,73 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var landedGoal = context.CurrentGoal;
             var landedId = landedGoal.Id;
             var landedGp = landedId.Value[..8];
-            if (landedGoal.Status is not (GoalStatus.Verified or GoalStatus.Completed))
+            if (landedGoal.Status is not (GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed))
                 throw new InvalidOperationException(
-                    $"goal-mark-landed is only valid for Verified or Completed goals; goal {landedGp} is {landedGoal.Status}. " +
+                    $"goal-mark-landed is only valid for Verifying, Verified, or Completed goals; goal {landedGp} is {landedGoal.Status}. " +
                     "Active or InProgress goals self-heal via the conductor; only verified force-landed goals need this command.");
             var landedDir = context.Workspace.ExecutionDirectory;
             var landedBranch = context.Worktrees.BranchName(landedId);
             var forceCleanup = HasCliConfirmation(parts, "--force");
-            var landedBranchRef = landedBranch;
+            string landedMergeSha;
+            var hasResolvedLandingSha = true;
             if (!forceCleanup)
             {
                 var localBranch = RunGoalMarkLandedStep(
                     "branch-local-check",
                     () => GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/heads/{landedBranch}"));
                 var localExists = localBranch.ExitCode == 0;
-                var remoteExists = !localExists &&
-                    RunGoalMarkLandedStep(
+                GitCli.GitResult? remoteBranch = !localExists
+                    ? RunGoalMarkLandedStep(
                         "branch-remote-check",
-                        () => GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}")).ExitCode == 0;
-                if (!localExists && !remoteExists)
+                        () => GitCli.Run(landedDir, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{landedBranch}"))
+                    : null;
+                var remoteExists = remoteBranch?.ExitCode == 0;
+                var branchRef = localExists
+                    ? $"refs/heads/{landedBranch}"
+                    : remoteExists
+                        ? $"refs/remotes/origin/{landedBranch}"
+                        : null;
+                var branchIsAncestor = branchRef is not null &&
+                    RunGoalMarkLandedStep(
+                        "branch-ancestry-check",
+                        () => GitCli.Run(landedDir, "merge-base", "--is-ancestor", branchRef, "HEAD")).ExitCode == 0;
+                var mergeEvidenceResolver = GoalIntegrationEvidenceResolver.Build(landedDir);
+                var hasIntegrateCommit = mergeEvidenceResolver.TryResolve(landedId, out var mergeEvidence) &&
+                    mergeEvidence is not null;
+                if (!branchIsAncestor && !hasIntegrateCommit)
+                {
+                    var branchEvidence = localExists
+                        ? "local branch found"
+                        : remoteExists
+                            ? "remote branch found"
+                            : "branch not found locally or remotely";
                     throw new InvalidOperationException(
-                        $"goal-mark-landed: branch '{landedBranch}' was not found locally or remotely; ancestry check cannot run. " +
-                        "Use --force if you have manually confirmed the work is in main.");
-                var branchRef = localExists ? landedBranch : $"origin/{landedBranch}";
-                landedBranchRef = branchRef;
-                var ancestry = RunGoalMarkLandedStep(
-                    "branch-ancestry-check",
-                    () => GitCli.Run(landedDir, "merge-base", "--is-ancestor", branchRef, "HEAD"));
-                if (ancestry.ExitCode != 0)
-                    throw new InvalidOperationException(
-                        $"goal-mark-landed: branch '{landedBranch}' is not an ancestor of the current HEAD; " +
-                        "verify the work was merged into main before using this command. Use --force to bypass this check.");
+                        $"goal-mark-landed: searched both artifacts for '{landedBranch}': {branchEvidence}; " +
+                        $"no reachable 'Integrate {landedBranch}' commit was found on main. " +
+                        "Use --force only if you have manually confirmed the work is in main.");
+                }
+
+                landedMergeSha = branchIsAncestor
+                    ? (localExists ? localBranch.Output : remoteBranch!.Value.Output).Trim()
+                    : mergeEvidence!.IntegrateSha;
             }
-            var landedMergeCommit = RunGoalMarkLandedStep(
-                "landing-intent-commit-resolve",
-                () => GitCli.Run(landedDir, "rev-parse", forceCleanup ? "HEAD" : landedBranchRef));
-            if (landedMergeCommit.ExitCode == 0 && !string.IsNullOrWhiteSpace(landedMergeCommit.Output))
+            else
+            {
+                var head = RunGoalMarkLandedStep(
+                    "landing-intent-commit-resolve",
+                    () => GitCli.Run(landedDir, "rev-parse", "HEAD"));
+                hasResolvedLandingSha = head.ExitCode == 0 && !string.IsNullOrWhiteSpace(head.Output);
+                landedMergeSha = hasResolvedLandingSha ? head.Output.Trim() : "force-unverified";
+            }
+
+            if (hasResolvedLandingSha)
             {
                 GoalOperationJournal.RecordLandingIntent(
                     landedDir,
                     landedGoal,
                     landedBranch,
                     LandingExecutor.IntegrationBranchName,
-                    landedMergeCommit.Output.Trim(),
+                    landedMergeSha,
                     "goal-mark-landed");
             }
             GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:land", "Out-of-band landing recorded via goal-mark-landed.");
@@ -384,15 +408,26 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 landedDir,
                 landedGoal,
                 new GoalTerminalDisposition(
-                    GoalTerminalDispositionKind.Retired,
-                    $"Goal {landedGp} was marked landed out-of-band via goal-mark-landed; retire from future terminal sweeps."));
+                    GoalTerminalDispositionKind.Landed,
+                    $"Goal {landedGp} was marked landed from merge evidence at {landedMergeSha} via goal-mark-landed.",
+                    GoalTerminalDispositionSource.MergeEvidence));
             JournalAutoCloseSourceBacklogItem(context, landedGoal);
 
             var hadWorktree = context.Worktrees.TryResolve(landedDir, landedId) is not null;
-            context.Kernel.CompleteGoal(landedId, "Goal marked landed after durable out-of-band landing; cleanup deferred to conductor sweep.");
+            context.Kernel.CompleteGoalFromMergeEvidence(
+                landedId,
+                landedMergeSha,
+                "Goal marked landed after durable out-of-band landing; cleanup deferred to conductor sweep.");
+            var resolvedAttentionItems = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory)
+                .ResolveOpenForGoalAsync(
+                    landedId.Value,
+                    $"goal terminalized from merge evidence at {landedMergeSha}")
+                .GetAwaiter()
+                .GetResult();
             context.PersistCheckpoint(context.Kernel);
             RecordDeferredGoalCleanup(context, landedGoal, "remove:goal-mark-landed-deferred", "goal-mark-landed");
             PrintGoalMarkLandedSummary(hadWorktree, cleanupComplete: false);
+            Console.WriteLine($"Resolved attention items: {resolvedAttentionItems}");
             return true;
         }
 

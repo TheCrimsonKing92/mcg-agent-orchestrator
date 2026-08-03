@@ -24,40 +24,34 @@ public sealed class GoalGitFactIndexTests
         Assert.False(tips.ContainsKey("goal/extra-object"));
     }
 
-    [Xunit.Fact(DisplayName = "GoalGitFactIndex_main_ancestry_requires_positive_landing_path_evidence")]
-    public void GoalGitFactIndexMainAncestryRequiresPositiveLandingPathEvidence()
+    [Xunit.Fact(DisplayName = "GoalIntegrationEvidenceResolver_subject_without_main_ancestry_is_not_landed")]
+    public void GoalIntegrationEvidenceResolverSubjectWithoutMainAncestryIsNotLanded()
     {
-        var originalRunner = GoalGitFactIndex.GitRunner;
+        var originalRunner = GoalIntegrationEvidenceResolver.GitRunner;
+        var goalId = new GoalId("aaaaaaaa111111111111111111111111");
         try
         {
-            GoalGitFactIndex.GitRunner = (_, args) =>
+            GoalIntegrationEvidenceResolver.GitRunner = (_, args) =>
             {
                 var command = string.Join(" ", args);
                 return command switch
                 {
-                    "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/" =>
-                        new GitCli.GitResult(0, "goal/empty aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", string.Empty),
-                    "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/" =>
-                        new GitCli.GitResult(0, "goal/empty\n", string.Empty),
-                    "worktree list --porcelain" => new GitCli.GitResult(0, string.Empty, string.Empty),
-                    "rev-parse --verify refs/heads/main" =>
-                        new GitCli.GitResult(0, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n", string.Empty),
-                    "merge-base --is-ancestor aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" =>
-                        new GitCli.GitResult(0, string.Empty, string.Empty),
-                    "log --format=%H -n 1 --ancestry-path aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" =>
-                        new GitCli.GitResult(0, string.Empty, string.Empty),
+                    "log main-sha --format=%H%x09%s --grep=^Integrate goal/" =>
+                        new GitCli.GitResult(0, $"discarded-sha\tIntegrate goal/{goalId.Value[..8]}\n", string.Empty),
+                    "merge-base --is-ancestor discarded-sha main-sha" =>
+                        new GitCli.GitResult(1, string.Empty, string.Empty),
                     _ => new GitCli.GitResult(1, string.Empty, $"unexpected git command: {command}")
                 };
             };
 
-            var index = GoalGitFactIndex.Build(Environment.CurrentDirectory);
+            var resolver = GoalIntegrationEvidenceResolver.Build(Environment.CurrentDirectory, "main-sha");
 
-            Assert.False(index.TryResolveMainAncestry(new GoalId("empty"), out var ancestry));
-            Assert.Null(ancestry);
+            Assert.False(resolver.TryResolve(goalId, out var evidence));
+            Assert.Null(evidence);
         }
         finally
         {
-            GoalGitFactIndex.GitRunner = originalRunner;
+            GoalIntegrationEvidenceResolver.GitRunner = originalRunner;
         }
     }
 

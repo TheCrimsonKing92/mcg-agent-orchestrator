@@ -9,14 +9,7 @@ internal sealed record GoalBranchFacts(
     bool HasRegisteredWorktree,
     bool HasGoalBranch,
     bool HasGoalBranchArtifact,
-    bool BranchAlreadyLanded)
-{
-    public bool MissingBranchOrWorktree => IsAcceptedOrVerifiedGitGoal && (!HasRegisteredWorktree || !HasGoalBranch);
-}
-
-internal sealed record GoalMainAncestry(
-    string BranchTip,
-    string MainSha);
+    bool BranchAlreadyLanded);
 
 internal sealed class GoalGitFactIndex(
     string executionDirectory,
@@ -58,6 +51,8 @@ internal sealed class GoalGitFactIndex(
 
     public bool HasGoalBranch(GoalId goalId) => HasGoalBranch(GoalWorktrees.BranchName(goalId));
 
+    public string? MainSha => mainSha;
+
     public GoalBranchFacts BuildGoalBranchFacts(Goal goal)
     {
         var branch = GoalWorktrees.BranchName(goal.Id);
@@ -77,46 +72,6 @@ internal sealed class GoalGitFactIndex(
             hasGoalBranch,
             hasGoalBranchArtifact,
             branchAlreadyLanded);
-    }
-
-    public bool TryResolveMainAncestry(GoalId goalId, out GoalMainAncestry? ancestry)
-    {
-        ancestry = null;
-        var branch = GoalWorktrees.BranchName(goalId);
-        if (!isGitWorkTree ||
-            !goalBranchTips.TryGetValue(branch, out var branchTip) ||
-            string.IsNullOrWhiteSpace(branchTip) ||
-            string.IsNullOrWhiteSpace(mainSha))
-        {
-            return false;
-        }
-
-        var ancestorResult = RunGit(
-            executionDirectory,
-            "merge-base",
-            "--is-ancestor",
-            branchTip,
-            mainSha);
-        if (ancestorResult.ExitCode != 0)
-        {
-            return false;
-        }
-
-        var landingPathResult = RunGit(
-            executionDirectory,
-            "log",
-            "--format=%H",
-            "-n",
-            "1",
-            "--ancestry-path",
-            $"{branchTip}..{mainSha}");
-        if (landingPathResult.ExitCode != 0 || !IsSingleToken(landingPathResult.Output.Trim()))
-        {
-            return false;
-        }
-
-        ancestry = new GoalMainAncestry(branchTip, mainSha);
-        return true;
     }
 
     public string BuildGoalEvidenceKey(Goal goal)
