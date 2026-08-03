@@ -822,6 +822,7 @@ public sealed class ProgressiveReviewSteeringTests
         var attentionStore = new FakeCollaborationItemStore();
         var started = false;
         File.WriteAllText(Path.Combine(root, "worker-edit.cs"), "valuable worker edit");
+        var originalProcess = task.LastProcess;
 
         var coordinator = NewCoordinator(
             root,
@@ -851,10 +852,13 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Contains("exit artifact missing", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.Single(attentionStore.ListAsync(goal.Id.Value).GetAwaiter().GetResult());
         var retained = kernel.GetTask(goal.Id, task.Id);
-        Assert.Equal(WorkTaskStatus.Cancelled, retained.Status);
-        Assert.NotNull(retained.LastProcess);
-        Assert.Contains("worker-edit.cs", GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output, StringComparison.Ordinal);
-        Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "stash", "list").Output));
+        Assert.Equal(WorkTaskStatus.Assigned, retained.Status);
+        Assert.Same(originalProcess, retained.LastProcess);
+        Assert.True(retained.LastProcess!.IsRunning);
+        Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output));
+        Assert.Contains("worker-edit.cs", GitCli.Run(root, "stash", "show", "--include-untracked", "--name-only", "stash@{0}").Output, StringComparison.Ordinal);
+        Assert.Matches("preservation=preserved=[0-9a-f]{40}", receipt.CancelConfirmation);
+        Assert.Contains("hold=retained-live-process", receipt.CancelConfirmation, StringComparison.Ordinal);
     }
 
     [Fact(DisplayName = "ProgressiveReviewSteering_records_receipt_and_attention_when_steer_start_throws")]

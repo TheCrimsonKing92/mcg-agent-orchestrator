@@ -203,7 +203,7 @@ public sealed class ProgressiveReviewGlanceTests
         var receipt = Xunit.Assert.Single(events.GuardReceipts);
         Xunit.Assert.False(receipt.Downgraded);
         Xunit.Assert.Equal("FundamentalMisdirection", receipt.FinalVerdict);
-        Xunit.Assert.Equal("changed-files-outside-trusted-scope", receipt.StructuralComparison);
+        Xunit.Assert.Equal("changes-not-proven-within-trusted-scope", receipt.StructuralComparison);
         Xunit.Assert.Contains(observed.ProgressLines, line =>
             line.Contains("result=guard-evaluated", StringComparison.Ordinal) &&
             line.Contains("downgraded=false", StringComparison.Ordinal));

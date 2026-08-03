@@ -171,9 +171,13 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         var cancelConfirmation = ConfirmTreeDead(cancelled, cancelTimeOwnedProcessSet);
         if (!cancelConfirmation.Confirmed)
         {
-            var disposition = "path=progressive-review-steering/tree-death-unconfirmed disposition=cancelled-live-tree preservation=live-worktree";
+            var disposition = RequeueBehindUnconfirmedLiveProcess(
+                kernel,
+                intent,
+                originalProcess,
+                cancelConfirmation.Proof);
             TryRecordCancelPathNote(kernel, goal.Id, taskId, disposition);
-            AppendFailSafeReceipt(intent, cancelConfirmation.Proof, "operator-attention", now);
+            AppendFailSafeReceipt(intent, $"{cancelConfirmation.Proof}; {disposition}", "operator-attention", now);
             RaiseAttention(intent, $"Progressive-review steer suppressed because tree-death confirmation failed: {cancelConfirmation.Proof}. Cancel disposition: {disposition}");
             _store.CompleteIntentAsync(intent.Id, now).GetAwaiter().GetResult();
             lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result=operator-attention reason=tree-death-unconfirmed");
@@ -238,6 +242,11 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             started,
             "steer-started",
             _utcNow());
+        TryRecordCancelPathNote(
+            kernel,
+            goal.Id,
+            taskId,
+            $"path=progressive-review-steering disposition={decision} preservation=running-worker-worktree");
         _store.AppendReceiptAsync(receipt).GetAwaiter().GetResult();
         _store.CompleteIntentAsync(intent.Id, _utcNow()).GetAwaiter().GetResult();
         lines.Add($"STEER goal={Short(intent.GoalId)} task={Short(intent.TaskId)} result={decision} receipt={receipt.Id}");
@@ -261,7 +270,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
 
         var restartFailedAfterConfirmedCancel =
             string.Equals(cancelPath, "restart-failed", StringComparison.Ordinal) &&
-            (task.Status == WorkTaskStatus.Assigned || task.Status == WorkTaskStatus.Running) &&
+            (task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running) &&
             task.LastProcess is null;
         if (task.Status != WorkTaskStatus.Cancelled && !restartFailedAfterConfirmedCancel)
             return $"path=progressive-review-steering/{cancelPath} disposition=not-cancelled";
@@ -295,6 +304,27 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             // The returned disposition is also written to the steering receipt and operator attention.
         }
         return disposition;
+    }
+
+    private static string RequeueBehindUnconfirmedLiveProcess(
+        AgentOrchestratorKernel kernel,
+        ProgressiveReviewSteerIntent intent,
+        TaskProcessRecord originalProcess,
+        string proof)
+    {
+        var goalId = new GoalId(intent.GoalId);
+        var taskId = new TaskId(intent.TaskId);
+        var preservation = PreserveWorktreeEdits(
+            originalProcess.WorkingDirectory,
+            intent,
+            "tree-death-unconfirmed");
+        kernel.RequeueInterruptedDispatch(
+            goalId,
+            taskId,
+            $"ProgressiveReviewSteer: cancel tree death is unconfirmed ({proof}); requeued behind retained process liveness evidence.");
+        kernel.RecordTaskProcessRefreshed(goalId, taskId, originalProcess, verification: null);
+        var task = kernel.GetTask(goalId, taskId);
+        return $"path=progressive-review-steering/tree-death-unconfirmed disposition={task.Status} preservation={preservation} hold=retained-live-process";
     }
 
     private static string PreserveWorktreeEdits(
