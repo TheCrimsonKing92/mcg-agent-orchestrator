@@ -9139,7 +9139,7 @@ public sealed class ConductorBatchLoopTests
             NoStopPath(),
             maxIterations: 1);
 
-        var hold = Assert.IsType<GoalHoldSnapshot>(kernel.GetGoal(active.Id).CurrentHold);
+        var hold = Assert.IsType<GoalHoldState>(kernel.GetGoal(active.Id).CurrentHold);
         Assert.Equal(1, summary.Ticks);
         Assert.Equal(1, summary.Held);
         Assert.Equal("LifecycleState=unknown", hold.State);
@@ -9180,7 +9180,7 @@ public sealed class ConductorBatchLoopTests
                 NoStopPath(),
                 maxIterations: 1);
 
-            var hold = Assert.IsType<GoalHoldSnapshot>(goal.CurrentHold);
+            var hold = Assert.IsType<GoalHoldState>(goal.CurrentHold);
             Assert.Equal(1, summary.Ticks);
             Assert.Equal(1, summary.Held);
             Assert.Equal("LifecycleState=unknown", hold.State);
