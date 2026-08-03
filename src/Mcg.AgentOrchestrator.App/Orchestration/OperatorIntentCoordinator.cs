@@ -12,6 +12,7 @@ internal sealed class OperatorIntentCoordinator
 {
     internal const string ClaimOwner = "conduct-loop";
     internal const int MaxIntentsPerGoalPerTick = 32;
+    internal const string TerminalGoalEvictedReasonCode = "goal-terminal-evicted";
 
     private readonly IOperatorIntentStore _store;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -94,7 +95,7 @@ internal sealed class OperatorIntentCoordinator
         return new OperatorIntentExecutionResult(mutated, lines);
     }
 
-    public IReadOnlyList<string> RejectPending(string goalId, string reason)
+    public IReadOnlyList<string> RejectPending(string goalId, string reason, string? reasonCode = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(goalId);
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
@@ -107,7 +108,10 @@ internal sealed class OperatorIntentCoordinator
                 break;
             }
 
-            var outcome = $"Rejected {intent.Verb}: {Sanitize(reason)}";
+            var reasonCodeText = string.IsNullOrWhiteSpace(reasonCode)
+                ? string.Empty
+                : $" reasonCode={Sanitize(reasonCode)}";
+            var outcome = $"Rejected {intent.Verb}:{reasonCodeText} {Sanitize(reason)}";
             _store.CompleteAsync(
                 intent.Id,
                 ClaimOwner,
@@ -115,7 +119,7 @@ internal sealed class OperatorIntentCoordinator
                 outcome,
                 _utcNow()).GetAwaiter().GetResult();
             lines.Add(
-                $"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={ShortGoalId(goalId)} result=rejected reason={Sanitize(reason)}");
+                $"OPERATOR_INTENT id={intent.Id} verb={intent.Verb} goal={ShortGoalId(goalId)} result=rejected{reasonCodeText} reason={Sanitize(reason)}");
         }
 
         return lines;

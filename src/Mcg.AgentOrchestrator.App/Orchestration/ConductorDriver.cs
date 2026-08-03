@@ -621,7 +621,7 @@ internal sealed class ConductorDriver
         {
             var source = $"conductor:{state}";
             var result = OperatorInbox.RecordLandingEscalation(workspace, goal, reason, source, channel);
-            eventWriter.AppendGoalEscalated(goal.Id, state, reason, source);
+            eventWriter.AppendGoalEscalated(goal.Id, state, goal.Status, reason, source);
             return result;
         };
 
