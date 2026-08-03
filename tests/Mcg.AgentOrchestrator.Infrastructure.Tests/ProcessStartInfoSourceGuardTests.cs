@@ -17,7 +17,7 @@ public sealed class ProcessStartInfoSourceGuardTests
             var lines = File.ReadAllLines(file);
             for (var index = 0; index < lines.Length; index++)
             {
-                if (lines[index].Contains("Start-Process", StringComparison.Ordinal))
+                if (IntroducesStartProcessCommand(lines[index]))
                 {
                     var startProcessEnd = Math.Min(lines.Length, index + 8);
                     var startProcessWindow = string.Join('\n', lines[index..startProcessEnd]);
@@ -59,6 +59,12 @@ public sealed class ProcessStartInfoSourceGuardTests
             || line.Contains("ProcessStartInfo]::new", StringComparison.Ordinal)
             || line.Contains("UseShellExecute = false", StringComparison.Ordinal)
             || line.Contains("UseShellExecute = $false", StringComparison.Ordinal);
+    }
+
+    private static bool IntroducesStartProcessCommand(string line)
+    {
+        return line.Contains("Start-Process", StringComparison.Ordinal) &&
+            !line.Contains("(\"Start-Process\"", StringComparison.Ordinal);
     }
 
     private static string FindTestRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
