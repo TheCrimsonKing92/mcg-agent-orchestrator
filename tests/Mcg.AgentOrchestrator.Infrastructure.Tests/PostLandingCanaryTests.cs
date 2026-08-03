@@ -938,6 +938,74 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("generated-by-canary.txt", runDirtiness.Detail, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Repository preconditions abandon unverified while repository verdicts fail closed")]
+    public async Task RepositoryFailureChannelsDriveDistinctCoordinatorDispositions()
+    {
+        var precondition = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "baseline-sha",
+            ["operator-note.txt"],
+            ["operator-note.txt"],
+            currentIsDescendantOfBaseline: true);
+        var verdict = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "other-goal-landing-sha",
+            [],
+            ["generated-by-canary.txt"],
+            currentIsDescendantOfBaseline: true);
+        var preconditionException = PostLandingCanaryRunner.CreateRepositoryFailureException(precondition);
+        var verdictException = PostLandingCanaryRunner.CreateRepositoryFailureException(verdict);
+
+        Assert.IsType<InvalidOperationException>(preconditionException);
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.EnvironmentFault,
+            PostLandingCanaryFailureClassifier.Classify(preconditionException));
+        Assert.IsType<PostLandingCanaryEvaluationException>(verdictException);
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.VerdictFailure,
+            PostLandingCanaryFailureClassifier.Classify(verdictException));
+
+        using (var preconditionFixture = new CanaryTestFixture())
+        {
+            var (coordinator, circuit) = preconditionFixture.CreateCoordinator(
+                new FakeRunner((_, _) => Task.FromException<PostLandingCanaryOutcome>(preconditionException)),
+                maxAttempts: 1);
+
+            Assert.Equal(
+                PostLandingCanaryDisposition.Abandoned,
+                await coordinator.RunAsync(
+                    new PostLandingCanaryRequest("sha-precondition", ["engine/precondition"]),
+                    CancellationToken.None));
+            Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+            var records = await preconditionFixture.RawStore.ReadByTypeSinceAsync(
+                RunEventTypes.PostLandingCanary);
+            Assert.Contains(records, record =>
+                record.Operation == "abandoned" && record.Status == "Unverified");
+            Assert.DoesNotContain(records, record => record.Operation == "escalation");
+        }
+
+        using (var verdictFixture = new CanaryTestFixture())
+        {
+            var (coordinator, circuit) = verdictFixture.CreateCoordinator(
+                new FakeRunner((_, _) => Task.FromException<PostLandingCanaryOutcome>(verdictException)),
+                maxAttempts: 1);
+
+            Assert.Equal(
+                PostLandingCanaryDisposition.Failed,
+                await coordinator.RunAsync(
+                    new PostLandingCanaryRequest("sha-verdict", ["engine/verdict"]),
+                    CancellationToken.None));
+            Assert.Equal(AcceptanceEngineHealth.Unhealthy, circuit.Read().Health);
+            var records = await verdictFixture.RawStore.ReadByTypeSinceAsync(
+                RunEventTypes.PostLandingCanary);
+            Assert.Contains(records, record =>
+                record.Operation == "receipt" && record.Status == "Failed");
+            Assert.Contains(records, record =>
+                record.Operation == "escalation" && record.Status == "CanaryGateFailure");
+            Assert.DoesNotContain(records, record => record.Operation == "abandoned");
+        }
+    }
+
     private static string FindRepoRoot(
         [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {

@@ -114,7 +114,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             currentIsDescendantOfBaseline: true);
         if (!precondition.Green)
         {
-            throw new InvalidOperationException(precondition.Detail);
+            throw CreateRepositoryFailureException(precondition);
         }
 
         using var fixture = PostLandingCanaryFixture.Materialize(_repositoryRoot, request.LandingSha);
@@ -144,7 +144,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             currentIsDescendant);
         if (!repositoryVerdict.Green)
         {
-            throw new InvalidOperationException(repositoryVerdict.Detail);
+            throw CreateRepositoryFailureException(repositoryVerdict);
         }
 
         var probeLine = process.Stdout
@@ -181,6 +181,18 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 probe.FailureReason ?? PostLandingCanaryFailureReason.InfrastructureError,
                 probe.Detail,
                 probe.ExecutedTestCount);
+    }
+
+    internal static Exception CreateRepositoryFailureException(PostLandingCanaryRepositoryVerdict verdict)
+    {
+        if (verdict.Green)
+        {
+            throw new ArgumentException("A green repository verdict has no failure exception.", nameof(verdict));
+        }
+
+        return verdict.PreconditionFailure
+            ? new InvalidOperationException(verdict.Detail)
+            : new PostLandingCanaryEvaluationException(verdict.Detail);
     }
 
     private async Task InitializeFixtureRepositoryAsync(string fixtureRoot, CancellationToken cancellationToken)
