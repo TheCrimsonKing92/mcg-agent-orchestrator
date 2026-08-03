@@ -25,6 +25,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         command.Equals("answer", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("gate-satisfied", StringComparison.OrdinalIgnoreCase))
     {
+        if (args.Any(arg => arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase)))
+        {
+            return args;
+        }
+
         return SplitCommand(string.Join(' ', args));
     }
 
@@ -430,6 +435,11 @@ private static bool IsStopAliasValueFlag(string arg) =>
 private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int trailingArgumentCount, bool allowTextFile = false)
 {
     if (args.Length <= 1)
+    {
+        return args;
+    }
+
+    if (allowTextFile && args.Any(arg => arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase)))
     {
         return args;
     }

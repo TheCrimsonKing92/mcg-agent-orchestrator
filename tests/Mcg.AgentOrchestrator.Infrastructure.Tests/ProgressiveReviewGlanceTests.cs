@@ -323,6 +323,19 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains(evaluation.Receipt!.GateAnnotations!, annotation =>
             annotation.Contains(fixture.RecordId, StringComparison.Ordinal) &&
             annotation.Contains(fixture.DeliverableId, StringComparison.Ordinal));
+
+        // Negative control: identical model prose cannot confer immunity without the typed gate.
+        var noGateInputs = inputs with
+        {
+            OperatorRecords = inputs.EffectiveOperatorRecords
+                .Select(record => record with { Gates = [] })
+                .ToArray()
+        };
+        var noGateEvaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(
+            noGateInputs,
+            result);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Concern, noGateEvaluation.Result.Verdict);
+        Xunit.Assert.Contains(receipt.Note, noGateEvaluation.Result.Note, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -403,6 +416,8 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.FundamentalMisdirection, evaluation.Result.Verdict);
         Xunit.Assert.DoesNotContain("console missing", evaluation.Result.Note, StringComparison.Ordinal);
         Xunit.Assert.Contains("database migration", evaluation.Result.Note, StringComparison.Ordinal);
+        Xunit.Assert.Equal(result.Note, evaluation.Receipt!.Note);
+        Xunit.Assert.Equal(result.EvidenceLine, evaluation.Receipt.EvidenceLine);
     }
 
     [Xunit.Fact]
@@ -530,9 +545,15 @@ public sealed class ProgressiveReviewGlanceTests
         var (kernel, goal, task) = RunningDeveloperRound(now);
         var answered = kernel.RequestHumanInput(goal.Id, null, "Should console suppression ship?");
         var synthetic = kernel.RequestHumanInput(goal.Id, null, "Synthetic parked wait?");
+        var riskReview = kernel.RequestHumanInput(
+            goal.Id,
+            null,
+            "May the guarded rollout proceed?",
+            HumanWaitKind.RiskReview);
         _ = kernel.RequestHumanInput(goal.Id, null, "Is the correlation complete?");
         kernel.SubmitHumanInput(answered.Id, "Not until the hypothesis is confirmed.", ["hidden-console-spawn"]);
         kernel.SubmitHumanInput(synthetic.Id, "Goal parked: system-authored completion");
+        kernel.SubmitHumanInput(riskReview.Id, "Hold the guarded rollout.", ["guarded-rollout"]);
         kernel.RecordTaskNote(goal.Id, task.Id, "worker-authored note must be inert");
         kernel.RecordOperatorTaskNote(goal.Id, task.Id, "INCONCLUSIVE: retain the hypothesis gate.");
         var runner = new ControlledGlanceRunner();
@@ -551,11 +572,51 @@ public sealed class ProgressiveReviewGlanceTests
         var inputs = Xunit.Assert.Single(runner.Calls);
         Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record => record.Text.Contains("INCONCLUSIVE", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record => record.Text.Contains("Not until", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record => record.Text.Contains("Hold the guarded rollout", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record => record.Text.Contains("correlation complete", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record => record.Text.Contains("system-authored", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record => record.Text.Contains("worker-authored", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.EffectiveOperatorRecords.SelectMany(record => record.Gates), gate =>
             gate.DeliverableId == "hidden-console-spawn");
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords.SelectMany(record => record.Gates), gate =>
+            gate.DeliverableId == "guarded-rollout");
+    }
+
+    [Xunit.Fact]
+    public void AmendedAcceptanceSection_OverBudget_IsLoudlyBounded()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, task) = RunningDeveloperRound(now);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Bound the authoritative criteria input",
+            ["superseded acceptance requirement"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.RecordOperatorTaskNote(
+            goal.Id,
+            task.Id,
+            $"CRITERIA CORRECTION: supersedes=\"superseded acceptance requirement\"; correction=\"amended {new string('x', 300)}\"");
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "ok",
+            "bounded"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            options: new ProgressiveReviewGlanceOptions(AcceptanceCharacterLimit: 100),
+            utcNow: () => now,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a", "b", "c"], ["a", "b", "c"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var section = Xunit.Assert.Single(runner.Calls).AcceptanceSection;
+        Xunit.Assert.Contains("Current amended acceptance criteria", section, StringComparison.Ordinal);
+        Xunit.Assert.Contains("amended", section, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("superseded acceptance requirement", section, StringComparison.Ordinal);
+        Xunit.Assert.Contains("...(truncated at 100 chars)", section, StringComparison.Ordinal);
+        Xunit.Assert.True(section.Length < 150);
     }
 
     [Xunit.Fact]
@@ -806,6 +867,7 @@ public sealed class ProgressiveReviewGlanceTests
             new RecordingGlanceEvents(),
             utcNow: () => now,
             options: new ProgressiveReviewGlanceOptions(
+                AcceptanceCharacterLimit: 1000,
                 CriteriaCorrectionOverlayCharacterLimit: 450,
                 CriteriaCorrectionOverlayItemLimit: 3,
                 ChangedFilePromptLimit: 5,
@@ -822,6 +884,7 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains("Current amended acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains("Use refined acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains("operator rationale", inputs.AcceptanceSection, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("...(truncated", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("Correct criterion B", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("status=amended", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain("criterion B", inputs.AcceptanceSection, StringComparison.Ordinal);

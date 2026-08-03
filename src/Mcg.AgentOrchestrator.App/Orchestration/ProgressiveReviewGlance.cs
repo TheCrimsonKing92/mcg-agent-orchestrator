@@ -676,11 +676,11 @@ Transcript tail:
             inputs.ScopeConfidence.ToString(),
             inputs.TrustedScopePaths.ToArray(),
             changedFiles,
-            BoundReceiptField(result.Note),
-            BoundReceiptField(result.EvidenceLine),
-            result.ReasonCode?.ToString() ?? "absent",
-            LooksLikeScopeDeviationHint(result.Note + " " + result.EvidenceLine),
-            result.Verdict.ToString(),
+            BoundReceiptField(originalResult.Note),
+            BoundReceiptField(originalResult.EvidenceLine),
+            originalResult.ReasonCode?.ToString() ?? "absent",
+            LooksLikeScopeDeviationHint(originalResult.Note + " " + originalResult.EvidenceLine),
+            originalResult.Verdict.ToString(),
             guarded.Verdict.ToString(),
             shouldDowngrade,
             reason,
@@ -1150,8 +1150,9 @@ Corrective direction:
             var effective = EffectiveAcceptanceCriteriaVersion.BuildSnapshot(
                 goal.RefinedSpec,
                 goal.EffectiveAcceptanceCriteriaCorrections);
-            return "Current amended acceptance criteria:" + Environment.NewLine +
+            var section = "Current amended acceptance criteria:" + Environment.NewLine +
                 string.Join(Environment.NewLine, effective.Select(criterion => $"- {criterion}"));
+            return BoundBlock(section, limit);
         }
 
         return "Task acceptance excerpt:" + Environment.NewLine +
@@ -1166,7 +1167,7 @@ Corrective direction:
         var clarifications = kernel.HumanInputRequests
             .Where(request =>
                 request.GoalId == goal.Id &&
-                request.Kind == HumanWaitKind.SpecClarification &&
+                (request.Kind == HumanWaitKind.SpecClarification || request.OperatorGates.Count > 0) &&
                 request.IsCompleted &&
                 !request.WasDismissed &&
                 !request.IsSyntheticParkedHumanWaitCompletion &&
