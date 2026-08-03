@@ -312,7 +312,10 @@ public sealed class Goal
                     q.Status,
                     q.Answer,
                     q.TopicKey,
-                    q.NormalizedQuestionKey)).ToList()),
+                    q.NormalizedQuestionKey,
+                    q.Criterion,
+                    q.BlastRadius)).ToList(),
+                RefinedSpec.OperatorOwnedAcceptanceCriteria.ToList()),
             LatestAcceptanceFailure is null
                 ? null
                 : new AcceptanceFailureSnapshot(
@@ -394,7 +397,12 @@ public sealed class Goal
                     q.Status,
                     q.Answer,
                     q.TopicKey,
-                    q.NormalizedQuestionKey)).ToList()));
+                    q.NormalizedQuestionKey,
+                    q.Criterion,
+                    q.BlastRadius)).ToList())
+            {
+                OperatorOwnedAcceptanceCriteria = rs.OperatorOwnedAcceptanceCriteria ?? []
+            });
         }
 
         if (snapshot.LatestAcceptanceFailure is { } failure)

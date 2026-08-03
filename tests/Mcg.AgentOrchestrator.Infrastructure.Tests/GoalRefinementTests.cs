@@ -1047,9 +1047,57 @@ public sealed class GoalRefinementTests
 
         var result = await service.RefineAsync(kernel, goalId);
 
-        var question = Xunit.Assert.Single(result.Spec.OpenQuestions);
-        Xunit.Assert.Equal(AcceptanceCriterionFeasibility.ForkKind, question.ForkKind);
+        var feasibility = Xunit.Assert.Single(result.Spec.OpenQuestions.Where(question => question.Status == "Open"));
+        Xunit.Assert.Equal(AcceptanceCriterionFeasibility.ForkKind, feasibility.ForkKind);
+        var withheld = Xunit.Assert.Single(result.Spec.OpenQuestions.Where(question => question.Status == "Withheld"));
+        Xunit.Assert.Equal("makespan-measurement-method", withheld.TopicKey);
+        Xunit.Assert.Equal(criterion, withheld.Criterion);
         Xunit.Assert.Single(collab.Items);
+    }
+
+    [Xunit.Fact]
+    public async Task Resolve_Scenario_ReleasesWithheldMeasurementFork()
+    {
+        const string criterion =
+            "Measure before/after gate makespan on this host while the machine is idle.";
+        const string forks = """
+            [{"kind":"observable-behavior","topicKey":"makespan-measurement-method","refinerConfidence":"low","blastRadius":"high","question":"How should makespan measurement be asserted?","choice":"","rationale":"Method is unspecified."}]
+            """;
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(criterion, forks));
+        await service.RefineAsync(kernel, goalId);
+        var feasibilityKey = collab.Items.Single().CorrelationKey!;
+
+        var resolved = await service.TryResolveOpenClarificationAsync(
+            kernel,
+            feasibilityKey,
+            "supply-reproducing-scenario: checked-in isolated benchmark harness");
+
+        Xunit.Assert.True(resolved);
+        var question = Xunit.Assert.Single(kernel.GetGoal(goalId).RefinedSpec!.OpenQuestions);
+        Xunit.Assert.Equal("Open", question.Status);
+        Xunit.Assert.Equal("makespan-measurement-method", question.TopicKey);
+        Xunit.Assert.Equal(2, collab.Items.Count);
+        Xunit.Assert.Contains(collab.Items, item => item.CorrelationKey == question.Id);
+    }
+
+    [Xunit.Fact]
+    public async Task Refine_UnrelatedMeasurementForkSharingGoalToken_IsNotWithheld()
+    {
+        const string criterion =
+            "Drive two concurrent goals through dispatch and compare their results.";
+        const string forks = """
+            [{"kind":"observable-behavior","topicKey":"goals-list-ordering","refinerConfidence":"low","blastRadius":"high","question":"How should the goals list assert ordering?","choice":"","rationale":"Ordering method is unspecified."}]
+            """;
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(criterion, forks));
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(2, result.Spec.OpenQuestions.Count);
+        Xunit.Assert.All(result.Spec.OpenQuestions, question => Xunit.Assert.Equal("Open", question.Status));
+        Xunit.Assert.Contains(result.Spec.OpenQuestions, question => question.TopicKey == "goals-list-ordering");
+        Xunit.Assert.Equal(2, collab.Items.Count);
     }
 
     [Xunit.Fact]
@@ -1169,6 +1217,23 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.False(resolved);
         Xunit.Assert.True(kernel.GetGoal(goalId).RefinedSpec!.HasOpenQuestions);
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, collab.Items.Single().Status);
+    }
+
+    [Xunit.Fact]
+    public async Task Resolve_StoreOnlyInvalidFeasibilityAnswer_LeavesQuestionOpen()
+    {
+        const string criterion =
+            "Benchmark wall-clock performance on this host while the machine is idle.";
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(criterion));
+        await service.RefineAsync(kernel, goalId);
+
+        var resolved = await service.TryResolveOpenClarificationAsync(
+            collab.Items.Single().CorrelationKey!,
+            "Measure it with two conductor gates.");
+
+        Xunit.Assert.False(resolved);
         Xunit.Assert.Equal(CollaborationItemStatus.Raised, collab.Items.Single().Status);
     }
 

@@ -122,9 +122,9 @@ internal static class AcceptanceCriterionFeasibility
     public static string BuildQuestion(CriterionFeasibilityFinding finding) => $"""
         Criterion infeasible for {finding.Role}: {finding.Criterion}
         Choose exactly one disposition:
-        1. Re-scope — provide a replacement criterion the worker can satisfy.
-        2. Mark OPERATOR-OWNED and post-landing — remove it from worker acceptance and retain it for operator verification after landing.
-        3. Supply the reproducing scenario — provide the worker-accessible scenario that makes the existing criterion feasible.
+        1. Re-scope — answer `re-scope: <replacement criterion>` with a criterion the worker can satisfy.
+        2. Mark OPERATOR-OWNED and post-landing — answer `OPERATOR-OWNED` to remove it from worker acceptance and retain it for operator verification after landing.
+        3. Supply the reproducing scenario — answer `supply-reproducing-scenario: <worker-accessible scenario>` with the scenario that makes the existing criterion feasible.
         """;
 
     public static string BuildTopicKey(string criterion)
@@ -167,14 +167,20 @@ internal static class AcceptanceCriterionFeasibility
 
     public static bool IsMeasurementOrAssertionForkFor(
         SpecRefinementFork fork,
+        IReadOnlyCollection<CriterionFeasibilityFinding> findings) =>
+        FindMeasurementOrAssertionForkCriterion(fork, findings) is not null;
+
+    public static CriterionFeasibilityFinding? FindMeasurementOrAssertionForkCriterion(
+        SpecRefinementFork fork,
         IReadOnlyCollection<CriterionFeasibilityFinding> findings)
     {
         var forkText = $"{fork.TopicKey} {fork.Question}";
         if (!Regex.IsMatch(forkText, @"\b(?:measure|measurement|assert|assertion|verify|verification|evidence|test|makespan)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-            return false;
+            return null;
 
         var forkTokens = SignificantTokens(forkText);
-        return findings.Any(finding => SignificantTokens(finding.Criterion).Overlaps(forkTokens));
+        return findings.FirstOrDefault(finding =>
+            SignificantTokens(finding.Criterion).Count(forkTokens.Contains) >= 2);
     }
 
     private static bool TryParseValuedDisposition(
@@ -202,7 +208,22 @@ internal static class AcceptanceCriterionFeasibility
 
     private static HashSet<string> SignificantTokens(string text) =>
         Regex.Matches(text.ToLowerInvariant(), @"[a-z0-9]+")
-            .Select(match => match.Value)
+            .Select(match => NormalizeSignificantToken(match.Value))
             .Where(token => token.Length >= 5 && token is not "criterion" and not "worker" and not "should")
             .ToHashSet(StringComparer.Ordinal);
+
+    private static string NormalizeSignificantToken(string token)
+    {
+        if (token.StartsWith("measur", StringComparison.Ordinal))
+            return "measure";
+        if (token.StartsWith("assert", StringComparison.Ordinal))
+            return "assert";
+        if (token.StartsWith("verif", StringComparison.Ordinal))
+            return "verify";
+        if (token.StartsWith("test", StringComparison.Ordinal))
+            return "tests";
+        if (token.EndsWith('s') && token.Length > 5)
+            return token[..^1];
+        return token;
+    }
 }

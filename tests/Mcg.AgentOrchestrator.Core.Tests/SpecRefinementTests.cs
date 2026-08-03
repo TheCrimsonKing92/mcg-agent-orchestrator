@@ -88,7 +88,17 @@ public sealed class SpecRefinementTests
             ["Criterion A", "Criterion B"],
             VerificationClass.RealWorldDependent,
             [new RefinedSpecDecision("Q1?", "Option A", "Standard practice.")],
-            [new RefinedSpecOpenQuestion("key-1", "Q2?", "external-contract", "Open")]);
+            [new RefinedSpecOpenQuestion(
+                "key-1",
+                "Q2?",
+                "feasibility",
+                "Open",
+                TopicKey: "feasibility-topic",
+                Criterion: "Criterion A",
+                BlastRadius: "high")])
+        {
+            OperatorOwnedAcceptanceCriteria = ["Operator criterion"]
+        };
         kernel.SetGoalRefinedSpec(goal.Id, spec);
 
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
@@ -102,8 +112,11 @@ public sealed class SpecRefinementTests
         Assert.Equal(1, rs.Decisions.Count);
         Assert.Equal("Option A", rs.Decisions[0].Choice);
         Assert.Equal(1, rs.OpenQuestions.Count);
-        Assert.Equal("external-contract", rs.OpenQuestions[0].ForkKind);
+        Assert.Equal("feasibility", rs.OpenQuestions[0].ForkKind);
         Assert.Equal("Open", rs.OpenQuestions[0].Status);
+        Assert.Equal("Criterion A", rs.OpenQuestions[0].Criterion);
+        Assert.Equal("high", rs.OpenQuestions[0].BlastRadius);
+        Assert.Equal(["Operator criterion"], rs.OperatorOwnedAcceptanceCriteria);
     }
 
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_null_RefinedSpec")]

@@ -85,6 +85,28 @@ public sealed class AcceptanceCriterionFeasibilityTests
         Xunit.Assert.Equal(1, Count(question, "2. Mark OPERATOR-OWNED and post-landing"));
         Xunit.Assert.Equal(1, Count(question, "3. Supply the reproducing scenario"));
         Xunit.Assert.Contains(SyntheticMakespanCriterion, question, StringComparison.Ordinal);
+        Xunit.Assert.Contains("re-scope: <replacement criterion>", question, StringComparison.Ordinal);
+        Xunit.Assert.Contains("supply-reproducing-scenario: <worker-accessible scenario>", question, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void MeasurementForkAssociation_RequiresMoreThanOneSharedSignificantToken()
+    {
+        var finding = Xunit.Assert.Single(AcceptanceCriterionFeasibility.Evaluate(
+            ["Drive two concurrent goals through dispatch and compare their results."],
+            AgentRole.Developer));
+        var unrelated = new SpecRefinementFork(
+            "observable-behavior",
+            "low",
+            "high",
+            "How should the goals list assert ordering?",
+            "",
+            "Ordering method is unspecified.",
+            "goals-list-ordering");
+
+        Xunit.Assert.False(AcceptanceCriterionFeasibility.IsMeasurementOrAssertionForkFor(
+            unrelated,
+            [finding]));
     }
 
     [Xunit.Theory]

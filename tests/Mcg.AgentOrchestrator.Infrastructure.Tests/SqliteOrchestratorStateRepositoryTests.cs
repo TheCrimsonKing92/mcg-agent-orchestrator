@@ -2245,6 +2245,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains("FULL_OBJECTIVE_SENTINEL_0", goal.Objective, StringComparison.Ordinal);
         Assert.Contains(goal.Timeline, evt => evt.Message == "TIMELINE_SENTINEL_0");
         Assert.Equal("REFINED_SPEC_SENTINEL_0", goal.RefinedSpec?.BehavioralContract);
+        Assert.Equal(["OPERATOR_ACCEPTANCE_SENTINEL_0"], goal.RefinedSpec?.OperatorOwnedAcceptanceCriteria);
+        var question = Assert.Single(goal.RefinedSpec!.OpenQuestions);
+        Assert.Equal("QUESTION_CRITERION_SENTINEL_0", question.Criterion);
+        Assert.Equal("high", question.BlastRadius);
         Assert.Contains(goal.Tasks, task => task.Description == "TASK_DESCRIPTION_SENTINEL_0");
     }
 
@@ -2524,7 +2528,14 @@ public sealed class SqliteOrchestratorStateRepositoryTests
                 [$"ACCEPTANCE_SENTINEL_{index}"],
                 VerificationClass.TestVerifiable.ToString(),
                 [],
-                []));
+                [new RefinedSpecOpenQuestionSnapshot(
+                    $"question-{index}",
+                    $"QUESTION_SENTINEL_{index}",
+                    "feasibility",
+                    "Open",
+                    Criterion: $"QUESTION_CRITERION_SENTINEL_{index}",
+                    BlastRadius: "high")],
+                [$"OPERATOR_ACCEPTANCE_SENTINEL_{index}"]));
     }
 
     private static string DiagnosticsPath(string dbPath) =>

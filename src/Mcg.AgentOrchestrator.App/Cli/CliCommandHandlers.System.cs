@@ -354,7 +354,14 @@ internal static partial class CliCommandHandlers
                             $"Id '{id}' is ambiguous ({{0}} matches); use more characters from `attention show {goal!.Id.Value[..8]}`.")
                         : globalClarification!;
 
-                    var resolved = store.TryResolveAsync(clarification.CorrelationKey!, answer).GetAwaiter().GetResult();
+                    var refinementService = new GoalRefinementService(
+                        context.Providers,
+                        ModelFunctionCatalog.Empty,
+                        store,
+                        new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
+                    var resolved = refinementService.TryResolveOpenClarificationAsync(
+                        clarification.CorrelationKey!,
+                        answer).GetAwaiter().GetResult();
                     Console.WriteLine(resolved
                         ? goal is null
                             ? $"Answered clarification '{id}'."

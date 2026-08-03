@@ -146,8 +146,41 @@ internal sealed class GoalRefinementService
 
         foreach (var fork in output.Forks)
         {
-            if (AcceptanceCriterionFeasibility.IsMeasurementOrAssertionForkFor(fork, feasibilityFindings))
+            var withheldFor = AcceptanceCriterionFeasibility.FindMeasurementOrAssertionForkCriterion(
+                fork,
+                feasibilityFindings);
+            if (withheldFor is not null)
+            {
+                var withheldTopicKey = NormalizeTopicKey(fork.TopicKey, fork.Kind, fork.Question);
+                var withheldNormalizedQuestionKey = BuildNormalizedQuestionKey(fork.Kind, fork.Question);
+                var withheldResolution = resolvedClarifications.FirstOrDefault(item =>
+                    string.Equals(item.TopicKey, withheldTopicKey, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(item.NormalizedQuestionKey, withheldNormalizedQuestionKey, StringComparison.Ordinal));
+                if (withheldResolution is not null)
+                {
+                    AddDecisionIfMissing(
+                        decisions,
+                        fork.Question,
+                        withheldResolution.WasDismissed ? "dismissed by operator" : withheldResolution.Resolution,
+                        $"Answered by operator; feasibility-dependent clarification already resolved (topic: {withheldResolution.TopicKey}).");
+                    continue;
+                }
+
+                if (SpecRefinerPlanner.ClassifyFork(fork, policy ?? ConductorAutonomyPolicy.Conservative) == SpecForkDisposition.Ask)
+                {
+                    openQuestions.Add(new RefinedSpecOpenQuestion(
+                        BuildCorrelationKey(goalId, withheldTopicKey),
+                        fork.Question,
+                        fork.Kind,
+                        "Withheld",
+                        TopicKey: withheldTopicKey,
+                        NormalizedQuestionKey: withheldNormalizedQuestionKey,
+                        Criterion: withheldFor.Criterion,
+                        BlastRadius: fork.BlastRadius));
+                }
+
                 continue;
+            }
 
             var topicKey = NormalizeTopicKey(fork.TopicKey, fork.Kind, fork.Question);
             var normalizedQuestionKey = BuildNormalizedQuestionKey(fork.Kind, fork.Question);
@@ -241,6 +274,18 @@ internal sealed class GoalRefinementService
         string answer,
         CancellationToken cancellationToken = default)
     {
+        var goalId = ExtractGoalId(correlationKey);
+        var matchingItem = (await _collaboration.ListAsync(goalId, cancellationToken))
+            .FirstOrDefault(item =>
+                string.Equals(item.CorrelationKey, correlationKey, StringComparison.Ordinal) &&
+                !CollaborationItemLifecycle.IsTerminal(item.Status));
+        if (matchingItem is not null &&
+            IsFeasibilityClarification(matchingItem) &&
+            !AcceptanceCriterionFeasibility.TryParseDisposition(answer, out _))
+        {
+            return false;
+        }
+
         var resolved = await _collaboration.TryResolveAsync(correlationKey, answer, cancellationToken);
         if (!resolved)
             return false;
@@ -416,6 +461,8 @@ internal sealed class GoalRefinementService
                      string.Equals(question.ForkKind, AcceptanceCriterionFeasibility.ForkKind, StringComparison.OrdinalIgnoreCase)))
         {
             if (!answers.TryGetValue(question.Id, out var answer))
+                continue;
+            if (string.Equals(question.Answer, answer, StringComparison.Ordinal))
                 continue;
 
             spec = ApplyFeasibilityResolutionAsync(kernel, goalId, spec, question, answer)
@@ -595,7 +642,19 @@ internal sealed class GoalRefinementService
                     cancellationToken);
             }
 
-            return spec;
+            var rejected = spec with
+            {
+                OpenQuestions = spec.OpenQuestions
+                    .Select(candidate => string.Equals(candidate.Id, question.Id, StringComparison.Ordinal)
+                        ? candidate with { Answer = answer }
+                        : candidate)
+                    .ToList()
+            };
+            kernel.SetGoalRefinedSpec(goalId, rejected);
+            kernel.RecordGoalPolicyDecision(
+                goalId,
+                $"Rejected feasibility clarification answer for '{question.Id}': expected re-scope, OPERATOR-OWNED, or supply-reproducing-scenario syntax; clarification remains open.");
+            return rejected;
         }
 
         var workerCriteria = spec.AcceptanceCriteria.ToList();
@@ -625,18 +684,19 @@ internal sealed class GoalRefinementService
         var questions = spec.OpenQuestions
             .Where(candidate => !string.Equals(candidate.Id, question.Id, StringComparison.Ordinal))
             .ToList();
+        CriterionFeasibilityFinding? replacementFinding = null;
         if (replacement is not null)
         {
-            var finding = AcceptanceCriterionFeasibility.Evaluate([replacement], AgentRole.Developer).FirstOrDefault();
-            if (finding is not null)
+            replacementFinding = AcceptanceCriterionFeasibility.Evaluate([replacement], AgentRole.Developer).FirstOrDefault();
+            if (replacementFinding is not null)
             {
-                var questionText = AcceptanceCriterionFeasibility.BuildQuestion(finding);
-                var correlationKey = BuildCorrelationKey(goalId, finding.TopicKey);
+                var questionText = AcceptanceCriterionFeasibility.BuildQuestion(replacementFinding);
+                var correlationKey = BuildCorrelationKey(goalId, replacementFinding.TopicKey);
                 await _collaboration.RaiseAsync(
                     CollaborationItemType.Clarification,
                     goalId.Value,
-                    $"Spec feasibility clarification needed: {finding.Criterion}",
-                    BuildFeasibilityClarificationBody(kernel.GetGoal(goalId).Objective, finding),
+                    $"Spec feasibility clarification needed: {replacementFinding.Criterion}",
+                    BuildFeasibilityClarificationBody(kernel.GetGoal(goalId).Objective, replacementFinding),
                     correlationKey,
                     cancellationToken);
                 questions.Add(new RefinedSpecOpenQuestion(
@@ -644,12 +704,49 @@ internal sealed class GoalRefinementService
                     questionText,
                     AcceptanceCriterionFeasibility.ForkKind,
                     "Open",
-                    TopicKey: finding.TopicKey,
+                    TopicKey: replacementFinding.TopicKey,
                     NormalizedQuestionKey: BuildNormalizedQuestionKey(
                         AcceptanceCriterionFeasibility.ForkKind,
                         questionText),
-                    Criterion: finding.Criterion,
+                    Criterion: replacementFinding.Criterion,
                     BlastRadius: AcceptanceCriterionFeasibility.FixedBlastRadius));
+            }
+        }
+
+        var withheldQuestions = questions
+            .Where(candidate =>
+                string.Equals(candidate.Status, "Withheld", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(candidate.Criterion?.Trim(), question.Criterion.Trim(), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (disposition.Kind == FeasibilityDisposition.OperatorOwned)
+        {
+            questions.RemoveAll(candidate => withheldQuestions.Contains(candidate));
+        }
+        else if (replacementFinding is not null)
+        {
+            questions = questions
+                .Select(candidate => withheldQuestions.Contains(candidate)
+                    ? candidate with { Criterion = replacement }
+                    : candidate)
+                .ToList();
+        }
+        else
+        {
+            foreach (var withheld in withheldQuestions)
+            {
+                var released = withheld with
+                {
+                    Status = "Open",
+                    Criterion = replacement ?? withheld.Criterion
+                };
+                questions[questions.IndexOf(withheld)] = released;
+                await _collaboration.RaiseAsync(
+                    CollaborationItemType.Clarification,
+                    goalId.Value,
+                    $"Spec clarification needed: {released.Question}",
+                    BuildReleasedClarificationBody(kernel.GetGoal(goalId).Objective, released),
+                    released.Id,
+                    cancellationToken);
             }
         }
 
@@ -894,6 +991,23 @@ internal sealed class GoalRefinementService
 
     private static string BuildResolutionText(CollaborationItem item) =>
         string.IsNullOrWhiteSpace(item.Resolution) ? "dismissed by operator" : item.Resolution!;
+
+    private static string BuildReleasedClarificationBody(
+        string objective,
+        RefinedSpecOpenQuestion question) => $"""
+        Goal objective: {objective}
+
+        Question: {question.Question}
+        Fork kind: {question.ForkKind}
+        Topic key: {ResolveQuestionTopicKey(question)}
+        Blast radius: {question.BlastRadius ?? "high"}
+
+        The criterion's feasibility disposition is resolved. Please answer this previously withheld measurement/assertion clarification.
+        """;
+
+    private static bool IsFeasibilityClarification(CollaborationItem item) =>
+        item.Type == CollaborationItemType.Clarification &&
+        item.Body.Contains($"Fork kind: {AcceptanceCriterionFeasibility.ForkKind}", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsDismissedResolution(string? resolution) =>
         string.IsNullOrWhiteSpace(resolution) ||
