@@ -124,6 +124,7 @@ public sealed partial class AgentOrchestratorKernel
                 (request.TaskId == taskId || request.TaskId is null) &&
                 request.IsCompleted &&
                 !request.WasDismissed &&
+                !request.IsSyntheticParkedHumanWaitCompletion &&
                 request.SupersededByRequestId is null &&
                 !string.IsNullOrWhiteSpace(request.Answer))
             .OrderByDescending(request => request.AnsweredAt)

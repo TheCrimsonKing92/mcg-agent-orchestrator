@@ -685,7 +685,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         foreach (var request in current ?? [])
         {
             if (!merged.TryGetValue(request.Id, out var existing) ||
-                request.IsCompleted && !existing.IsCompleted)
+                (request.IsCompleted && !existing.IsCompleted) ||
+                request.SuppressionCount > existing.SuppressionCount)
             {
                 merged[request.Id] = request;
             }

@@ -711,6 +711,51 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(1, restoredRequest.SuppressionCount);
     }
 
+    [Xunit.Fact]
+    public async Task TickMerge_persists_answered_suppression_count_and_threshold_failure()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Persist answered duplicate suppression", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: "unchanged-blocker").Request;
+        kernel.SubmitHumanInput(request.Id, "Authorized.");
+        await repo.SaveAsync(kernel);
+
+        for (var expectedCount = 1; expectedCount <= 3; expectedCount++)
+        {
+            var baselineKernel = await repo.LoadAsync();
+            var baseline = baselineKernel.ExportSnapshot();
+            var tickKernel = AgentOrchestratorKernel.FromSnapshot(baseline);
+            tickKernel.RequestHumanInputDeduplicated(
+                goal.Id,
+                task.Id,
+                "Expand scope?",
+                blockerFingerprint: "unchanged-blocker");
+            var current = tickKernel.ExportSnapshot();
+
+            await repo.SaveGoalSnapshotsWithMergeAsync(
+                [new GoalSnapshotSaveRequest(
+                    baseline.Goals.Single(),
+                    current.Goals.Single(),
+                    current.HumanInputRequests)]);
+
+            var restored = await repo.LoadAsync();
+            Assert.Equal(expectedCount, restored.GetHumanInputRequest(request.Id).SuppressionCount);
+        }
+
+        var final = await repo.LoadAsync();
+        Assert.Equal(WorkTaskStatus.Failed, final.GetTask(goal.Id, task.Id).Status);
+        Assert.Single(final.GetGoal(goal.Id).Timeline.Where(item =>
+            item.Kind == ProgressKind.TaskFailed &&
+            item.Message.Contains("suppression threshold 3 reached", StringComparison.Ordinal)));
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_upsert_updates_existing_row")]
     public async Task HumanInputUpsertUpdatesExistingRow()
     {

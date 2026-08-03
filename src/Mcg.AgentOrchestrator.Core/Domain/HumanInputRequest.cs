@@ -92,6 +92,11 @@ public sealed class HumanInputRequest
 
     public bool WasDismissed { get; private set; }
 
+    public bool IsSyntheticParkedHumanWaitCompletion =>
+        IsCompleted &&
+        !WasDismissed &&
+        Answer?.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase) == true;
+
     internal void Complete(string answer, DateTimeOffset answeredAt)
     {
         if (string.IsNullOrWhiteSpace(answer))

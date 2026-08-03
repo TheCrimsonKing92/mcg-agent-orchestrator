@@ -823,6 +823,81 @@ public sealed class VerificationAndInputWorklistTests
     }
 
     [Xunit.Fact]
+    public void Parked_completion_is_not_treated_as_an_answered_duplicate()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Re-ask after park",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        var first = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: "unchanged-blocker");
+        kernel.ParkGoal(goal.Id, "wait for a later round");
+        kernel.UnparkGoal(goal.Id, "resume work");
+
+        var repeated = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            " expand   SCOPE? ",
+            blockerFingerprint: "unchanged-blocker");
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+        Assert.True(first.Request.IsSyntheticParkedHumanWaitCompletion);
+        Assert.True(repeated.WasCreated);
+        Assert.NotEqual(first.Request.Id, repeated.Request.Id);
+        Assert.Equal(new HumanInputRequestCounts(2, 1), kernel.GetHumanInputRequestCounts(goal.Id, task.Id));
+        Assert.DoesNotContain("Goal parked: wait for a later round", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void Answered_duplicate_threshold_stops_automatic_redispatch()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Bound answered duplicate retries",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        var first = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: "unchanged-blocker");
+        kernel.SubmitHumanInput(first.Request.Id, "Authorized.");
+
+        for (var attempt = 1; attempt < 3; attempt++)
+        {
+            var suppressed = kernel.RequestHumanInputDeduplicated(
+                goal.Id,
+                task.Id,
+                "Expand scope?",
+                blockerFingerprint: "unchanged-blocker");
+            Assert.True(suppressed.WasSuppressedByAnswer);
+            Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        }
+
+        var thresholdAttempt = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: "unchanged-blocker");
+
+        Assert.True(thresholdAttempt.WasSuppressedByAnswer);
+        Assert.Equal(3, first.Request.SuppressionCount);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Single(goal.Timeline.Where(item =>
+            item.Kind == ProgressKind.TaskFailed &&
+            item.Message.Contains("suppression threshold 3 reached", StringComparison.Ordinal)));
+        Assert.Single(goal.Timeline.Where(item =>
+            item.Kind == ProgressKind.DuplicateHumanInputSuppressed &&
+            item.Message.Contains("repeated suppression threshold reached", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact]
     public void SubmitHumanInput_resolves_historical_matching_siblings()
     {
         var clock = new FakeClock();

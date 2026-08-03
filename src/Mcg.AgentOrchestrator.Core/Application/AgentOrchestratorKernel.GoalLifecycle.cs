@@ -2,6 +2,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed partial class AgentOrchestratorKernel
 {
+    private const int DuplicateHumanInputSuppressionThreshold = 3;
+
     public Goal CreateGoal(string objective, IReadOnlyList<TaskSpec>? tasks = null)
     {
         var goal = new Goal(GoalId.New(), objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks());
@@ -983,12 +985,13 @@ public sealed partial class AgentOrchestratorKernel
                 var answered = matches.FirstOrDefault(candidate =>
                     candidate.IsCompleted &&
                     !candidate.WasDismissed &&
+                    !candidate.IsSyntheticParkedHumanWaitCompletion &&
                     !string.IsNullOrWhiteSpace(candidate.Answer) &&
                     string.Equals(candidate.BlockerFingerprint, blockerFingerprint, StringComparison.Ordinal));
                 if (answered is not null)
                 {
                     answered.IncrementSuppressionCount();
-                    RestoreTaskAfterSuppressedAnsweredInput(goal, taskId);
+                    RestoreTaskAfterSuppressedAnsweredInput(goal, taskId, answered);
                     AppendDuplicateHumanInputSuppressed(goal, taskId, answered, answered: true);
                     return new HumanInputRequestCreationResult(answered, WasReused: false, WasSuppressedByAnswer: true);
                 }
@@ -1028,12 +1031,33 @@ public sealed partial class AgentOrchestratorKernel
         goal.SetStatus(GoalStatus.WaitingForHuman);
     }
 
-    private void RestoreTaskAfterSuppressedAnsweredInput(Goal goal, TaskId? taskId)
+    private void RestoreTaskAfterSuppressedAnsweredInput(
+        Goal goal,
+        TaskId? taskId,
+        HumanInputRequest request)
     {
         if (taskId is not null)
         {
             var task = goal.FindTask(taskId);
-            if (task.Status != WorkTaskStatus.Completed)
+            if (request.SuppressionCount >= DuplicateHumanInputSuppressionThreshold)
+            {
+                if (task.Status != WorkTaskStatus.Completed)
+                {
+                    task.SetStatus(WorkTaskStatus.Failed);
+
+                    if (request.SuppressionCount == DuplicateHumanInputSuppressionThreshold)
+                    {
+                        Append(
+                            goal,
+                            taskId,
+                            ProgressKind.TaskFailed,
+                            $"Unchanged human-input blocker persisted after the operator answer for request " +
+                            $"{request.Id.Value[..8]}; suppression threshold " +
+                            $"{DuplicateHumanInputSuppressionThreshold} reached. Automatic redispatch stopped.");
+                    }
+                }
+            }
+            else if (task.Status != WorkTaskStatus.Completed)
             {
                 task.SetStatus(WorkTaskStatus.Assigned);
             }
@@ -1048,7 +1072,7 @@ public sealed partial class AgentOrchestratorKernel
         HumanInputRequest request,
         bool answered)
     {
-        var thresholdReceipt = request.SuppressionCount == 3
+        var thresholdReceipt = request.SuppressionCount == DuplicateHumanInputSuppressionThreshold
             ? "; repeated suppression threshold reached"
             : string.Empty;
         Append(
