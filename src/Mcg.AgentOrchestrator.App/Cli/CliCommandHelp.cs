@@ -204,7 +204,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry BacklogList = new(
         BacklogListUsage,
-        "List backlog items from the backlog store.",
+        "List every backlog item with its status and linked goal id.",
         ["--all", "--limit", "--status", "--text", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogTriage = new(

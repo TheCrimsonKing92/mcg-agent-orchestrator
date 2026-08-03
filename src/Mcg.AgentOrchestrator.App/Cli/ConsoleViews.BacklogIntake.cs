@@ -7,7 +7,16 @@ internal static partial class ConsoleViews
 public static void PrintBacklogIntakePlan(BacklogIntakePlan plan)
 {
     Console.WriteLine();
-    Console.WriteLine($"Backlog intake: {plan.Items.Count} item(s) from {plan.BacklogPath}");
+    if (plan.SelectionCriterion is not null)
+    {
+        var withheldCount = Math.Max(0, plan.TotalItemCount - plan.Items.Count);
+        Console.WriteLine($"Backlog intake: {plan.Items.Count} of {plan.TotalItemCount} item(s) from {plan.BacklogPath} (filter: {plan.SelectionCriterion}; {withheldCount} withheld)");
+        Console.WriteLine("Use `backlog-list` to see all items.");
+    }
+    else
+    {
+        Console.WriteLine($"Backlog intake: {plan.Items.Count} item(s) from {plan.BacklogPath}");
+    }
     foreach (var item in plan.Items)
     {
         Console.WriteLine();

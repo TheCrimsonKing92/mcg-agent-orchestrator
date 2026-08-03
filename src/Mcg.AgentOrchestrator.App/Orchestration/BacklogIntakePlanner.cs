@@ -19,7 +19,11 @@ internal sealed record BacklogIntakeItem(
     RepositoryScopeConfidence ScopeConfidence,
     IReadOnlyList<string> ExcludedTargetFiles);
 
-internal sealed record BacklogIntakePlan(string BacklogPath, IReadOnlyList<BacklogIntakeItem> Items);
+internal sealed record BacklogIntakePlan(
+    string BacklogPath,
+    IReadOnlyList<BacklogIntakeItem> Items,
+    int TotalItemCount,
+    string? SelectionCriterion);
 
 internal static class BacklogIntakePlanner
 {
@@ -44,8 +48,12 @@ internal static class BacklogIntakePlanner
 
         var repositoryRoot = ResolveRepositoryRoot(backlogStorePath);
         var scopeContext = new GoalFileScopeDerivationContext(repositoryRoot);
-        var items = new BacklogStore(backlogStorePath).ListAsync().GetAwaiter().GetResult()
+        var store = new BacklogStore(backlogStorePath);
+        var eligibleItems = store.ListAsync().GetAwaiter().GetResult()
             .Where(item => !item.Title.StartsWith("Decision record", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var totalItemCount = eligibleItems.Length;
+        var items = eligibleItems
             .Where(item => MatchesFilter(item, headingFilter))
             .Take(maxItems)
             .Select(item => BuildItem(
@@ -55,7 +63,10 @@ internal static class BacklogIntakePlanner
                 scopeContext))
             .ToList();
 
-        return new BacklogIntakePlan("backlog store", items);
+        var selectionCriterion = string.IsNullOrWhiteSpace(headingFilter)
+            ? $"first {maxItems} open, non-superseded, canonical non-decision-record items in filing order"
+            : null;
+        return new BacklogIntakePlan("backlog store", items, totalItemCount, selectionCriterion);
     }
 
     private static bool MatchesFilter(BacklogItem item, string? headingFilter)

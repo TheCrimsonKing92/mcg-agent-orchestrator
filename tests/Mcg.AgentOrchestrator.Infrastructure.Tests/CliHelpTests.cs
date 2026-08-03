@@ -96,6 +96,43 @@ public sealed class CliHelpTests
         Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
     }
 
+    [Xunit.Fact]
+    public void BacklogHelp_ListAddClose_HasDescriptions()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+
+        var list = ExecuteHelpAndCapture(["backlog-list", "--help"], kernel, workspace);
+        var add = ExecuteHelpAndCapture(["backlog-add", "--help"], kernel, workspace);
+        var close = ExecuteHelpAndCapture(["backlog-close", "--help"], kernel, workspace);
+
+        Xunit.Assert.Contains("List every backlog item with its status and linked goal id.", list);
+        Xunit.Assert.Contains("Add a backlog item.", add);
+        Xunit.Assert.Contains("Close a backlog item by id prefix.", close);
+        Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
+    private static string ExecuteHelpAndCapture(
+        IReadOnlyList<string> args,
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace)
+    {
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        return CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+    }
+
     [Xunit.Fact(DisplayName = "Cli_help_goals_subscribe_prints_nested_command_usage_without_executing")]
     public void CliHelpGoalsSubscribePrintsNestedCommandUsageWithoutExecuting()
     {
@@ -316,7 +353,7 @@ public sealed class CliHelpTests
             result =>
             {
                 Xunit.Assert.Equal(0, result.ExitCode);
-                Xunit.Assert.Contains("No matching open backlog items.", result.StandardOutput);
+                Xunit.Assert.Contains("Backlog list: 0 item(s) from backlog store", result.StandardOutput);
             });
 
         await AssertCliSkipsOrphanWorktreeCleanupAsync(
@@ -448,7 +485,7 @@ public sealed class CliHelpTests
             Xunit.Assert.False(changed);
         });
 
-        Xunit.Assert.Contains("No matching backlog items.", output);
+        Xunit.Assert.Contains("Backlog list: 0 item(s) from backlog store", output);
     }
 
     private static string CreateTempDirectory()

@@ -274,7 +274,7 @@ public sealed class BacklogStore
         var results = new List<BacklogItem>();
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = includeAll
-            ? $"SELECT {SelectColumns} FROM backlog ORDER BY created_at ASC"
+            ? $"SELECT {SelectColumns} FROM backlog ORDER BY created_at ASC, id ASC"
             : $"""
                 SELECT {SelectColumns}
                 FROM backlog
@@ -285,7 +285,7 @@ public sealed class BacklogStore
                       FROM backlog_links
                       WHERE kind = 'Duplicate' AND canonical_id IS NOT NULL
                   )
-                ORDER BY created_at ASC
+                ORDER BY created_at ASC, id ASC
                 """;
         await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
         {
