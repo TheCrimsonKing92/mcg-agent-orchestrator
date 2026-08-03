@@ -14,6 +14,68 @@ internal static class ProcessTreeGuiSuppression
 
     private static readonly object WindowsLaunchLock = new();
 
+    internal sealed class ConsoleSpawnScope : IDisposable
+    {
+        private readonly IDisposable? _hiddenConsole;
+        private readonly Action? _onDispose;
+        private bool _disposed;
+
+        internal ConsoleSpawnScope(
+            bool hiddenConsoleAcquired,
+            IDisposable? hiddenConsole = null,
+            Action? onDispose = null)
+        {
+            HiddenConsoleAcquired = hiddenConsoleAcquired;
+            _hiddenConsole = hiddenConsole;
+            _onDispose = onDispose;
+        }
+
+        internal bool HiddenConsoleAcquired { get; }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                _hiddenConsole?.Dispose();
+            }
+            finally
+            {
+                _disposed = true;
+                _onDispose?.Invoke();
+            }
+        }
+    }
+
+    internal static ConsoleSpawnScope AcquireConsoleForChildSpawn()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return new ConsoleSpawnScope(hiddenConsoleAcquired: false);
+        }
+
+        Monitor.Enter(WindowsLaunchLock);
+        try
+        {
+            var hiddenConsole = Windows.GetConsoleWindow() == IntPtr.Zero
+                ? Windows.CreateHiddenConsoleAttachmentReplacingNonWindowConsole()
+                : null;
+            return new ConsoleSpawnScope(
+                hiddenConsoleAcquired: hiddenConsole is not null,
+                hiddenConsole,
+                onDispose: () => Monitor.Exit(WindowsLaunchLock));
+        }
+        catch
+        {
+            Monitor.Exit(WindowsLaunchLock);
+            throw;
+        }
+    }
+
     public static Process Start(ProcessStartInfo startInfo)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
