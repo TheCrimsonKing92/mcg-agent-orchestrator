@@ -878,6 +878,134 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         }
     }
 
+    [Xunit.Theory(DisplayName = "Post-landing repository invariant accepts clean unchanged and fast-forwarded main")]
+    [InlineData("baseline-sha")]
+    [InlineData("other-goal-landing-sha")]
+    public void RepositoryInvariantAcceptsCleanUnchangedOrFastForwardedMain(string currentSha)
+    {
+        var verdict = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            currentSha,
+            [],
+            [],
+            currentIsDescendantOfBaseline: true);
+
+        Assert.True(verdict.Green, verdict.Detail);
+        Assert.False(verdict.PreconditionFailure);
+        Assert.Contains("Baseline SHA: baseline-sha", verdict.Detail, StringComparison.Ordinal);
+        Assert.Contains($"Current SHA: {currentSha}", verdict.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Post-landing repository invariant rejects history rewrites with diagnosable state")]
+    public void RepositoryInvariantRejectsHistoryRewrite()
+    {
+        var verdict = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "rewritten-sha",
+            [],
+            [],
+            currentIsDescendantOfBaseline: false);
+
+        Assert.False(verdict.Green);
+        Assert.False(verdict.PreconditionFailure);
+        Assert.Contains("Baseline SHA: baseline-sha", verdict.Detail, StringComparison.Ordinal);
+        Assert.Contains("Current SHA: rewritten-sha", verdict.Detail, StringComparison.Ordinal);
+        Assert.Contains("Current is at or ahead of baseline: False", verdict.Detail, StringComparison.Ordinal);
+        Assert.Contains("Current dirty paths: <none>", verdict.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Post-landing repository invariant distinguishes dirty precondition from run dirtiness")]
+    public void RepositoryInvariantDistinguishesDirtyPreconditionFromRunDirtiness()
+    {
+        var precondition = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "baseline-sha",
+            ["operator-note.txt"],
+            ["operator-note.txt"],
+            currentIsDescendantOfBaseline: true);
+        var runDirtiness = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "other-goal-landing-sha",
+            [],
+            ["generated-by-canary.txt"],
+            currentIsDescendantOfBaseline: true);
+
+        Assert.False(precondition.Green);
+        Assert.True(precondition.PreconditionFailure);
+        Assert.Contains("operator-note.txt", precondition.Detail, StringComparison.Ordinal);
+        Assert.False(runDirtiness.Green);
+        Assert.False(runDirtiness.PreconditionFailure);
+        Assert.Contains("generated-by-canary.txt", runDirtiness.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Repository preconditions abandon unverified while repository verdicts fail closed")]
+    public async Task RepositoryFailureChannelsDriveDistinctCoordinatorDispositions()
+    {
+        var precondition = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "baseline-sha",
+            ["operator-note.txt"],
+            ["operator-note.txt"],
+            currentIsDescendantOfBaseline: true);
+        var verdict = PostLandingCanaryRepositoryInvariant.Evaluate(
+            "baseline-sha",
+            "other-goal-landing-sha",
+            [],
+            ["generated-by-canary.txt"],
+            currentIsDescendantOfBaseline: true);
+        var preconditionException = PostLandingCanaryRunner.CreateRepositoryFailureException(precondition);
+        var verdictException = PostLandingCanaryRunner.CreateRepositoryFailureException(verdict);
+
+        Assert.IsType<InvalidOperationException>(preconditionException);
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.EnvironmentFault,
+            PostLandingCanaryFailureClassifier.Classify(preconditionException));
+        Assert.IsType<PostLandingCanaryEvaluationException>(verdictException);
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.VerdictFailure,
+            PostLandingCanaryFailureClassifier.Classify(verdictException));
+
+        using (var preconditionFixture = new CanaryTestFixture())
+        {
+            var (coordinator, circuit) = preconditionFixture.CreateCoordinator(
+                new FakeRunner((_, _) => Task.FromException<PostLandingCanaryOutcome>(preconditionException)),
+                maxAttempts: 1);
+
+            Assert.Equal(
+                PostLandingCanaryDisposition.Abandoned,
+                await coordinator.RunAsync(
+                    new PostLandingCanaryRequest("sha-precondition", ["engine/precondition"]),
+                    CancellationToken.None));
+            Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+            var records = await preconditionFixture.RawStore.ReadByTypeSinceAsync(
+                RunEventTypes.PostLandingCanary);
+            Assert.Contains(records, record =>
+                record.Operation == "abandoned" && record.Status == "Unverified");
+            Assert.DoesNotContain(records, record => record.Operation == "escalation");
+        }
+
+        using (var verdictFixture = new CanaryTestFixture())
+        {
+            var (coordinator, circuit) = verdictFixture.CreateCoordinator(
+                new FakeRunner((_, _) => Task.FromException<PostLandingCanaryOutcome>(verdictException)),
+                maxAttempts: 1);
+
+            Assert.Equal(
+                PostLandingCanaryDisposition.Failed,
+                await coordinator.RunAsync(
+                    new PostLandingCanaryRequest("sha-verdict", ["engine/verdict"]),
+                    CancellationToken.None));
+            Assert.Equal(AcceptanceEngineHealth.Unhealthy, circuit.Read().Health);
+            var records = await verdictFixture.RawStore.ReadByTypeSinceAsync(
+                RunEventTypes.PostLandingCanary);
+            Assert.Contains(records, record =>
+                record.Operation == "receipt" && record.Status == "Failed");
+            Assert.Contains(records, record =>
+                record.Operation == "escalation" && record.Status == "CanaryGateFailure");
+            Assert.DoesNotContain(records, record => record.Operation == "abandoned");
+        }
+    }
+
     private static string FindRepoRoot(
         [System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
     {
