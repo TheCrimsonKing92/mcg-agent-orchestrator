@@ -175,7 +175,10 @@ internal sealed class WorkerGitContext
         return touched;
     }
 
-    internal ReviewerMergeTreeStatus ReadReviewerMergeTreeStatus(string workingDirectory)
+    internal ReviewerMergeTreeStatus ReadReviewerMergeTreeStatus(
+        string workingDirectory,
+        string baseReference = "main",
+        string headReference = "HEAD")
     {
         if (!LooksLikeGitWorkspace(workingDirectory))
         {
@@ -184,7 +187,14 @@ internal sealed class WorkerGitContext
                 "Reviewer merge-tree status unavailable because the working directory is not a git workspace.");
         }
 
-        var mergeTreeResult = GitCli.Run(workingDirectory, 5_000, "merge-tree", "--write-tree", "--name-only", "main", "HEAD");
+        var mergeTreeResult = GitCli.Run(
+            workingDirectory,
+            5_000,
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            baseReference,
+            headReference);
         if (mergeTreeResult.ExitCode == 0)
         {
             return new ReviewerMergeTreeStatus(IsClean: true, [], 0);

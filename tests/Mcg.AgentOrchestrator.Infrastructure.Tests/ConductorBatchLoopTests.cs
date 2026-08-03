@@ -5721,7 +5721,8 @@ public sealed class ConductorBatchLoopTests
                 return new LandingEscalationRecheckResult(
                     ConditionResolved: true,
                     Status: "MergeTreeClean",
-                    Observation: "Read-only merge-tree check found no conflict with main.");
+                    Observation: "Read-only merge-tree check found no conflict with main.",
+                    EvidenceFingerprint: "branch=resolved;main=current");
             },
             runAcceptance: _ => true,
             land: g =>
@@ -5784,7 +5785,8 @@ public sealed class ConductorBatchLoopTests
                 return new LandingEscalationRecheckResult(
                     ConditionResolved: false,
                     Status: "MergeTreeConflict",
-                    Observation: "Read-only merge-tree check still conflicts with main.");
+                    Observation: "Read-only merge-tree check still conflicts with main.",
+                    EvidenceFingerprint: "branch=conflicted;main=current");
             },
             runAcceptance: _ => true,
             land: g =>
@@ -5816,6 +5818,86 @@ public sealed class ConductorBatchLoopTests
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false, 2, 0, 1)]
+    [Xunit.InlineData(true, 3, 1, 2)]
+    public void BatchLoopResolvedRebaseEvidenceRetriesOnlyWhenGitCandidateChanges(
+        bool gitCandidateChanges,
+        int expectedRebaseChecks,
+        int expectedLandAttempts,
+        int expectedSelfClears)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Bound mismatched landing conflict probe");
+        var rebaseChecks = 0;
+        var conflictChecks = 0;
+        var landAttempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            rebaseOntoMain: _ =>
+            {
+                rebaseChecks++;
+                if (gitCandidateChanges && rebaseChecks == 3)
+                {
+                    return new GoalWorktreeRebaseResult(
+                        GoalWorktreeRebaseStatus.AlreadyFastForwardable,
+                        "goal/test",
+                        "Changed candidate no longer conflicts.",
+                        [],
+                        null);
+                }
+
+                return new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.Conflict,
+                    "goal/test",
+                    "Commit replay still conflicts.",
+                    ["docs/test-design-discipline.md"],
+                    "workspace rebase");
+            },
+            recheckPreLandingRebaseConflict: _ =>
+            {
+                conflictChecks++;
+                var candidate = gitCandidateChanges && conflictChecks == 2
+                    ? "branch=changed;main=changed"
+                    : "branch=unchanged;main=unchanged";
+                return new LandingEscalationRecheckResult(
+                    ConditionResolved: true,
+                    Status: "MergeTreeClean",
+                    Observation: "Tip trees merge cleanly despite the replay conflict.",
+                    EvidenceFingerprint: candidate);
+            },
+            runAcceptance: _ => true,
+            land: g =>
+            {
+                landAttempts++;
+                return new LandingResult(
+                    g.Id.Value,
+                    g.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 3,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(gitCandidateChanges ? 3 : 2, summary.Ticks);
+        Assert.Equal(2, summary.Escalated);
+        Assert.Equal(expectedRebaseChecks, rebaseChecks);
+        Assert.Equal(2, conflictChecks);
+        Assert.Equal(expectedLandAttempts, landAttempts);
+        Assert.Equal(expectedSelfClears, goal.Timeline.Count(evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact]

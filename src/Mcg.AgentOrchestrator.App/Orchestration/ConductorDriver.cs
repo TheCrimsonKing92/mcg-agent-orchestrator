@@ -565,19 +565,26 @@ internal sealed class ConductorDriver
                 return new LandingEscalationRecheckResult(
                     ConditionResolved: false,
                     Status: "MissingWorktree",
-                    Observation: $"Goal branch {goal.Id.Value[..8]} has no registered worktree.");
+                    Observation: $"Goal branch {goal.Id.Value[..8]} has no registered worktree.",
+                    EvidenceFingerprint: "worktree=missing");
             }
 
-            var mergeTree = new WorkerGitContext().ReadReviewerMergeTreeStatus(worktreePath);
+            var evidence = ReadLandingRecheckEvidence(worktreePath);
+            var mergeTree = new WorkerGitContext().ReadReviewerMergeTreeStatus(
+                worktreePath,
+                evidence.MainHead,
+                evidence.BranchHead);
             return mergeTree.IsClean
                 ? new LandingEscalationRecheckResult(
                     ConditionResolved: true,
                     Status: "MergeTreeClean",
-                    Observation: "Read-only merge-tree check found no conflict with main.")
+                    Observation: "Read-only merge-tree check found no conflict with main.",
+                    EvidenceFingerprint: evidence.Fingerprint)
                 : new LandingEscalationRecheckResult(
                     ConditionResolved: false,
                     Status: "MergeTreeConflict",
-                    Observation: $"Read-only merge-tree check still conflicts with main: {string.Join(", ", mergeTree.ConflictPaths)}");
+                    Observation: $"Read-only merge-tree check still conflicts with main: {string.Join(", ", mergeTree.ConflictPaths)}",
+                    EvidenceFingerprint: evidence.Fingerprint);
         };
 
         _land = (goal, policy) =>
@@ -812,7 +819,8 @@ internal sealed class ConductorDriver
             new LandingEscalationRecheckResult(
                 ConditionResolved: false,
                 Status: "NotConfigured",
-                Observation: "Landing escalation conflict recheck was not configured."));
+                Observation: "Landing escalation conflict recheck was not configured.",
+                EvidenceFingerprint: "recheck=not-configured"));
         _land = land;
         _afterSuccessfulLanding = afterSuccessfulLanding ?? ((_, _) => { });
         _record = record;
@@ -3178,6 +3186,27 @@ internal sealed class ConductorDriver
         return result.Succeeded ? result.Output.Trim() : null;
     }
 
+    private static (string BranchHead, string MainHead, string Fingerprint) ReadLandingRecheckEvidence(
+        string worktreePath)
+    {
+        var branchHead = ReadRequiredGitCommit(worktreePath, "HEAD");
+        var mainHead = ReadRequiredGitCommit(worktreePath, "main^{commit}");
+        return (branchHead, mainHead, $"branch={branchHead};main={mainHead}");
+    }
+
+    private static string ReadRequiredGitCommit(string worktreePath, string reference)
+    {
+        var result = GitCli.Run(worktreePath, 5_000, "rev-parse", "--verify", reference);
+        var commit = result.Output.Trim();
+        if (!result.Succeeded || !CandidateShaPattern.IsMatch(commit))
+        {
+            throw new InvalidOperationException(
+                $"Landing escalation recheck could not resolve git reference '{reference}'.");
+        }
+
+        return commit.ToLowerInvariant();
+    }
+
     private string? TryResolveAcceptanceBranchHead(Goal goal)
     {
         if (_executionDirectory is null)
@@ -3699,7 +3728,8 @@ internal sealed class ConductorDriver
 internal sealed record LandingEscalationRecheckResult(
     bool ConditionResolved,
     string Status,
-    string Observation);
+    string Observation,
+    string EvidenceFingerprint);
 
 internal sealed record ConductorLandingReceipt(
     string GoalId,

@@ -144,6 +144,7 @@ internal sealed class ConductorBatchLoop
         {
         var excludedGoals = new HashSet<string>(StringComparer.Ordinal);
         var setAsideGoals = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
+        var selfClearedSetAsideEntries = new Dictionary<string, BatchSetAsideEntry>(StringComparer.Ordinal);
         var completedGoals = new HashSet<string>(StringComparer.Ordinal);
         var escalatedGoals = new HashSet<string>(StringComparer.Ordinal);
         var reapedGoals = new HashSet<string>(StringComparer.Ordinal);
@@ -366,7 +367,15 @@ internal sealed class ConductorBatchLoop
                     selfRelaunchDrainStartedAt = null;
                 }
             }
-            ReadmitResolvedSetAsideGoals(kernel, driver, onlyGoalId, setAsideGoals, escalatedGoals, reapedGoals, goalProjectionCache);
+            ReadmitResolvedSetAsideGoals(
+                kernel,
+                driver,
+                onlyGoalId,
+                setAsideGoals,
+                selfClearedSetAsideEntries,
+                escalatedGoals,
+                reapedGoals,
+                goalProjectionCache);
             MarkCompletedDependencyGoals(kernel, driver, onlyGoalId, completedGoals, goalProjectionCache);
             ReconcileUnscopedDispatchableGoals(
                 kernel,
@@ -473,6 +482,7 @@ internal sealed class ConductorBatchLoop
                         preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
                         excludedGoals.Remove(scopedGoal.Id.Value);
                         setAsideGoals.Remove(scopedGoal.Id.Value);
+                        selfClearedSetAsideEntries.Remove(scopedGoal.Id.Value);
                         escalatedGoals.Remove(scopedGoal.Id.Value);
                         completedGoals.Remove(scopedGoal.Id.Value);
                         reapedGoals.Remove(scopedGoal.Id.Value);
@@ -710,7 +720,7 @@ internal sealed class ConductorBatchLoop
                     {
                         ClearGoalHold(kernel, goal, changedGoalIds);
                         escalatedGoals.Add(goal.Id.Value);
-                        SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals);
+                        SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals, selfClearedSetAsideEntries);
                         ReapGoalOnce(kernel, goal, reapedGoals);
                         tickEscalated++;
                     }
@@ -771,7 +781,7 @@ internal sealed class ConductorBatchLoop
 
                     escalatedGoals.Add(goal.Id.Value);
                     ClearGoalHold(kernel, goal, changedGoalIds);
-                    SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals);
+                    SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals, selfClearedSetAsideEntries);
                     ReapGoalOnce(kernel, goal, reapedGoals);
                     tickEscalated++;
                     FinishGoalWalk("verified-escalation");
@@ -855,7 +865,7 @@ internal sealed class ConductorBatchLoop
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
                         kernel.RecordGoalPolicyDecision(goal.Id, msg);
                         escalatedGoals.Add(goal.Id.Value);
-                        SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals);
+                        SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
                         ReapGoalOnce(kernel, goal, reapedGoals);
                         tickEscalated++;
                         FinishGoalWalk("advance-fault");
@@ -920,7 +930,7 @@ internal sealed class ConductorBatchLoop
 
                 if (result.WasExecuted)        { tickAdvanced++; }
                 else if (result.IsHeld)        { tickHeld++; }
-                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals); ReapGoalOnce(kernel, goal, reapedGoals); }
+                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals, selfClearedSetAsideEntries); ReapGoalOnce(kernel, goal, reapedGoals); }
                 else if (result.IsDone)        { tickDone++;      completedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
                 goalProjectionCache.Invalidate(goal.Id);
                 FinishGoalWalk(result.Outcome.GetType().Name);
@@ -2671,6 +2681,7 @@ internal sealed class ConductorBatchLoop
         ConductorDriver driver,
         string? onlyGoalId,
         Dictionary<string, BatchSetAsideEntry> setAsideGoals,
+        Dictionary<string, BatchSetAsideEntry> selfClearedSetAsideEntries,
         HashSet<string> escalatedGoals,
         HashSet<string> reapedGoals,
         GoalProjectionCache goalProjectionCache)
@@ -2711,7 +2722,19 @@ internal sealed class ConductorBatchLoop
                     continue;
                 }
 
+                if (string.Equals(
+                    entry.LastSelfClearEvidenceFingerprint,
+                    recheck.EvidenceFingerprint,
+                    StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 goalProjectionCache.Invalidate(goal.Id);
+                selfClearedSetAsideEntries[entry.GoalId] = entry with
+                {
+                    LastSelfClearEvidenceFingerprint = recheck.EvidenceFingerprint
+                };
                 setAsideGoals.Remove(entry.GoalId);
                 escalatedGoals.Remove(entry.GoalId);
                 reapedGoals.Remove(entry.GoalId);
@@ -2719,7 +2742,7 @@ internal sealed class ConductorBatchLoop
                     $"status={recheck.Status}; message={Sanitize(recheck.Observation)}";
                 kernel.RecordGoalPolicyDecision(
                     goal.Id,
-                    $"Landing escalation self-cleared: condition=pre-landing_rebase_conflict; observation={observation}.");
+                    $"Landing escalation self-cleared: condition=pre-landing_rebase_conflict; observation={observation}; evidence={recheck.EvidenceFingerprint}.");
                 EmitProgress(
                     $"ESCALATION_SELF_CLEARED goal={entry.GoalId[..8]} condition=pre-landing_rebase_conflict observation={Sanitize(observation)}");
                 continue;
@@ -2891,11 +2914,22 @@ internal sealed class ConductorBatchLoop
         ConductorDriver driver,
         Goal goal,
         BatchSetAsideCondition condition,
-        Dictionary<string, BatchSetAsideEntry> setAsideGoals) =>
+        Dictionary<string, BatchSetAsideEntry> setAsideGoals,
+        Dictionary<string, BatchSetAsideEntry>? selfClearedSetAsideEntries = null)
+    {
+        var lastSelfClearEvidenceFingerprint =
+            condition == BatchSetAsideCondition.PreLandingRebaseConflict &&
+            selfClearedSetAsideEntries is not null &&
+            selfClearedSetAsideEntries.TryGetValue(goal.Id.Value, out var selfClearedEntry)
+                ? selfClearedEntry.LastSelfClearEvidenceFingerprint
+                : null;
+        selfClearedSetAsideEntries?.Remove(goal.Id.Value);
         setAsideGoals[goal.Id.Value] = new BatchSetAsideEntry(
             goal.Id.Value,
             condition,
-            BuildEscalatedGoalStateFingerprint(kernel, driver, goal));
+            BuildEscalatedGoalStateFingerprint(kernel, driver, goal),
+            lastSelfClearEvidenceFingerprint);
+    }
 
     private static string BuildEscalatedGoalStateFingerprint(
         AgentOrchestratorKernel kernel,
@@ -3217,7 +3251,11 @@ internal enum WatchSleepResult
     WakeSignaled
 }
 
-internal sealed record BatchSetAsideEntry(string GoalId, BatchSetAsideCondition Condition, string StateFingerprint);
+internal sealed record BatchSetAsideEntry(
+    string GoalId,
+    BatchSetAsideCondition Condition,
+    string StateFingerprint,
+    string? LastSelfClearEvidenceFingerprint = null);
 
 internal sealed record ParallelLandingOutcome(ConductorAdvanceResult Result, int? SlotIndex);
 
