@@ -2212,6 +2212,130 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact]
+    public void ConductLoop_LiveGoal_ReloadsAndWalks()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            var completedTask = new TaskSpec(TaskId.New(), "Completed predecessor.", AgentRole.Developer);
+            var failedTask = new TaskSpec(TaskId.New(), "Failed successor.", AgentRole.Tester);
+            var goal = kernel.CreateGoal("Live conductor goal", [completedTask, failedTask]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.ReportTaskProgress(goal.Id, completedTask.Id, WorkTaskStatus.Completed, "done");
+            kernel.ReportTaskProgress(goal.Id, failedTask.Id, WorkTaskStatus.Failed, "failed");
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+            var loopKernel = CliPersistentStateRunner.LoadConductLoopKernel(repository);
+            var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+            var context = new CliExecutionContext(
+                loopKernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                currentGoal: null,
+                reloadKernel: () => CliPersistentStateRunner.LoadConductLoopKernel(repository),
+                persistKernel: _ => { },
+                persistGoalKernel: (_, _) => { },
+                reloadResolvedParkedHumanWaitKernel: () => new AgentOrchestratorKernel(),
+                reloadParkedGoalSafetyNetKernel: () => new AgentOrchestratorKernel(),
+                reloadKernelForGoals: trackedIds =>
+                    CliPersistentStateRunner.LoadConductLoopKernel(repository, trackedIds))
+            {
+                EventWriter = eventWriter
+            };
+
+            _ = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["conduct", "--loop", "--max-iterations", "1"],
+                context));
+
+            var trackedGoal = Xunit.Assert.Single(loopKernel.Goals);
+            Xunit.Assert.Equal(goal.Id, trackedGoal.Id);
+            Xunit.Assert.Equal(GoalStatus.Active, trackedGoal.Status);
+            Xunit.Assert.Contains(repository.LoadGoalBatches, batch => batch.Contains(goal.Id.Value));
+            var eventsPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
+            using var escalation = JsonDocument.Parse(Xunit.Assert.Single(File.ReadAllLines(eventsPath)));
+            Xunit.Assert.Equal("GoalEscalated", escalation.RootElement.GetProperty("eventType").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ConductLoop_EvictedGoal_LaterIntentKeepsReason()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var workspace = CreateRefinedWorkspace(root);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Cancelled work.", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Externally cancelled conductor goal", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+            var loopKernel = CliPersistentStateRunner.LoadConductLoopKernel(repository);
+            await repository.SaveGoalSnapshotsAsync(
+                WithGoalStatus(kernel, goal.Id, GoalStatus.Cancelled).ExportSnapshot().Goals);
+            var context = new CliExecutionContext(
+                loopKernel,
+                workspace,
+                new InMemoryModelProviderRegistry([]),
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                currentGoal: null,
+                reloadKernel: () => CliPersistentStateRunner.LoadConductLoopKernel(repository),
+                persistKernel: _ => { },
+                persistGoalKernel: (_, _) => { },
+                reloadResolvedParkedHumanWaitKernel: () => new AgentOrchestratorKernel(),
+                reloadParkedGoalSafetyNetKernel: () => new AgentOrchestratorKernel(),
+                reloadKernelForGoals: trackedIds =>
+                    CliPersistentStateRunner.LoadConductLoopKernel(repository, trackedIds));
+
+            _ = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["conduct", "--loop", "--max-iterations", "1"],
+                context));
+            Xunit.Assert.Empty(loopKernel.Goals);
+
+            var intentStore = SqliteOperatorIntentStore.ForDirectories(
+                workspace.OrchestratorDirectory,
+                workspace.LogDirectory);
+            var intent = new OperatorIntentRecord(
+                "later-terminal-eviction",
+                "later-terminal-eviction-key",
+                OperatorIntentVerbs.Progress,
+                goal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new ProgressOperatorIntentPayload(WorkTaskStatus.Running, "must remain cancelled"),
+                    OperatorIntentJson.Options),
+                [],
+                "operator",
+                "test",
+                "test",
+                DateTimeOffset.UtcNow);
+            await intentStore.EnqueueAsync(intent);
+
+            _ = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["conduct", "--loop", "--max-iterations", "1"],
+                context));
+
+            var outcome = await intentStore.GetAsync(intent.Id);
+            Xunit.Assert.Equal(OperatorIntentStatus.Rejected, outcome!.Status);
+            Xunit.Assert.Contains("reasonCode=goal-terminal-evicted", outcome.Outcome, StringComparison.Ordinal);
+            Xunit.Assert.Contains("stored status is Cancelled", outcome.Outcome, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_conduct_loop_targeted_query_ignores_synthetic_parked_wait_completion")]
     public void PersistentRunnerConductLoopTargetedQueryIgnoresSyntheticParkedWaitCompletion()
     {

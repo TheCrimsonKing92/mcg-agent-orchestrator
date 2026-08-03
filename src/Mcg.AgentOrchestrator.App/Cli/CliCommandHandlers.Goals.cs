@@ -1201,6 +1201,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
                 }
+                GoalStatus? resolveEvictedGoalStatus(string goalId)
+                {
+                    if (evictedGoalStatuses.TryGetValue(goalId, out var status))
+                    {
+                        return status;
+                    }
+
+                    return context.Kernel.TryGetKnownDependencyGoalStatus(new GoalId(goalId), out var knownStatus) &&
+                           Enum.TryParse<GoalStatus>(knownStatus, ignoreCase: true, out var parsedStatus) &&
+                           GoalStatusSemantics.ExcludesFromConductorWorkingSet(parsedStatus)
+                        ? parsedStatus
+                        : null;
+                }
                 using var loopWakeSignal = watchInterval is not null
                     ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
                     : null;
@@ -1227,8 +1240,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
                         Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable)),
                     postLandingCanary: postLandingCanary,
-                    evictedGoalStatusLookup: goalId =>
-                        evictedGoalStatuses.TryGetValue(goalId, out var status) ? status : null).Run(
+                    evictedGoalStatusLookup: resolveEvictedGoalStatus).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
