@@ -61,6 +61,7 @@ public sealed class ConductorBatchLoopTests
         Func<Goal, bool>? runAcceptance = null,
         Func<Goal, int?, AcceptanceVerificationSummary>? runAcceptanceWithSlot = null,
         Func<Goal, GoalWorktreeRebaseResult>? rebaseOntoMain = null,
+        Func<Goal, LandingEscalationRecheckResult>? recheckPreLandingRebaseConflict = null,
         Func<Goal, LandingResult>? land = null,
         Action<Goal>? record = null,
         Func<Goal, GoalWorktreeRemoveResult>? cleanup = null,
@@ -100,7 +101,8 @@ public sealed class ConductorBatchLoopTests
             getLandingFileScopes: getLandingFileScopes,
             runAcceptanceVerificationWithSlot: runAcceptanceWithSlot,
             parallelAcceptanceAttemptCoordinator: parallelAcceptanceAttemptCoordinator,
-            getAcceptanceSlotCount: getAcceptanceSlotCount);
+            getAcceptanceSlotCount: getAcceptanceSlotCount,
+            recheckPreLandingRebaseConflict: recheckPreLandingRebaseConflict);
 
     // Returns a path to a stop file that does NOT exist yet.
     private static string NoStopPath() =>
@@ -5696,6 +5698,7 @@ public sealed class ConductorBatchLoopTests
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Resolve landing conflict");
         var rebaseChecks = 0;
+        var conflictChecks = 0;
         var landAttempts = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
@@ -5712,6 +5715,14 @@ public sealed class ConductorBatchLoopTests
                     "Branch can fast-forward into main.",
                     [],
                     null),
+            recheckPreLandingRebaseConflict: _ =>
+            {
+                conflictChecks++;
+                return new LandingEscalationRecheckResult(
+                    ConditionResolved: true,
+                    Status: "MergeTreeClean",
+                    Observation: "Read-only merge-tree check found no conflict with main.");
+            },
             runAcceptance: _ => true,
             land: g =>
             {
@@ -5738,12 +5749,13 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, summary.Advanced);
         Assert.Equal(0, summary.Done);
-        Assert.Equal(3, rebaseChecks);
+        Assert.Equal(2, rebaseChecks);
+        Assert.Equal(1, conflictChecks);
         Assert.Equal(1, landAttempts);
         Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal) &&
-            evt.Message.Contains("status=AlreadyFastForwardable", StringComparison.Ordinal));
+            evt.Message.Contains("status=MergeTreeClean", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]
@@ -5752,6 +5764,7 @@ public sealed class ConductorBatchLoopTests
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Keep landing conflict escalated");
         var rebaseChecks = 0;
+        var conflictChecks = 0;
         var landAttempts = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
@@ -5764,6 +5777,14 @@ public sealed class ConductorBatchLoopTests
                     "Conflict remains.",
                     ["docs/test-design-discipline.md"],
                     "workspace rebase");
+            },
+            recheckPreLandingRebaseConflict: _ =>
+            {
+                conflictChecks++;
+                return new LandingEscalationRecheckResult(
+                    ConditionResolved: false,
+                    Status: "MergeTreeConflict",
+                    Observation: "Read-only merge-tree check still conflicts with main.");
             },
             runAcceptance: _ => true,
             land: g =>
@@ -5789,8 +5810,56 @@ public sealed class ConductorBatchLoopTests
 
         Assert.Equal(1, summary.Ticks);
         Assert.Equal(1, summary.Escalated);
-        Assert.Equal(2, rebaseChecks);
+        Assert.Equal(1, rebaseChecks);
+        Assert.Equal(1, conflictChecks);
         Assert.Equal(0, landAttempts);
+        Assert.DoesNotContain(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopRebaseRecheckFailureKeepsGoalSetAside()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Keep failed recheck escalated");
+        var rebaseChecks = 0;
+        var conflictChecks = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            rebaseOntoMain: _ =>
+            {
+                rebaseChecks++;
+                return new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.Conflict,
+                    "goal/test",
+                    "Conflict remains.",
+                    ["docs/test-design-discipline.md"],
+                    "workspace rebase");
+            },
+            recheckPreLandingRebaseConflict: _ =>
+            {
+                conflictChecks++;
+                throw new InvalidOperationException("git merge-tree could not start");
+            },
+            runAcceptance: _ => true);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromMilliseconds(1),
+            sleepFunc: _ => false);
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, rebaseChecks);
+        Assert.Equal(1, conflictChecks);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.Contains("Landing escalation recheck failed", StringComparison.Ordinal));
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal));

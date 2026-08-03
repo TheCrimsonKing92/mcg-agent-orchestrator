@@ -2690,7 +2690,22 @@ internal sealed class ConductorBatchLoop
 
             if (entry.Condition == BatchSetAsideCondition.PreLandingRebaseConflict)
             {
-                var recheck = driver.RecheckPreLandingRebaseConflict(goal);
+                LandingEscalationRecheckResult recheck;
+                try
+                {
+                    recheck = driver.RecheckPreLandingRebaseConflict(goal);
+                }
+                catch (Exception ex)
+                {
+                    var failureObservation = Sanitize(ex.Message);
+                    kernel.RecordGoalPolicyDecision(
+                        goal.Id,
+                        $"Landing escalation recheck failed; goal remains set aside: {failureObservation}");
+                    EmitProgress(
+                        $"ESCALATION_RECHECK_FAILED goal={entry.GoalId[..8]} condition=pre-landing_rebase_conflict observation={failureObservation}");
+                    continue;
+                }
+
                 if (!recheck.ConditionResolved)
                 {
                     continue;
