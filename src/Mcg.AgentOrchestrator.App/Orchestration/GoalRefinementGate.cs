@@ -25,14 +25,15 @@ internal static class GoalRefinementGate
     {
         if (goal.RefinedSpec is { } existing)
         {
+            var existingService = CreateService(workspace, providers, workerProfiles);
             // Pick up any operator answers submitted since refinement: resolved clarification items in
             // the store are written into the spec's open questions here (the listener only resolves the
             // store item), so an answered goal clears AwaitingClarification and planning resumes with the
             // operator's decisions recorded in the spec.
             if (existing.HasOpenQuestions)
             {
-                existing = CreateService(workspace, providers, workerProfiles)
-                    .SyncAnsweredClarifications(kernel, goal.Id) ?? existing;
+                existing = existingService.SyncAnsweredFeasibilityClarifications(kernel, goal.Id) ?? existing;
+                existing = existingService.SyncAnsweredClarifications(kernel, goal.Id) ?? existing;
             }
 
             var outcome = existing.HasOpenQuestions ? RefinementOutcome.AwaitingClarification : RefinementOutcome.AutoRefined;

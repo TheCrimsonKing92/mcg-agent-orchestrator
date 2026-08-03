@@ -2,6 +2,21 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class TaskBriefTests
 {
+    [Xunit.Fact]
+    public void BuildTaskBrief_AlwaysPermitsBlockedCriterionReport()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Implement a small change");
+        var task = goal.Tasks[0];
+
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+        Assert.Contains(
+            "Reporting an acceptance criterion as BLOCKED, while naming what is needed to satisfy it, is an acceptable and expected outcome.",
+            brief,
+            StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_goal_task_role_and_timeline")]
     public void BuildTaskBriefIncludesGoalTaskRoleAndTimeline()
 {

@@ -1015,7 +1015,282 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(System.Text.Encoding.UTF8, startInfo.StandardErrorEncoding);
     }
 
+    [Xunit.Fact]
+    public async Task Refine_InfeasibleMakespan_RaisesOneHighQuestion()
+    {
+        const string criterion =
+            "Measure before/after gate makespan on this host while the machine is idle.";
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(criterion));
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        var question = Xunit.Assert.Single(result.Spec.OpenQuestions);
+        Xunit.Assert.Equal(AcceptanceCriterionFeasibility.ForkKind, question.ForkKind);
+        Xunit.Assert.Equal(AcceptanceCriterionFeasibility.FixedBlastRadius, question.BlastRadius);
+        Xunit.Assert.Equal(criterion, question.Criterion);
+        var item = Xunit.Assert.Single(collab.Items);
+        Xunit.Assert.Contains("Blast radius: high", item.Body, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task Refine_MeasurementForkForInfeasibleCriterion_IsWithheld()
+    {
+        const string criterion =
+            "Measure before/after gate makespan on this host while the machine is idle.";
+        const string forks = """
+            [{"kind":"observable-behavior","topicKey":"makespan-measurement-method","refinerConfidence":"low","blastRadius":"high","question":"How should makespan measurement be asserted?","choice":"","rationale":"Method is unspecified."}]
+            """;
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(criterion, forks));
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        var question = Xunit.Assert.Single(result.Spec.OpenQuestions);
+        Xunit.Assert.Equal(AcceptanceCriterionFeasibility.ForkKind, question.ForkKind);
+        Xunit.Assert.Single(collab.Items);
+    }
+
+    [Xunit.Fact]
+    public async Task Refine_AnsweredMeasurement_DoesNotSuppressFeasibility()
+    {
+        const string criterion =
+            "Measure before/after gate makespan on this host while the machine is idle.";
+        const string forks = """
+            [{"kind":"observable-behavior","topicKey":"makespan-measurement-method","refinerConfidence":"low","blastRadius":"high","question":"How should makespan measurement be asserted?","choice":"","rationale":"Method is unspecified."}]
+            """;
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(criterion, forks));
+        kernel.SetGoalRefinedSpec(goalId, new RefinedSpec(
+            "Existing spec",
+            [criterion],
+            VerificationClass.TestVerifiable,
+            [],
+            [new RefinedSpecOpenQuestion(
+                "spec-clarification:goal:makespan-measurement-method",
+                "How should makespan measurement be asserted?",
+                "observable-behavior",
+                "Answered",
+                "Use conductor event timestamps.",
+                "makespan-measurement-method")]));
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        var question = Xunit.Assert.Single(result.Spec.OpenQuestions);
+        Xunit.Assert.Equal(AcceptanceCriterionFeasibility.ForkKind, question.ForkKind);
+        Xunit.Assert.Single(collab.Items);
+    }
+
+    [Xunit.Fact]
+    public async Task Resolve_ReScopeStillInfeasible_RaisesNewQuestion()
+    {
+        const string original =
+            "Measure wall-clock performance on this host while the machine is idle.";
+        const string replacement =
+            "Drive two concurrent goals through dispatch and compare their results.";
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(original));
+        await service.RefineAsync(kernel, goalId);
+        var firstKey = collab.Items.Single().CorrelationKey!;
+
+        var resolved = await service.TryResolveOpenClarificationAsync(
+            kernel,
+            firstKey,
+            $"re-scope: {replacement}");
+
+        Xunit.Assert.True(resolved);
+        var spec = kernel.GetGoal(goalId).RefinedSpec!;
+        Xunit.Assert.Equal([replacement], spec.AcceptanceCriteria);
+        var question = Xunit.Assert.Single(spec.OpenQuestions);
+        Xunit.Assert.Equal(replacement, question.Criterion);
+        Xunit.Assert.Equal(2, collab.Items.Count);
+    }
+
+    [Xunit.Fact]
+    public async Task Resolve_OperatorOwned_MovesCriterionOutOfWorkerSet()
+    {
+        const string criterion =
+            "Benchmark wall-clock performance on this host while the machine is idle.";
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(criterion));
+        await service.RefineAsync(kernel, goalId);
+
+        var resolved = await service.TryResolveOpenClarificationAsync(
+            kernel,
+            collab.Items.Single().CorrelationKey!,
+            "OPERATOR-OWNED");
+
+        Xunit.Assert.True(resolved);
+        var spec = kernel.GetGoal(goalId).RefinedSpec!;
+        Xunit.Assert.Empty(spec.AcceptanceCriteria);
+        Xunit.Assert.Equal([criterion], spec.OperatorOwnedAcceptanceCriteria);
+        Xunit.Assert.Empty(spec.OpenQuestions);
+
+        var task = kernel.GetGoal(goalId).Tasks[0];
+        var brief = kernel.BuildTaskBrief(goalId, task.Id).Content;
+        Xunit.Assert.Contains("OPERATOR-OWNED / post-landing criteria", brief, StringComparison.Ordinal);
+        Xunit.Assert.Contains(criterion, brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task Resolve_Scenario_KeepsCriterionAndClearsQuestion()
+    {
+        const string criterion =
+            "Benchmark wall-clock performance on this host while the machine is idle.";
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(criterion));
+        await service.RefineAsync(kernel, goalId);
+
+        var resolved = await service.TryResolveOpenClarificationAsync(
+            kernel,
+            collab.Items.Single().CorrelationKey!,
+            "supply-reproducing-scenario: checked-in isolated benchmark harness");
+
+        Xunit.Assert.True(resolved);
+        var spec = kernel.GetGoal(goalId).RefinedSpec!;
+        Xunit.Assert.Equal([criterion], spec.AcceptanceCriteria);
+        Xunit.Assert.Empty(spec.OpenQuestions);
+    }
+
+    [Xunit.Fact]
+    public async Task Resolve_InvalidFeasibilityAnswer_LeavesQuestionOpen()
+    {
+        const string criterion =
+            "Benchmark wall-clock performance on this host while the machine is idle.";
+        var (service, kernel, goalId, collab) = BuildScenario(
+            responseJson: BuildFeasibilityJson(criterion));
+        await service.RefineAsync(kernel, goalId);
+
+        var resolved = await service.TryResolveOpenClarificationAsync(
+            kernel,
+            collab.Items.Single().CorrelationKey!,
+            "Measure it with two conductor gates.");
+
+        Xunit.Assert.False(resolved);
+        Xunit.Assert.True(kernel.GetGoal(goalId).RefinedSpec!.HasOpenQuestions);
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, collab.Items.Single().Status);
+    }
+
+    [Xunit.Fact]
+    public void DispatchPreflight_OpenFeasibility_StartsNoWorker()
+    {
+        const string criterion =
+            "Benchmark wall-clock performance on this host while the machine is idle.";
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var provider = new FakeSmokeProvider(
+            text: BuildFeasibilityJson(criterion),
+            providerName: "fake-refiner");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Add deterministic benchmark support",
+            workspace,
+            providers);
+
+        var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() =>
+            GoalManagementCommandService.SubscriptionDispatchReadyTasks(
+                kernel,
+                workspace,
+                goal,
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default(),
+                providers));
+
+        Xunit.Assert.Contains("Resolve spec clarification", blocked.Message, StringComparison.Ordinal);
+        Xunit.Assert.All(goal.Tasks, task => Xunit.Assert.Null(task.LastDispatch));
+    }
+
+    [Xunit.Fact]
+    public async Task EnsureRefined_StoreAnswer_AppliesFeasibleReScope()
+    {
+        const string criterion =
+            "Benchmark wall-clock performance on this host while the machine is idle.";
+        const string replacement = "Assert the pure duration mapper output.";
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var provider = new FakeSmokeProvider(
+            text: BuildFeasibilityJson(criterion),
+            providerName: "fake-refiner");
+        var providers = new InMemoryModelProviderRegistry([provider]);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("fake-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Add deterministic benchmark support",
+            workspace,
+            providers);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var item = (await store.ListAsync(goal.Id.Value)).Single();
+        await store.TryResolveAsync(item.CorrelationKey!, $"re-scope: {replacement}");
+
+        var result = GoalRefinementGate.EnsureRefined(
+            kernel,
+            workspace,
+            providers,
+            kernel.GetGoal(goal.Id));
+
+        Xunit.Assert.False(result.RanRefinement);
+        Xunit.Assert.Equal([replacement], result.Spec.AcceptanceCriteria);
+        Xunit.Assert.Empty(result.Spec.OpenQuestions);
+        Xunit.Assert.False(GoalRefinementGate.HasOpenClarification(workspace, kernel.GetGoal(goal.Id)));
+    }
+
+    [Xunit.Fact]
+    public void EnsureRefined_InFlightSpec_IsNotRetroactivelyChecked()
+    {
+        const string criterion =
+            "Benchmark wall-clock performance on this host while the machine is idle.";
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Already dispatched work");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Existing in-flight contract",
+            [criterion],
+            VerificationClass.RealWorldDependent,
+            [],
+            []));
+
+        var result = GoalRefinementGate.EnsureRefined(
+            kernel,
+            workspace,
+            new InMemoryModelProviderRegistry([]),
+            kernel.GetGoal(goal.Id));
+
+        Xunit.Assert.False(result.RanRefinement);
+        Xunit.Assert.Equal([criterion], result.Spec.AcceptanceCriteria);
+        Xunit.Assert.Empty(result.Spec.OpenQuestions);
+    }
+
     // --- Helpers ---
+
+    private static string BuildFeasibilityJson(string criterion, string forks = "[]") => $$"""
+        ```json
+        {
+          "behavioralContract": "Exercise the requested behavior.",
+          "acceptanceCriteria": [{{System.Text.Json.JsonSerializer.Serialize(criterion)}}],
+          "verificationClass": "TestVerifiable",
+          "decisions": [],
+          "forks": {{forks}}
+        }
+        ```
+        """;
 
     private static (
         GoalRefinementService Service,
