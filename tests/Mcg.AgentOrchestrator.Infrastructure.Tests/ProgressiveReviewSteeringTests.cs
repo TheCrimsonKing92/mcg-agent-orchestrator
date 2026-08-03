@@ -14,14 +14,14 @@ public sealed class ProgressiveReviewSteeringTests
         var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
         kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
             "Keep the warm dispatch scoped",
-            ["preserve the accepted implementation", "  use a conductor-owned measurement  "],
+            ["preserve the accepted implementation", "  use a conductor-owned measurement  ", "ship the operator receipt"],
             VerificationClass.TestVerifiable,
             [],
             []));
         kernel.WaiveAcceptanceCriterion(
             goal.Id,
             "use a conductor-owned measurement",
-            "the worker cannot drive the real conductor",
+            "the worker cannot drive the real conductor:",
             "operator:miles");
         Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
         File.WriteAllText(task.LastDispatch.PromptPath!, kernel.BuildTaskBrief(goal.Id, task.Id).Content);
@@ -936,7 +936,7 @@ public sealed class ProgressiveReviewSteeringTests
         string? sessionId)
     {
         Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "logs"));
-        var kernel = new AgentOrchestratorKernel();
+        var kernel = new AgentOrchestratorKernel(new TestClock(dispatchedAt));
         var task = new TaskSpec(new TaskId("developer-task-0001"), "Implement feature.\n\nACCEPTANCE\n- Stay scoped", AgentRole.Developer);
         var goal = kernel.CreateGoal(new GoalId("goal-progressive-review-0001"), "Progressive review steering goal", [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);

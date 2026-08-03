@@ -20,7 +20,7 @@ public sealed partial class AgentOrchestratorKernel
         var spec = goal.RefinedSpec
             ?? throw new InvalidOperationException($"Goal '{goal.Id.Value[..8]}' has no refined acceptance criteria to waive.");
         var criterion = ResolveAcceptanceCriterion(spec.AcceptanceCriteria, criterionReference).Trim();
-        var normalizedReason = RequireWaiverText(reason, nameof(reason));
+        var normalizedReason = RequireWaiverText(reason, nameof(reason)).ReplaceLineEndings(" ");
         var normalizedActor = RequireWaiverText(actor, nameof(actor)).ReplaceLineEndings(" ");
         var waiver = EffectiveAcceptanceCriteriaCorrection.Waiver(
             criterion,

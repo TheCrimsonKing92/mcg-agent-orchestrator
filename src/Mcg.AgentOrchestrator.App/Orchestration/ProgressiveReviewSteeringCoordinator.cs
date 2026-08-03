@@ -803,6 +803,9 @@ Evidence: {intent.MisdirectionEvidence}
                 continue;
             }
 
+            if (criteria.Count > 0 && rawLine.Length > 0 && char.IsWhiteSpace(rawLine[0]))
+                continue;
+
             if (line.StartsWith("## ", StringComparison.Ordinal) ||
                 line.EndsWith(":", StringComparison.Ordinal))
             {
@@ -814,9 +817,6 @@ Evidence: {intent.MisdirectionEvidence}
                 criteria.Add(line[2..].Trim());
                 continue;
             }
-
-            if (criteria.Count > 0 && rawLine.Length > 0 && char.IsWhiteSpace(rawLine[0]))
-                continue;
 
             if (criteria.Count > 0)
                 break;

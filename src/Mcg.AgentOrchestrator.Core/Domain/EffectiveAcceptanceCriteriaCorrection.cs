@@ -11,7 +11,11 @@ public sealed record EffectiveAcceptanceCriteriaCorrection(
 {
     private const string WaiverPrefix = "WAIVED: ";
 
-    public string? WaiverReason => IsWaiver ? Correction[WaiverPrefix.Length..].Trim() : null;
+    public string? WaiverReason => IsWaiver
+        ? (Correction.StartsWith(WaiverPrefix, StringComparison.Ordinal)
+            ? Correction[WaiverPrefix.Length..]
+            : Correction).Trim()
+        : null;
 
     public static EffectiveAcceptanceCriteriaCorrection Waiver(
         string criterion,

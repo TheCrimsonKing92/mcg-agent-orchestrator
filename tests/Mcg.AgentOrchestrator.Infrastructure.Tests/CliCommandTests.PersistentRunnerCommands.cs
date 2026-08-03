@@ -898,7 +898,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var goal = kernel.CreateGoal("Recover acceptance scope", [developer, reviewer]);
         kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
             "Ship recoverable acceptance scope",
-            ["focused tests pass", "measure unavailable makespan"],
+            ["focused tests pass", "  measure unavailable makespan  "],
             VerificationClass.TestVerifiable,
             [],
             []));
@@ -908,12 +908,14 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
+        var reasonPath = Path.Combine(root, "waiver-reason.txt");
+        await File.WriteAllTextAsync(reasonPath, "requires conductor evidence:\r\nno worker substitute is acceptable");
 
         var output = CaptureConsole(() =>
         {
             var changed = CliPersistentStateRunner.ExecuteCommand(
                 CliArgumentParser.SplitCommand(
-                    $"goal-amend {goal.Id.Value[..8]} --waive 2 --reason requires conductor evidence --actor operator:miles"),
+                    $"goal-amend {goal.Id.Value[..8]} --waive 2 --reason-file {reasonPath} --actor operator:miles"),
                 repository,
                 workspace,
                 ref agents,
@@ -936,12 +938,14 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         using var auditEvent = JsonDocument.Parse(auditLine);
 
         Xunit.Assert.Contains("Acceptance criterion waived", output);
+        Xunit.Assert.Contains("criterion=2", output);
         Xunit.Assert.Equal("measure unavailable makespan", waiver.SupersededCriterion);
-        Xunit.Assert.Equal("requires conductor evidence", waiver.WaiverReason);
+        Xunit.Assert.Equal("requires conductor evidence: no worker substitute is acceptable", waiver.WaiverReason);
         Xunit.Assert.Contains("- [WAIVED] measure unavailable makespan", brief);
+        Xunit.Assert.Contains("Reason: requires conductor evidence: no worker substitute is acceptable", brief);
         Xunit.Assert.Equal("measure unavailable makespan", auditEvent.RootElement.GetProperty("criterion").GetString());
         Xunit.Assert.Equal("operator:miles", auditEvent.RootElement.GetProperty("actor").GetString());
-        Xunit.Assert.Equal("requires conductor evidence", auditEvent.RootElement.GetProperty("reason").GetString());
+        Xunit.Assert.Equal("requires conductor evidence: no worker substitute is acceptable", auditEvent.RootElement.GetProperty("reason").GetString());
         Xunit.Assert.True(auditEvent.RootElement.TryGetProperty("recordedAt", out _));
         Xunit.Assert.All(restoredGoal.Tasks, task => Xunit.Assert.Null(task.LastDispatch));
     }

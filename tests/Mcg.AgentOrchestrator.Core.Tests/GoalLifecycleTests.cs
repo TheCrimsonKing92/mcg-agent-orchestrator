@@ -270,6 +270,15 @@ public sealed class GoalLifecycleTests
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock).GetGoal(goal.Id);
     Assert.True(Assert.Single(restored.EffectiveAcceptanceCriteriaCorrections).IsWaiver);
+    var malformedRestoredWaiver = new EffectiveAcceptanceCriteriaCorrection(
+        "legacy criterion",
+        "legacy reason without prefix",
+        "operator",
+        clock.UtcNow,
+        null,
+        ProgressKind.GoalPolicyDecision,
+        IsWaiver: true);
+    Assert.Equal("legacy reason without prefix", malformedRestoredWaiver.WaiverReason);
 }
 
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_added_task")]

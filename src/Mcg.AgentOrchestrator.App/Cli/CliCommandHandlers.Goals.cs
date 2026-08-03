@@ -255,7 +255,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             context.CurrentGoal = goal;
             var criterionNumber = Array.FindIndex(
                 goal.RefinedSpec!.AcceptanceCriteria.ToArray(),
-                item => string.Equals(item, waiver.SupersededCriterion, StringComparison.Ordinal)) + 1;
+                item => string.Equals(item.Trim(), waiver.SupersededCriterion, StringComparison.Ordinal)) + 1;
             Console.WriteLine(
                 $"Acceptance criterion waived: goal={goal.Id.Value[..8]} criterion={criterionNumber} actor={waiver.Actor} reason={waiver.WaiverReason}");
             return true;
