@@ -9006,11 +9006,11 @@ public sealed class ConductorBatchLoopTests
             maxIterations: 1,
             persistGoalTick: (_, changedGoalIds) => persistedGoalBatches.Add(changedGoalIds.ToArray()));
 
-        // A changed disposition (workspace created); B was held with no state change in the tick batch.
+        // A changed disposition (workspace created); B started a durable hold episode.
         var persistedGoalIds = persistedGoalBatches.First();
         Assert.Contains(goalA.Id, persistedGoalIds);
-        Assert.DoesNotContain(goalB.Id, persistedGoalIds);
-        Assert.Single(persistedGoalIds);
+        Assert.Contains(goalB.Id, persistedGoalIds);
+        Assert.Equal(2, persistedGoalIds.Count);
     }
 
     private static AgentOrchestratorKernel WithGoalStatus(
@@ -9025,6 +9025,111 @@ public sealed class ConductorBatchLoopTests
                 .Select(goal => goal.Id == goalId.Value ? goal with { Status = status } : goal)
                 .ToArray()
         });
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void GoalStall_RestartAfterThreshold_EmitsOnce()
+    {
+        var root = CreateTempDirectory("mcg-goal-stall-restart");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var now = new DateTimeOffset(2026, 8, 3, 1, 0, 0, TimeSpan.Zero);
+        var writer = new ConductEventLogWriter(logPath, utcNow: () => now);
+        var (kernel, goal) = SimpleGoal("persist a held goal across loop generations");
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+        new ConductorBatchLoop(conductEventLogWriter: writer, utcNow: () => now).Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            goalStallThreshold: TimeSpan.FromMinutes(10));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        now = now.AddMinutes(11);
+        new ConductorBatchLoop(conductEventLogWriter: writer, utcNow: () => now).Run(
+            restored,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            goalStallThreshold: TimeSpan.FromMinutes(10));
+
+        now = now.AddMinutes(1);
+        new ConductorBatchLoop(conductEventLogWriter: writer, utcNow: () => now).Run(
+            restored,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            goalStallThreshold: TimeSpan.FromMinutes(10));
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .Where(record => record.EventKind == "goal-stalled")
+            .ToArray();
+        var stalled = Assert.Single(records);
+        Assert.Equal(goal.Id.Value[..8], stalled.GoalId);
+        Assert.Contains("repeatedForSeconds=660", stalled.Detail, StringComparison.Ordinal);
+        Assert.NotNull(restored.GetGoal(goal.Id).CurrentHold?.StalledAt);
+    }
+
+    [Xunit.Fact]
+    public void GoalStall_ChangedBlocker_DoesNotEmit()
+    {
+        var root = CreateTempDirectory("mcg-goal-stall-change");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var now = new DateTimeOffset(2026, 8, 3, 2, 0, 0, TimeSpan.Zero);
+        var reason = "first empty batch";
+        var (kernel, _) = SimpleGoal("change the blocker before the threshold");
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => DispatchStartOutcome.EmptyBatch(reason));
+
+        new ConductorBatchLoop(
+            conductEventLogWriter: new ConductEventLogWriter(logPath, utcNow: () => now),
+            utcNow: () => now).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ =>
+                {
+                    now = now.AddMinutes(11);
+                    reason = "second empty batch";
+                    return false;
+                },
+                goalStallThreshold: TimeSpan.FromMinutes(10));
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!);
+        Assert.DoesNotContain(records, record => record.EventKind == "goal-stalled");
+        Assert.Contains("second empty batch", kernel.Goals.Single().CurrentHold?.Blocker, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void GoalStall_NormalProgress_LeavesNoHold()
+    {
+        var (kernel, goal) = SimpleGoal("make normal progress");
+
+        new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            goalStallThreshold: TimeSpan.Zero);
+
+        Assert.Null(goal.CurrentHold);
     }
 }
 

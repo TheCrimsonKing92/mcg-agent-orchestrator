@@ -59,6 +59,8 @@ public sealed class Goal
 
     public string? MetadataResultCommit { get; private set; }
 
+    public GoalHoldState? CurrentHold { get; private set; }
+
     public DateTimeOffset? MetadataCreatedAt { get; private set; }
 
     public DateTimeOffset? MetadataTerminatedAt { get; private set; }
@@ -152,6 +154,59 @@ public sealed class Goal
     {
         AutomaticAcceptanceRetryCount = Math.Max(0, automaticRetryCount);
         OperatorAcceptanceRegateCount = Math.Max(0, operatorRegateCount);
+    }
+
+    internal GoalHoldObservation ObserveHold(
+        string state,
+        string blocker,
+        DateTimeOffset observedAt,
+        TimeSpan stallThreshold)
+    {
+        state = RequireText(state, nameof(state));
+        blocker = RequireText(blocker, nameof(blocker));
+        if (stallThreshold < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stallThreshold));
+        }
+
+        var identity = GoalHoldState.BuildIdentity(state, blocker);
+        if (CurrentHold is null || !string.Equals(CurrentHold.Identity, identity, StringComparison.Ordinal))
+        {
+            CurrentHold = new GoalHoldState(identity, state, blocker, observedAt);
+            return new GoalHoldObservation(CurrentHold, StateChanged: true, BecameStalled: false);
+        }
+
+        var repeatedFor = observedAt - CurrentHold.StartedAt;
+        if (CurrentHold.StalledAt is null && repeatedFor >= stallThreshold && repeatedFor >= TimeSpan.Zero)
+        {
+            CurrentHold = CurrentHold with { StalledAt = observedAt };
+            return new GoalHoldObservation(CurrentHold, StateChanged: true, BecameStalled: true);
+        }
+
+        return new GoalHoldObservation(CurrentHold, StateChanged: false, BecameStalled: false);
+    }
+
+    internal bool ClearHold()
+    {
+        if (CurrentHold is null)
+        {
+            return false;
+        }
+
+        CurrentHold = null;
+        return true;
+    }
+
+    internal void RestoreHold(GoalHoldSnapshot? snapshot)
+    {
+        CurrentHold = snapshot is null
+            ? null
+            : new GoalHoldState(
+                snapshot.Identity,
+                snapshot.State,
+                snapshot.Blocker,
+                snapshot.StartedAt,
+                snapshot.StalledAt);
     }
 
     internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
@@ -268,7 +323,15 @@ public sealed class Goal
                     correction.IsWaiver,
                     correction.CapturedAcceptanceCriteriaHash)).ToList(),
             AutomaticAcceptanceRetryCount: AutomaticAcceptanceRetryCount,
-            OperatorAcceptanceRegateCount: OperatorAcceptanceRegateCount);
+            OperatorAcceptanceRegateCount: OperatorAcceptanceRegateCount,
+            CurrentHold: CurrentHold is null
+                ? null
+                : new GoalHoldSnapshot(
+                    CurrentHold.Identity,
+                    CurrentHold.State,
+                    CurrentHold.Blocker,
+                    CurrentHold.StartedAt,
+                    CurrentHold.StalledAt));
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -350,6 +413,7 @@ public sealed class Goal
         goal.RestoreAcceptanceRetryCounts(
             snapshot.AutomaticAcceptanceRetryCount,
             snapshot.OperatorAcceptanceRegateCount);
+        goal.RestoreHold(snapshot.CurrentHold);
 
         return goal;
     }

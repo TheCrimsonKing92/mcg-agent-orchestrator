@@ -161,7 +161,8 @@ private static GoalTimingReportContext BuildGoalTimingContext(
         backlogIntentAt,
         landing.LandedAt,
         landing.Source,
-        gateSpans);
+        gateSpans,
+        AsOf: DateTimeOffset.UtcNow);
 }
 
 private static DateTimeOffset? ResolveBacklogIntentAt(Goal goal, string backlogStorePath)

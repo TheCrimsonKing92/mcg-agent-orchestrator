@@ -20,7 +20,15 @@ public sealed record GoalSnapshot(
     DateTimeOffset? CreatedAt = null,
     DateTimeOffset? TerminatedAt = null,
     int AutomaticAcceptanceRetryCount = 0,
-    int OperatorAcceptanceRegateCount = 0);
+    int OperatorAcceptanceRegateCount = 0,
+    GoalHoldSnapshot? CurrentHold = null);
+
+public sealed record GoalHoldSnapshot(
+    string Identity,
+    string State,
+    string Blocker,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? StalledAt = null);
 
 public sealed record TerminalGoalMetadata(
     GoalId Id,
