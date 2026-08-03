@@ -8,13 +8,14 @@ internal static class CliCommandHelp
     public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix>] | goal --brief-file <path> | goal --text-file <path>";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
     public const string RetryUsage = "Usage: retry <task-number> <message> [--mechanical] | retry <goal-prefix> <task-number> <message> [--mechanical] | retry --goal <goal-prefix> <task-number> <message> [--mechanical] | retry <task-number> --text-file <path> [--mechanical]";
-    public const string NoteUsage = "Usage: note <task-number> <message> | note <goal-prefix> <task-number> <message> | note --goal <goal-prefix> <task-number> <message> | note <task-number> --text-file <path>";
+    public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
     public const string ProgressUsage = "Usage: progress <task-number> <status> <message> | progress <task-number> <status> --text-file <path>";
     public const string VerifyManualUsage = "Usage: verify-manual <task-number> <passed|failed> <note> | verify-manual <task-number> <passed|failed> --text-file <path>";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
     public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
-    public const string AnswerUsage = "Usage: answer <request-id> <answer> | answer <request-id> --text-file <path>";
+    public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
+    public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
     public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss <goal-id-prefix> | attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
     public const string CancelGoalUsage = "Usage: cancel-goal <goal-id-prefix> <reason> [--confirm-goal-stop] | cancel-goal <goal-id-prefix> --text-file <path> [--confirm-goal-stop]";
@@ -100,7 +101,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Note = new(
         NoteUsage,
         "Record a status-neutral task note.",
-        ["--goal", "--text-file", "--help", "-h"]);
+        ["--goal", "--text-file", "--gate-deliverable", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Progress = new(
         ProgressUsage,
@@ -130,6 +131,11 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Answer = new(
         AnswerUsage,
         "Submit an answer to a human-input request.",
+        ["--text-file", "--gate-deliverable", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry GateSatisfied = new(
+        GateSatisfiedUsage,
+        "Explicitly lift a structured operator gate with durable evidence.",
         ["--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Attention = new(
@@ -461,6 +467,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("answer", StringComparison.OrdinalIgnoreCase))
         {
             entry = Answer;
+            return true;
+        }
+
+        if (args[0].Equals("gate-satisfied", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = GateSatisfied;
             return true;
         }
 

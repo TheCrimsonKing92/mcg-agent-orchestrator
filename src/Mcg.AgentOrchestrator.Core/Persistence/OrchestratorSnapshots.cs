@@ -194,7 +194,8 @@ public sealed record ProgressEventSnapshot(
     ProgressKind Kind,
     string Message,
     DateTimeOffset OccurredAt,
-    TaskRequeueSkippedPayload? RequeueSkipped = null);
+    TaskRequeueSkippedPayload? RequeueSkipped = null,
+    IReadOnlyList<OperatorGateRecord>? OperatorGates = null);
 
 public sealed record HumanInputRequestSnapshot(
     string Id,
@@ -216,7 +217,8 @@ public sealed record HumanInputRequestSnapshot(
     string? QuestionFingerprint = null,
     string? BlockerFingerprint = null,
     int SuppressionCount = 0,
-    string? SupersededByRequestId = null);
+    string? SupersededByRequestId = null,
+    IReadOnlyList<OperatorGateRecord>? OperatorGates = null);
 
 public static class VerificationTextBounds
 {

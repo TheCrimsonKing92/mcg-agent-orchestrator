@@ -915,7 +915,9 @@ Evidence: {intent.MisdirectionEvidence}
             return Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, "goal has no refined acceptance criteria hash to compare");
 
         var currentCriteria = BuildEffectiveAcceptanceCriteriaSnapshot(goal);
-        var currentHash = HashText(string.Join("\n", currentCriteria));
+        var currentHash = EffectiveAcceptanceCriteriaVersion.ComputeHash(
+            goal.RefinedSpec,
+            goal.EffectiveAcceptanceCriteriaCorrections);
         if (FindLatestValidAcceptanceCriteriaCaptureIndex(goal, currentHash) >= 0)
         {
             return Pass(
@@ -1009,7 +1011,11 @@ Evidence: {intent.MisdirectionEvidence}
         {
             var correction = goal.EffectiveAcceptanceCriteriaCorrections[index];
             if (correction.IsWaiver &&
-                string.Equals(correction.CapturedAcceptanceCriteriaHash, currentHash, StringComparison.OrdinalIgnoreCase))
+                (string.Equals(correction.CapturedAcceptanceCriteriaHash, currentHash, StringComparison.OrdinalIgnoreCase) ||
+                    EffectiveAcceptanceCriteriaVersion.IsCapturedHashCurrent(
+                        goal.RefinedSpec!,
+                        goal.EffectiveAcceptanceCriteriaCorrections,
+                        correction.CapturedAcceptanceCriteriaHash)))
             {
                 return index;
             }

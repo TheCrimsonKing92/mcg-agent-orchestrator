@@ -153,6 +153,33 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec RecordOperatorTaskNote(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        IReadOnlyList<string>? gatedDeliverableIds = null)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        var noteMessage = message.Trim();
+        if (string.IsNullOrWhiteSpace(noteMessage))
+        {
+            throw new ArgumentException("Task note message cannot be empty.", nameof(message));
+        }
+
+        var recordedAt = _clock.UtcNow;
+        var sourceRecordId = $"task-note:{taskId.Value}:{recordedAt.UtcTicks}";
+        var gates = (gatedDeliverableIds ?? [])
+            .Select(deliverableId => deliverableId.Trim())
+            .Where(deliverableId => deliverableId.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(deliverableId => new OperatorGateRecord(deliverableId, sourceRecordId, recordedAt))
+            .ToArray();
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.OperatorTaskNote, noteMessage);
+        Append(goal, taskId, ProgressKind.OperatorTaskNote, noteMessage, gates, recordedAt);
+        return task;
+    }
+
     public TaskSpec RecordReviewerEvidenceRequestReceived(GoalId goalId, TaskId taskId, string message)
     {
         var goal = GetGoal(goalId);
@@ -1188,7 +1215,10 @@ public sealed partial class AgentOrchestratorKernel
             $"count={request.SuppressionCount} state={(answered ? "answered" : "open")}{thresholdReceipt}");
     }
 
-    public void SubmitHumanInput(HumanInputRequestId requestId, string answer)
+    public void SubmitHumanInput(
+        HumanInputRequestId requestId,
+        string answer,
+        IReadOnlyList<string>? gatedDeliverableIds = null)
     {
         lock (_humanInputRequestLock)
         {
@@ -1204,7 +1234,7 @@ public sealed partial class AgentOrchestratorKernel
 
             var goal = GetGoal(request.GoalId);
             var answeredAt = _clock.UtcNow;
-            request.Complete(answer, answeredAt);
+            request.Complete(answer, answeredAt, gatedDeliverableIds);
             var siblings = _humanInputRequests.Values
                 .Where(candidate =>
                     candidate.Id != request.Id &&
@@ -1238,6 +1268,86 @@ public sealed partial class AgentOrchestratorKernel
                 : $" Resolved {siblings.Count} sibling duplicate request(s).";
             Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer + siblingReceipt);
         }
+    }
+
+    public void MarkOperatorGateSatisfied(
+        HumanInputRequestId requestId,
+        string deliverableId,
+        string evidence)
+    {
+        lock (_humanInputRequestLock)
+        {
+            if (!_humanInputRequests.TryGetValue(requestId, out var request))
+            {
+                throw new KeyNotFoundException($"Human input request '{requestId}' was not found.");
+            }
+
+            var satisfiedGate = request.MarkOperatorGateSatisfied(deliverableId, evidence, _clock.UtcNow);
+            var goal = GetGoal(request.GoalId);
+            Append(
+                goal,
+                request.TaskId,
+                ProgressKind.OperatorGateSatisfied,
+                $"Operator gate satisfied: source=clarification:{request.Id.Value}; deliverable={deliverableId.Trim()}; evidence={evidence.Trim()}",
+                [satisfiedGate]);
+        }
+    }
+
+    public void MarkOperatorGateSatisfied(
+        GoalId goalId,
+        string sourceRecordId,
+        string deliverableId,
+        string evidence)
+    {
+        var goal = GetGoal(goalId);
+        var normalizedSource = string.IsNullOrWhiteSpace(sourceRecordId)
+            ? throw new ArgumentException("Gate source record id cannot be empty.", nameof(sourceRecordId))
+            : sourceRecordId.Trim();
+        var normalizedDeliverable = string.IsNullOrWhiteSpace(deliverableId)
+            ? throw new ArgumentException("Gate deliverable id cannot be empty.", nameof(deliverableId))
+            : deliverableId.Trim();
+        var normalizedEvidence = string.IsNullOrWhiteSpace(evidence)
+            ? throw new ArgumentException("Gate satisfaction evidence cannot be empty.", nameof(evidence))
+            : evidence.Trim();
+        var matches = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.OperatorTaskNote)
+            .SelectMany(evt => (evt.OperatorGates ?? []).Select(gate => (evt, gate)))
+            .Where(item =>
+                string.Equals(item.gate.SourceRecordId, normalizedSource, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.gate.DeliverableId, normalizedDeliverable, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (matches.Length == 0)
+        {
+            throw new KeyNotFoundException(
+                $"Operator task-note gate '{normalizedDeliverable}' from '{normalizedSource}' was not found on goal '{goal.Id.Value[..8]}'.");
+        }
+
+        var alreadySatisfied = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.OperatorGateSatisfied)
+            .SelectMany(evt => evt.OperatorGates ?? [])
+            .Any(gate =>
+                !gate.IsActive &&
+                string.Equals(gate.SourceRecordId, normalizedSource, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(gate.DeliverableId, normalizedDeliverable, StringComparison.OrdinalIgnoreCase));
+        if (alreadySatisfied)
+        {
+            throw new InvalidOperationException(
+                $"Operator task-note gate '{normalizedDeliverable}' from '{normalizedSource}' is already satisfied.");
+        }
+
+        var satisfiedAt = _clock.UtcNow;
+        var satisfiedGate = matches[0].gate with
+        {
+            SatisfiedAt = satisfiedAt,
+            SatisfactionEvidence = normalizedEvidence
+        };
+        Append(
+            goal,
+            matches[0].evt.TaskId,
+            ProgressKind.OperatorGateSatisfied,
+            $"Operator gate satisfied: source={normalizedSource}; deliverable={normalizedDeliverable}; evidence={normalizedEvidence}",
+            [satisfiedGate],
+            satisfiedAt);
     }
 
     private void RestoreTaskAfterHumanInput(Goal goal, TaskSpec task)

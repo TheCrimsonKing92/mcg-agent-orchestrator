@@ -1,0 +1,22 @@
+{
+  "goalId": "10bd7223",
+  "recordId": "clarification:10bd7223:hypothesis-gate",
+  "deliverableId": "hidden-console-spawn",
+  "recordedAt": "2026-08-03T04:00:00Z",
+  "clarificationQuestion": "Should console suppression be implemented before the max-duration handoff hypothesis is confirmed?",
+  "clarificationAnswer": "HYPOTHESIS GATE: instrument the max-duration handoff, observe whether the incumbent holds a console, and do NOT implement console suppression until the hypothesis is confirmed.",
+  "inconclusiveObservation": "INCONCLUSIVE: the observation did not establish whether the incumbent held a console, so the diagnostic shipped and the suppression change remained withheld.",
+  "sliceDiffSummary": "The slice adds max-duration handoff console instrumentation and a scope type; the CreateProcessW spawn path still uses the existing raw flags and does not yet acquire hidden-console suppression.",
+  "concernReceipts": [
+    {
+      "recordedAt": "2026-08-03T04:11:29Z",
+      "note": "this slice has not actually wired the hidden-console acquisition into the max-duration spawn path; it only adds logging and a new scope type, while the CreateProcessW call still uses raw flags, so the concrete visible-console regression fix is not yet demonstrated",
+      "evidenceLine": "hidden-console acquisition is not wired into the max-duration spawn path"
+    },
+    {
+      "recordedAt": "2026-08-03T04:14:45Z",
+      "note": "does not demonstrate the required 3-consecutive max-duration handoff correlation evidence, so the behavioral acceptance criteria are not yet satisfied",
+      "evidenceLine": "missing 3-consecutive max-duration handoff correlation evidence"
+    }
+  ]
+}

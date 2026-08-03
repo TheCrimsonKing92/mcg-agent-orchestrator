@@ -326,7 +326,7 @@ Console.WriteLine("  timeline [goal-id], task-timeline <task-number>, pending");
 Console.WriteLine("  goal-events <goal-id-prefix> [--follow]");
 Console.WriteLine("  run <task-number> [--confirm-paid-api-run] [--autonomy <policy>]");
 Console.WriteLine("  api-run <task-number> [--confirm-paid-api-run] [--autonomy <policy>]");
-Console.WriteLine("  retry <task-number> <message> [--autonomy <policy>], note <task-number> <message>");
+Console.WriteLine("  retry <task-number> <message> [--autonomy <policy>], note <task-number> <message> [--gate-deliverable <id>...]");
 Console.WriteLine("  dispatch <task-number> <worker-name> <command>, worker-profiles, worker-profile <name> <command-template>");
 Console.WriteLine("  worker-profile-check [name], worker-profile-export <path>, worker-profile-import <path> [merge|replace]");
 Console.WriteLine("  worker-dispatch <task-number> <worker-name> <command-template>, profile-dispatch <task-number> <profile-name>");
@@ -338,7 +338,8 @@ Console.WriteLine("  start-dispatches --confirm-batch-start [--autonomy <policy>
 Console.WriteLine("  refresh-dispatch <task-number>, refresh-dispatches");
 Console.WriteLine("  logs <task-number> [stdout|stderr|exit|all], cancel-dispatch <task-number>");
 Console.WriteLine("  verify <task-number> <command>, verify-manual <task-number> <passed|failed> <note>, verifications <task-number>");
-Console.WriteLine("  progress <task-number> <status> <message>, ask <task-number> <question>, ask-goal <question>, answer <request-id> <answer>");
+Console.WriteLine("  progress <task-number> <status> <message>, ask <task-number> <question>, ask-goal <question>, answer <request-id> <answer> [--gate-deliverable <id>...]");
+Console.WriteLine("  gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence>");
 Console.WriteLine("  goal-plan, retention-plan, build-lease-cleanup --confirm-build-lease-cleanup");
 Console.WriteLine("  acceptance-queue [--apply --confirm-acceptance-queue], drain-goals [--apply --confirm-goal-drain --confirm-batch-start]");
 Console.WriteLine("  operator-inbox-ack <item-id> [note], cross-goal-start-plan, start-subscription-ready-goals --confirm-batch-start");

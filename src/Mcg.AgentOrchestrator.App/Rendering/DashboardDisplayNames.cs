@@ -52,6 +52,8 @@ internal static class DashboardDisplayNames
         ProgressKind.TaskRequeueSkipped => "Task auto-requeue skipped",
         ProgressKind.TaskVerificationPlanUpdated => "Verification plan updated",
         ProgressKind.TaskNote => "Task note",
+        ProgressKind.OperatorTaskNote => "Operator task note",
+        ProgressKind.OperatorGateSatisfied => "Operator gate satisfied",
         ProgressKind.TaskSubscriptionLimitReviewAcknowledged => "Subscription limit reviewed",
         ProgressKind.ReviewerEvidenceRequestReceived => "Reviewer evidence requested",
         ProgressKind.ReviewerEvidenceRunRecorded => "Reviewer evidence run recorded",

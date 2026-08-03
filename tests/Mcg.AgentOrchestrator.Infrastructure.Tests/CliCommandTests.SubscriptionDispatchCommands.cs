@@ -2203,7 +2203,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         CliCommandDispatcher.ExecuteCommand(["answer", request.Id.Value[..8], "--text-file", answerPath], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRetried && evt.Message == retryText);
-        Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskNote && evt.Message == noteText);
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.OperatorTaskNote && evt.Message == noteText);
         Xunit.Assert.Contains(goal.Timeline, evt => evt.Kind == ProgressKind.TaskStarted && evt.Message == progressText);
         Xunit.Assert.Equal(verifyText, task.LastVerification!.StandardOutput);
         Xunit.Assert.Contains(goal.Tasks, candidate => candidate.Description == addTaskText);
@@ -2354,12 +2354,12 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         Xunit.Assert.True(noteChanged);
         Xunit.Assert.Equal(WorkTaskStatus.Assigned, statusAfterNote);
-        Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskNote && evt.Message == "Preserve dispatch readiness.");
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.OperatorTaskNote && evt.Message == "Preserve dispatch readiness.");
         Xunit.Assert.True(retryChanged);
         Xunit.Assert.Equal(WorkTaskStatus.Assigned, statusAfterRetry);
         Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskRetried && evt.Message == "Retry remains available.");
         Xunit.Assert.True(secondNoteChanged);
-        Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskNote && evt.Message == "Dispatch remains available.");
+        Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.OperatorTaskNote && evt.Message == "Dispatch remains available.");
         Xunit.Assert.True(dispatchChanged);
         Xunit.Assert.NotNull(task.LastDispatch);
     }
@@ -2414,7 +2414,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             Xunit.Assert.Equal(expectedStatuses[index], goal.Tasks[index].Status);
             Xunit.Assert.Contains(goal.Timeline, evt =>
                 evt.TaskId == goal.Tasks[index].Id &&
-                evt.Kind == ProgressKind.TaskNote &&
+                evt.Kind == ProgressKind.OperatorTaskNote &&
                 evt.Message == message);
         }
     }

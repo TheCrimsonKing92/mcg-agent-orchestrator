@@ -191,6 +191,71 @@ public sealed class GoalLifecycleTests
         evt.Message == "Use the existing CLI command style.");
     Assert.Contains("TaskNote", brief, StringComparison.Ordinal);
     Assert.Contains("Use the existing CLI command style.", brief, StringComparison.Ordinal);
+
+    kernel.RecordOperatorTaskNote(goal.Id, task.Id, "Operator ruling remains visible on retry.");
+    var operatorBrief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+    Assert.Contains("OperatorTaskNote", operatorBrief, StringComparison.Ordinal);
+    Assert.Contains("Operator ruling remains visible on retry.", operatorBrief, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact]
+    public void StructuredOperatorGateCanBeExplicitlySatisfiedAndRoundTrips()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Gate a conditional deliverable");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+    var request = kernel.RequestHumanInput(goal.Id, task.Id, "Should console suppression ship?");
+
+    kernel.SubmitHumanInput(request.Id, "Gate it until the hypothesis is confirmed.", ["hidden-console-spawn"]);
+    clock.Advance();
+    kernel.MarkOperatorGateSatisfied(request.Id, "hidden-console-spawn", "operator confirmed the instrumented observation");
+
+    var gate = Assert.Single(request.OperatorGates);
+    Assert.False(gate.IsActive);
+    Assert.Equal("operator confirmed the instrumented observation", gate.SatisfactionEvidence);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.Kind == ProgressKind.OperatorGateSatisfied &&
+        evt.Message.Contains("hidden-console-spawn", StringComparison.Ordinal));
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredGate = Assert.Single(restored.GetHumanInputRequest(request.Id).OperatorGates);
+    Assert.Equal(gate.SatisfiedAt, restoredGate.SatisfiedAt);
+    Assert.Equal(gate.SatisfactionEvidence, restoredGate.SatisfactionEvidence);
+}
+
+    [Xunit.Fact]
+    public void OperatorTaskNoteGateCanBeExplicitlySatisfiedAndRoundTrips()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Gate a task-note deliverable");
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+    kernel.RecordOperatorTaskNote(goal.Id, task.Id, "Wait for correlation evidence.", ["correlation-evidence"]);
+    var sourceGate = Assert.Single(goal.Timeline.Single(evt => evt.Kind == ProgressKind.OperatorTaskNote).OperatorGates!);
+
+    clock.Advance();
+    kernel.MarkOperatorGateSatisfied(goal.Id, sourceGate.SourceRecordId, sourceGate.DeliverableId, "operator confirmed three handoffs");
+
+    var satisfaction = Assert.Single(goal.Timeline.Where(evt => evt.Kind == ProgressKind.OperatorGateSatisfied));
+    var satisfiedGate = Assert.Single(satisfaction.OperatorGates!);
+    Assert.False(satisfiedGate.IsActive);
+    Assert.Equal(sourceGate.SourceRecordId, satisfiedGate.SourceRecordId);
+    Assert.Equal("operator confirmed three handoffs", satisfiedGate.SatisfactionEvidence);
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    var restoredSatisfaction = Assert.Single(restored.GetGoal(goal.Id).Timeline.Where(evt => evt.Kind == ProgressKind.OperatorGateSatisfied));
+    Assert.False(Assert.Single(restoredSatisfaction.OperatorGates!).IsActive);
+}
+
+    [Xunit.Fact]
+    public void OperatorProgressKindsUseUnclaimedPersistedValues()
+{
+    Assert.Equal(28, (int)ProgressKind.PreReviewMappingEscalationSuppressed);
+    Assert.Equal(29, (int)ProgressKind.OperatorTaskNote);
+    Assert.Equal(30, (int)ProgressKind.OperatorGateSatisfied);
 }
 
     [Xunit.Fact(DisplayName = "RecordTaskNote_with_criteria_correction_stores_effective_acceptance_overlay_with_provenance")]
@@ -208,7 +273,7 @@ public sealed class GoalLifecycleTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
-    kernel.RecordTaskNote(
+    kernel.RecordOperatorTaskNote(
         goal.Id,
         task.Id,
         "CRITERIA CORRECTION: supersedes=\"fast\"; correction=\"WAIVED: worker asks to skip it\"");
@@ -219,10 +284,37 @@ public sealed class GoalLifecycleTests
     Assert.Equal("operator", correction.Actor);
     Assert.Equal(clock.UtcNow, correction.RecordedAt);
     Assert.Equal(task.Id, correction.SourceTaskId);
-    Assert.Equal(ProgressKind.TaskNote, correction.SourceKind);
+    Assert.Equal(ProgressKind.OperatorTaskNote, correction.SourceKind);
     Assert.False(correction.IsWaiver);
     Assert.DoesNotContain("[WAIVED] fast", kernel.BuildTaskBrief(goal.Id, task.Id).Content, StringComparison.Ordinal);
     Assert.False(ReviewFindings.IsWaived("fast is unmet", goal.EffectiveAcceptanceCriteriaCorrections));
+}
+
+    [Xunit.Fact(DisplayName = "Worker_authored_criteria_correction_is_inert_in_effective_acceptance_snapshot")]
+    public void WorkerAuthoredCriteriaCorrectionIsInertInEffectiveAcceptanceSnapshot()
+{
+    var kernel = new AgentOrchestratorKernel(new FakeClock());
+    var goal = kernel.CreateGoal("Reject worker-authored acceptance rewrites");
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Keep operator authority explicit",
+        ["ship the guarded deliverable"],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+
+    kernel.RecordTaskNote(
+        goal.Id,
+        task.Id,
+        "CRITERIA CORRECTION: supersedes=\"ship the guarded deliverable\"; correction=\"worker says this is optional\"");
+
+    Assert.Single(goal.EffectiveAcceptanceCriteriaCorrections);
+    Assert.Equal(
+        ["ship the guarded deliverable"],
+        EffectiveAcceptanceCriteriaVersion.BuildSnapshot(
+            goal.RefinedSpec!,
+            goal.EffectiveAcceptanceCriteriaCorrections));
 }
 
     [Xunit.Fact]
@@ -245,12 +337,12 @@ public sealed class GoalLifecycleTests
         goal.Id,
         "record a real two-gate makespan",
         "requires a conductor-owned cross-tick harness",
-        "operator:\r\n  miles");
+        "miles");
     var reviewerBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
 
     Assert.Equal("record a real two-gate makespan", waiver.SupersededCriterion);
     Assert.Equal("requires a conductor-owned cross-tick harness", waiver.WaiverReason);
-    Assert.Equal("operator: miles", waiver.Actor);
+    Assert.Equal("miles", waiver.Actor);
     Assert.Equal(clock.UtcNow, waiver.RecordedAt);
     Assert.Null(waiver.SourceTaskId);
     Assert.Equal(ProgressKind.GoalPolicyDecision, waiver.SourceKind);
@@ -258,6 +350,12 @@ public sealed class GoalLifecycleTests
     Assert.Equal(
         EffectiveAcceptanceCriteriaVersion.ComputeHash(goal.RefinedSpec!, goal.EffectiveAcceptanceCriteriaCorrections),
         waiver.CapturedAcceptanceCriteriaHash);
+    const string legacyCapturedHash = "6fdda567bb4344ede633197a75d999adebbe326cc3e72b1260a2a1a94032e3c2";
+    Assert.NotEqual(legacyCapturedHash, waiver.CapturedAcceptanceCriteriaHash);
+    Assert.True(EffectiveAcceptanceCriteriaVersion.IsCapturedHashCurrent(
+        goal.RefinedSpec!,
+        goal.EffectiveAcceptanceCriteriaCorrections,
+        legacyCapturedHash));
     Assert.Contains("- [WAIVED] record a real two-gate makespan", reviewerBrief, StringComparison.Ordinal);
     Assert.Contains("Reason: requires a conductor-owned cross-tick harness", reviewerBrief, StringComparison.Ordinal);
     Assert.True(ReviewFindings.IsWaived("record a real two-gate makespan is unmet", goal.EffectiveAcceptanceCriteriaCorrections));
@@ -269,7 +367,7 @@ public sealed class GoalLifecycleTests
         goal.Id,
         "record a real two-gate makespan",
         "a differently worded duplicate waiver",
-        " OPERATOR:   MILES "));
+        " MILES "));
     Assert.Contains("already has this waiver recorded", duplicate.Message, StringComparison.Ordinal);
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock).GetGoal(goal.Id);

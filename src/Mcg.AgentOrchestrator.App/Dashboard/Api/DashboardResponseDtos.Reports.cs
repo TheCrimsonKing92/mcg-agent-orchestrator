@@ -288,7 +288,10 @@ internal sealed record ProgressiveReviewGlanceGuardReceiptDto(
     string FinalVerdict,
     bool Downgraded,
     string DowngradeReason,
-    string StructuralComparison);
+    string StructuralComparison,
+    IReadOnlyList<string> GateAnnotations,
+    bool OperatorContextTruncated,
+    bool CancellationWithheld);
 
 internal sealed record OperatorIntentDto(
     string Id,

@@ -74,10 +74,12 @@ public sealed class ProgressiveReviewSteeringTests
 
         var result = coordinator.ExecutePending(kernel, goal);
 
-        Assert.True(result.MutatedTaskState);
+        Assert.True(result.MutatedTaskState, string.Join(Environment.NewLine, result.ProgressLines));
         Assert.True(order.IndexOf("cancel") >= 0);
         Assert.True(order.IndexOf("probe:6001") > order.IndexOf("cancel"));
-        Assert.True(order.IndexOf("start") > order.IndexOf("probe:6001"));
+        Assert.True(
+            order.IndexOf("start") > order.IndexOf("probe:6001"),
+            $"order={string.Join(',', order)}; receipts={string.Join(" | ", store.Receipts.Select(item => item.Outcome))}; checks={string.Join(" | ", store.Receipts.SelectMany(item => item.AdmissionChecks))}");
         var receipt = Assert.Single(store.Receipts);
         Assert.Equal("warm-resume", receipt.Decision);
         Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("AcceptanceCriteriaHash:Passed:", StringComparison.Ordinal));
@@ -960,7 +962,7 @@ public sealed class ProgressiveReviewSteeringTests
             WorkerProfileCatalog.Default(),
             new InMemoryModelProviderRegistry([]),
             store,
-            attentionStore,
+            attentionStore ?? new FakeCollaborationItemStore(),
             options,
             utcNow: () => new DateTimeOffset(2026, 7, 20, 12, 0, 10, TimeSpan.Zero),
             isProcessRunning: isProcessRunning ?? (_ => false),

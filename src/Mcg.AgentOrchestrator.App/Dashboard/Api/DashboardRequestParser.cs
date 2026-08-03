@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Dashboard.Api;
 
 internal static partial class DashboardRequestParser
 {
-public static string ParseAnswerSubmission(string body)
+public static AnswerSubmissionDto ParseAnswerSubmission(string body)
 {
     if (string.IsNullOrWhiteSpace(body))
     {
@@ -16,7 +16,7 @@ public static string ParseAnswerSubmission(string body)
     var trimmed = body.Trim();
     if (!trimmed.StartsWith("{", StringComparison.Ordinal))
     {
-        return trimmed;
+        return new AnswerSubmissionDto(trimmed);
     }
 
     var submission = JsonSerializer.Deserialize<AnswerSubmissionDto>(trimmed, DashboardJson.Options());
@@ -25,7 +25,13 @@ public static string ParseAnswerSubmission(string body)
         throw new ArgumentException("Answer JSON must include a non-empty 'answer' value.");
     }
 
-    return submission.Answer;
+    return new AnswerSubmissionDto(
+        submission.Answer.Trim(),
+        (submission.GatedDeliverableIds ?? [])
+            .Select(value => value.Trim())
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray());
 }
 
 public static CreateGoalSubmissionDto ParseCreateGoalSubmission(string body)

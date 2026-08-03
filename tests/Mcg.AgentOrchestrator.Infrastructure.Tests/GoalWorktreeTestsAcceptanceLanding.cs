@@ -220,6 +220,96 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "Gated_progressive_glance_preserves_worktree_and_allows_acceptance_completion")]
+    public void GatedProgressiveGlancePreservesWorktreeAndAllowsAcceptanceCompletion()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var now = new DateTimeOffset(2026, 8, 3, 4, 20, 0, TimeSpan.Zero);
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(
+                TaskId.New(),
+                "Implement the gated diagnostic.\n\nTarget files/scopes\nIncludes:\n- feature.txt",
+                AgentRole.Developer);
+            var goal = kernel.CreateGoal("Honor the operator hypothesis gate", [task]);
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+                "Instrument before suppressing",
+                ["wire hidden-console acquisition after confirmation"],
+                VerificationClass.TestVerifiable,
+                [],
+                []));
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "diagnostic only");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Add gated diagnostic");
+            kernel.RecordTaskDispatch(
+                goal.Id,
+                task.Id,
+                new TaskDispatchRecord(
+                    "codex-cli",
+                    "codex exec",
+                    worktreePath,
+                    now.AddMinutes(-10),
+                    BaseCommit: "base"));
+            var clarification = kernel.RequestHumanInput(
+                goal.Id,
+                null,
+                "Should console suppression ship before the hypothesis is confirmed?");
+            kernel.SubmitHumanInput(
+                clarification.Id,
+                "HYPOTHESIS GATE: do not implement suppression until confirmed.",
+                ["hidden-console-spawn"]);
+
+            var runner = new GatedWorkflowGlanceRunner(new ProgressiveReviewGlanceDispatchResult(
+                ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+                "hidden-console acquisition is not wired into the max-duration spawn path",
+                "missing hidden-console acquisition",
+                ReasonCode: ProgressiveReviewGlanceReasonCode.UnmentionedWork,
+                Findings:
+                [
+                    new ProgressiveReviewGlanceFinding(
+                        "hidden-console-spawn",
+                        "hidden-console acquisition is not wired into the max-duration spawn path")
+                ]));
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var steeringStore = new InMemoryProgressiveReviewSteeringStore();
+            var coordinator = new ProgressiveReviewGlanceCoordinator(
+                runner,
+                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory),
+                new CollaborationItemStore(Path.Combine(workspace.OrchestratorDirectory, "collaboration-items.db")),
+                new ProgressiveReviewGlanceOptions(FirstElapsedThreshold: TimeSpan.Zero),
+                () => now,
+                (_, _) => new DispatchLiveChangeSnapshot(["feature.txt"], ["feature.txt"], 0),
+                (_, _) => "diagnostic-only diff",
+                _ => "worker remains live",
+                steeringStore);
+
+            _ = coordinator.Observe(kernel, [goal]);
+            _ = coordinator.Observe(kernel, [goal]);
+
+            Assert.Empty(steeringStore.Intents);
+            Assert.Equal(WorkTaskStatus.Running, task.Status);
+            Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", worktreePath, now));
+            var output = CaptureConsole(() => CliCommandHandlers.Execute(
+                ["acceptance", goal.Id.Value[..8], "--keep-workspace"],
+                CreateAcceptanceContext(kernel, repo, goal)));
+
+            Assert.Equal(GoalStatus.Completed, goal.Status);
+            Assert.Contains("Fast-forwarded", output, StringComparison.Ordinal);
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_does_not_auto_verify_without_committed_changes")]
     public void CliAcceptanceDoesNotAutoVerifyWithoutCommittedChanges()
     {
@@ -1153,5 +1243,13 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         {
             DeleteDirectory(repo);
         }
+    }
+    private sealed class GatedWorkflowGlanceRunner(ProgressiveReviewGlanceDispatchResult result)
+        : IProgressiveReviewGlanceRunner
+    {
+        public Task<ProgressiveReviewGlanceDispatchResult> RunAsync(
+            ProgressiveReviewGlanceInputs inputs,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(result);
     }
 }

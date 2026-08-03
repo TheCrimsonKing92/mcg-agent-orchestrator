@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -97,7 +98,10 @@ public sealed class ProgressiveReviewGlanceTests
                 "Concern",
                 true,
                 "all changed files are within the trusted scope",
-                "all-changes-within-trusted-scope");
+                "all-changes-within-trusted-scope",
+                ["gate=console; record=clarification:gate"],
+                OperatorContextTruncated: true,
+                CancellationWithheld: true);
             var workspace = OrchestratorWorkspace.ForDirectory(root);
             new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, new TestClock(now))
                 .AppendProgressiveReviewGlanceGuardReceipt(goal.Id, task.Id, receipt);
@@ -113,6 +117,9 @@ public sealed class ProgressiveReviewGlanceTests
             Xunit.Assert.Equal(receipt.EvidenceLine, visible.EvidenceLine);
             Xunit.Assert.Equal(receipt.ChangedFiles, visible.ChangedFiles);
             Xunit.Assert.True(visible.Downgraded);
+            Xunit.Assert.Equal(receipt.GateAnnotations, visible.GateAnnotations);
+            Xunit.Assert.True(visible.OperatorContextTruncated);
+            Xunit.Assert.True(visible.CancellationWithheld);
         }
         finally
         {
@@ -212,7 +219,9 @@ public sealed class ProgressiveReviewGlanceTests
     private static ProgressiveReviewGlanceInputs Inputs(
         IReadOnlyList<string> trustedScope,
         RepositoryScopeConfidence confidence,
-        string changedFile = "docs/test-design-discipline.md") =>
+        string changedFile = "docs/test-design-discipline.md",
+        IReadOnlyList<ProgressiveReviewOperatorRecord>? operatorRecords = null,
+        bool operatorContextTruncated = false) =>
         new(
             "goal-guard",
             "task-guard",
@@ -226,7 +235,466 @@ public sealed class ProgressiveReviewGlanceTests
             "diff",
             "transcript",
             trustedScope,
-            confidence);
+            confidence,
+            operatorRecords,
+            operatorContextTruncated);
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void GateCoveredFinding_RemovesFault(bool fundamental)
+    {
+        var verdict = fundamental
+            ? ProgressiveReviewGlanceVerdict.FundamentalMisdirection
+            : ProgressiveReviewGlanceVerdict.Concern;
+        var recordedAt = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var gate = new OperatorGateRecord("hidden-console-spawn", "clarification:10bd7223", recordedAt);
+        var inputs = Inputs(
+            ["docs/test-design-discipline.md"],
+            RepositoryScopeConfidence.Precise,
+            operatorRecords:
+            [
+                new ProgressiveReviewOperatorRecord(
+                    "clarification:10bd7223",
+                    "answered-clarification",
+                    "Question:\nShould suppression ship?\nAnswer:\nGate it until confirmed.",
+                    recordedAt,
+                    [gate])
+            ]);
+        var result = new ProgressiveReviewGlanceDispatchResult(
+            verdict,
+            "hidden-console acquisition is not wired into the max-duration spawn path",
+            "missing correlation evidence",
+            ReasonCode: ProgressiveReviewGlanceReasonCode.UnmentionedWork,
+            Findings:
+            [
+                new ProgressiveReviewGlanceFinding(
+                    "hidden-console-spawn",
+                    "hidden-console acquisition is not wired into the max-duration spawn path")
+            ]);
+
+        var evaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(inputs, result);
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.OnTrack, evaluation.Result.Verdict);
+        Xunit.Assert.Contains(evaluation.Receipt!.GateAnnotations!, item =>
+            item.Contains("clarification:10bd7223", StringComparison.Ordinal));
+        Xunit.Assert.Equal(
+            verdict == ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            evaluation.Receipt.CancellationWithheld);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(1)]
+    public void FrozenGoal10bd7223ConcernReceipts_AreGovernedByStructuredGate(int receiptIndex)
+    {
+        var fixture = LoadGoal10bd7223Fixture();
+        var receipt = fixture.ConcernReceipts[receiptIndex];
+        var gate = new OperatorGateRecord(
+            fixture.DeliverableId,
+            fixture.RecordId,
+            fixture.RecordedAt);
+        var inputs = Inputs(
+            ["docs/test-design-discipline.md"],
+            RepositoryScopeConfidence.Precise,
+            operatorRecords:
+            [
+                new ProgressiveReviewOperatorRecord(
+                    fixture.RecordId,
+                    "answered-clarification",
+                    $"Question:\n{fixture.ClarificationQuestion}\nAnswer:\n{fixture.ClarificationAnswer}\nObservation:\n{fixture.InconclusiveObservation}",
+                    fixture.RecordedAt,
+                    [gate])
+            ]);
+        var result = new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.Concern,
+            receipt.Note,
+            receipt.EvidenceLine,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.UnmentionedWork,
+            Findings: [new ProgressiveReviewGlanceFinding(fixture.DeliverableId, receipt.Note)]);
+
+        var evaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(inputs, result);
+
+        Xunit.Assert.Equal("10bd7223", fixture.GoalId);
+        Xunit.Assert.Contains("INCONCLUSIVE", fixture.InconclusiveObservation, StringComparison.Ordinal);
+        Xunit.Assert.Contains("CreateProcessW", fixture.SliceDiffSummary, StringComparison.Ordinal);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.OnTrack, evaluation.Result.Verdict);
+        Xunit.Assert.DoesNotContain(receipt.Note, evaluation.Result.Note, StringComparison.Ordinal);
+        Xunit.Assert.Contains(evaluation.Receipt!.GateAnnotations!, annotation =>
+            annotation.Contains(fixture.RecordId, StringComparison.Ordinal) &&
+            annotation.Contains(fixture.DeliverableId, StringComparison.Ordinal));
+
+        // Negative control: identical model prose cannot confer immunity without the typed gate.
+        var noGateInputs = inputs with
+        {
+            OperatorRecords = inputs.EffectiveOperatorRecords
+                .Select(record => record with { Gates = [] })
+                .ToArray()
+        };
+        var noGateEvaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(
+            noGateInputs,
+            result);
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Concern, noGateEvaluation.Result.Verdict);
+        Xunit.Assert.Contains(receipt.Note, noGateEvaluation.Result.Note, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FrozenGoal10bd7223FundamentalVerdict_DoesNotCancelOrEnqueueSteering()
+    {
+        var fixture = LoadGoal10bd7223Fixture();
+        var now = fixture.RecordedAt.AddMinutes(20);
+        var (kernel, goal, task) = RunningDeveloperRound(now.AddMinutes(-10));
+        var clarification = kernel.RequestHumanInput(goal.Id, null, fixture.ClarificationQuestion);
+        kernel.SubmitHumanInput(
+            clarification.Id,
+            fixture.ClarificationAnswer,
+            [fixture.DeliverableId]);
+        kernel.RecordOperatorTaskNote(goal.Id, task.Id, fixture.InconclusiveObservation);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            fixture.ConcernReceipts[0].Note,
+            fixture.ConcernReceipts[0].EvidenceLine,
+            ReasonCode: ProgressiveReviewGlanceReasonCode.UnmentionedWork,
+            Findings:
+            [
+                new ProgressiveReviewGlanceFinding(
+                    fixture.DeliverableId,
+                    fixture.ConcernReceipts[0].Note)
+            ]));
+        var steeringStore = new InMemoryProgressiveReviewSteeringStore();
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-glance-{Guid.NewGuid():N}");
+        var coordinator = new ProgressiveReviewGlanceCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            new CollaborationItemStore(Path.Combine(root, "items.db")),
+            new ProgressiveReviewGlanceOptions(FirstElapsedThreshold: TimeSpan.Zero),
+            () => now,
+            (_, _) => new DispatchLiveChangeSnapshot(["handoff.cs"], ["handoff.cs"], 0),
+            (_, _) => fixture.SliceDiffSummary,
+            _ => "worker remains live",
+            steeringStore);
+
+        _ = coordinator.Observe(kernel, [goal]);
+        var observed = coordinator.Observe(kernel, [goal]);
+
+        Xunit.Assert.False(observed.MutatedTaskState);
+        Xunit.Assert.Empty(steeringStore.Intents);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
+    [Xunit.Fact]
+    public void GateCoversOneOfTwoFindings_PreservesUncoveredFault()
+    {
+        var recordedAt = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var inputs = Inputs(
+            ["docs/test-design-discipline.md"],
+            RepositoryScopeConfidence.Precise,
+            operatorRecords:
+            [
+                new ProgressiveReviewOperatorRecord(
+                    "clarification:gate",
+                    "answered-clarification",
+                    "Gate only the console work.",
+                    recordedAt,
+                    [new OperatorGateRecord("console", "clarification:gate", recordedAt)])
+            ]);
+        var result = new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "console missing; database migration targets the wrong subsystem",
+            "two gaps",
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem,
+            Findings:
+            [
+                new ProgressiveReviewGlanceFinding("console", "console missing"),
+                new ProgressiveReviewGlanceFinding("database", "database migration targets the wrong subsystem")
+            ]);
+
+        var evaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(inputs, result);
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.FundamentalMisdirection, evaluation.Result.Verdict);
+        Xunit.Assert.DoesNotContain("console missing", evaluation.Result.Note, StringComparison.Ordinal);
+        Xunit.Assert.Contains("database migration", evaluation.Result.Note, StringComparison.Ordinal);
+        Xunit.Assert.Equal(result.Note, evaluation.Receipt!.Note);
+        Xunit.Assert.Equal(result.EvidenceLine, evaluation.Receipt.EvidenceLine);
+    }
+
+    [Xunit.Fact]
+    public void UncoveredOrAbsentGate_PreservesFundamentalVerdict()
+    {
+        var recordedAt = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var result = new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "wrong subsystem",
+            "database",
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem,
+            Findings: [new ProgressiveReviewGlanceFinding("database", "wrong subsystem")]);
+        var differentGate = Inputs(
+            [],
+            RepositoryScopeConfidence.Precise,
+            operatorRecords:
+            [
+                new ProgressiveReviewOperatorRecord(
+                    "clarification:gate",
+                    "answered-clarification",
+                    "Gate console work.",
+                    recordedAt,
+                    [new OperatorGateRecord("console", "clarification:gate", recordedAt)])
+            ]);
+
+        Xunit.Assert.Equal(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            ProgressiveReviewGlanceCoordinator.GuardUnsupportedScopeVerdict(differentGate, result).Verdict);
+        Xunit.Assert.Equal(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            ProgressiveReviewGlanceCoordinator.GuardUnsupportedScopeVerdict(
+                Inputs([], RepositoryScopeConfidence.Precise),
+                result).Verdict);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void UncoveredFindingWithUnrelatedOperatorTextPreservesFault(bool fundamental)
+    {
+        var verdict = fundamental
+            ? ProgressiveReviewGlanceVerdict.FundamentalMisdirection
+            : ProgressiveReviewGlanceVerdict.Concern;
+        var recordedAt = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var inputs = Inputs(
+            [],
+            RepositoryScopeConfidence.Precise,
+            changedFile: "src/Other.cs",
+            operatorRecords:
+            [
+                new ProgressiveReviewOperatorRecord(
+                    "clarification:unrelated",
+                    "answered-clarification",
+                    "Use the existing serializer.",
+                    recordedAt,
+                    [])
+            ]);
+        var result = new ProgressiveReviewGlanceDispatchResult(
+            verdict,
+            "database migration targets the wrong subsystem",
+            "database",
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem);
+
+        var guarded = ProgressiveReviewGlanceCoordinator.GuardUnsupportedScopeVerdict(inputs, result);
+
+        Xunit.Assert.Equal(verdict, guarded.Verdict);
+    }
+
+    [Xunit.Fact]
+    public void TruncatedOperatorContext_WithholdsContextSensitiveCancellation()
+    {
+        var result = new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "missing deliverable",
+            "context incomplete",
+            ReasonCode: ProgressiveReviewGlanceReasonCode.UnmentionedWork);
+
+        var evaluation = ProgressiveReviewGlanceCoordinator.EvaluateUnsupportedScopeVerdict(
+            Inputs([], RepositoryScopeConfidence.Precise, operatorContextTruncated: true),
+            result);
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.Concern, evaluation.Result.Verdict);
+        Xunit.Assert.True(evaluation.Receipt!.OperatorContextTruncated);
+        Xunit.Assert.True(evaluation.Receipt.CancellationWithheld);
+    }
+
+    [Xunit.Fact]
+    public void SatisfiedGate_NoLongerSuppressesFinding()
+    {
+        var recordedAt = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var satisfiedGate = new OperatorGateRecord(
+            "console",
+            "clarification:gate",
+            recordedAt,
+            recordedAt.AddMinutes(20),
+            "operator confirmed the hypothesis");
+        var inputs = Inputs(
+            [],
+            RepositoryScopeConfidence.Precise,
+            operatorRecords:
+            [
+                new ProgressiveReviewOperatorRecord(
+                    "clarification:gate",
+                    "answered-clarification",
+                    "Gate console work until confirmed.",
+                    recordedAt,
+                    [satisfiedGate])
+            ]);
+        var result = new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+            "console work missing",
+            "console",
+            ReasonCode: ProgressiveReviewGlanceReasonCode.Subsystem,
+            Findings: [new ProgressiveReviewGlanceFinding("console", "console work missing")]);
+
+        var guarded = ProgressiveReviewGlanceCoordinator.GuardUnsupportedScopeVerdict(inputs, result);
+
+        Xunit.Assert.Equal(ProgressiveReviewGlanceVerdict.FundamentalMisdirection, guarded.Verdict);
+    }
+
+    [Xunit.Fact]
+    public void InputAssembly_UsesAnsweredClarificationsAndOperatorNotesOnly()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, task) = RunningDeveloperRound(now);
+        var answered = kernel.RequestHumanInput(goal.Id, null, "Should console suppression ship?");
+        var synthetic = kernel.RequestHumanInput(goal.Id, null, "Synthetic parked wait?");
+        var riskReview = kernel.RequestHumanInput(
+            goal.Id,
+            null,
+            "May the guarded rollout proceed?",
+            HumanWaitKind.RiskReview);
+        _ = kernel.RequestHumanInput(goal.Id, null, "Is the correlation complete?");
+        kernel.SubmitHumanInput(answered.Id, "Not until the hypothesis is confirmed.", ["hidden-console-spawn"]);
+        kernel.SubmitHumanInput(synthetic.Id, "Goal parked: system-authored completion");
+        kernel.SubmitHumanInput(riskReview.Id, "Hold the guarded rollout.", ["guarded-rollout"]);
+        kernel.RecordTaskNote(goal.Id, task.Id, "worker-authored note must be inert");
+        kernel.RecordOperatorTaskNote(goal.Id, task.Id, "INCONCLUSIVE: retain the hypothesis gate.");
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "ok",
+            "operator context present"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            utcNow: () => now,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a", "b", "c"], ["a", "b", "c"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var inputs = Xunit.Assert.Single(runner.Calls);
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record => record.Text.Contains("INCONCLUSIVE", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record => record.Text.Contains("Not until", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record => record.Text.Contains("Hold the guarded rollout", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record => record.Text.Contains("correlation complete", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record => record.Text.Contains("system-authored", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record => record.Text.Contains("worker-authored", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords.SelectMany(record => record.Gates), gate =>
+            gate.DeliverableId == "hidden-console-spawn");
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords.SelectMany(record => record.Gates), gate =>
+            gate.DeliverableId == "guarded-rollout");
+    }
+
+    [Xunit.Fact]
+    public void InputAssembly_AppliesExplicitTaskNoteGateSatisfaction()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var clock = new TestClock(now);
+        var (kernel, goal, task) = RunningDeveloperRound(now, clock: clock);
+        kernel.RecordOperatorTaskNote(
+            goal.Id,
+            task.Id,
+            "Gate the correlation evidence until the operator confirms it.",
+            ["correlation-evidence"]);
+        var sourceGate = Xunit.Assert.Single(goal.Timeline
+            .Single(evt => evt.Kind == ProgressKind.OperatorTaskNote)
+            .OperatorGates!);
+        clock.UtcNow = now.AddMinutes(1);
+        kernel.MarkOperatorGateSatisfied(
+            goal.Id,
+            sourceGate.SourceRecordId,
+            sourceGate.DeliverableId,
+            "operator confirmed three consecutive handoffs");
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "ok",
+            "gate expired"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            utcNow: () => clock.UtcNow,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a", "b", "c"], ["a", "b", "c"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var gate = Xunit.Assert.Single(Xunit.Assert.Single(runner.Calls).EffectiveOperatorRecords.SelectMany(record => record.Gates));
+        Xunit.Assert.False(gate.IsActive);
+        Xunit.Assert.Equal("operator confirmed three consecutive handoffs", gate.SatisfactionEvidence);
+    }
+
+    [Xunit.Fact]
+    public void AmendedAcceptanceSection_OverBudget_IsNotTruncated()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var (kernel, goal, task) = RunningDeveloperRound(now);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Bound the authoritative criteria input",
+            ["superseded acceptance requirement"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.RecordOperatorTaskNote(
+            goal.Id,
+            task.Id,
+            $"CRITERIA CORRECTION: supersedes=\"superseded acceptance requirement\"; correction=\"amended {new string('x', 300)}\"");
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "ok",
+            "bounded"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            options: new ProgressiveReviewGlanceOptions(AcceptanceCharacterLimit: 100),
+            utcNow: () => now,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a", "b", "c"], ["a", "b", "c"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var section = Xunit.Assert.Single(runner.Calls).AcceptanceSection;
+        Xunit.Assert.Contains("Current amended acceptance criteria", section, StringComparison.Ordinal);
+        Xunit.Assert.Contains("amended", section, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("superseded acceptance requirement", section, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("...(truncated", section, StringComparison.Ordinal);
+        Xunit.Assert.Contains(new string('x', 300), section, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void OperatorContextBudgetOmitsOlderTextBeforeNewerAndRetainsStructuredGates()
+    {
+        var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var clock = new TestClock(now);
+        var (kernel, goal, task) = RunningDeveloperRound(now, clock: clock);
+        kernel.RecordOperatorTaskNote(goal.Id, task.Id, "older short note");
+        clock.UtcNow = now.AddMinutes(1);
+        kernel.RecordOperatorTaskNote(
+            goal.Id,
+            task.Id,
+            "newest governing ruling is intentionally larger than the entire text budget",
+            ["hidden-console-spawn"]);
+        var runner = new ControlledGlanceRunner();
+        runner.EnqueueCompleted(new ProgressiveReviewGlanceDispatchResult(
+            ProgressiveReviewGlanceVerdict.OnTrack,
+            "ok",
+            "bounded"));
+        var coordinator = NewCoordinator(
+            runner,
+            new RecordingGlanceEvents(),
+            options: new ProgressiveReviewGlanceOptions(OperatorContextCharacterLimit: 20),
+            utcNow: () => clock.UtcNow,
+            liveChanges: (_, _) => new DispatchLiveChangeSnapshot(["a", "b", "c"], ["a", "b", "c"], 0));
+
+        _ = coordinator.Observe(kernel, [goal]);
+
+        var inputs = Xunit.Assert.Single(runner.Calls);
+        Xunit.Assert.True(inputs.OperatorContextTruncated);
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record =>
+            record.Text.Contains("newest governing ruling", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords, record =>
+            record.Text.Contains("omitted due to operator-context budget", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(inputs.EffectiveOperatorRecords, record =>
+            record.Text.Contains("older short note", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.EffectiveOperatorRecords.SelectMany(record => record.Gates), gate =>
+            gate.DeliverableId == "hidden-console-spawn");
+    }
 
     [Xunit.Fact(DisplayName = "ProgressiveReviewGlance_goal_625_core_first_scope_does_not_steer_from_canned_intake")]
     public void Goal625CoreFirstScopeDoesNotSteerFromCannedIntake()
@@ -412,19 +880,19 @@ public sealed class ProgressiveReviewGlanceTests
             "requires a conductor-owned external harness",
             "operator:miles");
         kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["retry feedback is not the criteria correction overlay"]);
-        kernel.RecordTaskNote(
+        kernel.RecordOperatorTaskNote(
             goal.Id,
             task.Id,
             "CRITERIA CORRECTION: supersedes=\"criterion B\"; correction=\"Correct criterion B before retry.\"");
-        kernel.RecordTaskNote(
+        kernel.RecordOperatorTaskNote(
             goal.Id,
             task.Id,
             $"CRITERIA CORRECTION: supersedes=\"oversized criterion\"; correction=\"{new string('x', 5000)}\"");
-        kernel.RecordTaskNote(
+        kernel.RecordOperatorTaskNote(
             goal.Id,
             task.Id,
             "CRITERIA CORRECTION: supersedes=\"extra 01\"; correction=\"Extra correction 01\"");
-        kernel.RecordTaskNote(
+        kernel.RecordOperatorTaskNote(
             goal.Id,
             task.Id,
             "CRITERIA CORRECTION: supersedes=\"extra 02\"; correction=\"Extra correction 02\"");
@@ -437,6 +905,7 @@ public sealed class ProgressiveReviewGlanceTests
             new RecordingGlanceEvents(),
             utcNow: () => now,
             options: new ProgressiveReviewGlanceOptions(
+                AcceptanceCharacterLimit: 1000,
                 CriteriaCorrectionOverlayCharacterLimit: 450,
                 CriteriaCorrectionOverlayItemLimit: 3,
                 ChangedFilePromptLimit: 5,
@@ -450,11 +919,13 @@ public sealed class ProgressiveReviewGlanceTests
         _ = coordinator.Observe(kernel, [goal]);
 
         var inputs = runner.Calls.Single();
-        Xunit.Assert.Contains("Current refined acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Current amended acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains("Use refined acceptance criteria", inputs.AcceptanceSection, StringComparison.Ordinal);
-        Xunit.Assert.Contains("ACCEPTANCE", inputs.AcceptanceSection, StringComparison.Ordinal);
+        Xunit.Assert.Contains("operator rationale", inputs.AcceptanceSection, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("...(truncated", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("Correct criterion B", StringComparison.Ordinal));
-        Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("supersedes=\"criterion B\"", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("status=amended", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain("criterion B", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("status=waived", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("reason=\"requires a conductor-owned external harness\"", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(inputs.CriteriaCorrectionOverlay, item => item.Contains("correction=\"WAIVED:", StringComparison.Ordinal));
@@ -465,7 +936,7 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains("src/File05.cs", inputs.ChangedFiles);
         Xunit.Assert.DoesNotContain("src/File06.cs", inputs.ChangedFiles);
         Xunit.Assert.Contains(inputs.ChangedFiles, item => item.Contains("more changed file", StringComparison.Ordinal));
-        Xunit.Assert.True(inputs.DiffExcerpt.Length < 90);
+        Xunit.Assert.Equal(new string('d', 100), inputs.DiffExcerpt);
         Xunit.Assert.True(inputs.TranscriptTail.Length < 90);
 
         var lightDelivery = await CaptureGlancePromptDeliveryAsync(WorkerProfileCatalog.Default(), inputs);
@@ -480,16 +951,16 @@ public sealed class ProgressiveReviewGlanceTests
             Xunit.Assert.False(string.IsNullOrWhiteSpace(delivery.StandardInput));
             Xunit.Assert.Contains("Progressive review goal objective", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("Use refined acceptance criteria", delivery.StandardInput!, StringComparison.Ordinal);
-            Xunit.Assert.Contains("ACCEPTANCE", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("operator rationale", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("Correct criterion B", delivery.StandardInput!, StringComparison.Ordinal);
-            Xunit.Assert.Contains("supersedes=\"criterion B\"", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains("status=amended", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("supersedes=\"criterion B\"", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("retry feedback", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("xxxxxxxxxx", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("src/File01.cs", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("src/File06.cs", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("more changed file", delivery.StandardInput!, StringComparison.Ordinal);
-            Xunit.Assert.Contains("dddddddddddddddddddddddddddddd", delivery.StandardInput!, StringComparison.Ordinal);
-            Xunit.Assert.DoesNotContain("ddddddddddddddddddddddddddddddd", delivery.StandardInput!, StringComparison.Ordinal);
+            Xunit.Assert.Contains(new string('d', 100), delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("tttttttttttttttttttt", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("ttttttttttttttttttttt", delivery.StandardInput!, StringComparison.Ordinal);
             Xunit.Assert.Contains("--sandbox 'read-only'", delivery.Command, StringComparison.Ordinal);
@@ -906,6 +1377,18 @@ public sealed class ProgressiveReviewGlanceTests
             useDefaultTranscriptReader ? transcriptReader : transcriptReader ?? (_ => "transcript"));
     }
 
+    private static Goal10bd7223Fixture LoadGoal10bd7223Fixture()
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "TestData",
+            "Fixtures",
+            "progressive-review-10bd7223.json");
+        return JsonSerializer.Deserialize<Goal10bd7223Fixture>(
+            File.ReadAllText(path),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+    }
+
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) RunningDeveloperRound(
         DateTimeOffset dispatchedAt,
         string description = "Implement feature.\n\nACCEPTANCE\n- Pass focused tests",
@@ -1030,6 +1513,22 @@ public sealed class ProgressiveReviewGlanceTests
         string ProfileName,
         string Command,
         string? StandardInput);
+
+    private sealed record Goal10bd7223Fixture(
+        string GoalId,
+        string RecordId,
+        string DeliverableId,
+        DateTimeOffset RecordedAt,
+        string ClarificationQuestion,
+        string ClarificationAnswer,
+        string InconclusiveObservation,
+        string SliceDiffSummary,
+        IReadOnlyList<Goal10bd7223ConcernReceipt> ConcernReceipts);
+
+    private sealed record Goal10bd7223ConcernReceipt(
+        DateTimeOffset RecordedAt,
+        string Note,
+        string EvidenceLine);
 
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {

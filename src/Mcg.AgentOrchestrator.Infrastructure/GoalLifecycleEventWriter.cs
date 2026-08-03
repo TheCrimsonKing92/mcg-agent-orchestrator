@@ -296,6 +296,10 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["downgraded"] = receipt.Downgraded;
             obj["downgradeReason"] = receipt.DowngradeReason;
             obj["structuralComparison"] = receipt.StructuralComparison;
+            obj["gateAnnotations"] = new JsonArray((receipt.GateAnnotations ?? [])
+                .Select(annotation => JsonValue.Create(annotation)).ToArray());
+            obj["operatorContextTruncated"] = receipt.OperatorContextTruncated;
+            obj["cancellationWithheld"] = receipt.CancellationWithheld;
         });
 
     public void AppendProgressiveReviewGlanceSummary(

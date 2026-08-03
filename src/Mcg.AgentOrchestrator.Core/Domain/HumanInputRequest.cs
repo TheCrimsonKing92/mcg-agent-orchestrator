@@ -6,6 +6,8 @@ namespace Mcg.AgentOrchestrator.Core;
 
 public sealed class HumanInputRequest
 {
+    private readonly List<OperatorGateRecord> _operatorGates = [];
+
     public HumanInputRequest(
         HumanInputRequestId id,
         GoalId goalId,
@@ -90,6 +92,8 @@ public sealed class HumanInputRequest
 
     public DateTimeOffset? AnsweredAt { get; private set; }
 
+    public IReadOnlyList<OperatorGateRecord> OperatorGates => _operatorGates;
+
     public bool WasDismissed { get; private set; }
 
     public bool IsSyntheticParkedHumanWaitCompletion =>
@@ -97,7 +101,10 @@ public sealed class HumanInputRequest
         !WasDismissed &&
         Answer?.StartsWith("Goal parked:", StringComparison.OrdinalIgnoreCase) == true;
 
-    internal void Complete(string answer, DateTimeOffset answeredAt)
+    internal void Complete(
+        string answer,
+        DateTimeOffset answeredAt,
+        IReadOnlyList<string>? gatedDeliverableIds = null)
     {
         if (string.IsNullOrWhiteSpace(answer))
         {
@@ -108,6 +115,18 @@ public sealed class HumanInputRequest
         Answer = answer.Trim();
         AnsweredAt = answeredAt;
         WasDismissed = false;
+        foreach (var deliverableId in gatedDeliverableIds ?? [])
+        {
+            var normalized = deliverableId.Trim();
+            if (normalized.Length > 0 && !_operatorGates.Any(gate =>
+                    string.Equals(gate.DeliverableId, normalized, StringComparison.OrdinalIgnoreCase)))
+            {
+                _operatorGates.Add(new OperatorGateRecord(
+                    normalized,
+                    $"clarification:{Id.Value}",
+                    answeredAt));
+            }
+        }
     }
 
     internal void Dismiss(DateTimeOffset dismissedAt)
@@ -119,6 +138,28 @@ public sealed class HumanInputRequest
     }
 
     internal void IncrementSuppressionCount() => SuppressionCount++;
+
+    internal OperatorGateRecord MarkOperatorGateSatisfied(
+        string deliverableId,
+        string evidence,
+        DateTimeOffset satisfiedAt)
+    {
+        var index = _operatorGates.FindIndex(gate =>
+            gate.IsActive && string.Equals(gate.DeliverableId, deliverableId.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (index < 0)
+        {
+            throw new KeyNotFoundException($"Active operator gate '{deliverableId}' was not found on clarification '{Id.Value[..8]}'.");
+        }
+
+        _operatorGates[index] = _operatorGates[index] with
+        {
+            SatisfiedAt = satisfiedAt,
+            SatisfactionEvidence = string.IsNullOrWhiteSpace(evidence)
+                ? throw new ArgumentException("Gate satisfaction evidence cannot be empty.", nameof(evidence))
+                : evidence.Trim()
+        };
+        return _operatorGates[index];
+    }
 
     internal void CompleteAsSuperseded(
         string answer,
@@ -151,7 +192,8 @@ public sealed class HumanInputRequest
             QuestionFingerprint,
             BlockerFingerprint,
             SuppressionCount,
-            SupersededByRequestId?.Value);
+            SupersededByRequestId?.Value,
+            _operatorGates.Count == 0 ? null : _operatorGates.ToArray());
     }
 
     internal static HumanInputRequest FromSnapshot(HumanInputRequestSnapshot snapshot)
@@ -186,6 +228,9 @@ public sealed class HumanInputRequest
             }
         }
 
+        request._operatorGates.Clear();
+        request._operatorGates.AddRange(snapshot.OperatorGates ?? []);
+
         return request;
     }
 
@@ -213,6 +258,16 @@ public sealed class HumanInputRequest
 
     private static string BuildFingerprint(string normalizedValue) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedValue))).ToLowerInvariant();
+}
+
+public sealed record OperatorGateRecord(
+    string DeliverableId,
+    string SourceRecordId,
+    DateTimeOffset RecordedAt,
+    DateTimeOffset? SatisfiedAt = null,
+    string? SatisfactionEvidence = null)
+{
+    public bool IsActive => SatisfiedAt is null;
 }
 
 public sealed record HumanInputRequestCreationResult(
