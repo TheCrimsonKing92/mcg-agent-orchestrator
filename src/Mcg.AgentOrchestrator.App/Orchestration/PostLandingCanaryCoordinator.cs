@@ -179,23 +179,26 @@ internal sealed class PostLandingCanaryCoordinator
                     return ReceiptDisposition(completed);
                 }
 
-                var earliest = await _events.FindEarliestUnreceiptedQueueAsync(cancellationToken)
+                var landingEvents = await _events.ReadForLandingAsync(request.LandingSha, cancellationToken)
                     .ConfigureAwait(false);
+                var latest = landingEvents.LastOrDefault();
+                var now = _utcNow();
+                if (latest is { Kind: PostLandingCanaryEventKind.Deferred, Payload.NotBefore: { } notBefore } &&
+                    notBefore > now)
+                {
+                    retryDelay = notBefore - now;
+                }
+
+                var earliest = retryDelay is null
+                    ? await _events.FindEarliestRunnableQueueAsync(now, cancellationToken).ConfigureAwait(false)
+                    : null;
                 if (earliest is null ||
-                    string.Equals(
+                    retryDelay is null && string.Equals(
                         earliest.Payload.LandingSha,
                         request.LandingSha,
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    var landingEvents = await _events.ReadForLandingAsync(request.LandingSha, cancellationToken)
-                        .ConfigureAwait(false);
-                    var latest = landingEvents.LastOrDefault();
-                    if (latest is { Kind: PostLandingCanaryEventKind.Deferred, Payload.NotBefore: { } notBefore } &&
-                        notBefore > _utcNow())
-                    {
-                        retryDelay = notBefore - _utcNow();
-                    }
-                    else
+                    if (retryDelay is null)
                     {
                         return await RunOwnedAsync(request, cancellationToken).ConfigureAwait(false);
                     }
@@ -233,7 +236,14 @@ internal sealed class PostLandingCanaryCoordinator
             cancellationToken).ConfigureAwait(false);
         if (!started.Appended)
         {
-            return PostLandingCanaryDisposition.Deferred;
+            return await DeferOrAbandonAsync(
+                    request,
+                    attempt,
+                    PostLandingCanaryFaultDisposition.EnvironmentFault,
+                    "InvalidOperationException: canary attempt start was already recorded without a terminal outcome.",
+                    startedAt,
+                    _utcNow())
+                .ConfigureAwait(false);
         }
         ReportProgress(
             $"CANARY_GATE sha={request.LandingSha} result=started attempt={attempt} paths={string.Join(",", request.TriggeringPaths)}");
@@ -276,7 +286,9 @@ internal sealed class PostLandingCanaryCoordinator
             {
                 runnerException = ex;
                 outcome = PostLandingCanaryOutcome.Failed(
-                    PostLandingCanaryFailureReason.InfrastructureError,
+                    ex is PostLandingCanaryEvaluationException
+                        ? PostLandingCanaryFailureReason.EvaluatedArtifactFailure
+                        : PostLandingCanaryFailureReason.InfrastructureError,
                     $"{ex.GetType().Name}: {ex.Message}");
             }
             finally
@@ -512,9 +524,9 @@ internal sealed class PostLandingCanaryCoordinator
     }
 
     private static PostLandingCanaryDisposition ReceiptDisposition(PostLandingCanaryEvent receipt) =>
-        receipt.Kind == PostLandingCanaryEventKind.Passed
+        receipt.IsTerminal
             ? PostLandingCanaryDisposition.AlreadyCompleted
-            : PostLandingCanaryDisposition.AlreadyCompleted;
+            : throw new InvalidOperationException($"Canary event {receipt.EventId} is not terminal.");
 
     private async Task<PostLandingCanaryDisposition> ObservePostLandingTaskAsync(
         Task<PostLandingCanaryDisposition> task,
@@ -613,6 +625,7 @@ internal sealed class PostLandingCanaryCoordinator
         PostLandingCanaryFailureReason.EmptyReceipt => "empty-receipt",
         PostLandingCanaryFailureReason.Timeout => "timeout",
         PostLandingCanaryFailureReason.InfrastructureError => "infrastructure-error",
+        PostLandingCanaryFailureReason.EvaluatedArtifactFailure => "evaluated-artifact-failure",
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown canary failure reason.")
     };
 
@@ -665,10 +678,9 @@ internal static class PostLandingCanaryFactory
                     ensureSchema: !File.Exists(workspace.RunEventStorePath)),
                 CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
         }
-        catch when (PostLandingCanaryEmergencyCircuit.TryRead(workspace.RunEventStorePath) is not null)
+        catch
         {
-            // The emergency signal must remain readable even when the durable store cannot
-            // be opened. Defer all SQLite access; the circuit checks emergency state first.
+            // Defer SQLite access so Read() can surface the outage without blocking landings.
             return new AcceptanceEngineCircuitBreaker(
                 CreateEventStore(workspace, ensureSchema: false),
                 CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
@@ -688,13 +700,20 @@ internal static class PostLandingCanaryFactory
         {
             var detail =
                 $"Post-landing canary initialization failed after main advanced: {ex.GetType().Name}: {ex.Message}";
+            var landingIdentity = string.IsNullOrWhiteSpace(landing.LandingSha)
+                ? $"goal-{landing.GoalId}"
+                : landing.LandingSha.Trim();
             try
             {
-                PostLandingCanaryEmergencyCircuit.Signal(
-                    workspace.RunEventStorePath,
-                    landing.LandingSha,
-                    detail,
-                    DateTimeOffset.UtcNow);
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+                    .RaiseAsync(
+                        CollaborationItemType.Verify,
+                        goalId: null,
+                        subject: $"Post-landing canary could not initialize for {landingIdentity}",
+                        body: $"Landing {landingIdentity} is UNVERIFIED.\n{detail}",
+                        correlationKey: $"post-landing-canary:initialization:{landingIdentity.ToLowerInvariant()}")
+                    .GetAwaiter()
+                    .GetResult();
             }
             catch
             {
@@ -703,14 +722,14 @@ internal static class PostLandingCanaryFactory
             try
             {
                 progress?.Invoke(
-                    $"CANARY_GATE sha={landing.LandingSha ?? "unknown"} result=failed " +
-                    $"reason=infrastructure-error receipt=in-memory-emergency-circuit detail={ex.GetType().Name}");
+                    $"CANARY_GATE sha={landingIdentity} result=deferred " +
+                    $"reason=initialization-error detail={ex.GetType().Name}");
             }
             catch
             {
             }
 
-            return PostLandingCanaryDisposition.Failed;
+            return PostLandingCanaryDisposition.Deferred;
         }
     }
 

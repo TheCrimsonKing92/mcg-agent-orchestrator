@@ -142,6 +142,15 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             PostLandingCanaryFaultDisposition.EnvironmentFault,
             PostLandingCanaryFailureClassifier.Classify(new IOException("environment unavailable")));
         Assert.Equal(
+            PostLandingCanaryFaultDisposition.VerdictFailure,
+            PostLandingCanaryFailureClassifier.Classify(
+                new PostLandingCanaryEvaluationException("landed artifact failed to build")));
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.VerdictFailure,
+            PostLandingCanaryFailureClassifier.Classify(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.EvaluatedArtifactFailure,
+                "landed artifact failed to build")));
+        Assert.Equal(
             PostLandingCanaryFaultDisposition.EnvironmentFault,
             PostLandingCanaryFailureClassifier.Classify(PostLandingCanaryOutcome.Failed(
                 PostLandingCanaryFailureReason.InfrastructureError,
@@ -160,17 +169,35 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var delayRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseRetry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var retryCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slotBusyCalls = 0;
+        var now = DateTimeOffset.UtcNow;
         var busy = new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
             "run-slot-busy",
             [new DotnetBuildStableSlotWait(0, 100), new DotnetBuildStableSlotWait(1, 101)]));
         var (coordinator, circuit) = fixture.CreateCoordinator(
-            new FakeRunner((_, _) => throw busy),
-            delay: async (_, cancellationToken) =>
+            new FakeRunner((request, _) =>
+            {
+                if (request.LandingSha == "sha-slot-busy" && Interlocked.Increment(ref slotBusyCalls) == 1)
+                {
+                    throw busy;
+                }
+
+                return Task.FromResult(PostLandingCanaryOutcome.Passed(1, $"passed {request.LandingSha}"));
+            }),
+            utcNow: () => now,
+            delay: async (requested, cancellationToken) =>
             {
                 delayRequested.TrySetResult();
                 await releaseRetry.Task.WaitAsync(cancellationToken);
+                now = now.Add(requested);
             },
-            progress: _ => { });
+            progress: line =>
+            {
+                if (line.Contains("sha=sha-slot-busy result=passed", StringComparison.Ordinal))
+                {
+                    retryCompleted.TrySetResult();
+                }
+            });
 
         var first = await coordinator.RunAsync(
             new PostLandingCanaryRequest("sha-slot-busy", ["engine/slot"]),
@@ -178,7 +205,11 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
         Assert.Equal(PostLandingCanaryDisposition.Deferred, first);
         await delayRequested.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+        var deferredHealth = circuit.Read();
+        Assert.Equal(AcceptanceEngineHealth.Healthy, deferredHealth.Health);
+        Assert.Equal("sha-slot-busy", deferredHealth.LandingSha);
+        Assert.Equal("resource-busy", deferredHealth.FailureReason);
+        Assert.StartsWith("run-event:", deferredHealth.ReceiptReference, StringComparison.Ordinal);
         Assert.Null(await fixture.RawStore.ReadByEventIdAsync(
             PostLandingCanaryEventIds.Receipt("sha-slot-busy")));
         Assert.Null(PostLandingCanaryFactory.BuildMutationBlockReason(
@@ -188,21 +219,16 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Equal("CouldNotEvaluate", deferred.Status);
         Assert.Contains("DotnetBuildSlotsBusyException: Stable dotnet build slots busy", deferred.Detail);
 
-        var (resumedCoordinator, _) = fixture.CreateCoordinator(
-            new FakeRunner((_, _) => Task.FromResult(
-                PostLandingCanaryOutcome.Passed(1, "restart resumed retry"))),
-            utcNow: () => DateTimeOffset.UtcNow.AddHours(1),
-            delay: (_, _) => Task.CompletedTask,
-            progress: line =>
-            {
-                if (line.Contains("result=passed", StringComparison.Ordinal))
-                {
-                    retryCompleted.TrySetResult();
-                }
-            });
-        resumedCoordinator.ResumePending();
-        await retryCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            PostLandingCanaryDisposition.Passed,
+            await coordinator.RunAsync(
+                new PostLandingCanaryRequest("sha-not-blocked", ["engine/later"]),
+                CancellationToken.None));
+        Assert.NotNull(await fixture.RawStore.ReadByEventIdAsync(
+            PostLandingCanaryEventIds.Receipt("sha-not-blocked")));
+
         releaseRetry.TrySetResult();
+        await retryCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var receipt = await fixture.RawStore.ReadByEventIdAsync(
             PostLandingCanaryEventIds.Receipt("sha-slot-busy"));
         Assert.Equal("Passed", Assert.IsType<RunEventRecord>(receipt).Status);
@@ -403,7 +429,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             circuit.Clear("explicitly repaired after latched failure").Health);
     }
 
-    [Xunit.Fact(DisplayName = "Pending and failed canaries hold acceptance only; explicit clear restores it")]
+    [Xunit.Fact(DisplayName = "An evaluated artifact failure trips the circuit; explicit clear restores it")]
     public async Task CircuitHoldsAcceptanceOnlyAndRequiresExplicitClearAfterFailure()
     {
         using var fixture = new CanaryTestFixture();
@@ -413,9 +439,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         {
             started.TrySetResult();
             await release.Task.WaitAsync(cancellationToken);
-            return PostLandingCanaryOutcome.Failed(
-                PostLandingCanaryFailureReason.Reject,
-                "forced red");
+            throw new PostLandingCanaryEvaluationException("freshly landed application failed to build");
         });
         var (coordinator, circuit) = fixture.CreateCoordinator(runner);
         var run = coordinator.RunAsync(
@@ -432,6 +456,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Equal(PostLandingCanaryDisposition.Failed, await run);
         var failed = circuit.Read();
         Assert.Equal(AcceptanceEngineHealth.Unhealthy, failed.Health);
+        Assert.Equal("evaluated-artifact-failure", failed.FailureReason);
         Assert.True(ConductorBatchLoop.IsAcceptanceEngineCircuitHoldRequired(GoalStatus.Verified, failed));
         Assert.False(ConductorBatchLoop.IsAcceptanceEngineCircuitHoldRequired(GoalStatus.Active, failed));
 
@@ -558,8 +583,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", acceptance, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Post-main factory failure is nonthrowing and leaves acceptance unhealthy")]
-    public void PostMainFactoryFailureSignalsEmergencyCircuit()
+    [Xunit.Fact(DisplayName = "Post-main factory failure is nonblocking and raises an operator item")]
+    public async Task PostMainFactoryFailureDefersAndRaisesOperatorItem()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-canary-factory-failure", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -575,18 +600,51 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                     "sha-factory-failure"),
                 _ => throw new InvalidOperationException("progress sink failed"));
 
-            Assert.Equal(PostLandingCanaryDisposition.Failed, disposition);
+            Assert.Equal(PostLandingCanaryDisposition.Deferred, disposition);
             Assert.Equal(
-                AcceptanceEngineHealth.Unhealthy,
+                AcceptanceEngineHealth.Healthy,
                 PostLandingCanaryFactory.CreateCircuit(workspace).Read().Health);
-            Assert.Contains(
-                "acceptance engine circuit is Unhealthy",
-                PostLandingCanaryFactory.BuildMutationBlockReason(workspace),
-                StringComparison.Ordinal);
+            Assert.Null(PostLandingCanaryFactory.BuildMutationBlockReason(workspace));
+            var item = Assert.Single((await CollaborationItemStore
+                .ForDirectory(workspace.OrchestratorDirectory)
+                .GetAttentionQueueAsync())
+                .Where(item => item.Subject.Contains("could not initialize", StringComparison.Ordinal)));
+            Assert.Contains("sha-factory-failure", item.Subject, StringComparison.Ordinal);
+            Assert.Contains("initialization failed", item.Body, StringComparison.Ordinal);
         }
         finally
         {
             PostLandingCanaryEmergencyCircuit.Clear(workspace.RunEventStorePath);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Unreadable canary state stays nonblocking and raises one operator item")]
+    public async Task UnreadableStateStaysHealthyAndRaisesOperatorItem()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-canary-state-unreadable", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        Directory.CreateDirectory(workspace.RunEventStorePath);
+        try
+        {
+            var operatorItems = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+            var events = new PostLandingCanaryEventStore(
+                new SqliteRunEventStore(workspace.RunEventStorePath, ensureSchema: false),
+                workspace.RunEventStorePath);
+            var circuit = new AcceptanceEngineCircuitBreaker(events, operatorItems);
+
+            var health = circuit.Read();
+
+            Assert.Equal(AcceptanceEngineHealth.Healthy, health.Health);
+            Assert.Equal("state-unavailable", health.FailureReason);
+            Assert.True(health.AllowsAcceptance);
+            var item = Assert.Single(await operatorItems.GetAttentionQueueAsync());
+            Assert.Contains("state is unavailable", item.Subject, StringComparison.Ordinal);
+            Assert.Contains("landings remain enabled", item.Body, StringComparison.Ordinal);
+        }
+        finally
+        {
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }

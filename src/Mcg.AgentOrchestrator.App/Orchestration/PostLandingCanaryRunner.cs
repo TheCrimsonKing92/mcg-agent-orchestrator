@@ -70,8 +70,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             .LastOrDefault(line => line.StartsWith(PostLandingCanaryCommand.ResultPrefix, StringComparison.Ordinal));
         if (probeLine is null)
         {
-            return PostLandingCanaryOutcome.Failed(
-                PostLandingCanaryFailureReason.InfrastructureError,
+            throw new PostLandingCanaryEvaluationException(
                 $"canary subprocess returned exit {process.ExitCode} without a result contract: {Tail(process.Stderr)}");
         }
 
@@ -84,15 +83,13 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         }
         catch (JsonException ex)
         {
-            return PostLandingCanaryOutcome.Failed(
-                PostLandingCanaryFailureReason.InfrastructureError,
+            throw new PostLandingCanaryEvaluationException(
                 $"canary subprocess result contract was invalid: {ex.Message}");
         }
 
         if (probe is null)
         {
-            return PostLandingCanaryOutcome.Failed(
-                PostLandingCanaryFailureReason.InfrastructureError,
+            throw new PostLandingCanaryEvaluationException(
                 "canary subprocess returned an empty result contract");
         }
 
@@ -176,7 +173,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 "-clp:ErrorsOnly"
             ],
             _repositoryRoot,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            evaluatedArtifactFailure: true).ConfigureAwait(false);
         File.WriteAllText(markerPath, landingSha + Environment.NewLine);
         return appDllPath;
     }
@@ -186,7 +184,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool evaluatedArtifactFailure = false)
     {
         var result = await RunProcessAsync(
             fileName,
@@ -195,8 +194,11 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
-            throw new InvalidOperationException(
-                $"Failed to {operation} (exit {result.ExitCode}): {Tail(result.Stdout + Environment.NewLine + result.Stderr)}");
+            var detail =
+                $"Failed to {operation} (exit {result.ExitCode}): {Tail(result.Stdout + Environment.NewLine + result.Stderr)}";
+            throw evaluatedArtifactFailure
+                ? new PostLandingCanaryEvaluationException(detail)
+                : new InvalidOperationException(detail);
         }
     }
 

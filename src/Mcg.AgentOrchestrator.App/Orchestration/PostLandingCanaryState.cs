@@ -31,7 +31,8 @@ internal enum PostLandingCanaryFailureReason
     Reject,
     EmptyReceipt,
     Timeout,
-    InfrastructureError
+    InfrastructureError,
+    EvaluatedArtifactFailure
 }
 
 internal enum PostLandingCanaryFaultDisposition
@@ -46,6 +47,7 @@ internal static class PostLandingCanaryFailureClassifier
     internal static PostLandingCanaryFaultDisposition Classify(Exception exception) => exception switch
     {
         DotnetBuildSlotsBusyException => PostLandingCanaryFaultDisposition.ResourceBusy,
+        PostLandingCanaryEvaluationException => PostLandingCanaryFaultDisposition.VerdictFailure,
         _ => PostLandingCanaryFaultDisposition.EnvironmentFault
     };
 
@@ -53,6 +55,8 @@ internal static class PostLandingCanaryFailureClassifier
         outcome.FailureReason switch
         {
             PostLandingCanaryFailureReason.Reject => PostLandingCanaryFaultDisposition.VerdictFailure,
+            PostLandingCanaryFailureReason.EvaluatedArtifactFailure =>
+                PostLandingCanaryFaultDisposition.VerdictFailure,
             PostLandingCanaryFailureReason.EmptyReceipt or
             PostLandingCanaryFailureReason.Timeout or
             PostLandingCanaryFailureReason.InfrastructureError => PostLandingCanaryFaultDisposition.EnvironmentFault,
@@ -61,6 +65,14 @@ internal static class PostLandingCanaryFailureClassifier
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome), outcome.FailureReason, "Unknown canary failure reason.")
         };
+}
+
+internal sealed class PostLandingCanaryEvaluationException : Exception
+{
+    internal PostLandingCanaryEvaluationException(string message)
+        : base(message)
+    {
+    }
 }
 
 internal enum PostLandingCanaryEventKind
@@ -291,10 +303,18 @@ internal sealed class PostLandingCanaryEventStore
         }
     }
 
-    internal async Task<PostLandingCanaryEvent?> FindEarliestUnreceiptedQueueAsync(
+    internal async Task<PostLandingCanaryEvent?> FindEarliestRunnableQueueAsync(
+        DateTimeOffset now,
         CancellationToken cancellationToken = default)
     {
         var events = await ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false);
+        var latestByLanding = events
+            .Where(item => !string.IsNullOrWhiteSpace(item.Payload.LandingSha))
+            .GroupBy(item => item.Payload.LandingSha!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderByDescending(item => item.Sequence).First(),
+                StringComparer.OrdinalIgnoreCase);
         var completed = events
             .Where(item => item.IsTerminal && !string.IsNullOrWhiteSpace(item.Payload.LandingSha))
             .Select(item => item.Payload.LandingSha!)
@@ -303,7 +323,11 @@ internal sealed class PostLandingCanaryEventStore
             .Where(item =>
                 item.Kind == PostLandingCanaryEventKind.Queued &&
                 !string.IsNullOrWhiteSpace(item.Payload.LandingSha) &&
-                !completed.Contains(item.Payload.LandingSha!))
+                !completed.Contains(item.Payload.LandingSha!) &&
+                latestByLanding.TryGetValue(item.Payload.LandingSha!, out var latest) &&
+                (latest.Kind != PostLandingCanaryEventKind.Deferred ||
+                 latest.Payload.NotBefore is null ||
+                 latest.Payload.NotBefore <= now))
             .OrderBy(item => item.Sequence)
             .FirstOrDefault();
     }
@@ -390,6 +414,7 @@ internal sealed class PostLandingCanaryEventStore
 internal sealed class AcceptanceEngineCircuitBreaker
 {
     internal const string OperatorItemCorrelationKey = "acceptance-engine:unhealthy-episode";
+    internal const string StateUnavailableOperatorItemCorrelationKey = "acceptance-engine:canary-state-unavailable";
     private readonly PostLandingCanaryEventStore _events;
     private readonly ICollaborationItemStore? _operatorItems;
     private readonly Func<DateTimeOffset> _utcNow;
@@ -412,13 +437,14 @@ internal sealed class AcceptanceEngineCircuitBreaker
         }
         catch (Exception ex)
         {
+            RaiseStateUnavailableItem(ex);
             return new AcceptanceEngineHealthSnapshot(
-                AcceptanceEngineHealth.Unhealthy,
+                AcceptanceEngineHealth.Healthy,
                 null,
-                "infrastructure-error",
+                "state-unavailable",
                 null,
                 _utcNow(),
-                $"canary event store unreadable: {ex.GetType().Name}");
+                $"canary state unavailable; landings remain enabled: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -431,6 +457,7 @@ internal sealed class AcceptanceEngineCircuitBreaker
         }
 
         var events = await _events.ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false);
+        await ResolveStateUnavailableItemAsync(cancellationToken).ConfigureAwait(false);
         var clear = events.FirstOrDefault(item => item.Kind == PostLandingCanaryEventKind.Cleared);
         var receipts = new Dictionary<string, PostLandingCanaryEvent>(StringComparer.OrdinalIgnoreCase);
         PostLandingCanaryEvent? failed = null;
@@ -475,6 +502,24 @@ internal sealed class AcceptanceEngineCircuitBreaker
                 pending.OccurredAt);
         }
 
+        var deferred = events
+            .Where(item => !string.IsNullOrWhiteSpace(item.Payload.LandingSha))
+            .GroupBy(item => item.Payload.LandingSha!, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(item => item.Sequence).First())
+            .Where(item => item.Kind == PostLandingCanaryEventKind.Deferred)
+            .OrderBy(item => item.Sequence)
+            .FirstOrDefault();
+        if (deferred is not null)
+        {
+            return new AcceptanceEngineHealthSnapshot(
+                AcceptanceEngineHealth.Healthy,
+                deferred.Payload.LandingSha,
+                deferred.Payload.FailureReason ?? "could-not-evaluate",
+                $"run-event:{deferred.Sequence}",
+                deferred.OccurredAt,
+                $"canary deferred until {deferred.Payload.NotBefore:O}: {deferred.Payload.Detail}");
+        }
+
         var latestPass = receipts.Values
             .Where(item => item.Kind == PostLandingCanaryEventKind.Passed)
             .OrderByDescending(item => item.Sequence)
@@ -489,6 +534,52 @@ internal sealed class AcceptanceEngineCircuitBreaker
         return AcceptanceEngineHealthSnapshot.Healthy(
             clear?.OccurredAt ?? _utcNow(),
             clear?.Payload.OperatorNote);
+    }
+
+    private void RaiseStateUnavailableItem(Exception exception)
+    {
+        if (_operatorItems is null)
+        {
+            return;
+        }
+
+        var detail = $"{exception.GetType().Name}: {exception.Message}";
+        try
+        {
+            _operatorItems.RaiseAsync(
+                    CollaborationItemType.Verify,
+                    goalId: null,
+                    subject: "Post-landing canary state is unavailable",
+                    body: $"Canary state could not be read; landings remain enabled.\n{detail}",
+                    correlationKey: StateUnavailableOperatorItemCorrelationKey)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch
+        {
+            // The health read must remain non-blocking even when both stores are unavailable.
+        }
+    }
+
+    private async Task ResolveStateUnavailableItemAsync(CancellationToken cancellationToken)
+    {
+        if (_operatorItems is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _operatorItems.TryResolveAsync(
+                    StateUnavailableOperatorItemCorrelationKey,
+                    "Post-landing canary state is readable again.",
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Operator-item cleanup is advisory and cannot change circuit health.
+        }
     }
 
     internal async Task RaiseUnhealthyEpisodeItemAsync(
