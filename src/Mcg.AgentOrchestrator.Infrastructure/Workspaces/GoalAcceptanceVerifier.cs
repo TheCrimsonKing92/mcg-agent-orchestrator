@@ -93,7 +93,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         long StderrBytes = 0);
 
     private static readonly Regex TestAttrPattern = new(
-        @"^\[(?:Fact|Theory|Xunit\.Fact\()",
+        @"^\s*\[\s*(?:Xunit\.)?(?:Fact|Theory)\s*(?:\(|,|\])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex TautologyPattern = new(

@@ -6641,6 +6641,78 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.True(lastCall.Any(a => a.Equals("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs", StringComparison.Ordinal)));
     }
 
+    [Xunit.Fact]
+    public async Task TestTamperGuardAllowsQualifiedFactRename()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,2 +10,2 @@",
+            "-    [Xunit.Fact(DisplayName = \"old test\")]",
+            "-    public void OldTest()",
+            "+    [Xunit.Fact]",
+            "+    public void RenamedTest()"
+        ]);
+
+        var result = await RunTamperGuardAsync(
+            CreateTamperGuardVerifier(diff),
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
+
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Passed);
+        Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("[Fact]")]
+    [Xunit.InlineData("[Fact(DisplayName = \"test\")]")]
+    [Xunit.InlineData("[Theory]")]
+    [Xunit.InlineData("[Theory(DisplayName = \"test\")]")]
+    [Xunit.InlineData("[Xunit.Fact]")]
+    [Xunit.InlineData("[Xunit.Fact(DisplayName = \"test\")]")]
+    [Xunit.InlineData("[Xunit.Theory]")]
+    [Xunit.InlineData("[Xunit.Theory(DisplayName = \"test\")]")]
+    [Xunit.InlineData("[Fact, Trait(\"category\", \"guard\")]")]
+    public async Task TestTamperGuardCountsSupportedAttributes(string attribute)
+    {
+        var removedDiff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,2 +10,0 @@",
+            $"-    {attribute}",
+            "-    public void RemovedTest()"
+        ]);
+
+        var removedResult = await RunTamperGuardAsync(
+            CreateTamperGuardVerifier(removedDiff),
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
+        var removedCheck = removedResult.Checks!.Single(c => c.Name == "test tamper guard");
+
+        Assert.False(removedCheck.Passed);
+        Assert.Contains("tests -1/+0", removedCheck.OutputTail!, StringComparison.Ordinal);
+
+        var balancedDiff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,2 +10,2 @@",
+            "-    [Xunit.Fact(DisplayName = \"old test\")]",
+            "-    public void RemovedTest()",
+            $"+    {attribute}",
+            "+    public void AddedTest()"
+        ]);
+
+        var balancedResult = await RunTamperGuardAsync(
+            CreateTamperGuardVerifier(balancedDiff),
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"]);
+        var balancedCheck = balancedResult.Checks!.Single(c => c.Name == "test tamper guard");
+
+        Assert.True(balancedCheck.Passed);
+        Assert.Equal("no test degradation detected", balancedCheck.ResultSummary);
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_test_tamper_guard_passes_when_assertions_added")]
     public async Task GoalAcceptanceVerifierTestTamperGuardPassesWhenAssertionsAdded()
     {
@@ -7081,6 +7153,24 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             DeleteDirectoryWithRetry(root);
         }
     }
+
+    private static GoalAcceptanceVerifier CreateTamperGuardVerifier(string diff) => new((args, _, _) =>
+    {
+        if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+        {
+            WriteMtpTrx(args);
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                0,
+                "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+        }
+
+        if (args.Length >= 2 && args[0] == "git" && args[1] == "diff")
+        {
+            return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, diff));
+        }
+
+        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+    });
 
     private static string CreateAdvisoryWorkspace(string criteriaJson)
     {
