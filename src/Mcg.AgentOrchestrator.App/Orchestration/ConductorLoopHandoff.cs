@@ -887,6 +887,11 @@ internal static partial class ConductorLoopHandoff
 
             try
             {
+                var incumbentConsole = GetConsoleWindow() == IntPtr.Zero ? "absent" : "present";
+                TryAppendWindowsSpawnEvent(
+                    request,
+                    $"spawnPath=windows-createprocess incumbentConsole={incumbentConsole} suppression=not-applied");
+
                 if (!CreateProcessW(
                         lpApplicationName: nativeCommand[0],
                         lpCommandLine: commandLine,
@@ -1296,6 +1301,22 @@ internal static partial class ConductorLoopHandoff
     private static string ConductEventsPath(ConductLoopHandoffOptions options) =>
         Path.Combine(options.LogDirectory, ConductEventLogWriter.CurrentFileName);
 
+    private static void TryAppendWindowsSpawnEvent(ConductLoopLaunchRequest request, string detail)
+    {
+        try
+        {
+            var logDirectory = Path.GetDirectoryName(request.StdoutPath) ?? request.WorkingDirectory;
+            var path = Path.Combine(logDirectory, ConductEventLogWriter.CurrentFileName);
+            new ConductEventLogWriter(path).Append("loop-handoff-spawn", null, detail);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                $"LOOP_HANDOFF_SPAWN_DIAGNOSTIC_FAILED error={ex.GetType().Name}:{ex.Message}");
+            Console.Error.Flush();
+        }
+    }
+
     private static string ToLowerInvariant(bool value) =>
         value ? "true" : "false";
 
@@ -1587,6 +1608,9 @@ internal static partial class ConductorLoopHandoff
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool TerminateProcess(IntPtr processHandle, uint exitCode);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetConsoleWindow();
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr CreateFileW(

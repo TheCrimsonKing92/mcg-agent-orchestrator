@@ -3960,6 +3960,12 @@ public sealed class ConductorBatchLoopTests
 
             Assert.True(result.ProcessId > 0);
             processId = result.ProcessId;
+            var conductEventsPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+            Assert.True(File.Exists(conductEventsPath), "Windows handoff did not journal its pre-spawn diagnostic.");
+            var conductEvents = File.ReadAllText(conductEventsPath);
+            Assert.Contains("\"eventKind\":\"loop-handoff-spawn\"", conductEvents, StringComparison.Ordinal);
+            Assert.Contains("spawnPath=windows-createprocess", conductEvents, StringComparison.Ordinal);
+            Assert.Matches("incumbentConsole=(present|absent)", conductEvents);
             Assert.True(WaitUntil(
                 () => File.Exists(stdoutPath) && ReadAllTextShared(stdoutPath).Contains(stdoutMarker, StringComparison.Ordinal),
                 TimeSpan.FromSeconds(10)),
