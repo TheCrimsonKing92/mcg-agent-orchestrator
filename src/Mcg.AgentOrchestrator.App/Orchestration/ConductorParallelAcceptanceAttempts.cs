@@ -877,7 +877,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             $"{purpose}-{attempt.AttemptId}");
         var acquisition = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
             environment,
-            TimeSpan.Zero);
+            DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout);
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
         {
             var permitName = PermitName(acquired.Lease.Environment);

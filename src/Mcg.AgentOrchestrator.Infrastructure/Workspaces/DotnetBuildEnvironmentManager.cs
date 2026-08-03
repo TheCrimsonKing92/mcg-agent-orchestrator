@@ -537,9 +537,39 @@ public static class DotnetBuildEnvironmentManager
         BuildLockAttribution? selfHeldLandingFixtureAttribution = null;
         var forceCleanArtifacts = false;
         var pendingStaleExecutionLeaseReclaim = StaleExecutionLeaseReclaim.None;
-        while (true)
+        FileStream? acceptancePriorityStream = null;
+        var acceptancePriorityHeld = false;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!acceptancePriorityHeld)
+                {
+                    try
+                    {
+                        acceptancePriorityStream = new FileStream(
+                            environment.ExecutionLockPath + ".acceptance-priority.lock",
+                            FileMode.OpenOrCreate,
+                            FileAccess.ReadWrite,
+                            FileShare.ReadWrite);
+                        acceptancePriorityStream.Lock(0, 1);
+                        acceptancePriorityHeld = true;
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        acceptancePriorityStream?.Dispose();
+                        acceptancePriorityStream = null;
+                        if (clock.GetUtcNow() >= timeoutAt)
+                        {
+                            return EmitSlotsBusy(environment.LeaseId);
+                        }
+
+                        delay(SlotBusyPollDelay);
+                        continue;
+                    }
+                }
+
             var reclaim = TryReclaimStaleExecutionLease(environment);
             if (reclaim.Reclaimed)
             {
@@ -659,6 +689,16 @@ public static class DotnetBuildEnvironmentManager
 
                 delay(SlotBusyPollDelay);
             }
+            }
+        }
+        finally
+        {
+            if (acceptancePriorityHeld)
+            {
+                acceptancePriorityStream!.Unlock(0, 1);
+            }
+
+            acceptancePriorityStream?.Dispose();
         }
     }
 
@@ -854,9 +894,21 @@ public static class DotnetBuildEnvironmentManager
     private static string IsolatedRootBase()
     {
         var overridden = Environment.GetEnvironmentVariable(IsolatedRootOverrideVariable);
-        return string.IsNullOrWhiteSpace(overridden)
-            ? Path.Combine(Path.GetTempPath(), RootDirectoryName)
-            : overridden;
+        if (!string.IsNullOrWhiteSpace(overridden))
+        {
+            return overridden;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (!string.IsNullOrWhiteSpace(localAppData))
+            {
+                return Path.GetFullPath(Path.Combine(localAppData, "..", "LocalLow", RootDirectoryName));
+            }
+        }
+
+        return Path.Combine(Path.GetTempPath(), RootDirectoryName);
     }
 
     private static string BuildSlotExecutionLockPath(int slotIndex)

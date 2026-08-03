@@ -224,6 +224,15 @@ function Get-IsolatedRootBase {
         return $env:MCG_DOTNET_ISOLATED_ROOT
     }
 
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT -and
+        -not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        # DispatchProcessHost redirects TEMP into each worker's private sandbox. LocalLow is the
+        # machine-user shared Low-integrity location, so workers and the acceptance lane resolve
+        # the same four authoritative build-slot locks without widening worker write access.
+        $localLow = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "..\LocalLow"))
+        return (Join-Path $localLow "mcg-dotnet-isolated")
+    }
+
     return (Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated")
 }
 
@@ -1129,7 +1138,8 @@ function Invoke-FocusedChildProcess {
         [string]$FileName,
         [string[]]$ProcessArguments,
         [DateTime]$Deadline,
-        [string]$HeartbeatPath
+        [string]$HeartbeatPath,
+        [string]$AcceptancePriorityPath
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -1165,9 +1175,33 @@ function Invoke-FocusedChildProcess {
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         $completed = $false
+        $acceptancePriorityRequested = $false
         while (-not $completed -and [DateTime]::UtcNow -lt $Deadline) {
-            $remainingMilliseconds = [int][Math]::Max(1, [Math]::Min(1000, ($Deadline - [DateTime]::UtcNow).TotalMilliseconds))
+            $remainingMilliseconds = [int][Math]::Max(1, [Math]::Min(250, ($Deadline - [DateTime]::UtcNow).TotalMilliseconds))
             $completed = $process.WaitForExit($remainingMilliseconds)
+            if (-not $completed -and -not [string]::IsNullOrWhiteSpace($AcceptancePriorityPath)) {
+                $priorityProbe = $null
+                $priorityProbeHeld = $false
+                try {
+                    $priorityProbe = [System.IO.File]::Open($AcceptancePriorityPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+                    $priorityProbe.Lock(0, 1)
+                    $priorityProbeHeld = $true
+                }
+                catch [System.IO.IOException] {
+                    $acceptancePriorityRequested = $true
+                }
+                finally {
+                    if ($priorityProbeHeld) {
+                        $priorityProbe.Unlock(0, 1)
+                    }
+                    if ($null -ne $priorityProbe) {
+                        $priorityProbe.Dispose()
+                    }
+                }
+                if ($acceptancePriorityRequested) {
+                    break
+                }
+            }
             if (-not $completed -and -not [string]::IsNullOrWhiteSpace($HeartbeatPath)) {
                 try {
                     $heartbeat = Get-Content -LiteralPath $HeartbeatPath -Raw | ConvertFrom-Json
@@ -1191,7 +1225,8 @@ function Invoke-FocusedChildProcess {
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         return [pscustomobject]@{
-            TimedOut = -not $completed
+            TimedOut = -not $completed -and -not $acceptancePriorityRequested
+            AcceptancePriorityRequested = $acceptancePriorityRequested
             ExitCode = if ($completed) { $process.ExitCode } else { $null }
             ElapsedSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
             Stdout = $stdout
@@ -1426,13 +1461,18 @@ function Invoke-FocusedTestMode {
                 $receipt.reason = "budget-exceeded"
                 return $receipt
             }
-            $build = Invoke-FocusedChildProcess -FileName "dotnet" -ProcessArguments $buildArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath
+            $build = Invoke-FocusedChildProcess -FileName "dotnet" -ProcessArguments $buildArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
             $buildLogPath = Join-Path $outputDirectory "build.log"
             Write-FocusedLog -Path $buildLogPath -Stdout $build.Stdout -Stderr $build.Stderr
             $receipt.outputLogPath = $buildLogPath
             if ($build.TimedOut) {
                 $receipt.exitCode = 2
                 $receipt.reason = "budget-exceeded"
+                return $receipt
+            }
+            if ($build.AcceptancePriorityRequested) {
+                $receipt.exitCode = 3
+                $receipt.reason = "acceptance-priority"
                 return $receipt
             }
             if ($build.ExitCode -ne 0) {
@@ -1475,7 +1515,7 @@ function Invoke-FocusedTestMode {
             $receipt.reason = "budget-exceeded"
             return $receipt
         }
-        $testRun = Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath -ProcessArguments $testArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath
+        $testRun = Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath -ProcessArguments $testArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
         $testLogPath = Join-Path $outputDirectory "test.log"
         Write-FocusedLog -Path $testLogPath -Stdout $testRun.Stdout -Stderr $testRun.Stderr
         $receipt.outputLogPath = $testLogPath
@@ -1483,6 +1523,11 @@ function Invoke-FocusedTestMode {
         if ($testRun.TimedOut) {
             $receipt.exitCode = 2
             $receipt.reason = "budget-exceeded"
+            return $receipt
+        }
+        if ($testRun.AcceptancePriorityRequested) {
+            $receipt.exitCode = 3
+            $receipt.reason = "acceptance-priority"
             return $receipt
         }
         if (-not (Test-Path -LiteralPath $trxPath -PathType Leaf)) {
