@@ -81,7 +81,7 @@ public static class TaskOutcomeClassifier
     {
         var rule = timeline
             .Select((evt, index) => (evt, index))
-            .Where(item => item.evt.TaskId == taskId && item.evt.Kind == ProgressKind.TaskNote)
+            .Where(item => item.evt.TaskId == taskId && item.evt.Kind is ProgressKind.TaskNote or ProgressKind.OperatorTaskNote)
             .Where(item => completedAt is null || item.evt.OccurredAt >= completedAt.Value)
             .Where(item => before is null || item.evt.OccurredAt <= before.Value)
             .OrderByDescending(item => item.evt.OccurredAt)

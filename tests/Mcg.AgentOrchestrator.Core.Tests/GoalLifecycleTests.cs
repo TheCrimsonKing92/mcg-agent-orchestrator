@@ -208,7 +208,7 @@ public sealed class GoalLifecycleTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
-    kernel.RecordTaskNote(
+    kernel.RecordOperatorTaskNote(
         goal.Id,
         task.Id,
         "CRITERIA CORRECTION: supersedes=\"fast\"; correction=\"WAIVED: worker asks to skip it\"");
@@ -219,7 +219,7 @@ public sealed class GoalLifecycleTests
     Assert.Equal("operator", correction.Actor);
     Assert.Equal(clock.UtcNow, correction.RecordedAt);
     Assert.Equal(task.Id, correction.SourceTaskId);
-    Assert.Equal(ProgressKind.TaskNote, correction.SourceKind);
+    Assert.Equal(ProgressKind.OperatorTaskNote, correction.SourceKind);
     Assert.False(correction.IsWaiver);
     Assert.DoesNotContain("[WAIVED] fast", kernel.BuildTaskBrief(goal.Id, task.Id).Content, StringComparison.Ordinal);
     Assert.False(ReviewFindings.IsWaived("fast is unmet", goal.EffectiveAcceptanceCriteriaCorrections));

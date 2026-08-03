@@ -100,7 +100,8 @@ public enum ProgressKind
     PreReviewEvidenceRecorded = 25,
     TaskRequeueSkipped = 26,
     DuplicateHumanInputSuppressed = 27,
-    PreReviewMappingEscalationSuppressed = 28
+    PreReviewMappingEscalationSuppressed = 28,
+    OperatorTaskNote = 29
 }
 
 public enum TaskAttentionKind

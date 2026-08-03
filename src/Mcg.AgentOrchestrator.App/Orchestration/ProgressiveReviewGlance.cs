@@ -52,6 +52,7 @@ internal sealed record ProgressiveReviewGlanceOptions(
     int TranscriptCharacterLimit = 3000,
     int TranscriptTailByteLimit = ProgressiveReviewGlanceLimits.DefaultTranscriptTailByteLimit,
     int TaskBriefCharacterLimit = 4000,
+    int OperatorContextCharacterLimit = 4000,
     TimeSpan? DispatchTimeout = null)
 {
     public TimeSpan EffectiveFirstElapsedThreshold => FirstElapsedThreshold ?? TimeSpan.FromMinutes(15);
@@ -73,7 +74,21 @@ internal sealed record ProgressiveReviewGlanceInputs(
     string DiffExcerpt,
     string TranscriptTail,
     IReadOnlyList<string> TrustedScopePaths,
-    RepositoryScopeConfidence ScopeConfidence);
+    RepositoryScopeConfidence ScopeConfidence,
+    IReadOnlyList<ProgressiveReviewOperatorRecord>? OperatorRecords = null,
+    bool OperatorContextTruncated = false)
+{
+    public IReadOnlyList<ProgressiveReviewOperatorRecord> EffectiveOperatorRecords => OperatorRecords ?? [];
+}
+
+internal sealed record ProgressiveReviewOperatorRecord(
+    string RecordId,
+    string Kind,
+    string Text,
+    DateTimeOffset RecordedAt,
+    IReadOnlyList<OperatorGateRecord> Gates);
+
+internal sealed record ProgressiveReviewGlanceFinding(string DeliverableId, string Basis);
 
 internal sealed record ProgressiveReviewGlanceDispatchResult(
     ProgressiveReviewGlanceVerdict Verdict,
@@ -83,7 +98,8 @@ internal sealed record ProgressiveReviewGlanceDispatchResult(
     int? OutputTokens = null,
     string? Model = null,
     string? Profile = null,
-    ProgressiveReviewGlanceReasonCode? ReasonCode = null);
+    ProgressiveReviewGlanceReasonCode? ReasonCode = null,
+    IReadOnlyList<ProgressiveReviewGlanceFinding>? Findings = null);
 
 internal sealed record ProgressiveReviewGlanceGuardEvaluation(
     ProgressiveReviewGlanceDispatchResult Result,
@@ -200,7 +216,7 @@ internal sealed class ProgressiveReviewGlanceCoordinator
                     return new ProgressiveReviewGlanceObservationResult(mutated, lines);
                 }
 
-                TryStartGlance(goal, task, durationStats ?? [], lines, liveChanges);
+                TryStartGlance(kernel, goal, task, durationStats ?? [], lines, liveChanges);
             }
         }
 
@@ -223,15 +239,24 @@ internal sealed class ProgressiveReviewGlanceCoordinator
                 maxItems: 20,
                 charLimit: 3000,
                 omittedLabel: ChangedFileLabel).Select(item => "- " + item));
+        var operatorRecords = inputs.EffectiveOperatorRecords.Count == 0
+            ? "none"
+            : string.Join(Environment.NewLine + Environment.NewLine, inputs.EffectiveOperatorRecords.Select(record =>
+                $"[{record.Kind} {record.RecordId} at {record.RecordedAt:u}]\n{record.Text}\n" +
+                (record.Gates.Count == 0
+                    ? "structured-gates: none"
+                    : "structured-gates:\n" + string.Join(Environment.NewLine, record.Gates.Select(gate =>
+                        $"- deliverableId=\"{gate.DeliverableId}\"; status={(gate.IsActive ? "active" : "satisfied")}; source={gate.SourceRecordId}")))));
 
         return $$"""
 You are a progressive review glance for an in-flight Developer dispatch.
 
 Return only JSON:
-{"verdict":"on-track|concern|fundamental-misdirection","reasonCode":"scope-deviation|approach|subsystem|unmentioned-work","note":"short evidence-grounded note","evidenceLine":"single strongest evidence line"}
+{"verdict":"on-track|concern|fundamental-misdirection","reasonCode":"scope-deviation|approach|subsystem|unmentioned-work","note":"short evidence-grounded note","evidenceLine":"single strongest evidence line","findings":[{"deliverableId":"exact acceptance-criterion or structured-gate id","basis":"one observed gap"}]}
 
 High bar: use fundamental-misdirection only for a defective criterion, forbidden scope, or provably impossible task. Concerns are queued advisory evidence only. Never ask to cancel unless the evidence is fundamental.
 The current task brief and trusted scope below are authoritative over generated intake fallback text. Unknown scope is absence of evidence: it must never justify a scope-deviation verdict.
+Operator rulings below are authoritative. An active structured gate covering a missing deliverable is a gate annotation, not a fault. Never decide that a gate expired; only status=satisfied lifts it. Keep unrelated, uncovered findings.
 
 Goal:
 {{inputs.GoalObjective}}
@@ -247,6 +272,10 @@ Acceptance and criteria:
 
 Criteria correction overlay:
 {{overlay}}
+
+Answered operator clarifications and operator-authored task notes (newest first):
+{{operatorRecords}}
+{{(inputs.OperatorContextTruncated ? "[OPERATOR CONTEXT TRUNCATED — cancellation authority is withheld for scope or missing-deliverable findings]" : string.Empty)}}
 
 Trigger:
 {{inputs.Trigger}} - {{inputs.TriggerDetail}}
@@ -291,7 +320,11 @@ Transcript tail:
                 dto.OutputTokens,
                 dto.Model,
                 dto.Profile,
-                NormalizeReasonCode(dto.ReasonCode));
+                NormalizeReasonCode(dto.ReasonCode),
+                dto.Findings?
+                    .Where(finding => !string.IsNullOrWhiteSpace(finding.DeliverableId) && !string.IsNullOrWhiteSpace(finding.Basis))
+                    .Select(finding => new ProgressiveReviewGlanceFinding(finding.DeliverableId!.Trim(), BoundReceiptField(finding.Basis)))
+                    .ToArray());
         }
         catch (Exception ex) when (ex is JsonException or ArgumentException or InvalidOperationException)
         {
@@ -300,6 +333,7 @@ Transcript tail:
     }
 
     private void TryStartGlance(
+        AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec task,
         IReadOnlyList<TaskDurationStatsRecord> durationStats,
@@ -350,6 +384,7 @@ Transcript tail:
         }
 
         var scope = GoalFileScopeInference.ForScheduling(goal, task);
+        var operatorContext = BuildOperatorRecords(kernel, goal, _options.OperatorContextCharacterLimit);
         var inputs = new ProgressiveReviewGlanceInputs(
             goal.Id.Value,
             task.Id.Value,
@@ -367,7 +402,9 @@ Transcript tail:
             BoundBlock(_diffReader(task.LastDispatch.WorkingDirectory, task.LastDispatch.BaseCommit), _options.DiffCharacterLimit),
             BoundTail(_transcriptReader(task.LastProcess), _options.TranscriptCharacterLimit),
             scope.Includes,
-            scope.Confidence);
+            scope.Confidence,
+            operatorContext.Records,
+            operatorContext.Truncated);
         var inputHash = HashInputs(inputs);
         var stopwatch = Stopwatch.StartNew();
         Task<ProgressiveReviewGlanceDispatchResult> run;
@@ -588,9 +625,16 @@ Transcript tail:
         ProgressiveReviewGlanceInputs inputs,
         ProgressiveReviewGlanceDispatchResult result)
     {
+        var originalResult = result;
+        var gateGuard = ApplyOperatorGateGuard(inputs, result);
+        result = gateGuard.Result;
         if (result.Verdict != ProgressiveReviewGlanceVerdict.FundamentalMisdirection)
         {
-            return new ProgressiveReviewGlanceGuardEvaluation(result, null);
+            return new ProgressiveReviewGlanceGuardEvaluation(
+                result,
+                gateGuard.HasReceipt
+                    ? BuildGateGuardReceipt(inputs, originalResult, result, gateGuard)
+                    : null);
         }
 
         var changedFiles = inputs.ChangedFiles
@@ -640,9 +684,120 @@ Transcript tail:
             guarded.Verdict.ToString(),
             shouldDowngrade,
             reason,
-            structuralComparison);
+            structuralComparison,
+            gateGuard.Annotations,
+            inputs.OperatorContextTruncated,
+            gateGuard.CancellationWithheld || shouldDowngrade);
         return new ProgressiveReviewGlanceGuardEvaluation(guarded, receipt);
     }
+
+    private static OperatorGateGuardOutcome ApplyOperatorGateGuard(
+        ProgressiveReviewGlanceInputs inputs,
+        ProgressiveReviewGlanceDispatchResult result)
+    {
+        var records = inputs.EffectiveOperatorRecords;
+        var activeGates = records
+            .SelectMany(record => record.Gates.Select(gate => (record, gate)))
+            .Where(item => item.gate.IsActive)
+            .ToArray();
+        var findings = result.Findings?.Where(finding =>
+            !string.IsNullOrWhiteSpace(finding.DeliverableId) &&
+            !string.IsNullOrWhiteSpace(finding.Basis)).ToArray() ?? [];
+        var covered = findings
+            .Where(finding => activeGates.Any(item => string.Equals(
+                item.gate.DeliverableId,
+                finding.DeliverableId,
+                StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        var annotations = covered
+            .Select(finding =>
+            {
+                var match = activeGates.First(item => string.Equals(
+                    item.gate.DeliverableId,
+                    finding.DeliverableId,
+                    StringComparison.OrdinalIgnoreCase));
+                return $"gate={match.gate.DeliverableId}; record={match.record.RecordId}; source={match.gate.SourceRecordId}";
+            })
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (covered.Length > 0)
+        {
+            var uncovered = findings.Except(covered).ToArray();
+            if (uncovered.Length == 0)
+            {
+                return new OperatorGateGuardOutcome(
+                    result with
+                    {
+                        Verdict = ProgressiveReviewGlanceVerdict.OnTrack,
+                        Note = $"Observed gap is governed by operator gate: {string.Join(" | ", annotations)}",
+                        EvidenceLine = annotations[0],
+                        Findings = []
+                    },
+                    annotations,
+                    CancellationWithheld: result.Verdict == ProgressiveReviewGlanceVerdict.FundamentalMisdirection,
+                    HasReceipt: true);
+            }
+
+            return new OperatorGateGuardOutcome(
+                result with
+                {
+                    Note = string.Join("; ", uncovered.Select(finding => finding.Basis)),
+                    EvidenceLine = uncovered[0].Basis,
+                    Findings = uncovered
+                },
+                annotations,
+                CancellationWithheld: false,
+                HasReceipt: true);
+        }
+
+        var cancellationGroundIsContextSensitive = result.ReasonCode is
+            ProgressiveReviewGlanceReasonCode.ScopeDeviation or
+            ProgressiveReviewGlanceReasonCode.UnmentionedWork or
+            ProgressiveReviewGlanceReasonCode.Unknown or null;
+        var uncertainCoverage = result.Verdict == ProgressiveReviewGlanceVerdict.FundamentalMisdirection &&
+            ((records.Count > 0 && findings.Length == 0) ||
+                (inputs.OperatorContextTruncated && cancellationGroundIsContextSensitive));
+        if (!uncertainCoverage)
+        {
+            return new OperatorGateGuardOutcome(result, [], false, false);
+        }
+
+        var reason = inputs.OperatorContextTruncated
+            ? "operator context was truncated"
+            : "operator ruling was present but the verdict supplied no structured deliverable id";
+        return new OperatorGateGuardOutcome(
+            result with
+            {
+                Verdict = ProgressiveReviewGlanceVerdict.Concern,
+                Note = $"Cancellation withheld as a fail-safe because {reason}; coverage could not be established structurally: {result.Note}"
+            },
+            [$"coverage=uncertain; reason={reason}"],
+            CancellationWithheld: true,
+            HasReceipt: true);
+    }
+
+    private static ProgressiveReviewGlanceGuardReceipt BuildGateGuardReceipt(
+        ProgressiveReviewGlanceInputs inputs,
+        ProgressiveReviewGlanceDispatchResult original,
+        ProgressiveReviewGlanceDispatchResult guarded,
+        OperatorGateGuardOutcome outcome) =>
+        new(
+            inputs.ScopeConfidence.ToString(),
+            inputs.TrustedScopePaths.ToArray(),
+            inputs.ChangedFiles.ToArray(),
+            BoundReceiptField(original.Note),
+            BoundReceiptField(original.EvidenceLine),
+            original.ReasonCode?.ToString() ?? "absent",
+            LooksLikeScopeDeviationHint(original.Note + " " + original.EvidenceLine),
+            original.Verdict.ToString(),
+            guarded.Verdict.ToString(),
+            original.Verdict != guarded.Verdict,
+            outcome.CancellationWithheld ? "operator gate guard withheld cancellation" : "operator gate annotation applied",
+            "operator-gate-coverage",
+            outcome.Annotations,
+            inputs.OperatorContextTruncated,
+            outcome.CancellationWithheld);
 
     private static bool LooksLikeScopeDeviationHint(string text) =>
         text.Contains("scope deviation", StringComparison.OrdinalIgnoreCase) ||
@@ -983,23 +1138,77 @@ Corrective direction:
                     : $"{correction.SourceKind} task={correction.SourceTaskId.Value}";
                 return correction.IsWaiver
                     ? $"criterion=\"{correction.SupersededCriterion}\"; status=waived; reason=\"{correction.WaiverReason}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}"
-                    : $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
+                    : $"status=amended; criterion=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
             })
             .ToArray();
     }
 
     private static string BuildAcceptanceSection(Goal goal, TaskSpec task, int limit)
     {
-        var sections = new List<string>();
         if (goal.RefinedSpec?.AcceptanceCriteria is { Count: > 0 } criteria)
         {
-            sections.Add("Current refined acceptance criteria:" + Environment.NewLine +
-                string.Join(Environment.NewLine, criteria.Select(criterion => $"- {criterion.Trim()}")));
+            var effective = EffectiveAcceptanceCriteriaVersion.BuildSnapshot(
+                goal.RefinedSpec,
+                goal.EffectiveAcceptanceCriteriaCorrections);
+            return "Current amended acceptance criteria:" + Environment.NewLine +
+                string.Join(Environment.NewLine, effective.Select(criterion => $"- {criterion}"));
         }
 
-        sections.Add("Task acceptance excerpt:" + Environment.NewLine +
-            ExtractAcceptanceSection(task.Description, limit));
-        return BoundBlock(string.Join(Environment.NewLine + Environment.NewLine, sections), limit);
+        return "Task acceptance excerpt:" + Environment.NewLine +
+            ExtractAcceptanceSection(task.Description, limit);
+    }
+
+    private static OperatorContextBuildResult BuildOperatorRecords(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        int characterLimit)
+    {
+        var clarifications = kernel.HumanInputRequests
+            .Where(request =>
+                request.GoalId == goal.Id &&
+                request.Kind == HumanWaitKind.SpecClarification &&
+                request.IsCompleted &&
+                !request.WasDismissed &&
+                request.AnsweredAt is not null &&
+                request.Answer is not null)
+            .Select(request => new ProgressiveReviewOperatorRecord(
+                $"clarification:{request.Id.Value}",
+                "answered-clarification",
+                $"Question:\n{request.Question}\nAnswer:\n{request.Answer}",
+                request.AnsweredAt!.Value,
+                request.OperatorGates.ToArray()));
+        var notes = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.OperatorTaskNote)
+            .Select(evt => new ProgressiveReviewOperatorRecord(
+                $"task-note:{evt.TaskId?.Value ?? "goal"}:{evt.OccurredAt.UtcTicks}",
+                "operator-task-note",
+                evt.Message,
+                evt.OccurredAt,
+                evt.OperatorGates ?? []));
+        var ordered = clarifications
+            .Concat(notes)
+            .OrderByDescending(record => record.RecordedAt)
+            .ToArray();
+        var remaining = Math.Max(0, characterLimit);
+        var truncated = false;
+        var bounded = new List<ProgressiveReviewOperatorRecord>(ordered.Length);
+        foreach (var record in ordered)
+        {
+            if (record.Text.Length <= remaining)
+            {
+                bounded.Add(record);
+                remaining -= record.Text.Length;
+                continue;
+            }
+
+            truncated = true;
+            bounded.Add(record with
+            {
+                Text = "[older operator record text omitted due to operator-context budget]"
+            });
+        }
+
+        return new OperatorContextBuildResult(bounded, truncated);
     }
 
     private static string ExtractAcceptanceSection(string description, int limit)
@@ -1319,6 +1528,16 @@ Corrective direction:
         Task<ProgressiveReviewGlanceDispatchResult> Task,
         Stopwatch Stopwatch);
 
+    private sealed record OperatorContextBuildResult(
+        IReadOnlyList<ProgressiveReviewOperatorRecord> Records,
+        bool Truncated);
+
+    private sealed record OperatorGateGuardOutcome(
+        ProgressiveReviewGlanceDispatchResult Result,
+        IReadOnlyList<string> Annotations,
+        bool CancellationWithheld,
+        bool HasReceipt);
+
     private sealed record ProgressiveReviewSteeringHashInputs(
         string GoalId,
         string TaskId,
@@ -1361,6 +1580,13 @@ Corrective direction:
         public int? OutputTokens { get; set; }
         public string? Model { get; set; }
         public string? Profile { get; set; }
+        public IReadOnlyList<GlanceFindingDto>? Findings { get; set; }
+    }
+
+    private sealed class GlanceFindingDto
+    {
+        public string? DeliverableId { get; set; }
+        public string? Basis { get; set; }
     }
 }
 

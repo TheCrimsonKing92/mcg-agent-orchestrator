@@ -363,7 +363,10 @@ private static IReadOnlyList<ProgressiveReviewGlanceGuardReceiptDto> ReadProgres
                     root.GetProperty("finalVerdict").GetString() ?? string.Empty,
                     root.GetProperty("downgraded").GetBoolean(),
                     root.GetProperty("downgradeReason").GetString() ?? string.Empty,
-                    root.GetProperty("structuralComparison").GetString() ?? string.Empty));
+                    root.GetProperty("structuralComparison").GetString() ?? string.Empty,
+                    ReadStringArray(root, "gateAnnotations"),
+                    root.TryGetProperty("operatorContextTruncated", out var truncated) && truncated.GetBoolean(),
+                    root.TryGetProperty("cancellationWithheld", out var withheld) && withheld.GetBoolean()));
             }
             catch (JsonException)
             {

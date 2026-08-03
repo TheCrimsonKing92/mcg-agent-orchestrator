@@ -345,7 +345,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 ["note", "1", "operator note"],
                 (_, _, _) => { },
                 (goal, task) =>
-                    Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskNote && evt.Message == "operator note"))
+                    Xunit.Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.OperatorTaskNote && evt.Message == "operator note"))
         };
 
         foreach (var testCase in cases)
@@ -873,7 +873,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Render correction overlay");
         var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
-        kernel.RecordTaskNote(
+        kernel.RecordOperatorTaskNote(
             goal.Id,
             task.Id,
             "CRITERIA CORRECTION: supersedes=\"full suite required\"; correction=\"focused build-check accepted\"");

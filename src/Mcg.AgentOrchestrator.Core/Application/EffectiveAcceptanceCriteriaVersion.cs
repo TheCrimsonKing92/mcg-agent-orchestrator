@@ -9,14 +9,20 @@ public static class EffectiveAcceptanceCriteriaVersion
         RefinedSpec spec,
         IEnumerable<EffectiveAcceptanceCriteriaCorrection> corrections)
     {
-        var waivedCriteria = corrections
-            .Where(correction => correction.IsWaiver)
-            .Select(correction => correction.SupersededCriterion.Trim())
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var latest = corrections
+            .Where(correction => string.Equals(correction.Actor, "operator", StringComparison.OrdinalIgnoreCase) ||
+                correction.Actor.StartsWith("operator:", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(correction => correction.RecordedAt)
+            .GroupBy(correction => correction.SupersededCriterion.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
 
         return spec.AcceptanceCriteria
             .Select(criterion => criterion.Trim())
-            .Select(criterion => waivedCriteria.Contains(criterion) ? $"[WAIVED] {criterion}" : criterion)
+            .Select(criterion => latest.TryGetValue(criterion, out var correction)
+                ? correction.IsWaiver
+                    ? $"[WAIVED] {criterion} — operator rationale: {correction.WaiverReason}"
+                    : correction.Correction.Trim()
+                : criterion)
             .ToArray();
     }
 

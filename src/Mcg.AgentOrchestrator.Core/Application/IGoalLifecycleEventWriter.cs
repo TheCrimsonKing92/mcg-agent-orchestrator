@@ -12,7 +12,10 @@ public sealed record ProgressiveReviewGlanceGuardReceipt(
     string FinalVerdict,
     bool Downgraded,
     string DowngradeReason,
-    string StructuralComparison);
+    string StructuralComparison,
+    IReadOnlyList<string>? GateAnnotations = null,
+    bool OperatorContextTruncated = false,
+    bool CancellationWithheld = false);
 
 public interface IGoalLifecycleEventWriter
 {

@@ -148,8 +148,34 @@ public sealed partial class AgentOrchestratorKernel
             throw new ArgumentException("Task note message cannot be empty.", nameof(message));
         }
 
-        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.TaskNote, noteMessage);
         Append(goal, taskId, ProgressKind.TaskNote, noteMessage);
+        return task;
+    }
+
+    public TaskSpec RecordOperatorTaskNote(
+        GoalId goalId,
+        TaskId taskId,
+        string message,
+        IReadOnlyList<string>? gatedDeliverableIds = null)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        var noteMessage = message.Trim();
+        if (string.IsNullOrWhiteSpace(noteMessage))
+        {
+            throw new ArgumentException("Task note message cannot be empty.", nameof(message));
+        }
+
+        var recordedAt = _clock.UtcNow;
+        var sourceRecordId = $"task-note:{taskId.Value}:{recordedAt.UtcTicks}";
+        var gates = (gatedDeliverableIds ?? [])
+            .Select(deliverableId => deliverableId.Trim())
+            .Where(deliverableId => deliverableId.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(deliverableId => new OperatorGateRecord(deliverableId, sourceRecordId, recordedAt))
+            .ToArray();
+        RecordEffectiveAcceptanceCriteriaCorrections(goal, taskId, ProgressKind.OperatorTaskNote, noteMessage);
+        Append(goal, taskId, ProgressKind.OperatorTaskNote, noteMessage, gates, recordedAt);
         return task;
     }
 
@@ -1188,7 +1214,10 @@ public sealed partial class AgentOrchestratorKernel
             $"count={request.SuppressionCount} state={(answered ? "answered" : "open")}{thresholdReceipt}");
     }
 
-    public void SubmitHumanInput(HumanInputRequestId requestId, string answer)
+    public void SubmitHumanInput(
+        HumanInputRequestId requestId,
+        string answer,
+        IReadOnlyList<string>? gatedDeliverableIds = null)
     {
         lock (_humanInputRequestLock)
         {
@@ -1204,7 +1233,7 @@ public sealed partial class AgentOrchestratorKernel
 
             var goal = GetGoal(request.GoalId);
             var answeredAt = _clock.UtcNow;
-            request.Complete(answer, answeredAt);
+            request.Complete(answer, answeredAt, gatedDeliverableIds);
             var siblings = _humanInputRequests.Values
                 .Where(candidate =>
                     candidate.Id != request.Id &&
@@ -1237,6 +1266,28 @@ public sealed partial class AgentOrchestratorKernel
                 ? string.Empty
                 : $" Resolved {siblings.Count} sibling duplicate request(s).";
             Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer + siblingReceipt);
+        }
+    }
+
+    public void MarkOperatorGateSatisfied(
+        HumanInputRequestId requestId,
+        string deliverableId,
+        string evidence)
+    {
+        lock (_humanInputRequestLock)
+        {
+            if (!_humanInputRequests.TryGetValue(requestId, out var request))
+            {
+                throw new KeyNotFoundException($"Human input request '{requestId}' was not found.");
+            }
+
+            request.MarkOperatorGateSatisfied(deliverableId, evidence, _clock.UtcNow);
+            var goal = GetGoal(request.GoalId);
+            Append(
+                goal,
+                request.TaskId,
+                ProgressKind.GoalPolicyDecision,
+                $"Operator gate satisfied: source=clarification:{request.Id.Value}; deliverable={deliverableId.Trim()}; evidence={evidence.Trim()}");
         }
     }
 

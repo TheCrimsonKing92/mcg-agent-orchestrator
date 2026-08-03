@@ -255,6 +255,7 @@ internal static class PromptContextFormatter
             ProgressKind.TaskRedelegated or
             ProgressKind.TaskVerificationPlanUpdated or
             ProgressKind.TaskNote or
+            ProgressKind.OperatorTaskNote or
             ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
             ProgressKind.ReviewerEvidenceRequestReceived or
             ProgressKind.ReviewerEvidenceRunRecorded or

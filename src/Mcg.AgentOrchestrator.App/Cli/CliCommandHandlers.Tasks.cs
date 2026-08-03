@@ -107,7 +107,7 @@ internal static GoalScopedTaskMutationOutcome ExecuteGoalScopedTaskMutationWitho
         case "note":
             var noteUsage = "note <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> <message>|note <task-number> --text-file <path>";
             var noteTarget = ResolveCommandTaskTarget(command.Parts, context, noteUsage);
-            context.Kernel.RecordTaskNote(
+            context.Kernel.RecordOperatorTaskNote(
                 context.CurrentGoal!.Id,
                 noteTarget.Task.Id,
                 command.Text ?? throw new InvalidOperationException("Prepared note command is missing text."));
@@ -448,7 +448,7 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             var noteTarget = ResolveCommandTaskTarget(parts, context, noteUsage);
             RequireRemainingArgument(parts, noteTarget.NextIndex, noteUsage);
             var noteTask = noteTarget.Task;
-            context.Kernel.RecordTaskNote(context.CurrentGoal!.Id, noteTask.Id, ResolveTextArgument(parts, noteTarget.NextIndex, noteUsage, "--text-file"));
+            context.Kernel.RecordOperatorTaskNote(context.CurrentGoal!.Id, noteTask.Id, ResolveTextArgument(parts, noteTarget.NextIndex, noteUsage, "--text-file"));
             Console.WriteLine($"Note added to task {noteTask.Id}");
             return true;
 
