@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.Json;
 
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorCrossTickTests
@@ -47,6 +48,10 @@ public sealed class ConductorCrossTickTests
 
         var runningHandle = fixture.RequiredHandleForTests(running);
         Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Running, runningHandle.Attempt.Outcome);
+        using (var heartbeat = JsonDocument.Parse(File.ReadAllText(runningHandle.Attempt.HeartbeatPath)))
+        {
+            Assert.Equal("running", heartbeat.RootElement.GetProperty("state").GetString());
+        }
         Assert.True(fixture.AttemptCoordinator.HasLiveAttempt(running.Id.Value));
 
         fixture.AdvanceTimeForTests(TimeSpan.FromSeconds(1));
@@ -57,6 +62,7 @@ public sealed class ConductorCrossTickTests
 
         var primerHandle = fixture.RequiredHandleForTests(primer);
         Assert.Equal(1, rejectedRunningCandidateRebuildCount);
+        Assert.Equal(ConductorBatchLoop.DefaultParallelAcceptanceCapacity, fixture.HeldAttemptCapacity);
         Assert.Equal(2, fixture.HeldAttemptCapacity);
         Assert.Equal(2, fixture.HeldAttemptCount);
         Assert.True(fixture.AttemptCoordinator.HasLiveAttempt(running.Id.Value));
@@ -100,6 +106,7 @@ public sealed class ConductorCrossTickTests
                     AcceptanceVerificationSummary.PassedWithNoUnmetCriteria)));
         Assert.Contains("capacity 2 is exhausted", gateViolation.Message, StringComparison.Ordinal);
         Assert.Equal(2, fixture.HeldAttemptCount);
+        Assert.False(fixture.AttemptCoordinator.HasLiveAttempt(excess.Id.Value));
 
         waitingHandle.CompleteForTests();
         Assert.True(fixture.AttemptCoordinator.HasLiveAttempt(running.Id.Value));
