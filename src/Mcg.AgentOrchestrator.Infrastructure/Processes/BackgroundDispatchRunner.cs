@@ -3671,7 +3671,8 @@ public sealed class BackgroundDispatchRunner
             var fileExists = File.Exists(outputPath);
             var fileLen = fileExists ? new FileInfo(outputPath).Length : 0L;
             var readLen = (long)standardOutput.Length;
-            var stderrLen = (long)standardError.Length;
+            var stderrPath = processRecord.StandardErrorPath;
+            var stderrLen = File.Exists(stderrPath) ? new FileInfo(stderrPath).Length : 0L;
 
             var classification = ClassifyDispatch(
                 exitCode, fileLen, readLen, stderrLen, standardOutput, standardError, out var reason);
@@ -3731,7 +3732,7 @@ public sealed class BackgroundDispatchRunner
 
         reason = exitCode == 0
             ? $"exit 0; fileLen={fileLen}; readLen={readLen}"
-            : $"exit {exitCode}; fileLen={fileLen}; readLen={readLen}; stderrLen={standardError.Length}";
+            : $"exit {exitCode}; fileLen={fileLen}; readLen={readLen}; stderrLen={stderrLen}";
         return exitCode == 0 ? "success" : "failed";
     }
 

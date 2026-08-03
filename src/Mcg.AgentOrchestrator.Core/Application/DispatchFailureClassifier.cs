@@ -222,7 +222,8 @@ public static class DispatchFailureClassifier
 
         if (verification.ExitCode != 0)
         {
-            return false;
+            return string.IsNullOrWhiteSpace(verification.StandardOutput) &&
+                !HasSubstantiveStandardError(verification.StandardError);
         }
 
         if (!string.IsNullOrWhiteSpace(verification.StandardOutput) ||
@@ -239,6 +240,7 @@ public static class DispatchFailureClassifier
         if (verification.ExitCode == 0 ||
             IsPreflightFailure(verification) ||
             IsDispatchRecoveryPolicyDiagnostic(verification) ||
+            IsDirtyDispatchGuardFailure(verification) ||
             HasArtifactEvidence(verification.WorkerResultPresent, verification.HasCommittedChanges) ||
             !HasZeroByteStandardOutput(verification) ||
             !HasZeroByteStandardError(verification))
@@ -282,6 +284,15 @@ public static class DispatchFailureClassifier
 
     private static bool HasZeroByteStandardError(TaskVerificationRecord verification)
     {
+        // The redirected file is authoritative for worker bytes, but the verification text can
+        // contain orchestrator-injected diagnostics that never appeared in that file. Positive
+        // failure evidence must win over an empty file; bookkeeping receipts do not constitute a
+        // worker verdict and are deliberately ignored here.
+        if (HasSubstantiveStandardError(verification.StandardError))
+        {
+            return false;
+        }
+
         if (!string.IsNullOrWhiteSpace(verification.StandardErrorPath) &&
             File.Exists(verification.StandardErrorPath))
         {

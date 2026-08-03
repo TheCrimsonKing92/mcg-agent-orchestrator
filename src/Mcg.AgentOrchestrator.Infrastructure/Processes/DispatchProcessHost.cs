@@ -92,8 +92,9 @@ public static class DispatchProcessHost
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
-        int ExitCode,
-        DateTimeOffset RecordedAt);
+        int? ExitCode,
+        DateTimeOffset RecordedAt,
+        string State = "exited");
 
     public sealed record DispatchPrepRecord(
         string Kind,
@@ -123,6 +124,16 @@ public static class DispatchProcessHost
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
         using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough);
+        using var writer = new StreamWriter(stream);
+        writer.Write(payload);
+        writer.Flush();
+        stream.Flush(flushToDisk: true);
+    }
+
+    private static void AppendAllTextDurable(string path, string payload)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? ".");
+        using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough);
         using var writer = new StreamWriter(stream);
         writer.Write(payload);
         writer.Flush();
@@ -976,9 +987,27 @@ public static void DropToLow() {
             ? TimeSpan.FromMilliseconds(parameters.HeartbeatIntervalMilliseconds)
             : HeartbeatInterval;
 
-        void ObserveSelectedChild(IReadOnlyList<int> ownedPids)
+        void RecordFallbackDiagnostic(string diagnostic)
         {
-            var candidatePid = SelectHeartbeatChildPid(worker, ownedPids);
+            hostDiagnosticWriteFailure = diagnostic;
+            if (string.IsNullOrWhiteSpace(parameters.HostDiagnosticPath))
+            {
+                return;
+            }
+
+            try
+            {
+                AppendAllTextDurable(parameters.HostDiagnosticPath, diagnostic + Environment.NewLine);
+            }
+            catch (Exception fallbackFailure)
+            {
+                hostDiagnosticWriteFailure +=
+                    $"; fallback diagnostic write failed: {fallbackFailure.GetType().Name}: {fallbackFailure.Message}";
+            }
+        }
+
+        void ObserveSelectedChild(int? candidatePid)
+        {
             if (candidatePid is null || worker is null || candidatePid.Value == worker.Id)
             {
                 return;
@@ -986,7 +1015,7 @@ public static void DropToLow() {
 
             lock (selectedChildLock)
             {
-                if (selectedChild is not null)
+                if (selectedChild?.Id == candidatePid.Value)
                 {
                     return;
                 }
@@ -999,6 +1028,7 @@ public static void DropToLow() {
                     try
                     {
                         _ = observedChild.SafeHandle;
+                        selectedChild?.Dispose();
                         selectedChild = observedChild;
                     }
                     catch
@@ -1023,34 +1053,43 @@ public static void DropToLow() {
 
             lock (selectedChildLock)
             {
-                if (selectedChild is null)
-                {
-                    return;
-                }
-
                 try
                 {
-                    if (!selectedChild.HasExited)
+                    var childProcessId = selectedChild?.Id ?? 0;
+                    int? childExitCode = null;
+                    var state = "not-observed";
+                    if (selectedChild is not null)
                     {
-                        selectedChild.WaitForExit(1000);
+                        if (!selectedChild.HasExited)
+                        {
+                            selectedChild.WaitForExit(1000);
+                        }
+
+                        if (selectedChild.HasExited)
+                        {
+                            childExitCode = selectedChild.ExitCode;
+                            state = "exited";
+                        }
+                        else
+                        {
+                            state = "running-after-root-exit";
+                        }
                     }
 
-                    if (selectedChild.HasExited)
-                    {
-                        WriteAllTextDurable(
-                            parameters.ChildExitRecordPath,
-                            JsonSerializer.Serialize(
-                                new DispatchChildExitRecord(
-                                    selectedChild.Id,
-                                    selectedChild.ExitCode,
-                                    DateTimeOffset.UtcNow),
-                                JsonOptions));
-                    }
+                    WriteAllTextDurable(
+                        parameters.ChildExitRecordPath,
+                        JsonSerializer.Serialize(
+                            new DispatchChildExitRecord(
+                                childProcessId,
+                                childExitCode,
+                                DateTimeOffset.UtcNow,
+                                state),
+                            JsonOptions));
                 }
                 catch (Exception ex)
                 {
-                    hostDiagnosticWriteFailure =
-                        $"[dispatch-host] selected child exit record failed: {ex.GetType().Name}: {ex.Message}";
+                    RecordFallbackDiagnostic(
+                        $"[dispatch-host] selected child exit record failed: {ex.GetType().Name}: {ex.Message}");
                 }
             }
         }
@@ -1064,21 +1103,9 @@ public static void DropToLow() {
             }
             catch (Exception appendFailure)
             {
-                hostDiagnosticWriteFailure =
+                RecordFallbackDiagnostic(
                     $"[dispatch-host] stderr diagnostic append failed: {appendFailure.GetType().Name}: {appendFailure.Message}; " +
-                    $"original failure: {failure.GetType().Name}: {failure.Message}";
-                if (!string.IsNullOrWhiteSpace(parameters.HostDiagnosticPath))
-                {
-                    try
-                    {
-                        WriteAllTextDurable(parameters.HostDiagnosticPath, hostDiagnosticWriteFailure + Environment.NewLine);
-                    }
-                    catch (Exception fallbackFailure)
-                    {
-                        hostDiagnosticWriteFailure +=
-                            $"; fallback diagnostic write failed: {fallbackFailure.GetType().Name}: {fallbackFailure.Message}";
-                    }
-                }
+                    $"original failure: {failure.GetType().Name}: {failure.Message}");
             }
         }
 
@@ -1093,7 +1120,8 @@ public static void DropToLow() {
             var stderrBytes = FileLength(parameters.StderrPath);
             var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
             var ownedCpuMs = ReadHeartbeatOwnedCpuMs(workerGroup, ownedPids);
-            ObserveSelectedChild(ownedPids);
+            var childPid = SelectHeartbeatChildPid(worker, ownedPids);
+            ObserveSelectedChild(childPid);
             providerSessionId ??= TryCaptureProviderSessionId(
                 parameters.Provider,
                 parameters.StdoutPath,
@@ -1118,7 +1146,7 @@ public static void DropToLow() {
             {
                 kind = string.IsNullOrWhiteSpace(parameters.Kind) ? WorkerDispatchKind : parameters.Kind,
                 pid = Environment.ProcessId,
-                childPid = SelectHeartbeatChildPid(worker, ownedPids),
+                childPid,
                 ownedPids,
                 startedAt = startedAt.ToString("o"),
                 lastObservedAt = DateTimeOffset.UtcNow.ToString("o"),
@@ -1286,7 +1314,8 @@ public static void DropToLow() {
             var maxIdle = ResolveWatchdogTimeout("MCG_DISPATCH_MAX_IDLE_MIN", DefaultMaxIdle);
             while (!worker.WaitForExit((int)WatchdogProbeInterval.TotalMilliseconds))
             {
-                ObserveSelectedChild(GetHeartbeatOwnedProcessIds(workerGroup, worker));
+                var ownedPids = GetHeartbeatOwnedProcessIds(workerGroup, worker);
+                ObserveSelectedChild(SelectHeartbeatChildPid(worker, ownedPids));
                 var now = DateTimeOffset.UtcNow;
                 var runFor = now - startedAt;
                 var idleFor = now - lastProgressAt;
@@ -1342,11 +1371,15 @@ public static void DropToLow() {
                 TryShutdownBuildServer(parameters.WorkingDirectory);
             }
 
-            TryWriteExitCode(parameters.ExitCodePath, exitCode);
+            // One final heartbeat synchronizes the selected-child handle with the childPid receipt.
+            // Freeze that selection into the child record before publishing the completion signal.
+            WriteHeartbeat("exited");
             WriteSelectedChildExitRecord();
             WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
             egressProxy?.Dispose();
-            WriteHeartbeat("exited");
+            // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
+            // only after every child/diagnostic artifact the completion path reads is durable.
+            TryWriteExitCode(parameters.ExitCodePath, exitCode);
             selectedChild?.Dispose();
         }
 

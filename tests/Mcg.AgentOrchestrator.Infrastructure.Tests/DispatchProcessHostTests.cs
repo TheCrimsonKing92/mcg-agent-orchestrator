@@ -271,6 +271,7 @@ public sealed class DispatchProcessHostTests
         var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-child-exit-tests", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(dir);
         Task<int>? runTask = null;
+        int? heartbeatChildPid = null;
         var gatePath = Path.Combine(dir, "release-child");
         try
         {
@@ -313,8 +314,15 @@ public sealed class DispatchProcessHostTests
                             return false;
 
                         using var heartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath));
-                        return heartbeat.RootElement.GetProperty("childPid").ValueKind == JsonValueKind.Number &&
-                            heartbeat.RootElement.GetProperty("ownedPids").GetArrayLength() > 1;
+                        var childPid = heartbeat.RootElement.GetProperty("childPid");
+                        if (childPid.ValueKind != JsonValueKind.Number ||
+                            heartbeat.RootElement.GetProperty("ownedPids").GetArrayLength() <= 1)
+                        {
+                            return false;
+                        }
+
+                        heartbeatChildPid = childPid.GetInt32();
+                        return true;
                     }
                     catch (IOException)
                     {
@@ -335,8 +343,9 @@ public sealed class DispatchProcessHostTests
             Assert.Equal(0, new FileInfo(stdoutPath).Length);
             Assert.Equal(0, new FileInfo(stderrPath).Length);
             using var childExit = JsonDocument.Parse(File.ReadAllText(childExitPath));
-            Assert.True(childExit.RootElement.GetProperty("processId").GetInt32() > 0);
+            Assert.Equal(heartbeatChildPid, childExit.RootElement.GetProperty("processId").GetInt32());
             Assert.Equal(23, childExit.RootElement.GetProperty("exitCode").GetInt32());
+            Assert.Equal("exited", childExit.RootElement.GetProperty("state").GetString());
         }
         finally
         {

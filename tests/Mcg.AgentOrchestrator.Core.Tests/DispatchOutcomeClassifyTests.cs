@@ -829,8 +829,8 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.NotEqual(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
     }
 
-    [Xunit.Fact(DisplayName = "Classify does not call long-running empty worker exit a launch failure")]
-    public void ClassifyLongRunningEmptyFailureDoesNotRetryAsLaunchFailure()
+    [Xunit.Fact(DisplayName = "Classify preserves long-running nonzero empty-output retry")]
+    public void ClassifyLongRunningEmptyFailurePreservesEmptyOutputRetry()
     {
         var completedAt = DateTimeOffset.Parse("2026-08-03T03:22:50Z");
         var verification = new TaskVerificationRecord(
@@ -844,8 +844,52 @@ public sealed class DispatchOutcomeClassifyTests
 
         var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
 
-        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
-        Xunit.Assert.NotEqual(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Equal(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify ignores bookkeeping stderr when identifying a silent launch failure")]
+    public void ClassifySilentLaunchFailureIgnoresBookkeepingStderr()
+    {
+        var completedAt = DateTimeOffset.Parse("2026-08-03T03:22:50Z");
+        var verification = new TaskVerificationRecord(
+            "claude -p",
+            "C:\\repo",
+            1,
+            string.Empty,
+            "RESOURCE phase=dispatch cpu_ms=3015 accounting_source=snapshot",
+            completedAt,
+            DispatchStartedAt: completedAt - TimeSpan.FromSeconds(27));
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.LaunchFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify preserves injected dirty-worktree diagnostics over empty stderr file")]
+    public void ClassifyDirtyGuardDiagnosticDoesNotBecomeLaunchFailure()
+    {
+        var stderrPath = Path.GetTempFileName();
+        try
+        {
+            var completedAt = DateTimeOffset.Parse("2026-08-03T03:22:50Z");
+            var verification = new TaskVerificationRecord(
+                "codex exec",
+                "C:\\repo",
+                1,
+                string.Empty,
+                "Developer/Tester dispatch exited 0 but left the worktree dirty; status_short=M src/file.cs.",
+                completedAt,
+                StandardErrorPath: stderrPath,
+                DispatchStartedAt: completedAt - TimeSpan.FromSeconds(27));
+
+            Xunit.Assert.False(DispatchFailureClassifier.IsSilentLaunchFailure(verification));
+        }
+        finally
+        {
+            File.Delete(stderrPath);
+        }
     }
 
     [Xunit.Fact(DisplayName = "Classify preserves exit zero empty output failover when heartbeat has no bytes")]

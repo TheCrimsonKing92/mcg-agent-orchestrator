@@ -2934,6 +2934,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(1, record.ExitCode);
     Assert.Equal(0L, record.FileLen);
     Assert.Equal(0L, record.ReadLen);
+    Assert.Equal(0L, record.StderrLen);
     Assert.Equal("launch-failure", record.Classification);
 }
 
