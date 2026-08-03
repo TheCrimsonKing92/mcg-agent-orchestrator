@@ -17,6 +17,18 @@ public sealed class ProcessStartInfoSourceGuardTests
             var lines = File.ReadAllLines(file);
             for (var index = 0; index < lines.Length; index++)
             {
+                if (IntroducesStartProcessCommand(lines[index]))
+                {
+                    var startProcessEnd = Math.Min(lines.Length, index + 8);
+                    var startProcessWindow = string.Join('\n', lines[index..startProcessEnd]);
+                    if (!startProcessWindow.Contains("MCG_ALLOW_DEFAULT_WINDOW_SETTINGS_PROBE", StringComparison.Ordinal) &&
+                        !startProcessWindow.Contains("-NoNewWindow", StringComparison.Ordinal) &&
+                        !startProcessWindow.Contains("-WindowStyle Hidden", StringComparison.Ordinal))
+                    {
+                        offenders.Add($"{relativePath}:{index + 1} (Start-Process)");
+                    }
+                }
+
                 if (!IntroducesProcessStartInfo(lines[index]))
                 {
                     continue;
@@ -38,7 +50,7 @@ public sealed class ProcessStartInfoSourceGuardTests
 
         Assert.True(
             offenders.Count == 0,
-            "Test-side ProcessStartInfo usage must set CreateNoWindow=true. Offenders: " + string.Join(", ", offenders));
+            "Test-side process starts must set CreateNoWindow=true or request a hidden/no-new PowerShell window. Offenders: " + string.Join(", ", offenders));
     }
 
     private static bool IntroducesProcessStartInfo(string line)
@@ -47,6 +59,12 @@ public sealed class ProcessStartInfoSourceGuardTests
             || line.Contains("ProcessStartInfo]::new", StringComparison.Ordinal)
             || line.Contains("UseShellExecute = false", StringComparison.Ordinal)
             || line.Contains("UseShellExecute = $false", StringComparison.Ordinal);
+    }
+
+    private static bool IntroducesStartProcessCommand(string line)
+    {
+        return line.Contains("Start-Process", StringComparison.Ordinal) &&
+            !line.Contains("(\"Start-Process\"", StringComparison.Ordinal);
     }
 
     private static string FindTestRoot([System.Runtime.CompilerServices.CallerFilePath] string sourceFilePath = "")
