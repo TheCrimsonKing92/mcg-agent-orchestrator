@@ -2115,6 +2115,16 @@ internal sealed class ConductorDriver
                         $"All assigned tasks deferred by provider cooldown; {deferred.Reason}. Will retry next tick."));
             }
 
+            if (TryDescribeCancelledPredecessorBlocker(goal, out var terminalBlocker))
+            {
+                return Escalate(
+                    goal,
+                    goalPrefix,
+                    policy,
+                    fromState,
+                    $"STRUCTURAL_TASK_BLOCKER: {terminalBlocker}. Operator recovery is required; retrying cannot complete a cancelled predecessor.");
+            }
+
             if (readiness is not DispatchReadinessBlocked { HasCandidates: false })
             {
                 return MakeResult(goal.Id.Value, goalPrefix, policy,
@@ -2813,6 +2823,27 @@ internal sealed class ConductorDriver
             _ => "batch formation returned no dispatch"
         };
         return $"task {task.Id.Value} ({task.RequiredRole}) blocked: {readinessReason}";
+    }
+
+    private static bool TryDescribeCancelledPredecessorBlocker(Goal goal, out string blocker)
+    {
+        foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned))
+        {
+            var predecessor = goal.Tasks.FirstOrDefault(candidate =>
+                GoalManagementCommandService.IsEarlierSdlcStageOf(candidate.RequiredRole, task.RequiredRole) &&
+                candidate.Status == WorkTaskStatus.Cancelled);
+            if (predecessor is null)
+            {
+                continue;
+            }
+
+            blocker =
+                $"task {task.Id.Value} ({task.RequiredRole}) blocked: predecessor {predecessor.Id.Value} is Cancelled, not Completed";
+            return true;
+        }
+
+        blocker = string.Empty;
+        return false;
     }
 
     private static TimeSpan ComputeEmptyOutputBackoff(ConductorAutonomyPolicy policy, int retryCount)

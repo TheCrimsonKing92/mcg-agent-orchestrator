@@ -19,13 +19,22 @@ public sealed record GoalTimingReportSnapshot(
     TimeSpan TotalDuration,
     double WorkPercent,
     double WaitPercent,
-    IReadOnlyList<GoalTimingTaskReport> Tasks);
+    IReadOnlyList<GoalTimingTaskReport> Tasks,
+    GoalHoldTimingReport? CurrentHold);
 
 public sealed record GoalTimingReportContext(
     DateTimeOffset? BacklogIntentAt = null,
     DateTimeOffset? LandedAt = null,
     string? LandingSource = null,
-    IReadOnlyList<GoalTimingGateSpan>? GateSpans = null);
+    IReadOnlyList<GoalTimingGateSpan>? GateSpans = null,
+    DateTimeOffset? AsOf = null);
+
+public sealed record GoalHoldTimingReport(
+    string State,
+    string Blocker,
+    DateTimeOffset StartedAt,
+    TimeSpan Duration,
+    DateTimeOffset? StalledAt);
 
 public sealed record GoalTimingGateSpan(
     DateTimeOffset StartedAt,
@@ -168,6 +177,14 @@ public static class GoalTimingReport
                 task.Id == dispatchEvents.FirstOrDefault()?.TaskId ? intakeWait : TimeSpan.Zero,
                 roundsByTask.FirstOrDefault(item => item.TaskId == task.Id)?.Rounds ?? []))
             .ToList();
+        var currentHold = goal.CurrentHold is null
+            ? null
+            : new GoalHoldTimingReport(
+                goal.CurrentHold.State,
+                goal.CurrentHold.Blocker,
+                goal.CurrentHold.StartedAt,
+                PositiveDuration(context.AsOf, goal.CurrentHold.StartedAt),
+                goal.CurrentHold.StalledAt);
 
         return new GoalTimingReportSnapshot(
             goal.Id,
@@ -186,7 +203,8 @@ public static class GoalTimingReport
             totalDuration,
             totalDuration > TimeSpan.Zero ? workDuration.TotalMilliseconds / totalDuration.TotalMilliseconds : 0.0,
             totalDuration > TimeSpan.Zero ? waitDuration.TotalMilliseconds / totalDuration.TotalMilliseconds : 0.0,
-            taskReports);
+            taskReports,
+            currentHold);
     }
 
     public static GoalTimingRollupSnapshot BuildRollup(

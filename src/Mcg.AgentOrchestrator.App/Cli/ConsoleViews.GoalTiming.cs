@@ -9,6 +9,17 @@ public static void PrintGoalTimingReport(GoalTimingReportSnapshot report)
 {
     Console.WriteLine();
     Console.WriteLine($"Goal timing {report.GoalId.Value[..8]}: {OutputTextPreview.CreateSummary(report.Objective).Text}");
+    if (report.CurrentHold is { } hold)
+    {
+        Console.WriteLine(
+            $"Current status: held state={hold.State} since={hold.StartedAt:u} " +
+            $"duration={FormatDuration(hold.Duration)} stalled={(hold.StalledAt is null ? "no" : "yes")} " +
+            $"blocker={OutputTextPreview.CreateSummary(hold.Blocker).Text}");
+    }
+    else
+    {
+        Console.WriteLine("Current status: progressing (no active hold)");
+    }
     Console.WriteLine("Task  Role       Rounds  IntakeWait  Prep  Worker  Handoff");
     foreach (var task in report.Tasks.Where(task => task.Rounds.Count > 0))
     {

@@ -1311,6 +1311,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 baseline.OperatorAcceptanceRegateCount,
                 stored.OperatorAcceptanceRegateCount,
                 current.OperatorAcceptanceRegateCount),
+            CurrentHold = PickTickOwned(
+                baseline.CurrentHold,
+                stored.CurrentHold,
+                current.CurrentHold),
             EffectiveAcceptanceCriteriaCorrections = PickStoreOwnedList(
                 baseline.EffectiveAcceptanceCriteriaCorrections,
                 stored.EffectiveAcceptanceCriteriaCorrections,

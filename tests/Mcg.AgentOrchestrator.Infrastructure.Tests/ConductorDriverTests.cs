@@ -4827,4 +4827,38 @@ public sealed class ConductorDriverTests
         Assert.Equal(spawnFailReason, escalationReason);
         Assert.Contains("spawn", escalationReason!, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Xunit.Fact]
+    public void EmptyBatch_CancelledPredecessor_EscalatesImmediately()
+    {
+        var developerId = TaskId.New().Value;
+        var reviewerId = TaskId.New().Value;
+        var kernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot(
+            [
+                new GoalSnapshot(
+                    "goal-cancelled-predecessor",
+                    "Escalate terminal task dependencies",
+                    GoalStatus.Active,
+                    [
+                        new TaskSnapshot(developerId, "Cancelled implementation.", AgentRole.Developer, WorkTaskStatus.Cancelled, null, null, null, [], null, null),
+                        new TaskSnapshot(reviewerId, "Review waits forever.", AgentRole.Reviewer, WorkTaskStatus.Assigned, null, null, null, [], null, null)
+                    ],
+                    [])
+            ],
+            []));
+        var goal = kernel.Goals.Single();
+        string? escalationReason = null;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => DispatchStartOutcome.EmptyBatch("No tasks in ready batch"),
+            evaluateReadiness: _ => new DispatchReadinessReady(),
+            writeEscalation: (_, _, reason) => escalationReason = reason);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, escalated.State);
+        Assert.Contains(developerId, escalationReason, StringComparison.Ordinal);
+        Assert.Contains("Cancelled", escalationReason, StringComparison.Ordinal);
+    }
 }

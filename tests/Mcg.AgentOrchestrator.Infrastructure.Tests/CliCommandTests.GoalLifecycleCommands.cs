@@ -3698,6 +3698,30 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             item.Title.Contains("ready for acceptance", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Xunit.Fact]
+    public void CliGoalTiming_CurrentHold_PrintsTimeInStatus()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement held work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Audit held time", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var startedAt = DateTimeOffset.UtcNow.AddMinutes(-12);
+        kernel.ObserveGoalHold(
+            goal.Id,
+            "WorkspaceReady",
+            "workspace is busy",
+            startedAt,
+            TimeSpan.FromMinutes(10));
+
+        var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
+
+        Xunit.Assert.Contains("Current status: held", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"since={startedAt:u}", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("blocker=workspace is busy", output, StringComparison.Ordinal);
+    }
+
     private (
         string Root,
         OrchestratorWorkspace Workspace,

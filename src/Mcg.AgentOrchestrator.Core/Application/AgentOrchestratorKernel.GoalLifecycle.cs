@@ -1343,6 +1343,16 @@ public sealed partial class AgentOrchestratorKernel
         Append(goal, null, ProgressKind.GoalPolicyDecision, message);
     }
 
+    public GoalHoldObservation ObserveGoalHold(
+        GoalId goalId,
+        string state,
+        string blocker,
+        DateTimeOffset observedAt,
+        TimeSpan stallThreshold) =>
+        GetGoal(goalId).ObserveHold(state, blocker, observedAt, stallThreshold);
+
+    public bool ClearGoalHold(GoalId goalId) => GetGoal(goalId).ClearHold();
+
     public void SetGoalSourceBacklogItemId(GoalId goalId, string backlogItemId)
     {
         GetGoal(goalId).SetSourceBacklogItemId(backlogItemId);

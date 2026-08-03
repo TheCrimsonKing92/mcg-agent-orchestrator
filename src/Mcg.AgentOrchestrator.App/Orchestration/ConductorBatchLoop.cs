@@ -27,6 +27,7 @@ internal sealed class ConductorBatchLoop
     // throughput. Do NOT tie this to BuildConcurrencySlotCount or DefaultParallelAcceptanceCapacity.
     internal const int WorkerAdmissionCapacity = 4;
     internal const int DefaultUnscopedStallTickThreshold = 3;
+    internal static readonly TimeSpan DefaultGoalStallThreshold = TimeSpan.FromMinutes(10);
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
     internal const bool DefaultSelfRelaunchEnabled = false;
 
@@ -114,6 +115,7 @@ internal sealed class ConductorBatchLoop
         Func<AgentOrchestratorKernel, IReadOnlyList<ConductorOperatorDispositionSnapshot>>? buildOperatorDispositions = null,
         bool quiet = false,
         TimeSpan? stallWarningThreshold = null,
+        TimeSpan? goalStallThreshold = null,
         int unscopedStallTickThreshold = DefaultUnscopedStallTickThreshold,
         Action<TimeSpan>? busyWriteDelay = null,
         string? journalMode = null)
@@ -163,6 +165,11 @@ internal sealed class ConductorBatchLoop
         DateTimeOffset? selfRelaunchDrainStartedAt = null;
         ConductorLoopHandoffResult? selfRelaunchHandoff = null;
         var started = _utcNow();
+        var effectiveGoalStallThreshold = goalStallThreshold ?? DefaultGoalStallThreshold;
+        if (effectiveGoalStallThreshold < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(goalStallThreshold));
+        }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
         if ((_selfRelaunchEnabled && _selfRelaunch is not null) ||
             _postLandingCanary is not null)
@@ -462,6 +469,7 @@ internal sealed class ConductorBatchLoop
                     preWalkIntentProcessed |= intentResult.ProgressLines.Count > 0;
                     if (intentResult.MutatedGoalState)
                     {
+                        kernel.ClearGoalHold(scopedGoal.Id);
                         preWalkIntentChangedGoalIds.Add(scopedGoal.Id);
                         excludedGoals.Remove(scopedGoal.Id.Value);
                         setAsideGoals.Remove(scopedGoal.Id.Value);
@@ -700,6 +708,7 @@ internal sealed class ConductorBatchLoop
                     if (depHoldReason.StartsWith("dependency escalated", StringComparison.Ordinal) ||
                         depHoldReason.StartsWith("dependency-terminal-without-landing", StringComparison.Ordinal))
                     {
+                        ClearGoalHold(kernel, goal, changedGoalIds);
                         escalatedGoals.Add(goal.Id.Value);
                         SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals);
                         ReapGoalOnce(kernel, goal, reapedGoals);
@@ -707,6 +716,15 @@ internal sealed class ConductorBatchLoop
                     }
                     else
                     {
+                        TrackGoalHold(
+                            kernel,
+                            goal,
+                            TryResolveLifecycleState(goalProjectionCache, driver, goal),
+                            depHoldReason,
+                            _utcNow(),
+                            effectiveGoalStallThreshold,
+                            changedGoalIds,
+                            tickLines);
                         tickHeld++;
                     }
 
@@ -729,6 +747,15 @@ internal sealed class ConductorBatchLoop
                     }
 
                     tickHeld++;
+                    TrackGoalHold(
+                        kernel,
+                        goal,
+                        TryResolveLifecycleState(goalProjectionCache, driver, goal),
+                        holdReason,
+                        _utcNow(),
+                        effectiveGoalStallThreshold,
+                        changedGoalIds,
+                        tickLines);
                     FinishGoalWalk("acceptance-cancellation-pending");
                     continue;
                 }
@@ -743,6 +770,7 @@ internal sealed class ConductorBatchLoop
                     }
 
                     escalatedGoals.Add(goal.Id.Value);
+                    ClearGoalHold(kernel, goal, changedGoalIds);
                     SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals);
                     ReapGoalOnce(kernel, goal, reapedGoals);
                     tickEscalated++;
@@ -791,6 +819,7 @@ internal sealed class ConductorBatchLoop
                             if (steerResult.MutatedTaskState)
                             {
                                 changedGoalIds.Add(goal.Id);
+                                kernel.ClearGoalHold(goal.Id);
                                 tickHeld++;
                                 goalProjectionCache.Invalidate(goal.Id);
                                 FinishGoalWalk("progressive-review-steer");
@@ -822,6 +851,7 @@ internal sealed class ConductorBatchLoop
                         changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
                         lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
                         changedGoalIds.Add(goal.Id);
+                        kernel.ClearGoalHold(goal.Id);
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
                         kernel.RecordGoalPolicyDecision(goal.Id, msg);
                         escalatedGoals.Add(goal.Id.Value);
@@ -860,6 +890,15 @@ internal sealed class ConductorBatchLoop
                     result = result with { Outcome = reconciledOutcome };
                     goalProjectionCache.Invalidate(goal.Id);
                 }
+
+                TrackGoalOutcome(
+                    kernel,
+                    goal,
+                    result.Outcome,
+                    _utcNow(),
+                    effectiveGoalStallThreshold,
+                    changedGoalIds,
+                    tickLines);
 
                 var goalProgressLine = FormatGoalProgressLine(
                     label,
@@ -1148,7 +1187,7 @@ internal sealed class ConductorBatchLoop
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
             return;
 
-        var required = kind == "loop-relaunch-rollback" ||
+        var required = kind is "loop-relaunch-rollback" or "goal-stalled" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
         try
         {
@@ -1186,6 +1225,7 @@ internal sealed class ConductorBatchLoop
             "ACCEPTANCE_LEASE_YIELD" => "acceptance-lease",
             "BUILD_LOCK_BLOCKED" => "lock-blocker",
             "GOAL" => ClassifyGoalEvent(line),
+            "GOAL_STALLED" => "goal-stalled",
             "LOCK" => "lock-blocker",
             "LOOP_HANDOFF" => "loop-handoff",
             "LOOP_HANDOFF_FAILED" => "loop-handoff",
@@ -1518,6 +1558,105 @@ internal sealed class ConductorBatchLoop
         lastGoalDisposition[goalId] = progressLine;
         changedGoalLines.Add(progressLine);
         return true;
+    }
+
+    private static void TrackGoalOutcome(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        ConductorAdvanceOutcome outcome,
+        DateTimeOffset observedAt,
+        TimeSpan stallThreshold,
+        HashSet<GoalId> changedGoalIds,
+        List<string> tickLines)
+    {
+        if (outcome is ConductorAdvanceOutcome.Held held)
+        {
+            if (held.State is GoalLifecycleState.Running
+                or GoalLifecycleState.AwaitingVerification
+                or GoalLifecycleState.Verifying)
+            {
+                ClearGoalHold(kernel, goal, changedGoalIds);
+                return;
+            }
+
+            TrackGoalHold(
+                kernel,
+                goal,
+                held.State.ToString(),
+                held.Reason,
+                observedAt,
+                stallThreshold,
+                changedGoalIds,
+                tickLines);
+            return;
+        }
+
+        ClearGoalHold(kernel, goal, changedGoalIds);
+    }
+
+    private static void TrackGoalHold(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        string state,
+        string blocker,
+        DateTimeOffset observedAt,
+        TimeSpan stallThreshold,
+        HashSet<GoalId> changedGoalIds,
+        List<string> tickLines)
+    {
+        try
+        {
+            var observation = kernel.ObserveGoalHold(
+                goal.Id,
+                state,
+                blocker,
+                observedAt,
+                stallThreshold);
+            if (observation.StateChanged)
+            {
+                changedGoalIds.Add(goal.Id);
+            }
+
+            if (!observation.BecameStalled)
+            {
+                return;
+            }
+
+            var repeatedForSeconds = Math.Max(
+                0,
+                (long)(observedAt - observation.Hold.StartedAt).TotalSeconds);
+            EmitProgress(
+                $"GOAL_STALLED goal={goal.Id.Value[..8]} state={Sanitize(state)} " +
+                $"repeatedForSeconds={repeatedForSeconds} blocker={Sanitize(blocker)}",
+                tickLines);
+        }
+        catch (Exception ex)
+        {
+            // The watchdog is diagnostic safety infrastructure. A persistence or event-stream
+            // failure here must not take down the conductor loop it is meant to protect.
+            try
+            {
+                Console.Error.WriteLine(
+                    $"GOAL_STALL_TRACKING_FAILED goal={goal.Id.Value[..8]} " +
+                    $"exception={ex.GetType().Name} message={SanitizeHandoffDetail(ex.Message)}");
+                Console.Error.Flush();
+            }
+            catch
+            {
+                // Console diagnostics are best effort during fault isolation.
+            }
+        }
+    }
+
+    private static void ClearGoalHold(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        HashSet<GoalId> changedGoalIds)
+    {
+        if (kernel.ClearGoalHold(goal.Id))
+        {
+            changedGoalIds.Add(goal.Id);
+        }
     }
 
     private static bool ShouldAlwaysEmitDisposition(ConductorAdvanceOutcome outcome) =>
@@ -2710,6 +2849,21 @@ internal sealed class ConductorBatchLoop
         try
         {
             return GoalLifecycle.ResolveState(goal, driver.GetFacts(goal)).ToString();
+        }
+        catch
+        {
+            return "LifecycleState=unknown";
+        }
+    }
+
+    private static string TryResolveLifecycleState(
+        GoalProjectionCache goalProjectionCache,
+        ConductorDriver driver,
+        Goal goal)
+    {
+        try
+        {
+            return goalProjectionCache.ResolveState(goal, driver).ToString();
         }
         catch
         {
