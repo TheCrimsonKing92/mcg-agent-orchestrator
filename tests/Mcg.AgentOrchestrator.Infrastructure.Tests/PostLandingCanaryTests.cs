@@ -128,6 +128,87 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             PostLandingCanaryCommand.ClassifyFailure(productReject));
     }
 
+    [Xunit.Fact(DisplayName = "Canary fault classifier separates resource pressure, environment faults, and verdict failures")]
+    public void FaultClassifierHasThreeDistinctDispositions()
+    {
+        var busy = new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
+            "run-canary-classifier",
+            [new DotnetBuildStableSlotWait(0, 100), new DotnetBuildStableSlotWait(1, 101)]));
+
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.ResourceBusy,
+            PostLandingCanaryFailureClassifier.Classify(busy));
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.EnvironmentFault,
+            PostLandingCanaryFailureClassifier.Classify(new IOException("environment unavailable")));
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.EnvironmentFault,
+            PostLandingCanaryFailureClassifier.Classify(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.InfrastructureError,
+                "could not evaluate")));
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.VerdictFailure,
+            PostLandingCanaryFailureClassifier.Classify(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.Reject,
+                "evaluated and failed")));
+    }
+
+    [Xunit.Fact(DisplayName = "Busy build slots defer without a verdict or circuit hold, then retry to a normal receipt")]
+    public async Task BusyBuildSlotsDeferHealthyAndRetryThroughDurableQueue()
+    {
+        using var fixture = new CanaryTestFixture();
+        var delayRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRetry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retryCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var busy = new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
+            "run-slot-busy",
+            [new DotnetBuildStableSlotWait(0, 100), new DotnetBuildStableSlotWait(1, 101)]));
+        var (coordinator, circuit) = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => throw busy),
+            delay: async (_, cancellationToken) =>
+            {
+                delayRequested.TrySetResult();
+                await releaseRetry.Task.WaitAsync(cancellationToken);
+            },
+            progress: _ => { });
+
+        var first = await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-slot-busy", ["engine/slot"]),
+            CancellationToken.None);
+
+        Assert.Equal(PostLandingCanaryDisposition.Deferred, first);
+        await delayRequested.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+        Assert.Null(await fixture.RawStore.ReadByEventIdAsync(
+            PostLandingCanaryEventIds.Receipt("sha-slot-busy")));
+        Assert.Null(PostLandingCanaryFactory.BuildMutationBlockReason(
+            OrchestratorWorkspace.ForDirectory(fixture.Root)));
+        var deferred = Assert.Single((await fixture.RawStore.ReadByTypeSinceAsync(RunEventTypes.PostLandingCanary))
+            .Where(item => item.Operation == "deferred"));
+        Assert.Equal("CouldNotEvaluate", deferred.Status);
+        Assert.Contains("DotnetBuildSlotsBusyException: Stable dotnet build slots busy", deferred.Detail);
+
+        var (resumedCoordinator, _) = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => Task.FromResult(
+                PostLandingCanaryOutcome.Passed(1, "restart resumed retry"))),
+            utcNow: () => DateTimeOffset.UtcNow.AddHours(1),
+            delay: (_, _) => Task.CompletedTask,
+            progress: line =>
+            {
+                if (line.Contains("result=passed", StringComparison.Ordinal))
+                {
+                    retryCompleted.TrySetResult();
+                }
+            });
+        resumedCoordinator.ResumePending();
+        await retryCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseRetry.TrySetResult();
+        var receipt = await fixture.RawStore.ReadByEventIdAsync(
+            PostLandingCanaryEventIds.Receipt("sha-slot-busy"));
+        Assert.Equal("Passed", Assert.IsType<RunEventRecord>(receipt).Status);
+        Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+    }
+
     [Xunit.Fact(DisplayName = "Portable file lease serializes canaries without named OS semaphores")]
     public async Task PortableFileLeaseSerializesConcurrentCanaries()
     {
@@ -359,8 +440,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.False(ConductorBatchLoop.IsAcceptanceEngineCircuitHoldRequired(GoalStatus.Verified, cleared));
     }
 
-    [Xunit.Fact(DisplayName = "Hard timeout cancels the runner, records timeout failure, and keeps process-tree kill path")]
-    public async Task HardTimeoutCancelsRunnerAndRecordsFailure()
+    [Xunit.Fact(DisplayName = "Hard timeout cancels the runner, abandons unverified at the retry cap, and keeps process-tree kill path")]
+    public async Task HardTimeoutCancelsRunnerAndAbandonsAtCap()
     {
         using var fixture = new CanaryTestFixture(timeoutSeconds: 1);
         var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -377,17 +458,18 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 throw;
             }
         });
-        var (coordinator, circuit) = fixture.CreateCoordinator(runner);
+        var (coordinator, circuit) = fixture.CreateCoordinator(runner, maxAttempts: 1);
 
         var disposition = await coordinator.RunAsync(
             new PostLandingCanaryRequest("sha-timeout", ["engine/timeout"]),
             CancellationToken.None);
 
-        Assert.Equal(PostLandingCanaryDisposition.Failed, disposition);
+        Assert.Equal(PostLandingCanaryDisposition.Abandoned, disposition);
         await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        var failed = circuit.Read();
-        Assert.Equal(AcceptanceEngineHealth.Unhealthy, failed.Health);
-        Assert.Equal("timeout", failed.FailureReason);
+        Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+        var abandoned = Assert.Single((await fixture.RawStore.ReadByTypeSinceAsync(RunEventTypes.PostLandingCanary))
+            .Where(item => item.Operation == "abandoned"));
+        Assert.Equal("Unverified", abandoned.Status);
 
         var runnerSource = File.ReadAllText(Path.Combine(
             FindRepoRoot(),
@@ -428,7 +510,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             secondStarted.TrySetResult();
             return PostLandingCanaryOutcome.Passed(1, "second ran after termination");
         });
-        var (coordinator, _) = fixture.CreateCoordinator(runner);
+        var (coordinator, _) = fixture.CreateCoordinator(runner, maxAttempts: 1);
 
         var first = coordinator.RunAsync(
             new PostLandingCanaryRequest("sha-timeout-held", ["engine/timeout"]),
@@ -445,7 +527,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             PostLandingCanaryEventIds.Receipt("sha-timeout-held")));
 
         terminationConfirmed.TrySetResult();
-        Assert.Equal(PostLandingCanaryDisposition.Failed, await first);
+        Assert.Equal(PostLandingCanaryDisposition.Abandoned, await first);
         Assert.Equal(PostLandingCanaryDisposition.Passed, await second);
         Assert.True(secondStarted.Task.IsCompleted);
     }
@@ -515,7 +597,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         using var fixture = new CanaryTestFixture();
         var runner = new FakeRunner((_, _) => Task.FromResult(
             PostLandingCanaryOutcome.Failed(
-                PostLandingCanaryFailureReason.InfrastructureError,
+                PostLandingCanaryFailureReason.Reject,
                 "forced CLI circuit")));
         var (coordinator, _) = fixture.CreateCoordinator(runner);
         await coordinator.RunAsync(
@@ -536,6 +618,99 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Equal(
             AcceptanceEngineHealth.Healthy,
             PostLandingCanaryFactory.CreateCircuit(workspace).Read().Health);
+    }
+
+    [Xunit.Fact(DisplayName = "Retry exhaustion stays healthy and raises one unverified landing item")]
+    public async Task RetryExhaustionAbandonsWithoutBlockingAndRaisesOneItem()
+    {
+        using var fixture = new CanaryTestFixture();
+        var busy = new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
+            "run-cap-exhaustion",
+            [new DotnetBuildStableSlotWait(0, 100), new DotnetBuildStableSlotWait(1, 101)]));
+        var (coordinator, circuit) = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => throw busy),
+            maxAttempts: 1);
+        var request = new PostLandingCanaryRequest("sha-unverified", ["engine/unverified"]);
+
+        Assert.Equal(
+            PostLandingCanaryDisposition.Abandoned,
+            await coordinator.RunAsync(request, CancellationToken.None));
+        Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+        Assert.Equal(
+            PostLandingCanaryDisposition.AlreadyCompleted,
+            await coordinator.RunAsync(request, CancellationToken.None));
+
+        var item = Assert.Single(await fixture.OperatorItems.GetAttentionQueueAsync());
+        Assert.Contains("sha-unverified", item.Subject, StringComparison.Ordinal);
+        Assert.Contains("UNVERIFIED after 1 attempts", item.Body, StringComparison.Ordinal);
+        Assert.Contains(
+            "DotnetBuildSlotsBusyException: Stable dotnet build slots busy for run-cap-exhaustion.",
+            item.Body,
+            StringComparison.Ordinal);
+        Assert.Contains("run-event:", item.Body, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Circuit failures create one receipt-rich item per unhealthy episode and clear resolves it")]
+    public async Task CircuitFailureOperatorItemIsDeduplicatedAndResolvedPerEpisode()
+    {
+        using var fixture = new CanaryTestFixture();
+        var (coordinator, circuit) = fixture.CreateCoordinator(new FakeRunner((request, _) =>
+            Task.FromResult(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.Reject,
+                $"CanaryEvaluationException: evaluated failure for {request.LandingSha}"))));
+
+        await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-episode-one", ["engine/one"]),
+            CancellationToken.None);
+        await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-episode-two", ["engine/two"]),
+            CancellationToken.None);
+
+        var firstEpisode = Assert.Single(await fixture.OperatorItems.GetAttentionQueueAsync());
+        Assert.Contains("repeat-count=2", firstEpisode.Body, StringComparison.Ordinal);
+        Assert.Contains("CanaryEvaluationException: evaluated failure for sha-episode-two", firstEpisode.Body, StringComparison.Ordinal);
+        Assert.Contains("run-event:", firstEpisode.Body, StringComparison.Ordinal);
+
+        circuit.Clear("fixture repair");
+        Assert.Empty(await fixture.OperatorItems.GetAttentionQueueAsync());
+
+        await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-episode-three", ["engine/three"]),
+            CancellationToken.None);
+        var secondEpisode = Assert.Single(await fixture.OperatorItems.GetAttentionQueueAsync());
+        Assert.NotEqual(firstEpisode.Id, secondEpisode.Id);
+        Assert.Contains("repeat-count=1", secondEpisode.Body, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Run-event show reads full goal-less receipt text and rejects an unknown sequence")]
+    public async Task RunEventShowReadsGoalLessReceiptBySequence()
+    {
+        using var fixture = new CanaryTestFixture();
+        const string detail =
+            "DotnetBuildSlotsBusyException: Stable dotnet build slots busy for run-reader.";
+        var record = await fixture.RawStore.AppendAsync(new RunEventAppend(
+            RunEventTypes.PostLandingCanary,
+            GoalId: null,
+            Operation: "escalation",
+            Status: "CanaryGateFailure",
+            Detail: detail,
+            PayloadJson: "{\"tag\":\"canary\"}"));
+        var workspace = OrchestratorWorkspace.ForDirectory(fixture.Root);
+        var kernel = new AgentOrchestratorKernel();
+
+        var text = ExecuteCliAndCapture(
+            ["run-event", "show", record.Sequence.ToString(System.Globalization.CultureInfo.InvariantCulture)],
+            kernel,
+            workspace);
+        Assert.Contains($"run-event:{record.Sequence}", text, StringComparison.Ordinal);
+        Assert.Contains("goal: none", text, StringComparison.Ordinal);
+        Assert.Contains(detail, text, StringComparison.Ordinal);
+
+        var error = Assert.Throws<InvalidOperationException>(() => ExecuteCliAndCapture(
+            ["run-event", "show", (record.Sequence + 999).ToString(System.Globalization.CultureInfo.InvariantCulture)],
+            kernel,
+            workspace));
+        Assert.Contains("was not found", error.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Fresh workspace starts with a healthy initialized acceptance circuit")]
@@ -751,22 +926,39 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             var dbPath = OrchestratorWorkspace.ForDirectory(_root).RunEventStorePath;
             RawStore = new SqliteRunEventStore(dbPath);
             _events = new PostLandingCanaryEventStore(RawStore, dbPath);
+            OperatorItems = CollaborationItemStore.ForDirectory(
+                OrchestratorWorkspace.ForDirectory(_root).OrchestratorDirectory);
         }
 
         internal SqliteRunEventStore RawStore { get; }
+        internal CollaborationItemStore OperatorItems { get; }
         internal string Root => _root;
         internal string DbPath => OrchestratorWorkspace.ForDirectory(_root).RunEventStorePath;
 
         internal (PostLandingCanaryCoordinator Coordinator, AcceptanceEngineCircuitBreaker Circuit)
-            CreateCoordinator(IPostLandingCanaryRunner runner)
+            CreateCoordinator(
+                IPostLandingCanaryRunner runner,
+                int maxAttempts = PostLandingCanaryConfiguration.DefaultMaxAttempts,
+                Func<DateTimeOffset>? utcNow = null,
+                Func<TimeSpan, CancellationToken, Task>? delay = null,
+                Action<string>? progress = null)
         {
-            var circuit = new AcceptanceEngineCircuitBreaker(_events);
+            var circuit = new AcceptanceEngineCircuitBreaker(_events, OperatorItems);
             return (
                 new PostLandingCanaryCoordinator(
-                    new PostLandingCanaryConfiguration(true, _timeoutSeconds, []),
+                    new PostLandingCanaryConfiguration(
+                        true,
+                        _timeoutSeconds,
+                        [],
+                        maxAttempts,
+                        [1, 1, 1]),
                     runner,
                     _events,
-                    circuit),
+                    circuit,
+                    OperatorItems,
+                    utcNow: utcNow,
+                    delay: delay,
+                    progress: progress),
                 circuit);
         }
 

@@ -5,14 +5,25 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal sealed record PostLandingCanaryConfiguration(
     bool Enabled,
     int TimeoutSeconds,
-    IReadOnlyList<string> AdditionalEnginePathPrefixes)
+    IReadOnlyList<string> AdditionalEnginePathPrefixes,
+    int MaxAttempts = 4,
+    IReadOnlyList<int>? RetryBackoffSeconds = null)
 {
     internal const int DefaultTimeoutSeconds = 300;
+    internal const int DefaultMaxAttempts = 4;
+    internal static readonly IReadOnlyList<int> DefaultRetryBackoffSeconds = [120, 300, 900];
 
     internal static PostLandingCanaryConfiguration Default { get; } =
-        new(true, DefaultTimeoutSeconds, []);
+        new(true, DefaultTimeoutSeconds, [], DefaultMaxAttempts, DefaultRetryBackoffSeconds);
 
     internal TimeSpan Timeout => TimeSpan.FromSeconds(TimeoutSeconds);
+
+    internal TimeSpan RetryDelay(int completedAttemptCount)
+    {
+        var delays = RetryBackoffSeconds ?? DefaultRetryBackoffSeconds;
+        var index = Math.Clamp(completedAttemptCount - 1, 0, delays.Count - 1);
+        return TimeSpan.FromSeconds(delays[index]);
+    }
 
     internal static PostLandingCanaryConfiguration Load(string basePath)
     {
@@ -47,6 +58,29 @@ internal sealed record PostLandingCanaryConfiguration(
                 .Select(item => item!)
                 .ToArray()
             : [];
-        return new PostLandingCanaryConfiguration(enabled, timeoutSeconds, additionalPrefixes);
+        var maxAttempts = section.TryGetProperty("MaxAttempts", out var maxAttemptsElement)
+            ? maxAttemptsElement.GetInt32()
+            : Default.MaxAttempts;
+        if (maxAttempts is < 1 or > 20)
+        {
+            throw new InvalidDataException("PostLandingCanary MaxAttempts must be between 1 and 20.");
+        }
+
+        var retryBackoffSeconds = section.TryGetProperty("RetryBackoffSeconds", out var backoffElement)
+            ? backoffElement.EnumerateArray().Select(item => item.GetInt32()).ToArray()
+            : DefaultRetryBackoffSeconds;
+        if (retryBackoffSeconds.Count == 0 ||
+            retryBackoffSeconds.Any(seconds => seconds is < 1 or > 3600))
+        {
+            throw new InvalidDataException(
+                "PostLandingCanary RetryBackoffSeconds must contain values between 1 and 3600.");
+        }
+
+        return new PostLandingCanaryConfiguration(
+            enabled,
+            timeoutSeconds,
+            additionalPrefixes,
+            maxAttempts,
+            retryBackoffSeconds);
     }
 }

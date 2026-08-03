@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
@@ -33,12 +34,43 @@ internal enum PostLandingCanaryFailureReason
     InfrastructureError
 }
 
+internal enum PostLandingCanaryFaultDisposition
+{
+    ResourceBusy,
+    EnvironmentFault,
+    VerdictFailure
+}
+
+internal static class PostLandingCanaryFailureClassifier
+{
+    internal static PostLandingCanaryFaultDisposition Classify(Exception exception) => exception switch
+    {
+        DotnetBuildSlotsBusyException => PostLandingCanaryFaultDisposition.ResourceBusy,
+        _ => PostLandingCanaryFaultDisposition.EnvironmentFault
+    };
+
+    internal static PostLandingCanaryFaultDisposition Classify(PostLandingCanaryOutcome outcome) =>
+        outcome.FailureReason switch
+        {
+            PostLandingCanaryFailureReason.Reject => PostLandingCanaryFaultDisposition.VerdictFailure,
+            PostLandingCanaryFailureReason.EmptyReceipt or
+            PostLandingCanaryFailureReason.Timeout or
+            PostLandingCanaryFailureReason.InfrastructureError => PostLandingCanaryFaultDisposition.EnvironmentFault,
+            null when outcome.Green => throw new InvalidOperationException(
+                "A green canary outcome has no failure disposition."),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(outcome), outcome.FailureReason, "Unknown canary failure reason.")
+        };
+}
+
 internal enum PostLandingCanaryEventKind
 {
     Queued,
     Started,
+    Deferred,
     Passed,
     Failed,
+    Abandoned,
     Escalated,
     Cleared
 }
@@ -72,7 +104,9 @@ internal sealed record PostLandingCanaryEventPayload(
     string Detail,
     DateTimeOffset? StartedAt,
     DateTimeOffset? CompletedAt,
-    string? OperatorNote = null)
+    string? OperatorNote = null,
+    int AttemptCount = 0,
+    DateTimeOffset? NotBefore = null)
 {
     internal const string CanaryTag = "canary";
 }
@@ -86,13 +120,17 @@ internal sealed record PostLandingCanaryEvent(
 {
     internal bool IsReceipt =>
         Kind is PostLandingCanaryEventKind.Passed or PostLandingCanaryEventKind.Failed;
+
+    internal bool IsTerminal => IsReceipt || Kind == PostLandingCanaryEventKind.Abandoned;
 }
 
 internal static class PostLandingCanaryEventIds
 {
     internal static string Queued(string landingSha) => Build(landingSha, "queued");
-    internal static string Started(string landingSha) => Build(landingSha, "started");
+    internal static string Started(string landingSha, int attempt) => Build(landingSha, $"started:{attempt}");
+    internal static string Deferred(string landingSha, int attempt) => Build(landingSha, $"deferred:{attempt}");
     internal static string Receipt(string landingSha) => Build(landingSha, "receipt");
+    internal static string Abandoned(string landingSha) => Build(landingSha, "abandoned");
     internal static string Escalation(string landingSha) => Build(landingSha, "escalation");
 
     private static string Build(string landingSha, string suffix) =>
@@ -189,6 +227,33 @@ internal sealed class PostLandingCanaryEventStore
         return record is null ? null : Parse(record);
     }
 
+    internal async Task<PostLandingCanaryEvent?> FindTerminalAsync(
+        string landingSha,
+        CancellationToken cancellationToken = default)
+    {
+        var receipt = await FindReceiptAsync(landingSha, cancellationToken).ConfigureAwait(false);
+        if (receipt is not null)
+        {
+            return receipt;
+        }
+
+        var abandoned = await _store
+            .ReadByEventIdAsync(PostLandingCanaryEventIds.Abandoned(landingSha), cancellationToken)
+            .ConfigureAwait(false);
+        return abandoned is null ? null : Parse(abandoned);
+    }
+
+    internal async Task<IReadOnlyList<PostLandingCanaryEvent>> ReadForLandingAsync(
+        string landingSha,
+        CancellationToken cancellationToken = default) =>
+        (await ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false))
+        .Where(item => string.Equals(
+            item.Payload.LandingSha,
+            landingSha,
+            StringComparison.OrdinalIgnoreCase))
+        .OrderBy(item => item.Sequence)
+        .ToArray();
+
     internal async Task<IReadOnlyList<PostLandingCanaryEvent>> ReadProjectionEventsAsync(
         CancellationToken cancellationToken = default)
     {
@@ -230,15 +295,15 @@ internal sealed class PostLandingCanaryEventStore
         CancellationToken cancellationToken = default)
     {
         var events = await ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false);
-        var receipted = events
-            .Where(item => item.IsReceipt && !string.IsNullOrWhiteSpace(item.Payload.LandingSha))
+        var completed = events
+            .Where(item => item.IsTerminal && !string.IsNullOrWhiteSpace(item.Payload.LandingSha))
             .Select(item => item.Payload.LandingSha!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return events
             .Where(item =>
                 item.Kind == PostLandingCanaryEventKind.Queued &&
                 !string.IsNullOrWhiteSpace(item.Payload.LandingSha) &&
-                !receipted.Contains(item.Payload.LandingSha!))
+                !completed.Contains(item.Payload.LandingSha!))
             .OrderBy(item => item.Sequence)
             .FirstOrDefault();
     }
@@ -273,8 +338,10 @@ internal sealed class PostLandingCanaryEventStore
     {
         PostLandingCanaryEventKind.Queued => "queued",
         PostLandingCanaryEventKind.Started => "started",
+        PostLandingCanaryEventKind.Deferred => "deferred",
         PostLandingCanaryEventKind.Passed => "receipt",
         PostLandingCanaryEventKind.Failed => "receipt",
+        PostLandingCanaryEventKind.Abandoned => "abandoned",
         PostLandingCanaryEventKind.Escalated => "escalation",
         PostLandingCanaryEventKind.Cleared => "clear",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown canary event kind.")
@@ -284,8 +351,10 @@ internal sealed class PostLandingCanaryEventStore
     {
         PostLandingCanaryEventKind.Queued => "Pending",
         PostLandingCanaryEventKind.Started => "Running",
+        PostLandingCanaryEventKind.Deferred => "CouldNotEvaluate",
         PostLandingCanaryEventKind.Passed => "Passed",
         PostLandingCanaryEventKind.Failed => "Failed",
+        PostLandingCanaryEventKind.Abandoned => "Unverified",
         PostLandingCanaryEventKind.Escalated => "CanaryGateFailure",
         PostLandingCanaryEventKind.Cleared => "Cleared",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown canary event kind.")
@@ -300,16 +369,18 @@ internal sealed class PostLandingCanaryEventStore
         {
             "queued" => PostLandingCanaryEventKind.Queued,
             "started" => PostLandingCanaryEventKind.Started,
+            "deferred" => PostLandingCanaryEventKind.Deferred,
             "receipt" when status?.Equals("Passed", StringComparison.Ordinal) == true =>
                 PostLandingCanaryEventKind.Passed,
             "receipt" => PostLandingCanaryEventKind.Failed,
+            "abandoned" => PostLandingCanaryEventKind.Abandoned,
             "escalation" => PostLandingCanaryEventKind.Escalated,
             "clear" => PostLandingCanaryEventKind.Cleared,
             _ => default
         };
         if (operation != "receipt")
         {
-            return operation is "queued" or "started" or "escalation" or "clear";
+            return operation is "queued" or "started" or "deferred" or "abandoned" or "escalation" or "clear";
         }
 
         return true;
@@ -318,14 +389,18 @@ internal sealed class PostLandingCanaryEventStore
 
 internal sealed class AcceptanceEngineCircuitBreaker
 {
+    internal const string OperatorItemCorrelationKey = "acceptance-engine:unhealthy-episode";
     private readonly PostLandingCanaryEventStore _events;
+    private readonly ICollaborationItemStore? _operatorItems;
     private readonly Func<DateTimeOffset> _utcNow;
 
     internal AcceptanceEngineCircuitBreaker(
         PostLandingCanaryEventStore events,
+        ICollaborationItemStore? operatorItems = null,
         Func<DateTimeOffset>? utcNow = null)
     {
         _events = events;
+        _operatorItems = operatorItems;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
 
@@ -384,10 +459,10 @@ internal sealed class AcceptanceEngineCircuitBreaker
         }
 
         var pending = events
-            .Where(item =>
-                item.Kind is PostLandingCanaryEventKind.Queued or PostLandingCanaryEventKind.Started &&
-                !string.IsNullOrWhiteSpace(item.Payload.LandingSha) &&
-                !receipts.ContainsKey(item.Payload.LandingSha!))
+            .Where(item => !string.IsNullOrWhiteSpace(item.Payload.LandingSha))
+            .GroupBy(item => item.Payload.LandingSha!, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(item => item.Sequence).First())
+            .Where(item => item.Kind is PostLandingCanaryEventKind.Queued or PostLandingCanaryEventKind.Started)
             .OrderBy(item => item.Sequence)
             .FirstOrDefault();
         if (pending is not null)
@@ -416,50 +491,27 @@ internal sealed class AcceptanceEngineCircuitBreaker
             clear?.Payload.OperatorNote);
     }
 
-    internal AcceptanceEngineHealthSnapshot SignalPostLandingFailure(
-        string? landingSha,
-        IReadOnlyList<string> triggeringPaths,
-        Exception exception)
+    internal async Task RaiseUnhealthyEpisodeItemAsync(
+        PostLandingCanaryEvent receipt,
+        CancellationToken cancellationToken = default)
     {
-        var now = _utcNow();
-        var detail =
-            $"Post-landing canary could not persist or execute after main advanced: {exception.GetType().Name}: {exception.Message}";
-        var snapshot = PostLandingCanaryEmergencyCircuit.Signal(
-            _events.Identity,
-            landingSha,
-            detail,
-            now);
-        try
+        if (_operatorItems is null || receipt.Kind != PostLandingCanaryEventKind.Failed)
         {
-            var durableLandingSha = string.IsNullOrWhiteSpace(landingSha)
-                ? $"missing-sha-{Guid.NewGuid():N}"
-                : landingSha.Trim();
-            var receipt = _events.AppendOnceAsync(
-                    PostLandingCanaryEventKind.Failed,
-                    new PostLandingCanaryEventPayload(
-                        PostLandingCanaryEventPayload.CanaryTag,
-                        durableLandingSha,
-                        triggeringPaths,
-                        FailureReason: "infrastructure-error",
-                        ExecutedTestCount: 0,
-                        Detail: detail,
-                        StartedAt: null,
-                        CompletedAt: now),
-                    PostLandingCanaryEventIds.Receipt(durableLandingSha),
-                    now,
-                    CancellationToken.None)
-                .GetAwaiter()
-                .GetResult();
-            snapshot = snapshot with { ReceiptReference = $"run-event:{receipt.Event.Sequence}" };
-            PostLandingCanaryEmergencyCircuit.Signal(_events.Identity, snapshot);
-        }
-        catch
-        {
-            // SQLite/run-event failure is the condition being reported. The process-local
-            // emergency circuit remains the fail-closed signal for subsequent acceptance.
+            return;
         }
 
-        return snapshot;
+        var events = await _events.ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false);
+        var repeatCount = events.Count(item => item.Kind == PostLandingCanaryEventKind.Failed);
+        var receiptReference = $"run-event:{receipt.Sequence}";
+        await _operatorItems.RaiseAsync(
+            CollaborationItemType.Verify,
+            goalId: null,
+            subject: "Acceptance engine circuit is Unhealthy",
+            body:
+                $"Landing {receipt.Payload.LandingSha ?? "unknown"} failed post-landing evaluation. " +
+                $"repeat-count={repeatCount}\n{receipt.Payload.Detail}\n{receiptReference}",
+            correlationKey: OperatorItemCorrelationKey,
+            cancellationToken).ConfigureAwait(false);
     }
 
     internal AcceptanceEngineHealthSnapshot Clear(string operatorNote)
@@ -487,6 +539,14 @@ internal sealed class AcceptanceEngineCircuitBreaker
             .GetAwaiter()
             .GetResult();
         PostLandingCanaryEmergencyCircuit.Clear(_events.Identity);
+        if (_operatorItems is not null)
+        {
+            _operatorItems.TryResolveAsync(
+                    OperatorItemCorrelationKey,
+                    $"Acceptance engine circuit cleared: {operatorNote.Trim()}")
+                .GetAwaiter()
+                .GetResult();
+        }
         return Read();
     }
 }

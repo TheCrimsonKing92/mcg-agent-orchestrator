@@ -55,6 +55,7 @@ internal static class CliCommandHelp
     public const string GateStatusUsage = "Usage: gate-status";
     public const string AcceptanceEngineUsage = "Usage: acceptance-engine status | acceptance-engine clear <repair-or-operator-note>";
     public const string RunEventsMaintenanceUsage = "Usage: run-events-maintenance [--tick-max-age-days <days>] [--keep-tick-rows <count>] [--payload-max-bytes <bytes>] [--batch-size <rows>] [--legacy-purge-oversized-ticks] [--vacuum]";
+    public const string RunEventUsage = "Usage: run-event show <sequence> [--format text|json]";
 
     private static readonly CommandHelpEntry Conduct = new(
         ConductUsage,
@@ -345,6 +346,11 @@ internal static class CliCommandHelp
         "Prune high-churn run-events.db conductor tick rows and optionally reclaim free pages when idle.",
         ["--tick-max-age-days", "--keep-tick-rows", "--payload-max-bytes", "--batch-size", "--legacy-purge-oversized-ticks", "--vacuum", "--help", "-h"]);
 
+    private static readonly CommandHelpEntry RunEvent = new(
+        RunEventUsage,
+        "Show one stored run event by sequence, including goal-less event receipt text.",
+        ["--format", "--help", "-h"]);
+
     private static readonly IReadOnlySet<string> GenericHelpFlags =
         new[] { "--help", "-h" }.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -485,6 +491,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("run-events-maintenance", StringComparison.OrdinalIgnoreCase))
         {
             entry = RunEventsMaintenance;
+            return true;
+        }
+
+        if (args[0].Equals("run-event", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = RunEvent;
             return true;
         }
 

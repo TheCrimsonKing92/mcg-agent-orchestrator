@@ -232,6 +232,31 @@ public sealed class SqliteRunEventStore : IRunEventStore
         }, cancellationToken);
     }
 
+    public async Task<RunEventRecord?> ReadBySequenceAsync(
+        long sequence,
+        CancellationToken cancellationToken = default)
+    {
+        if (sequence < 1)
+        {
+            return null;
+        }
+
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT seq, event_id, occurred_at, event_type, goal_id, operation, status, detail, payload_json
+                FROM run_events
+                WHERE seq = $sequence
+                LIMIT 1
+                """;
+            cmd.Parameters.AddWithValue("$sequence", sequence);
+            var records = await ReadRecordsAsync(cmd, cancellationToken).ConfigureAwait(false);
+            return records.Count == 0 ? null : records[0];
+        }, cancellationToken);
+    }
+
     public async Task<RunEventRecord?> ReadLatestAsync(
         string eventType,
         string? operation = null,
