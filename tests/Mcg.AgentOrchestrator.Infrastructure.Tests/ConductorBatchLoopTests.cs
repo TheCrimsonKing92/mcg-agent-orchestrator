@@ -5810,10 +5810,10 @@ public sealed class ConductorBatchLoopTests
             watchInterval: TimeSpan.FromMilliseconds(1),
             sleepFunc: _ => false);
 
-        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(2, summary.Ticks);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, rebaseChecks);
-        Assert.Equal(1, conflictChecks);
+        Assert.Equal(2, conflictChecks);
         Assert.Equal(0, landAttempts);
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
@@ -9644,6 +9644,56 @@ public sealed class ConductorBatchLoopTests
                 line,
                 new JsonSerializerOptions(JsonSerializerDefaults.Web))!),
             record => record.EventKind == "goal-stalled");
+    }
+
+    [Xunit.Fact]
+    public void EmptyLoop_RecordsDurableStartAndTerminalStop()
+    {
+        var events = new List<RunEventAppend>();
+        var now = new DateTimeOffset(2026, 8, 3, 12, 0, 0, TimeSpan.Zero);
+        var recorder = new ConductorLifecycleRecorder(
+            new DelegateRunEventStore(evt => events.Add(evt)),
+            () => now,
+            () => "empty-loop");
+
+        var summary = new ConductorBatchLoop(
+            utcNow: () => now,
+            lifecycleRecorder: recorder).Run(
+                new AgentOrchestratorKernel(),
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath());
+
+        Assert.Equal("all-terminal", summary.StopReason);
+        Assert.Equal(["start", "stop"], events.Select(evt => evt.Operation));
+        Assert.Equal("all-terminal", events[1].Status);
+    }
+
+    private sealed class DelegateRunEventStore(Action<RunEventAppend> append) : IRunEventStore
+    {
+        public Task<RunEventRecord> AppendAsync(
+            RunEventAppend evt,
+            CancellationToken cancellationToken = default)
+        {
+            append(evt);
+            return Task.FromResult(new RunEventRecord(
+                1,
+                Guid.NewGuid().ToString("N"),
+                evt.OccurredAt ?? DateTimeOffset.MinValue,
+                evt.EventType,
+                evt.GoalId,
+                evt.Operation,
+                evt.Status,
+                evt.Detail,
+                evt.PayloadJson));
+        }
+
+        public Task<IReadOnlyList<RunEventRecord>> ReadSinceAsync(
+            long afterSequence = 0,
+            string? goalId = null,
+            int maxCount = 500,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<RunEventRecord>>([]);
     }
 }
 

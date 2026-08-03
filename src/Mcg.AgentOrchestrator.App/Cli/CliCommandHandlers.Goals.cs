@@ -1026,6 +1026,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
             if (HasCliConfirmation(parts, "--loop"))
             {
+                var supervisedChild = HasCliConfirmation(parts, ConductorContinuitySupervisor.ChildFlag);
+                var continuityExitArtifactPath = GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag);
                 var loopPolicyName = GetFlagValue(parts, "--policy");
                 var loopPolicy = loopPolicyName is null
                     ? ConductorAutonomyPolicy.Default
@@ -1269,7 +1271,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     {
                         GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper);
                     },
-                    handoffOnMaxDuration: handoff,
+                    handoffOnMaxDuration: supervisedChild ? null : handoff,
                     conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
                     operatorIntents: operatorIntents,
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
@@ -1278,7 +1280,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     selfRelaunchEnabled: ConductorBatchLoop.ResolveSelfRelaunchEnabled(
                         Environment.GetEnvironmentVariable(ConductorBatchLoop.SelfRelaunchEnabledEnvironmentVariable)),
                     postLandingCanary: postLandingCanary,
-                    evictedGoalStatusLookup: resolveEvictedGoalStatus).Run(
+                    evictedGoalStatusLookup: resolveEvictedGoalStatus,
+                    lifecycleRecorder: new ConductorLifecycleRecorder(
+                        new SqliteRunEventStore(context.Workspace.RunEventStorePath))).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,
@@ -1288,6 +1292,19 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     stallWarningThreshold: stallWarningThreshold,
                     unscopedStallTickThreshold: unscopedStallTickThreshold,
                     journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath));
+                if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
+                {
+                    ConductorContinuityExitArtifact.Write(
+                        continuityExitArtifactPath,
+                        new ConductorContinuityExitArtifact(
+                            loopSummary.StopReason ?? "unknown",
+                            loopSummary.Ticks,
+                            loopSummary.Done,
+                            RestartRequested: string.Equals(
+                                loopSummary.StopReason,
+                                "max-duration",
+                                StringComparison.Ordinal)));
+                }
                 Console.WriteLine($"Conduct --loop complete: ticks={loopSummary.Ticks} advanced={loopSummary.Advanced} held={loopSummary.Held} escalated={loopSummary.Escalated} retried={loopSummary.Retried}{(loopSummary.StopRequested ? " (stopped)" : "")}");
                 return loopSummary.Escalated == 0;
             }
@@ -1355,7 +1372,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     operatorIntents: OperatorIntentCoordinator.CreateDefault(context.Workspace),
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
-                    postLandingCanary: PostLandingCanaryFactory.CreateDefault(context.Workspace)).Run(
+                    postLandingCanary: PostLandingCanaryFactory.CreateDefault(context.Workspace),
+                    lifecycleRecorder: new ConductorLifecycleRecorder(
+                        new SqliteRunEventStore(context.Workspace.RunEventStorePath))).Run(
                     context.Kernel, conductDriver, conductPolicy, watchStopPath,
                     watchInterval: TimeSpan.FromSeconds(watchPollSeconds),
                     onTick: ConductorTickPusher.CreateStoreCallback(context.Workspace.RunEventStorePath),
