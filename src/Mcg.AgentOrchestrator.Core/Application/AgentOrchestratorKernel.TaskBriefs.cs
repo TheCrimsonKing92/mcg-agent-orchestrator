@@ -203,10 +203,11 @@ public sealed partial class AgentOrchestratorKernel
             };
             foreach (var criterion in refinedSpec.AcceptanceCriteria)
             {
+                var normalizedCriterion = criterion.Trim();
                 var waiver = goal.EffectiveAcceptanceCriteriaCorrections
                     .Where(correction =>
                         correction.IsWaiver &&
-                        string.Equals(correction.SupersededCriterion, criterion, StringComparison.OrdinalIgnoreCase))
+                        string.Equals(correction.SupersededCriterion, normalizedCriterion, StringComparison.OrdinalIgnoreCase))
                     .OrderByDescending(correction => correction.RecordedAt)
                     .FirstOrDefault();
                 if (waiver is null)
@@ -215,7 +216,7 @@ public sealed partial class AgentOrchestratorKernel
                     continue;
                 }
 
-                specLines.Add($"- [WAIVED] {criterion}");
+                specLines.Add($"- [WAIVED] {normalizedCriterion}");
                 specLines.Add($"  Reason: {PromptContextFormatter.TrimPromptBlock(waiver.WaiverReason!)}");
                 specLines.Add($"  Waived by {PromptContextFormatter.TrimPromptBlock(waiver.Actor)} at {waiver.RecordedAt:u}.");
             }

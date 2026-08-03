@@ -12,6 +12,19 @@ public sealed class ProgressiveReviewSteeringTests
         var root = CreateGitRepository("mcg-steer-warm");
         var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
         var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Keep the warm dispatch scoped",
+            ["preserve the accepted implementation", "  use a conductor-owned measurement  "],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.WaiveAcceptanceCriterion(
+            goal.Id,
+            "use a conductor-owned measurement",
+            "the worker cannot drive the real conductor",
+            "operator:miles");
+        Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
+        File.WriteAllText(task.LastDispatch.PromptPath!, kernel.BuildTaskBrief(goal.Id, task.Id).Content);
         var store = new InMemoryProgressiveReviewSteeringStore();
         var intent = Intent(goal, task, now, "fix the scoped slice");
         store.EnqueueIntentAsync(intent).GetAwaiter().GetResult();
@@ -60,6 +73,7 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.True(order.IndexOf("start") > order.IndexOf("probe:6001"));
         var receipt = Assert.Single(store.Receipts);
         Assert.Equal("warm-resume", receipt.Decision);
+        Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("AcceptanceCriteriaHash:Passed:", StringComparison.Ordinal));
         Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("SameGoal:Passed:", StringComparison.Ordinal));
         Assert.Equal(308, receipt.CancelledInputTokens);
@@ -421,13 +435,18 @@ public sealed class ProgressiveReviewSteeringTests
         var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
         var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
         Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
-        File.WriteAllText(task.LastDispatch.PromptPath!, "Acceptance criteria:\n- old criterion\n");
+        File.WriteAllText(task.LastDispatch.PromptPath!, "Acceptance criteria:\n- use a conductor-owned measurement\n");
         kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
             "contract",
-            ["new criterion"],
+            ["use a conductor-owned measurement"],
             VerificationClass.TestVerifiable,
             [],
             []));
+        kernel.WaiveAcceptanceCriterion(
+            goal.Id,
+            "1",
+            "the waiver was recorded after the original dispatch",
+            "operator:miles");
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(Intent(goal, task, now, "fresh fallback after AC drift")).GetAwaiter().GetResult();
         var preparedFresh = false;

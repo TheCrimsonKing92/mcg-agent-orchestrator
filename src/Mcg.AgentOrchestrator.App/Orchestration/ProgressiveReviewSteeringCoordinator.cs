@@ -773,9 +773,7 @@ Evidence: {intent.MisdirectionEvidence}
         if (!TryReadText(originalDispatch.PromptPath, out var prompt))
             return Fail(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, "spawn prompt unavailable; cannot compare acceptance criteria hash");
 
-        var currentCriteria = goal.RefinedSpec.AcceptanceCriteria
-            .Select(criterion => criterion.Trim())
-            .ToArray();
+        var currentCriteria = BuildEffectiveAcceptanceCriteriaSnapshot(goal);
         var currentHash = HashText(string.Join("\n", currentCriteria));
         if (prompt.Contains(currentHash, StringComparison.OrdinalIgnoreCase))
             return Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria hash {currentHash[..16]} unchanged from spawn prompt");
@@ -817,11 +815,28 @@ Evidence: {intent.MisdirectionEvidence}
                 continue;
             }
 
+            if (criteria.Count > 0 && rawLine.Length > 0 && char.IsWhiteSpace(rawLine[0]))
+                continue;
+
             if (criteria.Count > 0)
                 break;
         }
 
         return criteria;
+    }
+
+    private static IReadOnlyList<string> BuildEffectiveAcceptanceCriteriaSnapshot(Goal goal)
+    {
+        return goal.RefinedSpec!.AcceptanceCriteria
+            .Select(criterion =>
+            {
+                var normalized = criterion.Trim();
+                var isWaived = goal.EffectiveAcceptanceCriteriaCorrections.Any(correction =>
+                    correction.IsWaiver &&
+                    string.Equals(correction.SupersededCriterion, normalized, StringComparison.OrdinalIgnoreCase));
+                return isWaived ? $"[WAIVED] {normalized}" : normalized;
+            })
+            .ToArray();
     }
 
     private static InquiryAdmissionCheck BuildBranchMovementCheck(TaskDispatchRecord originalDispatch, string? currentHead, bool capturedHeadIsAncestor)
@@ -964,7 +979,9 @@ Evidence: {intent.MisdirectionEvidence}
                 var source = correction.SourceTaskId is null
                     ? correction.SourceKind.ToString()
                     : $"{correction.SourceKind}:{correction.SourceTaskId.Value}";
-                return $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
+                return correction.IsWaiver
+                    ? $"criterion=\"{correction.SupersededCriterion}\"; status=waived; reason=\"{correction.WaiverReason}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}"
+                    : $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
             })
             .ToArray();
     }

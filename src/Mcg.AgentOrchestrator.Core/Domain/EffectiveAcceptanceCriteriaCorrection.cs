@@ -6,11 +6,10 @@ public sealed record EffectiveAcceptanceCriteriaCorrection(
     string Actor,
     DateTimeOffset RecordedAt,
     TaskId? SourceTaskId,
-    ProgressKind SourceKind)
+    ProgressKind SourceKind,
+    bool IsWaiver = false)
 {
     private const string WaiverPrefix = "WAIVED: ";
-
-    public bool IsWaiver => Correction.StartsWith(WaiverPrefix, StringComparison.OrdinalIgnoreCase);
 
     public string? WaiverReason => IsWaiver ? Correction[WaiverPrefix.Length..].Trim() : null;
 
@@ -19,5 +18,5 @@ public sealed record EffectiveAcceptanceCriteriaCorrection(
         string reason,
         string actor,
         DateTimeOffset recordedAt) =>
-        new(criterion, $"{WaiverPrefix}{reason}", actor, recordedAt, null, ProgressKind.GoalPolicyDecision);
+        new(criterion, $"{WaiverPrefix}{reason}", actor, recordedAt, null, ProgressKind.GoalPolicyDecision, IsWaiver: true);
 }

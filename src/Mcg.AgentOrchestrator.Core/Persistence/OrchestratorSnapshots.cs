@@ -36,7 +36,8 @@ public sealed record EffectiveAcceptanceCriteriaCorrectionSnapshot(
     string Actor,
     DateTimeOffset RecordedAt,
     string? SourceTaskId,
-    ProgressKind SourceKind);
+    ProgressKind SourceKind,
+    bool IsWaiver = false);
 
 public sealed record AcceptanceFailureSnapshot(
     DateTimeOffset OccurredAt,

@@ -187,7 +187,8 @@ public sealed class Goal
             string.Equals(existing.Actor, normalized.Actor, StringComparison.Ordinal) &&
             existing.RecordedAt == normalized.RecordedAt &&
             existing.SourceTaskId == normalized.SourceTaskId &&
-            existing.SourceKind == normalized.SourceKind))
+            existing.SourceKind == normalized.SourceKind &&
+            existing.IsWaiver == normalized.IsWaiver))
         {
             return false;
         }
@@ -256,7 +257,8 @@ public sealed class Goal
                     correction.Actor,
                     correction.RecordedAt,
                     correction.SourceTaskId?.Value,
-                    correction.SourceKind)).ToList(),
+                    correction.SourceKind,
+                    correction.IsWaiver)).ToList(),
             AutomaticAcceptanceRetryCount: AutomaticAcceptanceRetryCount,
             OperatorAcceptanceRegateCount: OperatorAcceptanceRegateCount);
     }
@@ -332,7 +334,8 @@ public sealed class Goal
                 correction.Actor,
                 correction.RecordedAt,
                 correction.SourceTaskId is null ? null : new TaskId(correction.SourceTaskId),
-                correction.SourceKind));
+                correction.SourceKind,
+                correction.IsWaiver));
         }
 
         goal.RestoreAcceptanceRetryCounts(

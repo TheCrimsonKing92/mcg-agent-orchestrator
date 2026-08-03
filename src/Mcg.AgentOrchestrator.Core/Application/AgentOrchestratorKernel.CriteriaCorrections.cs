@@ -19,7 +19,7 @@ public sealed partial class AgentOrchestratorKernel
 
         var spec = goal.RefinedSpec
             ?? throw new InvalidOperationException($"Goal '{goal.Id.Value[..8]}' has no refined acceptance criteria to waive.");
-        var criterion = ResolveAcceptanceCriterion(spec.AcceptanceCriteria, criterionReference);
+        var criterion = ResolveAcceptanceCriterion(spec.AcceptanceCriteria, criterionReference).Trim();
         var normalizedReason = RequireWaiverText(reason, nameof(reason));
         var normalizedActor = RequireWaiverText(actor, nameof(actor)).ReplaceLineEndings(" ");
         var waiver = EffectiveAcceptanceCriteriaCorrection.Waiver(
@@ -28,7 +28,11 @@ public sealed partial class AgentOrchestratorKernel
             normalizedActor,
             _clock.UtcNow);
 
-        goal.AddEffectiveAcceptanceCriteriaCorrection(waiver);
+        if (!goal.AddEffectiveAcceptanceCriteriaCorrection(waiver))
+        {
+            throw new InvalidOperationException(
+                $"Acceptance criterion '{criterion}' already has this waiver recorded by {normalizedActor} at {waiver.RecordedAt:u}.");
+        }
         Append(
             goal,
             null,
@@ -165,7 +169,7 @@ public sealed partial class AgentOrchestratorKernel
             return criteria[ordinal - 1];
         }
 
-        return criteria.FirstOrDefault(criterion => string.Equals(criterion, reference, StringComparison.OrdinalIgnoreCase))
+        return criteria.FirstOrDefault(criterion => string.Equals(criterion.Trim(), reference, StringComparison.OrdinalIgnoreCase))
             ?? throw new KeyNotFoundException(
                 $"Acceptance criterion '{reference}' was not found. Use its 1-based number or exact text.");
     }

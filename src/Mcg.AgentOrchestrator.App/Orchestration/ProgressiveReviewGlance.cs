@@ -898,7 +898,9 @@ Corrective direction:
                 var source = correction.SourceTaskId is null
                     ? correction.SourceKind.ToString()
                     : $"{correction.SourceKind} task={correction.SourceTaskId.Value}";
-                return $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
+                return correction.IsWaiver
+                    ? $"criterion=\"{correction.SupersededCriterion}\"; status=waived; reason=\"{correction.WaiverReason}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}"
+                    : $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
             })
             .ToArray();
     }

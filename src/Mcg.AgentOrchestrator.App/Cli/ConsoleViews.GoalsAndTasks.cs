@@ -53,7 +53,9 @@ public static void PrintGoal(Goal goal, string? friendlyLabel = null, string? st
         {
             var source = correction.SourceTaskId is null ? "goal" : ShortId(correction.SourceTaskId.Value);
             Console.WriteLine($"  - supersedes: {OutputTextPreview.CreateSummary(correction.SupersededCriterion).Text}");
-            Console.WriteLine($"    correction: {OutputTextPreview.CreateSummary(correction.Correction).Text}");
+            Console.WriteLine(correction.IsWaiver
+                ? $"    waiver reason: {OutputTextPreview.CreateSummary(correction.WaiverReason!).Text}"
+                : $"    correction: {OutputTextPreview.CreateSummary(correction.Correction).Text}");
             Console.WriteLine($"    provenance: {correction.Actor} {correction.RecordedAt:u} {correction.SourceKind} {source}");
         }
     }
