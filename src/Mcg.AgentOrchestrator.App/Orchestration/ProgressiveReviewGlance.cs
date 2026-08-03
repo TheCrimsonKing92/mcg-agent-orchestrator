@@ -1195,10 +1195,11 @@ Corrective direction:
         var bounded = new List<ProgressiveReviewOperatorRecord>(ordered.Length);
         foreach (var record in ordered)
         {
-            if (!truncated && record.Text.Length <= remaining)
+            var isNewestRecord = bounded.Count == 0;
+            if (!truncated && (isNewestRecord || record.Text.Length <= remaining))
             {
                 bounded.Add(record);
-                remaining -= record.Text.Length;
+                remaining = Math.Max(0, remaining - record.Text.Length);
                 continue;
             }
 

@@ -10,6 +10,9 @@ public static class EffectiveAcceptanceCriteriaVersion
         IEnumerable<EffectiveAcceptanceCriteriaCorrection> corrections)
     {
         var latest = corrections
+            .Where(correction => correction.SourceKind is
+                ProgressKind.OperatorTaskNote or
+                ProgressKind.GoalPolicyDecision)
             .OrderBy(correction => correction.RecordedAt)
             .GroupBy(correction => correction.SupersededCriterion.Trim(), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
