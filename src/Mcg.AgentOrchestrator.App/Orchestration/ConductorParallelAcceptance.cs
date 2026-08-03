@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -126,7 +127,8 @@ internal sealed record ConductorParallelAcceptanceRunResult(
     AcceptanceVerificationSummary? Acceptance,
     ConductorAdvanceResult? EarlyResult,
     Exception? Exception,
-    ConductorParallelAcceptanceEarlyOutcome? EarlyOutcome = null)
+    ConductorParallelAcceptanceEarlyOutcome? EarlyOutcome = null,
+    FocusedEvidenceRunResult? FocusedEvidence = null)
 {
     public static ConductorParallelAcceptanceRunResult Accepted(
         ConductorParallelAcceptanceCandidate candidate,
@@ -143,6 +145,11 @@ internal sealed record ConductorParallelAcceptanceRunResult(
         ConductorParallelAcceptanceCandidate candidate,
         Exception exception) =>
         new(candidate, null, null, exception);
+
+    public static ConductorParallelAcceptanceRunResult Focused(
+        ConductorParallelAcceptanceCandidate candidate,
+        FocusedEvidenceRunResult focusedEvidence) =>
+        new(candidate, null, null, null, FocusedEvidence: focusedEvidence);
 }
 
 internal sealed record ConductorParallelAcceptanceEarlyOutcome(

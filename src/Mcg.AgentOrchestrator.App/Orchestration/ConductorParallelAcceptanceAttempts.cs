@@ -57,7 +57,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     IReadOnlyList<string>? TestResultPaths = null,
     IReadOnlyList<string>? LeaseReceipts = null,
     int ReplayedLeaseReceiptCount = 0,
-    string Kind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind)
+    string Kind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind,
+    string? FocusedEvidenceRequest = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -239,6 +240,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 {
     internal const string OwnedProcessSubcommandName = "__acceptance-gate-attempt";
     internal const string GateDispatchKind = "gate";
+    internal const string PreReviewEvidenceDispatchKind = "pre-review-evidence";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private static readonly object MetadataWriteGate = new();
@@ -257,6 +259,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly TimeSpan _recentHeartbeatGrace;
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _heartbeatWritten;
     private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests? _attemptCompletionGateForTests;
+    private readonly Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?> _acquireStableSlotLease;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -269,7 +272,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         TimeSpan? heartbeatInterval = null,
         TimeSpan? recentHeartbeatGrace = null,
         Action<ConductorParallelAcceptanceAttempt, string>? heartbeatWritten = null,
-        ConductorParallelAcceptanceAttemptCompletionGateForTests? attemptCompletionGateForTests = null)
+        ConductorParallelAcceptanceAttemptCompletionGateForTests? attemptCompletionGateForTests = null,
+        Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?>? acquireStableSlotLease = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -289,6 +293,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _recentHeartbeatGrace = recentHeartbeatGrace ?? DispatchRecoveryPolicy.DefaultRecentHeartbeatGrace;
         _heartbeatWritten = heartbeatWritten;
         _attemptCompletionGateForTests = attemptCompletionGateForTests;
+        _acquireStableSlotLease = acquireStableSlotLease ?? AcquireAttemptStableSlotLease;
     }
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
@@ -301,6 +306,32 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceRunAcceptance runAcceptance)
+        => EvaluateCore(candidate, policy, runAcceptance, GateDispatchKind, focusedEvidenceRequest: null);
+
+    internal ConductorParallelAcceptanceAttemptDecision EvaluateFocusedEvidence(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        string request,
+        Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> runFocusedEvidence)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(request);
+        ArgumentNullException.ThrowIfNull(runFocusedEvidence);
+        return EvaluateCore(
+            candidate,
+            policy,
+            (attemptCandidate, _, lease, cancellationToken) => ConductorParallelAcceptanceRunResult.Focused(
+                attemptCandidate,
+                runFocusedEvidence(attemptCandidate.Goal, request, lease, cancellationToken)),
+            PreReviewEvidenceDispatchKind,
+            request);
+    }
+
+    private ConductorParallelAcceptanceAttemptDecision EvaluateCore(
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance,
+        string dispatchKind,
+        string? focusedEvidenceRequest)
     {
         var current = TryReadLatest(candidate.Goal.Id.Value);
         if (current is not null && IsLiveInvalidatedAttempt(current))
@@ -315,10 +346,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (current is not null && IsTerminalWithoutRunOutcome(current.Outcome))
         {
-            if (!string.Equals(current.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
+            if (!MatchesCandidate(current, candidate, dispatchKind, focusedEvidenceRequest))
             {
                 MarkStale(current);
-                return Launch(candidate, policy, runAcceptance);
+                return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest);
             }
 
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
@@ -329,10 +360,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var terminal = TryCompleteRunningAttempt(current, candidate);
             if (terminal is { Run: not null })
             {
-                if (!string.Equals(terminal.Attempt.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
+                if (!MatchesCandidate(terminal.Attempt, candidate, dispatchKind, focusedEvidenceRequest))
                 {
                     MarkStale(terminal.Attempt);
-                    return Launch(candidate, policy, runAcceptance);
+                    return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest);
                 }
 
                 return terminal;
@@ -340,10 +371,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
             if (terminal is not null)
             {
-                if (!string.Equals(terminal.Attempt.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
+                if (!MatchesCandidate(terminal.Attempt, candidate, dispatchKind, focusedEvidenceRequest))
                 {
                     MarkStale(terminal.Attempt);
-                    return Launch(candidate, policy, runAcceptance);
+                    return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest);
                 }
 
                 return terminal;
@@ -352,8 +383,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             return ConductorParallelAcceptanceAttemptDecision.Running(current);
         }
 
-        return Launch(candidate, policy, runAcceptance);
+        return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest);
     }
+
+    private static bool MatchesCandidate(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        string dispatchKind,
+        string? focusedEvidenceRequest) =>
+        string.Equals(attempt.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal) &&
+        string.Equals(
+            string.IsNullOrWhiteSpace(attempt.Kind) ? GateDispatchKind : attempt.Kind,
+            dispatchKind,
+            StringComparison.Ordinal) &&
+        string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal);
 
     internal void MarkReconciled(ConductorParallelAcceptanceAttempt attempt)
     {
@@ -473,14 +516,16 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private ConductorParallelAcceptanceAttemptDecision Launch(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,
-        ConductorParallelAcceptanceRunAcceptance runAcceptance)
+        ConductorParallelAcceptanceRunAcceptance runAcceptance,
+        string dispatchKind,
+        string? focusedEvidenceRequest)
     {
-        var attempt = CreateAttempt(candidate, policy);
+        var attempt = CreateAttempt(candidate, policy, dispatchKind, focusedEvidenceRequest);
         try
         {
             Persist(attempt);
             WriteHeartbeat(attempt, "starting");
-            File.AppendAllText(attempt.StdoutPath, $"acceptance attempt {attempt.AttemptId} started for {attempt.GoalPrefix} slot-{attempt.SlotIndex}{Environment.NewLine}");
+            File.AppendAllText(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} started for {attempt.GoalPrefix} slot-{attempt.SlotIndex}{Environment.NewLine}");
 
             if (_runInline)
             {
@@ -626,11 +671,32 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 return 0;
             }
 
-            coordinator.RunAttempt(
-                activeAttempt,
-                candidate,
-                policy,
-                driver.RunParallelLandingAcceptance);
+            if (string.Equals(activeAttempt.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(activeAttempt.FocusedEvidenceRequest))
+                {
+                    throw new InvalidOperationException("pre-review evidence attempt metadata did not contain a request");
+                }
+
+                coordinator.RunAttempt(
+                    activeAttempt,
+                    candidate,
+                    policy,
+                    (attemptCandidate, _, lease, cancellationToken) =>
+                        driver.RunPreReviewFocusedEvidence(
+                            attemptCandidate,
+                            activeAttempt.FocusedEvidenceRequest,
+                            lease,
+                            cancellationToken));
+            }
+            else
+            {
+                coordinator.RunAttempt(
+                    activeAttempt,
+                    candidate,
+                    policy,
+                    driver.RunParallelLandingAcceptance);
+            }
             return 0;
         }
         catch (Exception ex)
@@ -678,7 +744,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             WriteHeartbeat(attempt, "running");
             heartbeatTimer.Change(_heartbeatInterval, _heartbeatInterval);
-            run = _tryRunPreSlot?.Invoke(candidate, policy);
+            run = string.Equals(attempt.Kind, GateDispatchKind, StringComparison.Ordinal)
+                ? _tryRunPreSlot?.Invoke(candidate, policy)
+                : null;
             if (run is null)
             {
                 run = RunWithAttemptTelemetryContext(
@@ -769,14 +837,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 CompletedAt = _utcNow(),
                 LastHeartbeatAt = _utcNow(),
                 Detail = AcceptanceRunDetail(run),
-                TestResultPaths = run.Acceptance?.TestResultPaths
+                TestResultPaths = ResultTestPaths(run)
             });
             if (!string.IsNullOrWhiteSpace(stderrDetail))
             {
                 TryAppend(attempt.StderrPath, $"{stderrDetail}{Environment.NewLine}");
             }
 
-            File.AppendAllText(attempt.StdoutPath, $"acceptance attempt {attempt.AttemptId} completed outcome={outcome}{Environment.NewLine}");
+            File.AppendAllText(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} completed outcome={outcome}{Environment.NewLine}");
             WriteHeartbeat(attempt, "exiting");
         }
         catch (Exception ex) when (IsTransientAttemptIo(ex))
@@ -801,9 +869,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate)
     {
+        var purpose = string.Equals(attempt.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal)
+            ? "pre-review-evidence"
+            : "parallel-acceptance";
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(
             candidate.Goal.Id,
-            $"parallel-acceptance-{attempt.AttemptId}");
+            $"{purpose}-{attempt.AttemptId}");
         var acquisition = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
             environment,
             TimeSpan.Zero);
@@ -853,8 +924,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             attempt.MetadataPath);
         try
         {
-            var stableSlotLease = AcquireAttemptStableSlotLease(attempt, candidate);
-            leaseAcquired(stableSlotLease);
+            var stableSlotLease = _acquireStableSlotLease(attempt, candidate);
+            if (stableSlotLease is not null)
+            {
+                leaseAcquired(stableSlotLease);
+            }
             return runAcceptance(candidate, policy, stableSlotLease, CancellationToken.None);
         }
         finally
@@ -1060,7 +1134,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     {
         decision = null!;
         var latest = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
-        if (latest.Outcome != ConductorParallelAcceptanceAttemptOutcome.Passed)
+        if (latest.Outcome != ConductorParallelAcceptanceAttemptOutcome.Passed ||
+            string.Equals(latest.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal))
         {
             return false;
         }
@@ -1106,7 +1181,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 CompletedAt = current.CompletedAt ?? _utcNow(),
                 LastHeartbeatAt = _utcNow(),
                 Detail = current.Detail ?? AcceptanceRunDetail(run),
-                TestResultPaths = run.Acceptance?.TestResultPaths ?? current.TestResultPaths
+                TestResultPaths = ResultTestPaths(run) ?? current.TestResultPaths
             };
             WriteAttemptFile(updated);
             return updated;
@@ -1144,7 +1219,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private ConductorParallelAcceptanceAttempt CreateAttempt(
         ConductorParallelAcceptanceCandidate candidate,
-        ConductorAutonomyPolicy policy)
+        ConductorAutonomyPolicy policy,
+        string dispatchKind,
+        string? focusedEvidenceRequest)
     {
         var startedAt = _utcNow();
         var rawId = $"{candidate.GoalPrefix}-{candidate.SlotIndex}-{startedAt:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}";
@@ -1172,7 +1249,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             prefix + ".attempt.json",
             _executionDirectory,
             policy.Name,
-            candidate.ScopePaths);
+            candidate.ScopePaths,
+            Kind: dispatchKind,
+            FocusedEvidenceRequest: focusedEvidenceRequest);
     }
 
     private ConductorParallelAcceptanceAttempt? TryReadLatest(string goalId)
@@ -1457,6 +1536,22 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             };
         }
 
+        if (run.FocusedEvidence is not null)
+        {
+            return new ConductorParallelAcceptanceRunArtifact(
+                "focused-evidence",
+                null,
+                null,
+                null,
+                null,
+                null,
+                run.Candidate.BranchHeadSha,
+                run.Candidate.MainHeadSha,
+                null,
+                null,
+                FocusedEvidence: run.FocusedEvidence);
+        }
+
         return new ConductorParallelAcceptanceRunArtifact(
             "accepted",
             null,
@@ -1502,6 +1597,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             "accepted" when artifact.Acceptance is not null =>
                 ConductorParallelAcceptanceRunResult.Accepted(effectiveCandidate, artifact.Acceptance),
+            "focused-evidence" when artifact.FocusedEvidence is not null =>
+                ConductorParallelAcceptanceRunResult.Focused(effectiveCandidate, artifact.FocusedEvidence),
             "early-held" => ConductorParallelAcceptanceRunResult.Early(
                 effectiveCandidate,
                 new ConductorAdvanceResult(
@@ -1591,6 +1688,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 : ConductorParallelAcceptanceAttemptOutcome.Passed;
         }
 
+        if (run.FocusedEvidence is not null)
+        {
+            return run.FocusedEvidence.Accepted && run.FocusedEvidence.Passed
+                ? ConductorParallelAcceptanceAttemptOutcome.Passed
+                : ConductorParallelAcceptanceAttemptOutcome.Failed;
+        }
+
         return run.Acceptance?.Passed == true
             ? ConductorParallelAcceptanceAttemptOutcome.Passed
             : ConductorParallelAcceptanceAttemptOutcome.Failed;
@@ -1621,8 +1725,19 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             return run.EarlyOutcome?.Detail ?? run.EarlyResult.Outcome.ToString() ?? "early result";
         }
 
+        if (run.FocusedEvidence is not null)
+        {
+            return run.FocusedEvidence.Summary;
+        }
+
         return run.Acceptance?.Passed == true ? "acceptance passed" : "acceptance failed";
     }
+
+    private static IReadOnlyList<string>? ResultTestPaths(ConductorParallelAcceptanceRunResult run) =>
+        run.Acceptance?.TestResultPaths ?? run.FocusedEvidence?.Checks
+            .SelectMany(check => check.TestResultPaths ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     private static void WriteResult(string path, ConductorParallelAcceptanceRunArtifact artifact)
     {
@@ -1873,4 +1988,5 @@ internal sealed record ConductorParallelAcceptanceRunArtifact(
     string? MainHeadSha,
     string? EarlyOutcomeKind,
     string? EarlyOutcomeDetail,
-    string DispatchKind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind);
+    string DispatchKind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind,
+    FocusedEvidenceRunResult? FocusedEvidence = null);
