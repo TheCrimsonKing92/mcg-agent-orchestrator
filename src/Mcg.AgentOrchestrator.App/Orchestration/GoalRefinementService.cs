@@ -794,6 +794,12 @@ internal sealed class GoalRefinementService
 
     internal static string NormalizeTopicKey(string? topicKey, string? forkKind, string question)
     {
+        var slug = NormalizeTopicKeyForDisplay(topicKey, forkKind, question);
+        return slug.Length <= 35 ? slug : slug[..35].TrimEnd('-');
+    }
+
+    private static string NormalizeTopicKeyForDisplay(string? topicKey, string? forkKind, string question)
+    {
         var raw = FirstNonEmpty(topicKey, forkKind, question) ?? "other";
         var chars = raw
             .Trim()
@@ -806,7 +812,7 @@ internal sealed class GoalRefinementService
                 .Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
         if (string.IsNullOrWhiteSpace(slug))
             slug = "other";
-        return slug.Length <= 35 ? slug : slug[..35].TrimEnd('-');
+        return slug;
     }
 
     internal static string BuildNormalizedQuestionKey(string forkKind, string question)

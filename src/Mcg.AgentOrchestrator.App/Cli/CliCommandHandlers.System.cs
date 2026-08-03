@@ -22,11 +22,20 @@ internal static partial class CliCommandHandlers
     private static List<CollaborationItem> OpenClarifications(CollaborationItemStore store)
     {
         return store.GetAttentionQueueAsync().GetAwaiter().GetResult()
-            .Where(item =>
-                !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
-                item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal))
+            .Where(IsSpecClarification)
             .ToList();
     }
+
+    private static List<CollaborationItem> AllClarifications(CollaborationItemStore store)
+    {
+        return store.ListAsync().GetAwaiter().GetResult()
+            .Where(IsSpecClarification)
+            .ToList();
+    }
+
+    private static bool IsSpecClarification(CollaborationItem item) =>
+        !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
+        item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal);
 
     private static Goal ResolveAttentionGoal(AgentOrchestratorKernel kernel, string goalPrefix)
     {
@@ -122,12 +131,20 @@ internal static partial class CliCommandHandlers
 
     private static CollaborationItem ResolveClarificationByShortId(
         IReadOnlyList<CollaborationItem> clarifications,
+        IReadOnlyList<CollaborationItem> identityUniverse,
         string id,
         string notFoundMessage,
         string ambiguousMessage)
     {
+        var exactCorrelationMatch = clarifications
+            .FirstOrDefault(c => string.Equals(c.CorrelationKey, id, StringComparison.OrdinalIgnoreCase));
+        if (exactCorrelationMatch is not null)
+            return exactCorrelationMatch;
+
         var matches = clarifications
-            .Where(c => ShortClarificationId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase))
+            .Where(c =>
+                ClarificationId(c, identityUniverse).StartsWith(id, StringComparison.OrdinalIgnoreCase) ||
+                ClarificationTopicId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         if (matches.Count == 0)
@@ -140,11 +157,14 @@ internal static partial class CliCommandHandlers
 
     private static CollaborationItem? ResolveClarificationByExactShortId(
         IReadOnlyList<CollaborationItem> clarifications,
+        IReadOnlyList<CollaborationItem> identityUniverse,
         string id,
         string ambiguousMessage)
     {
         var matches = clarifications
-            .Where(c => string.Equals(ShortClarificationId(c.CorrelationKey!), id, StringComparison.OrdinalIgnoreCase))
+            .Where(c =>
+                string.Equals(c.CorrelationKey, id, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(ClarificationId(c, identityUniverse), id, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         if (matches.Count > 1)
@@ -153,14 +173,30 @@ internal static partial class CliCommandHandlers
         return matches.Count == 1 ? matches[0] : null;
     }
 
-    // Stable short id for a clarification, derived from the trailing hash segment of its correlation key
-    // (spec-clarification:<goal>:<fork-kind>:<hash>). Intrinsic to the item, so answering one clarification
-    // never renumbers the others — unlike a positional index.
-    private static string ShortClarificationId(string correlationKey)
+    // Use the complete trailing topic segment when its shape is unambiguous to the CLI parser. For a true
+    // topic collision or a single-token topic, display the full correlation key as the stable escape hatch.
+    // The identity universe includes resolved history, so answering a peer never changes the remaining id.
+    private static string ClarificationId(
+        CollaborationItem clarification,
+        IReadOnlyList<CollaborationItem> identityUniverse)
     {
-        var lastSegment = correlationKey[(correlationKey.LastIndexOf(':') + 1)..];
-        return lastSegment.Length <= 8 ? lastSegment : lastSegment[..8];
+        var correlationKey = clarification.CorrelationKey!;
+        var topicId = ClarificationTopicId(correlationKey);
+        var collides = identityUniverse.Any(other =>
+            !string.Equals(other.CorrelationKey, correlationKey, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(
+                ClarificationTopicId(other.CorrelationKey!),
+                topicId,
+                StringComparison.OrdinalIgnoreCase));
+        return collides || !IsSelfDescribingClarificationTopicId(topicId) ? correlationKey : topicId;
     }
+
+    private static string ClarificationTopicId(string correlationKey) =>
+        correlationKey[(correlationKey.LastIndexOf(':') + 1)..];
+
+    private static bool IsSelfDescribingClarificationTopicId(string topicId) =>
+        (topicId.Length <= 8 && topicId.All(Uri.IsHexDigit)) ||
+        topicId.Contains('-', StringComparison.Ordinal);
 
     private static bool? TryExecuteSystemCommand(string command, IReadOnlyList<string> parts, CliExecutionContext context)
     {
@@ -260,11 +296,18 @@ internal static partial class CliCommandHandlers
                             ? store.ListAsync().GetAwaiter().GetResult()
                             : store.GetAttentionQueueAsync().GetAwaiter().GetResult();
                         var globalQueue = CollaborationItemsForAttention(globalItems, context.Kernel, null, includeHistory);
-                        ConsoleViews.PrintCollaborationItems(globalQueue, includeHistory);
+                        var allClarifications = AllClarifications(store);
+                        ConsoleViews.PrintCollaborationItems(
+                            globalQueue,
+                            includeHistory,
+                            item => IsSpecClarification(item) ? ClarificationId(item, allClarifications) : null);
                         return changed;
                     }
 
                     var goal = ResolveAttentionGoal(context.Kernel, goalPrefix);
+                    var clarificationIdentityUniverse = AllClarifications(store)
+                        .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
                     var waitsForGoal = HumanWaitsForAttention(context.Kernel, goal.Id, includeHistory);
                     if (waitsForGoal.Count > 0)
                     {
@@ -274,7 +317,8 @@ internal static partial class CliCommandHandlers
                             var allItems = store.ListAsync().GetAwaiter().GetResult();
                             ConsoleViews.PrintCollaborationItems(
                                 CollaborationItemsForAttention(allItems, context.Kernel, goal.Id, includeHistory),
-                                includeHistory);
+                                includeHistory,
+                                item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
                         }
 
                         return changed;
@@ -291,7 +335,10 @@ internal static partial class CliCommandHandlers
                             return changed;
                         }
 
-                        ConsoleViews.PrintCollaborationItems(scopedItems, includeHistory);
+                        ConsoleViews.PrintCollaborationItems(
+                            scopedItems,
+                            includeHistory,
+                            item => IsSpecClarification(item) ? ClarificationId(item, clarificationIdentityUniverse) : null);
                         return changed;
                     }
 
@@ -308,7 +355,7 @@ internal static partial class CliCommandHandlers
 
                     foreach (var clarification in clarifications)
                     {
-                        Console.WriteLine($"[{ShortClarificationId(clarification.CorrelationKey!)}] {clarification.Subject}");
+                        Console.WriteLine($"[{ClarificationId(clarification, clarificationIdentityUniverse)}] {clarification.Subject}");
                         if (!string.IsNullOrWhiteSpace(clarification.Body))
                             Console.WriteLine($"    {clarification.Body}");
                     }
@@ -328,12 +375,14 @@ internal static partial class CliCommandHandlers
                         throw new ArgumentException("Usage: attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>");
 
                     var globalClarifications = OpenClarifications(store);
+                    var clarificationIdentityUniverse = AllClarifications(store);
                     // Legacy global syntax wins when the first token is an open clarification id, even if
                     // that token also happens to be a goal prefix.
                     var globalClarification = ResolveClarificationByExactShortId(
                         globalClarifications,
+                        clarificationIdentityUniverse,
                         parts[2],
-                        $"Id '{parts[2]}' is ambiguous ({{0}} matches); use more characters from `attention show`.");
+                        $"Id '{parts[2]}' is ambiguous ({{0}} matches); use a goal-scoped id from `attention show <goal-id>` or a full correlation key.");
                     var scoped = globalClarification is null;
                     var goal = scoped ? ResolveAttentionGoal(context.Kernel, parts[2]) : null;
 
@@ -349,9 +398,12 @@ internal static partial class CliCommandHandlers
                     var clarification = scoped
                         ? ResolveClarificationByShortId(
                             OpenClarificationsForGoal(store, goal!),
+                            clarificationIdentityUniverse
+                                .Where(item => string.Equals(item.GoalId, goal!.Id.Value, StringComparison.OrdinalIgnoreCase))
+                                .ToList(),
                             id,
                             $"Clarification id '{id}' does not belong to goal '{goal!.Id.Value}'.",
-                            $"Id '{id}' is ambiguous ({{0}} matches); use more characters from `attention show {goal!.Id.Value[..8]}`.")
+                            $"Id '{id}' is ambiguous ({{0}} matches); copy a full id from `attention show {goal!.Id.Value[..8]}` or use a full correlation key.")
                         : globalClarification!;
 
                     var refinementService = new GoalRefinementService(

@@ -37,10 +37,16 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         var dismiss = CliArgumentParser.NormalizeArgs(["attention", "dismiss", "abc123ef"]);
         var answer = CliArgumentParser.NormalizeArgs(
             ["attention", "answer", "abc123ef", "391ce87f", "Use", "a", "static", "helper."]);
+        var topicAnswer = CliArgumentParser.NormalizeArgs(
+            ["attention", "answer", "abc123ef", "stranded-edits-disposition", "Use", "the", "topic", "id."]);
+        var correlationAnswer = CliArgumentParser.NormalizeArgs(
+            ["attention", "answer", "abc123ef", "spec-clarification:abc123ef:scope:duplicate-topic", "Use", "the", "full", "id."]);
 
         Xunit.Assert.Equal(["attention", "show", "abc123ef"], show);
         Xunit.Assert.Equal(["attention", "dismiss", "abc123ef"], dismiss);
         Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f", "Use a static helper."], answer);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "stranded-edits-disposition", "Use the topic id."], topicAnswer);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "spec-clarification:abc123ef:scope:duplicate-topic", "Use the full id."], correlationAnswer);
     }
 
 
@@ -50,10 +56,16 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         var show = CliArgumentParser.SplitCommand("attention show abc123ef");
         var dismiss = CliArgumentParser.SplitCommand("attention dismiss abc123ef");
         var answer = CliArgumentParser.SplitCommand("attention answer abc123ef 391ce87f Use a static helper.");
+        var topicAnswer = CliArgumentParser.SplitCommand(
+            "attention answer abc123ef stranded-edits-disposition Use the topic id.");
+        var correlationAnswer = CliArgumentParser.SplitCommand(
+            "attention answer abc123ef spec-clarification:abc123ef:scope:duplicate-topic Use the full id.");
 
         Xunit.Assert.Equal(["attention", "show", "abc123ef"], show);
         Xunit.Assert.Equal(["attention", "dismiss", "abc123ef"], dismiss);
         Xunit.Assert.Equal(["attention", "answer", "abc123ef", "391ce87f", "Use a static helper."], answer);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "stranded-edits-disposition", "Use the topic id."], topicAnswer);
+        Xunit.Assert.Equal(["attention", "answer", "abc123ef", "spec-clarification:abc123ef:scope:duplicate-topic", "Use the full id."], correlationAnswer);
     }
 
 
@@ -77,6 +89,131 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         Xunit.Assert.Contains("[11111111] Target clarification", output);
         Xunit.Assert.Contains("Target body", output);
         Xunit.Assert.DoesNotContain("Other clarification", output);
+    }
+
+    [Xunit.Fact]
+    public async Task CliAttentionCollidingPrefixesRoundTripShownIds()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("aabbccdd111111111111111111111111"), "Colliding topics");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var disposition = $"spec-clarification:{goal.Id.Value}:stranded-edits-disposition";
+        var preservation = $"spec-clarification:{goal.Id.Value}:stranded-edits-preservation-mechanism";
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value, "Disposition", "First body", disposition);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value, "Preservation", "Second body", preservation);
+
+        var shown = ExecuteCliAndCapture(["attention", "show", goal.Id.Value[..8]], kernel, workspace);
+        var firstAnswer = ExecuteCliAndCapture(
+            CliArgumentParser.NormalizeArgs(
+                ["attention", "answer", goal.Id.Value[..8], "stranded-edits-disposition", "Apply", "disposition."]),
+            kernel,
+            workspace);
+        var secondAnswer = ExecuteCliAndCapture(
+            CliArgumentParser.SplitCommand(
+                $"attention answer {goal.Id.Value[..8]} stranded-edits-preservation-mechanism Preserve edits."),
+            kernel,
+            workspace);
+        var items = await store.ListAsync();
+
+        Xunit.Assert.Contains("[stranded-edits-disposition] Disposition", shown, StringComparison.Ordinal);
+        Xunit.Assert.Contains("[stranded-edits-preservation-mechanism] Preservation", shown, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Answered clarification 'stranded-edits-disposition'", firstAnswer, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Answered clarification 'stranded-edits-preservation-mechanism'", secondAnswer, StringComparison.Ordinal);
+        Xunit.Assert.Equal("Apply disposition.", items.Single(item => item.CorrelationKey == disposition).Resolution);
+        Xunit.Assert.Equal("Preserve edits.", items.Single(item => item.CorrelationKey == preservation).Resolution);
+    }
+
+    [Xunit.Fact]
+    public async Task CliAttentionAnswerKeepsPeerIdStable()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("bbccddee222222222222222222222222"), "Stable topic ids");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        _ = await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Disposition",
+            "First body",
+            $"spec-clarification:{goal.Id.Value}:stranded-edits-disposition");
+        _ = await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Preservation",
+            "Second body",
+            $"spec-clarification:{goal.Id.Value}:stranded-edits-preservation-mechanism");
+
+        var before = ExecuteCliAndCapture(["attention", "show", goal.Id.Value[..8]], kernel, workspace);
+        _ = ExecuteCliAndCapture(
+            ["attention", "answer", goal.Id.Value[..8], "stranded-edits-disposition", "Apply disposition."],
+            kernel,
+            workspace);
+        var after = ExecuteCliAndCapture(["attention", "show", goal.Id.Value[..8]], kernel, workspace);
+
+        const string stableLine = "[stranded-edits-preservation-mechanism] Preservation";
+        Xunit.Assert.Contains(stableLine, before, StringComparison.Ordinal);
+        Xunit.Assert.Contains(stableLine, after, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task CliAttentionFullCorrelationKeyEscapesTrueCollision()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("ccddeeaa333333333333333333333333"), "Identical topic ids");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var firstKey = $"spec-clarification:{goal.Id.Value}:scope-a:duplicate-topic";
+        var secondKey = $"spec-clarification:{goal.Id.Value}:scope-b:duplicate-topic";
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value, "First", "First body", firstKey);
+        _ = await store.RaiseAsync(CollaborationItemType.Clarification, goal.Id.Value, "Second", "Second body", secondKey);
+
+        var shown = ExecuteCliAndCapture(["attention", "show", goal.Id.Value[..8]], kernel, workspace);
+        var ambiguous = Xunit.Assert.Throws<ArgumentException>(() => ExecuteCliAndCapture(
+            ["attention", "answer", goal.Id.Value[..8], "duplicate-topic", "Ambiguous answer."],
+            kernel,
+            workspace));
+        var answered = ExecuteCliAndCapture(
+            CliArgumentParser.SplitCommand(
+                $"attention answer {goal.Id.Value[..8]} {secondKey} Second answer."),
+            kernel,
+            workspace);
+        var resolved = (await store.ListAsync()).Single(item => item.CorrelationKey == secondKey);
+
+        Xunit.Assert.Contains($"[{firstKey}] First", shown, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"[{secondKey}] Second", shown, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("more characters", ambiguous.Message, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains("full correlation key", ambiguous.Message, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Contains($"Answered clarification '{secondKey}'", answered, StringComparison.Ordinal);
+        Xunit.Assert.Equal("Second answer.", resolved.Resolution);
+    }
+
+    [Xunit.Fact]
+    public async Task CliAttentionSingleTokenTopicShowsRoundTripCorrelationKey()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("ddeeffaa444444444444444444444444"), "Single-token topic");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var correlationKey = $"spec-clarification:{goal.Id.Value}:scope";
+        _ = await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Scope",
+            "Scope body",
+            correlationKey);
+
+        var shown = ExecuteCliAndCapture(["attention", "show", goal.Id.Value[..8]], kernel, workspace);
+        var answerParts = CliArgumentParser.NormalizeArgs(
+            ["attention", "answer", goal.Id.Value[..8], correlationKey, "Use", "the", "narrow", "scope."]);
+        var answered = ExecuteCliAndCapture(answerParts, kernel, workspace);
+
+        Xunit.Assert.Contains($"[{correlationKey}] Scope", shown, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Answered clarification '{correlationKey}'", answered, StringComparison.Ordinal);
     }
 
 

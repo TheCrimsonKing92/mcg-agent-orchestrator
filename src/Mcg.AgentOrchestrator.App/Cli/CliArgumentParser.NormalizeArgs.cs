@@ -466,6 +466,12 @@ private static IReadOnlyList<string> NormalizeObjectiveCommandWithFlags(string[]
 
 private static bool LooksLikeAttentionClarificationId(string value)
 {
-    return value.Length > 0 && value.Length <= 8 && value.All(Uri.IsHexDigit);
+    if (value.Length > 0 && value.Length <= 8 && value.All(Uri.IsHexDigit))
+        return true;
+    if (value.StartsWith("spec-clarification:", StringComparison.Ordinal))
+        return true;
+
+    return value.Contains('-', StringComparison.Ordinal) &&
+           value.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
 }
 }
