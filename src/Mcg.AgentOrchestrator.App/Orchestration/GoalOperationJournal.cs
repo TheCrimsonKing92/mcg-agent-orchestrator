@@ -577,6 +577,13 @@ internal static class GoalOperationJournal
         return journal.LatestByOperation.Any(IsLegacyRetiredTerminalDispositionEntry);
     }
 
+    public static bool HasMergeEvidenceTerminalDisposition(GoalOperationJournalSummary journal) =>
+        TryGetLatestTerminalDisposition(journal) is
+        {
+            Kind: GoalTerminalDispositionKind.Landed,
+            Detail: var detail
+        } && detail.StartsWith("Goal terminalized from merge evidence at ", StringComparison.Ordinal);
+
     public static bool HasDurableLandingIntent(GoalOperationJournalSummary journal)
     {
         var latestLandingIntent = journal.LatestByOperation

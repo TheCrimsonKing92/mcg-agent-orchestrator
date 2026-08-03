@@ -14,6 +14,11 @@ internal static partial class ConsoleViews
             Console.WriteLine($"SWEEP_SUMMARY kind=stale-terminal-excluded count={result.ExcludedGoalCount}");
         }
 
+        if (result.TerminalizedGoalCount > 0 || result.ResolvedAttentionItemCount > 0)
+        {
+            Console.WriteLine($"Resolved attention items: {result.ResolvedAttentionItemCount}");
+        }
+
         foreach (var goal in result.Goals)
         {
             if (includeRepairs)

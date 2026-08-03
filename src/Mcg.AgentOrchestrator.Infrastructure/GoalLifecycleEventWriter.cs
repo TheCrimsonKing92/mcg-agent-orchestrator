@@ -154,6 +154,20 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["source"] = "ancestry";
         });
 
+    public void AppendGoalLandedFromMergeEvidence(
+        GoalId goalId,
+        string goalBranch,
+        string integrateSha,
+        string mainSha) =>
+        Append(goalId, "GoalLanded", obj =>
+        {
+            obj["integrationBranch"] = "main";
+            obj["goalBranch"] = goalBranch;
+            obj["integrateSha"] = integrateSha;
+            obj["mainSha"] = mainSha;
+            obj["source"] = "merge-evidence";
+        });
+
     public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) =>
         AppendGoalEscalated(
             goalId,

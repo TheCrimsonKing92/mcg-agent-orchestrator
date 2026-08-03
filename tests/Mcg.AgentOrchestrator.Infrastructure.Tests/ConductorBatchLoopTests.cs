@@ -4644,8 +4644,8 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "TerminalGoalSweep_cache_preserves_verified_missing_branch_repair")]
-    public void TerminalGoalSweepCachePreservesVerifiedMissingBranchRepair()
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_cache_keeps_unintegrated_missing_branch_verified")]
+    public void TerminalGoalSweepCacheKeepsUnintegratedMissingBranchVerified()
     {
         var root = CreateSeededGitRepository();
         try
@@ -4657,9 +4657,9 @@ public sealed class ConductorBatchLoopTests
 
             var sweep = TerminalGoalSweep.Run(kernel, root, cache: cache);
 
-            Assert.Contains(sweep.Goals, goal =>
-                goal.GoalId == verified.Id &&
-                goal.Repairs.Any(repair => repair.Kind == "missing-branch-retired"));
+            Assert.Empty(sweep.Goals);
+            Assert.Equal(GoalStatus.Verified, verified.Status);
+            Assert.False(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, verified.Id)));
         }
         finally
         {
@@ -8807,10 +8807,12 @@ public sealed class ConductorBatchLoopTests
             var activeGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "Active conductor goal");
             PassVerification(kernel, retiredGoal, retiredGoal.Tasks.Single());
 
-            var sweep = TerminalGoalSweep.Run(kernel, root);
-            Assert.Contains(sweep.Goals, goal =>
-                goal.GoalId == retiredGoal.Id &&
-                goal.Repairs.Any(repair => repair.Kind == "missing-branch-retired"));
+            var retirementDetail = "Operator retired missing goal branch.";
+            GoalOperationJournal.RecordTerminalDisposition(
+                root,
+                retiredGoal,
+                new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, retirementDetail));
+            kernel.CompleteGoal(retiredGoal.Id, retirementDetail);
             Assert.True(GoalOperationJournal.HasRetiredTerminalDisposition(GoalOperationJournal.Read(root, retiredGoal.Id)));
 
             GoalOperationJournal.Begin(root, retiredGoal, "conductor:cleanup", "Later interrupted cleanup must not erase retirement.");

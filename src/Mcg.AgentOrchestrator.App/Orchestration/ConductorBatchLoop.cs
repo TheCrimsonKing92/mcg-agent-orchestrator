@@ -2166,8 +2166,9 @@ internal sealed class ConductorBatchLoop
 
         try
         {
-            return !GoalOperationJournal.HasRetiredTerminalDisposition(
-                GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id));
+            var journal = GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id);
+            return !GoalOperationJournal.HasRetiredTerminalDisposition(journal) &&
+                !GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal);
         }
         catch
         {
@@ -2957,6 +2958,14 @@ internal sealed class ConductorBatchLoop
     private static bool IsLoopEligibleGoal(Goal goal, ConductorDriver driver, GoalProjectionCache goalProjectionCache)
     {
         if (IsPreWalkExcludedGoal(goal))
+        {
+            return false;
+        }
+
+        if (goal.Status == GoalStatus.Completed &&
+            !string.IsNullOrWhiteSpace(driver.ExecutionDirectory) &&
+            GoalOperationJournal.HasMergeEvidenceTerminalDisposition(
+                GoalOperationJournal.Read(driver.ExecutionDirectory, goal.Id)))
         {
             return false;
         }
