@@ -8,6 +8,8 @@ internal sealed record ConductorParallelAcceptanceCandidate(
     int SlotIndex,
     IReadOnlyList<string> ScopePaths,
     IReadOnlyList<string> ResourceKeys,
+    IReadOnlyList<string> ConflictScopePaths,
+    IReadOnlyList<string> ExcludedConflictScopePaths,
     string? BranchHeadSha = null,
     string? MainHeadSha = null)
 {
@@ -20,7 +22,23 @@ internal sealed record ConductorParallelAcceptanceCandidate(
             return true;
         }
 
-        return ScopePaths.Any(left => other.ScopePaths.Any(right => RepositoryPathOverlap.Overlaps(left, right)));
+        return ConflictScopePaths.Any(left =>
+            other.ConflictScopePaths.Any(right => RepositoryPathOverlap.Overlaps(left, right)));
+    }
+
+    internal IReadOnlyList<string> GetDocumentationExclusionEvidence(
+        ConductorParallelAcceptanceCandidate other)
+    {
+        if (Overlaps(other) || !OverlapsWithoutDocumentationExclusion(other))
+        {
+            return [];
+        }
+
+        return ExcludedConflictScopePaths
+            .Concat(other.ExcludedConflictScopePaths)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     public string CandidateKey =>
@@ -39,18 +57,67 @@ internal sealed record ConductorParallelAcceptanceCandidate(
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var conflictPaths = paths
+            .Where(path => !IsDocumentationExcludedFromConflict(path))
+            .ToArray();
+        var excludedConflictPaths = paths
+            .Where(IsDocumentationExcludedFromConflict)
+            .ToArray();
 
-        var resources = paths.Length == 0
-            ? new[] { "ownership:unknown-acceptance-scope" }
-            : paths
-                .Select(RepositoryOwnershipMap.Classify)
-                .Where(path => path.RequiresSerialization)
-                .Select(path => $"ownership:{path.ReservationKey}")
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
+        var resources = BuildResourceKeys(
+            conflictPaths,
+            reserveUnknownScope: paths.Length == 0);
 
-        return new ConductorParallelAcceptanceCandidate(goal, slotIndex, paths, resources, branchHeadSha, mainHeadSha);
+        return new ConductorParallelAcceptanceCandidate(
+            goal,
+            slotIndex,
+            paths,
+            resources,
+            conflictPaths,
+            excludedConflictPaths,
+            branchHeadSha,
+            mainHeadSha);
+    }
+
+    internal static bool IsDocumentationExcludedFromConflict(string path)
+    {
+        var normalized = RepositoryPathOverlap.Normalize(path);
+        return normalized.Equals("docs", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("docs/", StringComparison.OrdinalIgnoreCase) ||
+            Path.GetExtension(normalized).Equals(".md", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool OverlapsWithoutDocumentationExclusion(ConductorParallelAcceptanceCandidate other)
+    {
+        var resources = BuildResourceKeys(ScopePaths, reserveUnknownScope: ScopePaths.Count == 0);
+        var otherResources = BuildResourceKeys(
+            other.ScopePaths,
+            reserveUnknownScope: other.ScopePaths.Count == 0);
+        if (resources.Intersect(otherResources, StringComparer.OrdinalIgnoreCase).Any())
+        {
+            return true;
+        }
+
+        return ScopePaths.Any(left =>
+            other.ScopePaths.Any(right => RepositoryPathOverlap.Overlaps(left, right)));
+    }
+
+    private static string[] BuildResourceKeys(
+        IReadOnlyList<string> paths,
+        bool reserveUnknownScope)
+    {
+        if (paths.Count == 0)
+        {
+            return reserveUnknownScope ? ["ownership:unknown-acceptance-scope"] : [];
+        }
+
+        return paths
+            .Select(RepositoryOwnershipMap.Classify)
+            .Where(path => path.RequiresSerialization)
+            .Select(path => $"ownership:{path.ReservationKey}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 }
 

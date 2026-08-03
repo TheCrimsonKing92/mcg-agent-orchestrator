@@ -1869,6 +1869,10 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
+            var documentationExclusionAdmission = BuildDocumentationExclusionAdmissionRecord(
+                candidate,
+                activeCandidates,
+                tick);
             var decision = driver.ParallelAcceptanceAttemptCoordinator.Evaluate(
                 candidate,
                 policy,
@@ -1878,6 +1882,11 @@ internal sealed class ConductorBatchLoop
             switch (decision.Kind)
             {
                 case ConductorParallelAcceptanceAttemptDecisionKind.Started:
+                    if (documentationExclusionAdmission is not null)
+                    {
+                        RecordParallelAcceptanceProgress(documentationExclusionAdmission, changedGoalLines);
+                    }
+
                     if (decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
                     {
                         var terminalDecision = driver.ParallelAcceptanceAttemptCoordinator.Evaluate(
@@ -2279,6 +2288,28 @@ internal sealed class ConductorBatchLoop
 
     private static void RecordParallelAcceptanceProgress(string line, List<string> changedGoalLines) =>
         changedGoalLines.Add(line);
+
+    private static string? BuildDocumentationExclusionAdmissionRecord(
+        ConductorParallelAcceptanceCandidate candidate,
+        IReadOnlyList<ConductorParallelAcceptanceCandidate> activeCandidates,
+        int tick)
+    {
+        foreach (var existing in activeCandidates)
+        {
+            var excludedPaths = existing.GetDocumentationExclusionEvidence(candidate);
+            if (excludedPaths.Count == 0)
+            {
+                continue;
+            }
+
+            var sample = string.Join(",", excludedPaths.Take(3));
+            return $"ADMISSION tick={tick} result=admitted reason=documentation-exclusion " +
+                $"goal={candidate.GoalPrefix} peer={existing.GoalPrefix} " +
+                $"excludedPathCount={excludedPaths.Count} excludedPathSample={sample}";
+        }
+
+        return null;
+    }
 
     private static void ReplayParallelAcceptanceLeaseReceipts(
         ConductorDriver driver,

@@ -34,6 +34,8 @@ l. **A test earns its authority only by being shown capable of failing.** A test
 
    For deterministic guards that consume operator rulings, hold the synthetic verdict constant and remove or change only the typed ruling record for the negative control. This proves the guard keys on authoritative structure rather than accommodating words in model- or worker-authored prose.
 
+   Record each new goal's negative-control receipt in `docs/negative-controls/<goal-prefix>.md`. Never append a per-goal record to this shared discipline file: sibling goal files keep independent evidence independently mergeable. The records already present below are historical and remain here; do not relocate them retroactively.
+
 ## Acceptance-Criterion Feasibility Pass
 
 Spec refinement checks feasibility before asking how a criterion will be measured or asserted. Treat every acceptance criterion as an obligation of the executing worker role unless it is explicitly moved to the `OPERATOR-OWNED / post-landing` set. A capability-demand criterion is infeasible when the role profile says the worker cannot exercise or observe the required boundary, including concurrent or multiple goals, the live conductor or behavior spanning multiple ticks, whole-host or wall-clock performance, and build/acceptance slots or other sandbox-forbidden operations. Bare words such as `goal`, `host`, `tick`, and `test` are never enough: a rule must match both a capability verb and a resource the role lacks.
