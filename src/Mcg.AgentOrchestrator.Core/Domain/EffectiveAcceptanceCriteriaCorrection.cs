@@ -7,7 +7,8 @@ public sealed record EffectiveAcceptanceCriteriaCorrection(
     DateTimeOffset RecordedAt,
     TaskId? SourceTaskId,
     ProgressKind SourceKind,
-    bool IsWaiver = false)
+    bool IsWaiver = false,
+    string? CapturedAcceptanceCriteriaHash = null)
 {
     private const string WaiverPrefix = "WAIVED: ";
 

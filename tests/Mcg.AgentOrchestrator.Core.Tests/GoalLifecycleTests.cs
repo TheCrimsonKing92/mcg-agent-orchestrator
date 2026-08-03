@@ -245,31 +245,37 @@ public sealed class GoalLifecycleTests
         goal.Id,
         "record a real two-gate makespan",
         "requires a conductor-owned cross-tick harness",
-        "operator:miles");
+        "operator:\r\n  miles");
     var reviewerBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
 
     Assert.Equal("record a real two-gate makespan", waiver.SupersededCriterion);
     Assert.Equal("requires a conductor-owned cross-tick harness", waiver.WaiverReason);
-    Assert.Equal("operator:miles", waiver.Actor);
+    Assert.Equal("operator: miles", waiver.Actor);
     Assert.Equal(clock.UtcNow, waiver.RecordedAt);
     Assert.Null(waiver.SourceTaskId);
     Assert.Equal(ProgressKind.GoalPolicyDecision, waiver.SourceKind);
     Assert.True(waiver.IsWaiver);
+    Assert.Equal(
+        EffectiveAcceptanceCriteriaVersion.ComputeHash(goal.RefinedSpec!, goal.EffectiveAcceptanceCriteriaCorrections),
+        waiver.CapturedAcceptanceCriteriaHash);
     Assert.Contains("- [WAIVED] record a real two-gate makespan", reviewerBrief, StringComparison.Ordinal);
     Assert.Contains("Reason: requires a conductor-owned cross-tick harness", reviewerBrief, StringComparison.Ordinal);
     Assert.True(ReviewFindings.IsWaived("record a real two-gate makespan is unmet", goal.EffectiveAcceptanceCriteriaCorrections));
     Assert.Contains(goal.Timeline, evt =>
         evt.Kind == ProgressKind.GoalPolicyDecision &&
         evt.Message.Contains("Acceptance criterion waived", StringComparison.Ordinal));
+    clock.Advance();
     var duplicate = Assert.Throws<InvalidOperationException>(() => kernel.WaiveAcceptanceCriterion(
         goal.Id,
         "record a real two-gate makespan",
-        "requires a conductor-owned cross-tick harness",
-        "operator:miles"));
+        "a differently worded duplicate waiver",
+        " OPERATOR:   MILES "));
     Assert.Contains("already has this waiver recorded", duplicate.Message, StringComparison.Ordinal);
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock).GetGoal(goal.Id);
-    Assert.True(Assert.Single(restored.EffectiveAcceptanceCriteriaCorrections).IsWaiver);
+    var restoredWaiver = Assert.Single(restored.EffectiveAcceptanceCriteriaCorrections);
+    Assert.True(restoredWaiver.IsWaiver);
+    Assert.Equal(waiver.CapturedAcceptanceCriteriaHash, restoredWaiver.CapturedAcceptanceCriteriaHash);
     var malformedRestoredWaiver = new EffectiveAcceptanceCriteriaCorrection(
         "legacy criterion",
         "legacy reason without prefix",

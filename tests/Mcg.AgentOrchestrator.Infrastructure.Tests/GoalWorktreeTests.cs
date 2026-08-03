@@ -342,7 +342,7 @@ public abstract class GoalWorktreeTestBase
             }
         }
 
-        public void AppendAcceptanceCriterionWaived(GoalId goalId, string criterion, string actor, DateTimeOffset recordedAt, string reason) { }
+        public void AppendAcceptanceCriterionWaived(GoalId goalId, string criterion, string actor, DateTimeOffset recordedAt, string reason, string capturedAcceptanceCriteriaHash) { }
 
         public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
         public void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha) { }

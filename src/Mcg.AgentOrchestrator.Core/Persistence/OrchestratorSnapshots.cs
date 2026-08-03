@@ -37,7 +37,8 @@ public sealed record EffectiveAcceptanceCriteriaCorrectionSnapshot(
     DateTimeOffset RecordedAt,
     string? SourceTaskId,
     ProgressKind SourceKind,
-    bool IsWaiver = false);
+    bool IsWaiver = false,
+    string? CapturedAcceptanceCriteriaHash = null);
 
 public sealed record AcceptanceFailureSnapshot(
     DateTimeOffset OccurredAt,

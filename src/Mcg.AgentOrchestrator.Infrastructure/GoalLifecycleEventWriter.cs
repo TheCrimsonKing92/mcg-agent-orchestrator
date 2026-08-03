@@ -107,13 +107,15 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         string criterion,
         string actor,
         DateTimeOffset recordedAt,
-        string reason) =>
+        string reason,
+        string capturedAcceptanceCriteriaHash) =>
         Append(goalId, "AcceptanceCriterionWaived", obj =>
         {
             obj["criterion"] = criterion;
             obj["actor"] = actor;
             obj["recordedAt"] = recordedAt;
             obj["reason"] = reason;
+            obj["capturedAcceptanceCriteriaHash"] = capturedAcceptanceCriteriaHash;
         });
 
     public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) =>

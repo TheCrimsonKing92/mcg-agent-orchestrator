@@ -947,6 +947,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal("operator:miles", auditEvent.RootElement.GetProperty("actor").GetString());
         Xunit.Assert.Equal("requires conductor evidence: no worker substitute is acceptable", auditEvent.RootElement.GetProperty("reason").GetString());
         Xunit.Assert.True(auditEvent.RootElement.TryGetProperty("recordedAt", out _));
+        Xunit.Assert.Equal(waiver.CapturedAcceptanceCriteriaHash, auditEvent.RootElement.GetProperty("capturedAcceptanceCriteriaHash").GetString());
         Xunit.Assert.All(restoredGoal.Tasks, task => Xunit.Assert.Null(task.LastDispatch));
     }
 

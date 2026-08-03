@@ -20,13 +20,17 @@ public sealed partial class AgentOrchestratorKernel
         var spec = goal.RefinedSpec
             ?? throw new InvalidOperationException($"Goal '{goal.Id.Value[..8]}' has no refined acceptance criteria to waive.");
         var criterion = ResolveAcceptanceCriterion(spec.AcceptanceCriteria, criterionReference).Trim();
-        var normalizedReason = RequireWaiverText(reason, nameof(reason)).ReplaceLineEndings(" ");
-        var normalizedActor = RequireWaiverText(actor, nameof(actor)).ReplaceLineEndings(" ");
-        var waiver = EffectiveAcceptanceCriteriaCorrection.Waiver(
+        var normalizedReason = NormalizeWaiverLine(reason, nameof(reason));
+        var normalizedActor = NormalizeWaiverLine(actor, nameof(actor));
+        var pendingWaiver = EffectiveAcceptanceCriteriaCorrection.Waiver(
             criterion,
             normalizedReason,
             normalizedActor,
             _clock.UtcNow);
+        var capturedHash = EffectiveAcceptanceCriteriaVersion.ComputeHash(
+            spec,
+            goal.EffectiveAcceptanceCriteriaCorrections.Append(pendingWaiver));
+        var waiver = pendingWaiver with { CapturedAcceptanceCriteriaHash = capturedHash };
 
         if (!goal.AddEffectiveAcceptanceCriteriaCorrection(waiver))
         {
@@ -43,7 +47,8 @@ public sealed partial class AgentOrchestratorKernel
             criterion,
             normalizedActor,
             waiver.RecordedAt,
-            normalizedReason);
+            normalizedReason,
+            capturedHash);
         return waiver;
     }
 
@@ -183,4 +188,8 @@ public sealed partial class AgentOrchestratorKernel
 
         return value.Trim();
     }
+
+    private static string NormalizeWaiverLine(string value, string parameterName) =>
+        string.Join(' ', RequireWaiverText(value, parameterName)
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

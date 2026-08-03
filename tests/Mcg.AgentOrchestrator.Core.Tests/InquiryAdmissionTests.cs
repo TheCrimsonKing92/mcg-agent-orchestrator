@@ -34,6 +34,7 @@ public sealed class InquiryAdmissionTests
         AssertRejects(InquiryAdmissionCheckKind.SessionNotRetired, dispatch: d => d with { ProviderSessionRetiredAt = Now });
         AssertRejects(InquiryAdmissionCheckKind.SpawnHeadAncestor, context: c => c with { CapturedHeadIsAncestorOfCurrentHead = false });
         AssertRejects(InquiryAdmissionCheckKind.NoCriteriaCorrectionSinceCapture, context: c => c with { LatestCriteriaCorrectionAt = DispatchedAt.AddMinutes(1) });
+        AssertRejects(InquiryAdmissionCheckKind.NoCriteriaCorrectionSinceCapture, context: c => c with { CriteriaCorrectionSinceCapture = true });
         AssertRejects(InquiryAdmissionCheckKind.NoIntegrationChangeSinceCapture, context: c => c with { LatestIntegrationChangeAt = DispatchedAt.AddMinutes(1) });
         AssertRejects(InquiryAdmissionCheckKind.SessionNotConsumedByNonForkedInquiry, context: c => c with { SessionConsumedByNonForkedInquiry = true });
         AssertRejects(InquiryAdmissionCheckKind.SessionAge, context: c => c with { Now = DispatchedAt.AddDays(8) });
