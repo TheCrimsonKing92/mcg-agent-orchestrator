@@ -155,6 +155,7 @@ public sealed partial class AgentOrchestratorKernel
             $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
             "Decision context: embedded in this brief and .orchestrator-handoff.md in the working directory when present; do not attempt to reach dashboard APIs or orchestrator state.",
+            "Reporting an acceptance criterion as BLOCKED, while naming what is needed to satisfy it, is an acceptable and expected outcome.",
             $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}",
             $"Task role: {task.RequiredRole}",
             $"Task status: {task.Status}",
@@ -232,6 +233,13 @@ public sealed partial class AgentOrchestratorKernel
                 specLines.Add($"- [WAIVED] {normalizedCriterion}");
                 specLines.Add($"  Reason: {PromptContextFormatter.TrimPromptBlock(waiver.WaiverReason!)}");
                 specLines.Add($"  Waived by {PromptContextFormatter.TrimPromptBlock(waiver.Actor)} at {waiver.RecordedAt:u}.");
+            }
+            if (refinedSpec.OperatorOwnedAcceptanceCriteria.Count > 0)
+            {
+                specLines.Add(string.Empty);
+                specLines.Add("OPERATOR-OWNED / post-landing criteria (not part of worker acceptance):");
+                foreach (var criterion in refinedSpec.OperatorOwnedAcceptanceCriteria)
+                    specLines.Add($"- {criterion}");
             }
             if (refinedSpec.Decisions.Count > 0)
             {

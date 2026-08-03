@@ -61,7 +61,8 @@ public sealed record RefinedSpecSnapshot(
     IReadOnlyList<string> AcceptanceCriteria,
     string VerificationClass,
     IReadOnlyList<RefinedSpecDecisionSnapshot> Decisions,
-    IReadOnlyList<RefinedSpecOpenQuestionSnapshot> OpenQuestions);
+    IReadOnlyList<RefinedSpecOpenQuestionSnapshot> OpenQuestions,
+    IReadOnlyList<string>? OperatorOwnedAcceptanceCriteria = null);
 
 public sealed record RefinedSpecDecisionSnapshot(string Question, string Choice, string Rationale);
 
@@ -72,7 +73,9 @@ public sealed record RefinedSpecOpenQuestionSnapshot(
     string Status,
     string? Answer = null,
     string? TopicKey = null,
-    string? NormalizedQuestionKey = null);
+    string? NormalizedQuestionKey = null,
+    string? Criterion = null,
+    string? BlastRadius = null);
 
 public sealed record TaskSnapshot(
     string Id,

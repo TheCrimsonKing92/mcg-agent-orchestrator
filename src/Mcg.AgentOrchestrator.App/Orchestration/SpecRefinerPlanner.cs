@@ -23,7 +23,9 @@ internal sealed record ResolvedSpecClarification(
     string NormalizedQuestionKey,
     string Question,
     string Resolution,
-    bool WasDismissed);
+    bool WasDismissed,
+    string? ForkKind = null,
+    string? Criterion = null);
 
 internal sealed record SpecRefinementOutput(
     string BehavioralContract,
@@ -142,6 +144,9 @@ internal static class SpecRefinerPlanner
 
     public static SpecForkDisposition ClassifyFork(SpecRefinementFork fork, ConductorAutonomyPolicy policy)
     {
+        if (string.Equals(fork.Kind, AcceptanceCriterionFeasibility.ForkKind, StringComparison.OrdinalIgnoreCase))
+            return SpecForkDisposition.Ask;
+
         var confidence = ParseConfidence(fork.RefinerConfidence);
         var blast = ParseBlastRadius(fork.BlastRadius);
         var kind = fork.Kind.Trim().ToLowerInvariant();

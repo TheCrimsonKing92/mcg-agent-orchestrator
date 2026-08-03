@@ -15,7 +15,9 @@ public sealed record RefinedSpecOpenQuestion(
     string Status,
     string? Answer = null,
     string? TopicKey = null,
-    string? NormalizedQuestionKey = null);
+    string? NormalizedQuestionKey = null,
+    string? Criterion = null,
+    string? BlastRadius = null);
 
 public sealed record RefinedSpec(
     string BehavioralContract,
@@ -24,6 +26,8 @@ public sealed record RefinedSpec(
     IReadOnlyList<RefinedSpecDecision> Decisions,
     IReadOnlyList<RefinedSpecOpenQuestion> OpenQuestions)
 {
+    public IReadOnlyList<string> OperatorOwnedAcceptanceCriteria { get; init; } = [];
+
     public bool HasOpenQuestions => OpenQuestions.Any(q =>
         string.Equals(q.Status, "Open", StringComparison.OrdinalIgnoreCase));
 }

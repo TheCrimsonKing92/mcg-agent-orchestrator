@@ -119,6 +119,35 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         Xunit.Assert.Contains(queue, item => item.CorrelationKey == $"spec-clarification:{other.Id.Value}:scope:44444444");
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_answer_rejects_invalid_feasibility_disposition")]
+    public async Task CliAttentionAnswerRejectsInvalidFeasibilityDisposition()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("feedface555555555555555555555555"), "Target goal");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var correlationKey = $"spec-clarification:{target.Id.Value}:feasibility:33333333";
+        _ = await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            target.Id.Value,
+            "Spec feasibility clarification needed",
+            "Fork kind: feasibility",
+            correlationKey);
+
+        var output = ExecuteCliAndCapture(
+            ["attention", "answer", target.Id.Value[..8], "33333333", "Measure it with two conductor gates."],
+            kernel,
+            workspace);
+        var item = Xunit.Assert.Single(await store.ListAsync(target.Id.Value));
+
+        Xunit.Assert.Equal(
+            $"Failed to resolve clarification '33333333' for goal '{target.Id.Value[..8]}'.{Environment.NewLine}",
+            output);
+        Xunit.Assert.Equal(CollaborationItemStatus.Raised, item.Status);
+        Xunit.Assert.Null(item.Resolution);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_attention_answer_goal_prefix_accepts_text_file")]
     public async Task CliAttentionAnswerGoalPrefixAcceptsTextFile()
