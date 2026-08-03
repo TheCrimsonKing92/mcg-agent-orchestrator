@@ -1901,6 +1901,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 check.Name,
                 StringComparison.Ordinal));
         Assert.Contains("collapsed from 5 focused targets", result.Summary);
+        Assert.NotNull(result.Coverage);
+        Assert.True(result.Coverage.CollapseEngaged);
+        var targetCoverage = Assert.Single(result.Coverage.TargetToChecks);
+        Assert.Equal(
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests",
+            targetCoverage.Target);
+        var coveringCheck = Assert.Single(targetCoverage.CheckNames);
+        Assert.EndsWith(": Remainder", coveringCheck, StringComparison.Ordinal);
         var testCalls = calls
             .Where(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
             .ToArray();

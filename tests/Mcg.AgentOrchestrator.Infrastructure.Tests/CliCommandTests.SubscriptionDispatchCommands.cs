@@ -2240,6 +2240,46 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Contains("either inline text or --text-file", ex.Message);
     }
 
+    [Xunit.Fact]
+    public void AddTask_GoalTarget_AddsTaskToNamedGoal()
+    {
+        var workspace = CreateRefinedWorkspace(CreateTempDirectory());
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(
+            "Target goal",
+            [
+                new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer)
+            ]);
+        var current = kernel.CreateGoal(
+            "Current goal",
+            [new TaskSpec(TaskId.New(), "Implement elsewhere", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = current;
+        kernel.ActivateGoal(target.Id, agents);
+        kernel.ActivateGoal(current.Id, agents);
+
+        var command = $"add-task --goal {target.Id.Value[..8]} Tester Resolve pre-review mapping --before-role Reviewer";
+        CliCommandDispatcher.ExecuteCommand(
+            CliArgumentParser.SplitCommand(command),
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        Xunit.Assert.Contains(target.Tasks, task =>
+            task.RequiredRole == AgentRole.Tester && task.Description == "Resolve pre-review mapping");
+        Xunit.Assert.True(
+            target.Tasks.ToList().FindIndex(task => task.RequiredRole == AgentRole.Tester) <
+            target.Tasks.ToList().FindIndex(task => task.RequiredRole == AgentRole.Reviewer));
+        Xunit.Assert.DoesNotContain(current.Tasks, task => task.RequiredRole == AgentRole.Tester);
+        Xunit.Assert.Equal(target.Id, currentGoal?.Id);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_note_preserves_task_and_allows_subscription_dispatch_and_retry")]
     public void CliNotePreservesTaskAndAllowsSubscriptionDispatchAndRetry()

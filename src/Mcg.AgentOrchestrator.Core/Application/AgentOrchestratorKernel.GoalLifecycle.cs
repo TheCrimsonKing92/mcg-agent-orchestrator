@@ -47,12 +47,32 @@ public sealed partial class AgentOrchestratorKernel
         return new DelegationPlan(goal.Id, assignments);
     }
 
-    public TaskSpec AddTask(GoalId goalId, AgentRole requiredRole, string description, IReadOnlyList<AgentDefinition>? availableAgents = null, string? verificationPlan = null)
+    public TaskSpec AddTask(
+        GoalId goalId,
+        AgentRole requiredRole,
+        string description,
+        IReadOnlyList<AgentDefinition>? availableAgents = null,
+        string? verificationPlan = null,
+        AgentRole? beforeRole = null)
     {
         var goal = GetGoal(goalId);
         var task = new TaskSpec(TaskId.New(), description, requiredRole, verificationPlan);
-        goal.AddTask(task);
-        Append(goal, task.Id, ProgressKind.TaskAdded, $"Added {requiredRole} task.");
+        if (beforeRole is { } targetRole)
+        {
+            goal.AddTaskBeforeRole(task, targetRole);
+        }
+        else
+        {
+            goal.AddTask(task);
+        }
+
+        Append(
+            goal,
+            task.Id,
+            ProgressKind.TaskAdded,
+            beforeRole is null
+                ? $"Added {requiredRole} task."
+                : $"Added {requiredRole} task before {beforeRole}.");
 
         if (availableAgents is not null)
         {
@@ -189,6 +209,23 @@ public sealed partial class AgentOrchestratorKernel
                 $"pointer={receipt.EvidencePointer ?? "none"}.");
         }
 
+        return task;
+    }
+
+    public TaskSpec RecordPreReviewMappingEscalationSuppressed(
+        GoalId goalId,
+        TaskId reviewerTaskId,
+        string candidateSha,
+        int suppressedCount)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(reviewerTaskId);
+        Append(
+            goal,
+            reviewerTaskId,
+            ProgressKind.PreReviewMappingEscalationSuppressed,
+            $"Pre-review mapping escalation suppressed: goal={goalId.Value}; candidate_sha={candidateSha}; " +
+            $"disposition={PreReviewEvidenceDisposition.MappingNeedsInput}; suppressed_count={suppressedCount}.");
         return task;
     }
 

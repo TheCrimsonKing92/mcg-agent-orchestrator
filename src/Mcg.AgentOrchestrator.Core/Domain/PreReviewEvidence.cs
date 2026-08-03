@@ -31,7 +31,8 @@ public sealed record PreReviewEvidenceReceipt(
     IReadOnlyList<string> FailingTestIdentities,
     string MappingReason,
     string? EvidencePointer,
-    DateTimeOffset RecordedAt)
+    DateTimeOffset RecordedAt,
+    IReadOnlyList<string>? Advisories = null)
 {
     public bool MatchesCurrentCandidate(
         string goalId,
@@ -53,7 +54,8 @@ public sealed record PreReviewEvidenceReceipt(
         Checks.Zip(other.Checks).All(pair => CheckContentEquals(pair.First, pair.Second)) &&
         FailingTestIdentities.SequenceEqual(other.FailingTestIdentities, StringComparer.Ordinal) &&
         string.Equals(MappingReason, other.MappingReason, StringComparison.Ordinal) &&
-        string.Equals(EvidencePointer, other.EvidencePointer, StringComparison.OrdinalIgnoreCase);
+        string.Equals(EvidencePointer, other.EvidencePointer, StringComparison.OrdinalIgnoreCase) &&
+        (Advisories ?? []).SequenceEqual(other.Advisories ?? [], StringComparer.Ordinal);
 
     private static bool CheckContentEquals(
         PreReviewEvidenceCheckReceipt left,

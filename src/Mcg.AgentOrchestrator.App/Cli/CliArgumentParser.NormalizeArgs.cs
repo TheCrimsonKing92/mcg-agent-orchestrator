@@ -192,9 +192,29 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("add-task", StringComparison.OrdinalIgnoreCase))
     {
-        return args.Length >= 3
-            ? NormalizeTargetTextCommandWithFileFlags(args, 1, "--text-file")
-            : args;
+        if (args.Length < 3)
+        {
+            return args;
+        }
+
+        var targetIndex = args[1].Equals("--goal", StringComparison.OrdinalIgnoreCase) ? 3 : 1;
+        var beforeRoleIndex = Array.FindIndex(
+            args,
+            targetIndex + 1,
+            arg => arg.Equals("--before-role", StringComparison.OrdinalIgnoreCase));
+        if (beforeRoleIndex < 0)
+        {
+            return NormalizeTargetTextCommandWithFileFlags(args, targetIndex, "--text-file");
+        }
+
+        var normalized = args.Take(targetIndex + 1).ToList();
+        if (beforeRoleIndex > targetIndex + 1)
+        {
+            normalized.Add(string.Join(' ', args.Skip(targetIndex + 1).Take(beforeRoleIndex - targetIndex - 1)));
+        }
+
+        normalized.AddRange(args.Skip(beforeRoleIndex));
+        return normalized;
     }
 
     if (command.Equals("agent", StringComparison.OrdinalIgnoreCase) ||

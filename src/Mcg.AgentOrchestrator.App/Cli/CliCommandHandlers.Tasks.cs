@@ -295,10 +295,32 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return false;
 
         case "add-task":
-            CliArgumentParser.RequirePartCount(parts, 3, "add-task <role> <description> | add-task <role> --text-file <path>");
-            context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
-            var taskDescription = ResolveTextArgument(parts, inlineIndex: 2, "add-task <role> <description> | add-task <role> --text-file <path>", "--text-file");
-            var addedTask = context.Kernel.AddTask(context.CurrentGoal.Id, CliArgumentParser.ParseAgentRole(parts[1]), taskDescription, context.Agents);
+            var addTaskUsage = "add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
+            CliArgumentParser.RequirePartCount(parts, 3, addTaskUsage);
+            var hasGoalTarget = parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase);
+            if (hasGoalTarget && parts.Count < 5)
+            {
+                throw new ArgumentException($"Usage: {addTaskUsage}");
+            }
+
+            context.CurrentGoal = hasGoalTarget
+                ? OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[2])
+                : OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
+            var roleIndex = hasGoalTarget ? 3 : 1;
+            var taskDescription = ResolveTextArgument(
+                parts,
+                inlineIndex: roleIndex + 1,
+                addTaskUsage,
+                "--text-file");
+            var beforeRoleValue = GetFlagValue(parts, "--before-role");
+            var addedTask = context.Kernel.AddTask(
+                context.CurrentGoal.Id,
+                CliArgumentParser.ParseAgentRole(parts[roleIndex]),
+                taskDescription,
+                context.Agents,
+                beforeRole: beforeRoleValue is null
+                    ? null
+                    : CliArgumentParser.ParseAgentRole(beforeRoleValue));
             ConsoleViews.PrintTask(context.CurrentGoal, addedTask);
             return true;
 

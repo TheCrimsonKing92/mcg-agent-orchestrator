@@ -51,7 +51,16 @@ public sealed record FocusedEvidenceRunResult(
     bool Accepted,
     bool Passed,
     string Summary,
-    IReadOnlyList<AcceptanceCheckResult> Checks);
+    IReadOnlyList<AcceptanceCheckResult> Checks,
+    FocusedEvidenceCoverage? Coverage = null);
+
+public sealed record FocusedEvidenceTargetCoverage(
+    string Target,
+    IReadOnlyList<string> CheckNames);
+
+public sealed record FocusedEvidenceCoverage(
+    bool CollapseEngaged,
+    IReadOnlyList<FocusedEvidenceTargetCoverage> TargetToChecks);
 
 public interface IGoalAcceptanceVerifier
 {
@@ -559,7 +568,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 request,
                 engineSettings.InfrastructureTestLanes,
                 out var focusedChecks,
-                out var collapsed,
+                out var coverage,
                 out var rejection))
         {
             return new FocusedEvidenceRunResult(
@@ -600,7 +609,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var collapseSummary = FormatFocusedEvidenceCollapseSummary(focusedChecks, collapsed);
+        var collapseSummary = FormatFocusedEvidenceCollapseSummary(focusedChecks, coverage.CollapseEngaged);
         var summary = failed is null
             ? $"focused evidence passed: {checks.Count} check(s){collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
             : $"focused evidence failed: {failed.Name} exit {failed.ExitCode}{collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
@@ -609,7 +618,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Accepted: true,
             Passed: failed is null,
             Summary: summary,
-            Checks: checks);
+            Checks: checks,
+            Coverage: coverage);
         if (evidence.Passed)
         {
             runEnvironmentScope.MarkSuccessful();
@@ -1029,11 +1039,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string request,
         IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
-        out bool collapsed,
+        out FocusedEvidenceCoverage coverage,
         out string rejection)
     {
         checks = [];
-        collapsed = false;
+        coverage = new FocusedEvidenceCoverage(CollapseEngaged: false, TargetToChecks: []);
         rejection = string.Empty;
         var items = request
             .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -1043,7 +1053,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        var validated = new List<(string Project, string? Filter)>();
+        var validated = new List<(string Target, string Project, string? Filter)>();
         var totalTargets = 0;
         foreach (var item in items)
         {
@@ -1074,13 +1084,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             totalTargets += targetCount;
-            validated.Add((project, filter));
+            validated.Add((item, project, filter));
         }
 
         var built = new List<AcceptanceManifestCheck>();
+        var targetToChecks = new List<FocusedEvidenceTargetCoverage>();
         if (totalTargets > MaxFocusedEvidenceTargets)
         {
-            collapsed = true;
             var emittedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var item in validated)
             {
@@ -1107,12 +1117,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     built.Add(projectCheck);
                 }
             }
+
+            foreach (var item in validated)
+            {
+                targetToChecks.Add(new FocusedEvidenceTargetCoverage(
+                    item.Target,
+                    built
+                        .Where(check =>
+                            string.Equals(check.Project, item.Project, StringComparison.OrdinalIgnoreCase) &&
+                            FocusedTargetMatchesCheck(item.Filter, check))
+                        .Select(check => check.Name)
+                        .ToArray()));
+            }
         }
         else
         {
             foreach (var item in validated)
             {
-                built.Add(new AcceptanceManifestCheck
+                var check = new AcceptanceManifestCheck
                 {
                     Name = item.Filter is null
                         ? $"reviewer mapped project evidence: {ProjectLabel(item.Project)}"
@@ -1127,12 +1149,60 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         ? ["--verbosity", "minimal"]
                         : ["--verbosity", "minimal", "--filter", item.Filter],
                     TimeoutMinutes = 10
-                });
+                };
+                built.Add(check);
+                targetToChecks.Add(new FocusedEvidenceTargetCoverage(item.Target, [check.Name]));
             }
         }
 
         checks = built;
+        coverage = new FocusedEvidenceCoverage(
+            CollapseEngaged: totalTargets > MaxFocusedEvidenceTargets,
+            TargetToChecks: targetToChecks);
         return true;
+    }
+
+    private static bool FocusedTargetMatchesCheck(
+        string? focusedFilter,
+        AcceptanceManifestCheck check)
+    {
+        if (string.IsNullOrWhiteSpace(focusedFilter) ||
+            !TryExtractFilter(check.Arguments, out var checkFilter))
+        {
+            return true;
+        }
+
+        var focusedClasses = Regex.Matches(
+                focusedFilter,
+                @"FullyQualifiedName\s*~\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)",
+                RegexOptions.IgnoreCase)
+            .Select(match => match.Groups["value"].Value)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return focusedClasses.Length == 0 ||
+            focusedClasses.Any(testClass => MtpFilterSelectsClass(checkFilter, testClass));
+    }
+
+    private static bool MtpFilterSelectsClass(string filter, string testClass)
+    {
+        var translated = TranslateMtpFilter(filter).ToArray();
+        var includes = new List<string>();
+        var excludes = new List<string>();
+        for (var index = 0; index + 1 < translated.Length; index += 2)
+        {
+            var value = translated[index + 1].Trim('*');
+            if (translated[index].Equals("--filter-class", StringComparison.OrdinalIgnoreCase))
+            {
+                includes.Add(value);
+            }
+            else if (translated[index].Equals("--filter-not-class", StringComparison.OrdinalIgnoreCase))
+            {
+                excludes.Add(value);
+            }
+        }
+
+        return (includes.Count == 0 || includes.Any(value => testClass.Contains(value, StringComparison.OrdinalIgnoreCase))) &&
+            !excludes.Any(value => testClass.Contains(value, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool TryResolveFocusedEvidenceProject(string alias, out string project)
