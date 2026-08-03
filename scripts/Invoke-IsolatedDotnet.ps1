@@ -137,7 +137,7 @@ if ($FocusedTest) {
     $validFocusedFilter = -not [string]::IsNullOrWhiteSpace($FocusedTestFilter) -and
         [System.Text.RegularExpressions.Regex]::IsMatch(
             $FocusedTestFilter,
-            '\AFullyQualifiedName~[A-Za-z_][A-Za-z0-9_]*(?:\|FullyQualifiedName~[A-Za-z_][A-Za-z0-9_]*)*\z',
+            '\AFullyQualifiedName~[A-Za-z_][A-Za-z0-9_]{7,}(?:\|FullyQualifiedName~[A-Za-z_][A-Za-z0-9_]{7,})*\z',
             [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
     if (-not $validFocusedFilter -or
         $FocusedBudgetSeconds -lt 1 -or $FocusedBudgetSeconds -gt 300 -or
@@ -824,7 +824,7 @@ function Get-FocusedWorktreeState {
         Commit = $head
         DirtyFiles = @($dirtyFiles)
         DirtyDigest = Get-Sha256Text -Value $digestInput
-        IsDirty = $dirtyFiles.Count -gt 0
+        IsDirty = @($dirtyFiles).Count -gt 0
     }
 }
 
@@ -957,7 +957,7 @@ function Get-FocusedMtpFilterArguments {
     foreach ($clause in $Filter.Split('|')) {
         $match = [System.Text.RegularExpressions.Regex]::Match(
             $clause,
-            '\AFullyQualifiedName~(?<token>[A-Za-z_][A-Za-z0-9_]*)\z',
+            '\AFullyQualifiedName~(?<token>[A-Za-z_][A-Za-z0-9_]{7,})\z',
             [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
         if (-not $match.Success) {
             throw "Focused test filter contains an unvalidated clause."
@@ -1053,44 +1053,68 @@ function Enter-FocusedBuildSlot {
         for ($offset = 0; $offset -lt $SlotCount; $offset++) {
             $slot = ($PreferredSlot + $offset) % $SlotCount
             $path = Join-Path $lockDirectory "build-$slot.lock"
-            $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+            $priorityPath = "$path.acceptance-priority.lock"
+            $priorityStream = [System.IO.File]::Open($priorityPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+            $priorityHeld = $false
             try {
-                $stream.Lock(0, 1)
-                $heartbeatPath = Join-Path $lockDirectory "activity-$slot.heartbeat.json"
                 try {
-                    $heartbeatTimestamp = [DateTime]::UtcNow.ToString('o')
-                    [ordered]@{
-                        goalId = $GoalId
-                        phase = "focused-test"
-                        currentTarget = $FocusedTestFilter
-                        slotIndex = $slot
-                        processId = $PID
-                        childPid = $null
-                        state = "running"
-                        startedAt = $heartbeatTimestamp
-                        lastObservedAt = $heartbeatTimestamp
-                        lastProgressAt = $heartbeatTimestamp
-                        stdoutBytes = 0
-                        stderrBytes = 0
-                        outputBytes = 0
-                    } | ConvertTo-Json | Set-Content -LiteralPath $heartbeatPath
+                    $priorityStream.Lock(0, 1)
+                    $priorityHeld = $true
                 }
-                catch {
-                    $heartbeatError = $_.Exception
-                    $stream.Unlock(0, 1)
+                catch [System.IO.IOException] {
+                    continue
+                }
+
+                $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+                try {
+                    $stream.Lock(0, 1)
+                    $heartbeatPath = Join-Path $lockDirectory "activity-$slot.heartbeat.json"
+                    try {
+                        $heartbeatTimestamp = [DateTime]::UtcNow.ToString('o')
+                        [ordered]@{
+                            goalId = $GoalId
+                            phase = "focused-test"
+                            currentTarget = $FocusedTestFilter
+                            slotIndex = $slot
+                            processId = $PID
+                            childPid = $null
+                            state = "running"
+                            startedAt = $heartbeatTimestamp
+                            lastObservedAt = $heartbeatTimestamp
+                            lastProgressAt = $heartbeatTimestamp
+                            stdoutBytes = 0
+                            stderrBytes = 0
+                            outputBytes = 0
+                        } | ConvertTo-Json | Set-Content -LiteralPath $heartbeatPath
+                    }
+                    catch {
+                        $heartbeatError = $_.Exception
+                        $stream.Unlock(0, 1)
+                        $stream.Dispose()
+                        throw [System.InvalidOperationException]::new("Focused slot heartbeat could not be created.", $heartbeatError)
+                    }
+                    return [pscustomobject]@{
+                        Slot = $slot
+                        Id = "build-$slot"
+                        Path = $path
+                        Stream = $stream
+                        HeartbeatPath = $heartbeatPath
+                    }
+                }
+                catch [System.IO.IOException] {
                     $stream.Dispose()
-                    throw [System.InvalidOperationException]::new("Focused slot heartbeat could not be created.", $heartbeatError)
-                }
-                return [pscustomobject]@{
-                    Slot = $slot
-                    Id = "build-$slot"
-                    Path = $path
-                    Stream = $stream
-                    HeartbeatPath = $heartbeatPath
                 }
             }
-            catch [System.IO.IOException] {
-                $stream.Dispose()
+            finally {
+                if ($priorityHeld) {
+                    try {
+                        $priorityStream.Unlock(0, 1)
+                    }
+                    catch {
+                        # The reservation is advisory only after the authoritative build-slot lease is held.
+                    }
+                }
+                $priorityStream.Dispose()
             }
         }
 
@@ -1517,6 +1541,17 @@ function Invoke-FocusedTestMode {
         catch {
             $receipt.worktreeStateAfter = [ordered]@{ error = $_.Exception.Message; unchanged = $false }
         }
+        if ($receipt.buildPerformed) {
+            try {
+                & dotnet build-server shutdown *> $null
+                if ($LASTEXITCODE -ne 0) {
+                    $receipt.buildServerShutdownError = "dotnet build-server shutdown exited $LASTEXITCODE."
+                }
+            }
+            catch {
+                $receipt.buildServerShutdownError = $_.Exception.Message
+            }
+        }
         if ($null -ne $slotLease) {
             try {
                 if (Test-Path -LiteralPath $slotLease.HeartbeatPath -PathType Leaf) {
@@ -1642,16 +1677,40 @@ Remove-Item Env:MCG_ORCHESTRATOR_WORKER_DISPATCH -ErrorAction SilentlyContinue
 
 $lockStream = $null
 $lockHeld = $false
+$acceptancePriorityStream = $null
+$acceptancePriorityHeld = $false
 $exitCode = 1
 try {
     $lockDirectory = Split-Path -Parent $executionLockPath
     New-Item -ItemType Directory -Force -Path $lockDirectory | Out-Null
+    $acceptancePriorityPath = "$executionLockPath.acceptance-priority.lock"
+    $acceptancePriorityDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not $acceptancePriorityHeld) {
+        $acceptancePriorityStream = [System.IO.File]::Open($acceptancePriorityPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+        try {
+            $acceptancePriorityStream.Lock(0, 1)
+            $acceptancePriorityHeld = $true
+        }
+        catch [System.IO.IOException] {
+            $acceptancePriorityStream.Dispose()
+            $acceptancePriorityStream = $null
+            if ([DateTime]::UtcNow -ge $acceptancePriorityDeadline) {
+                throw "Timed out reserving acceptance priority for build lease execution lock: $executionLockPath"
+            }
+            Start-Sleep -Milliseconds 50
+        }
+    }
+
     $deadline = [DateTime]::UtcNow.AddMinutes(5)
     while (-not $lockHeld) {
         $lockStream = [System.IO.File]::Open($executionLockPath, [System.IO.FileMode]::OpenOrCreate, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
         try {
             $lockStream.Lock(0, 1)
             $lockHeld = $true
+            $acceptancePriorityStream.Unlock(0, 1)
+            $acceptancePriorityStream.Dispose()
+            $acceptancePriorityStream = $null
+            $acceptancePriorityHeld = $false
             if (-not $ReuseArtifacts) {
                 Initialize-ArtifactsDirectory -Path $artifactsPath -OwnerToken $ownerToken -ForceClean $staleLockCleared
             }
@@ -1710,6 +1769,14 @@ try {
     }
 }
 finally {
+    if ($acceptancePriorityHeld -and $null -ne $acceptancePriorityStream) {
+        try {
+            $acceptancePriorityStream.Unlock(0, 1)
+        }
+        catch {
+        }
+        $acceptancePriorityStream.Dispose()
+    }
     if ($lockHeld -and $null -ne $lockStream) {
         & dotnet build-server shutdown *> $null
         $lockStream.Unlock(0, 1)
