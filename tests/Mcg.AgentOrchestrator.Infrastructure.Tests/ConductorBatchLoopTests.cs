@@ -504,8 +504,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(0, relaunchCalls);
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_runs_disjoint_gate_ready_acceptance_concurrently_on_distinct_slots")]
-    public void BatchLoopRunsDisjointGateReadyAcceptanceConcurrentlyOnDistinctSlots()
+    [Xunit.Fact]
+    public void BatchLoopDocIntersectionAdmitsConcurrentlyWithEvidence()
     {
         var kernel = new AgentOrchestratorKernel();
         var goalA = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/A.cs");
@@ -579,8 +579,8 @@ public sealed class ConductorBatchLoopTests
                     return new LandingResult(goal.Id.Value, goal.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "ok");
                 },
                 getLandingFileScopes: goal => goal.Id == goalA.Id
-                    ? ["src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
-                    : ["src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"],
+                    ? ["docs/test-design-discipline.md", "src/Mcg.AgentOrchestrator.App/Orchestration/A.cs"]
+                    : ["docs\\test-design-discipline.md", "src/Mcg.AgentOrchestrator.App/Orchestration/B.cs"],
                 parallelAcceptanceAttemptCoordinator: ThreadedAcceptanceAttemptCoordinator(attemptRoot, out waitForAttempts));
 
             BatchTickSummary? startTick = null;
@@ -631,6 +631,7 @@ public sealed class ConductorBatchLoopTests
                 {
                     Assert.True(attempt.OwnerProcessId > 0);
                     Assert.Equal(ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind, attempt.Kind);
+                    Assert.Contains("docs/test-design-discipline.md", attempt.ScopePaths ?? []);
                     using var heartbeat = JsonDocument.Parse(File.ReadAllText(attempt.HeartbeatPath));
                     Assert.Equal(ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind, heartbeat.RootElement.GetProperty("kind").GetString());
                     Assert.Equal(attempt.OwnerProcessId, heartbeat.RootElement.GetProperty("childPid").GetInt32());
@@ -638,6 +639,12 @@ public sealed class ConductorBatchLoopTests
                         heartbeat.RootElement.GetProperty("ownedPids").EnumerateArray(),
                         pid => pid.GetInt32() == attempt.OwnerProcessId);
                 });
+            Assert.Contains(startTick!.ProgressLines!, line =>
+                line.Contains("ADMISSION", StringComparison.Ordinal) &&
+                line.Contains("result=admitted", StringComparison.Ordinal) &&
+                line.Contains("reason=documentation-exclusion", StringComparison.Ordinal) &&
+                line.Contains("excludedPathCount=1", StringComparison.Ordinal) &&
+                line.Contains("excludedPathSample=docs/test-design-discipline.md", StringComparison.Ordinal));
             Assert.Contains(startTick!.ProgressLines!, line => line.Contains("ACCEPTANCE", StringComparison.Ordinal) && line.Contains("result=started", StringComparison.Ordinal));
             Assert.Contains(reconcileTick!.ProgressLines!, line => line.Contains("ACCEPTANCE", StringComparison.Ordinal) && line.Contains("result=passed", StringComparison.Ordinal));
         }
