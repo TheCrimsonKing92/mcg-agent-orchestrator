@@ -481,6 +481,65 @@ public sealed class DispatchExecutionTests
     Assert.False(goal.Timeline.Any(evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted));
 }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reuses_open_human_input_request_on_second_attempt")]
+    public void RecordDispatchExecutionResultReusesOpenHumanInputRequestOnSecondAttempt()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Converge repeated dispatch blocker");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("developer", "develop", "C:\\repo", clock.UtcNow));
+        var stdout = WorkerResultStdout(
+                "none",
+                "not-run - blocked on operator decision",
+                "exact-blocker - completion requires out-of-scope production hook plumbing") +
+            Environment.NewLine +
+            "HUMAN_INPUT: Authorize expanding scope to production hooks?";
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "develop",
+                "C:\\repo",
+                0,
+                stdout,
+                string.Empty,
+                clock.UtcNow,
+                WorkerResultPresent: true));
+        var firstRequest = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        var firstRequestId = firstRequest.Id;
+        var firstResumeCommand = firstRequest.ResumeCommand;
+
+        clock.Advance();
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "develop",
+                "C:\\repo",
+                0,
+                stdout,
+                string.Empty,
+                clock.UtcNow,
+                WorkerResultPresent: true));
+
+        var reusedRequest = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        Assert.Equal(firstRequestId, reusedRequest.Id);
+        Assert.Equal(firstResumeCommand, reusedRequest.ResumeCommand);
+        Assert.Contains(firstRequestId.Value[..8], reusedRequest.ResumeCommand, StringComparison.Ordinal);
+        Assert.Equal(new HumanInputRequestCounts(1, 1), kernel.GetHumanInputRequestCounts(goal.Id, task.Id));
+        Assert.Equal(1, reusedRequest.SuppressionCount);
+        Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.HumanInputRequested));
+        Assert.Contains(goal.Timeline, item =>
+            item.Kind == ProgressKind.DuplicateHumanInputSuppressed &&
+            item.Message.Contains(firstRequestId.Value[..8], StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_ignores_explicit_no_human_input_summary")]
     public void RecordDispatchExecutionResultIgnoresExplicitNoHumanInputSummary()
 {
