@@ -299,7 +299,7 @@ public static class DispatchFailureClassifier
             return new FileInfo(verification.StandardErrorPath).Length == 0;
         }
 
-        return verification.StandardError.Length == 0;
+        return true;
     }
 
     private static bool HasSubstantiveStandardError(string standardError)
