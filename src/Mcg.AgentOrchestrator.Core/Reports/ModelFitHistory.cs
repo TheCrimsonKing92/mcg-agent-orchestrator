@@ -63,7 +63,7 @@ public static class ModelFitHistory
             task.LastVerification?.CompletedAt ?? dispatch.DispatchedAt,
             outcome.Rule,
             outcome.Class,
-            dispatch.DispatchLane);
+            dispatch.DispatchLane ?? dispatch.WorkerName);
     }
 
     public static IReadOnlyList<ModelFitHistoryRow> FromGoals(IEnumerable<Goal> goals)

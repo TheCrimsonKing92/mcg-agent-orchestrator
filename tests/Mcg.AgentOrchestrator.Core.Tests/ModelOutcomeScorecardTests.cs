@@ -196,6 +196,27 @@ public sealed class ModelOutcomeScorecardTests
         Assert.Equal(TaskOutcomeClass.ManufacturedFixed, classification.Class);
     }
 
+    [Xunit.Fact(DisplayName = "TaskOutcomeClassifier_timeline_recognizes_legacy_sandbox1312_rule_without_outcome_class")]
+    public void TaskOutcomeClassifierTimelineRecognizesLegacySandbox1312RuleWithoutOutcomeClass()
+    {
+        var goalId = GoalId.New();
+        var taskId = TaskId.New();
+        var timeline = new[]
+        {
+            new ProgressEvent(
+                goalId,
+                taskId,
+                ProgressKind.TaskNote,
+                "CLASSIFIER rule=provider-sandbox1312; verdict=SandboxCommitBlocked",
+                DateTimeOffset.UtcNow)
+        };
+
+        var classification = TaskOutcomeClassifier.FromTimeline(timeline, taskId, WorkTaskStatus.Failed);
+
+        Assert.Equal("provider-sandbox1312", classification.Rule);
+        Assert.Equal(TaskOutcomeClass.ManufacturedFixed, classification.Class);
+    }
+
     [Xunit.Fact(DisplayName = "LoopHealthReport_uses_timeline_outcome_class_for_failed_model_mix")]
     public void LoopHealthReportUsesTimelineOutcomeClassForFailedModelMix()
     {
@@ -213,6 +234,7 @@ public sealed class ModelOutcomeScorecardTests
 
         Assert.Equal(0, record.RealFailures);
         Assert.Equal(1, record.EnvironmentalFailures);
+        Assert.Equal("worker-cli", record.DispatchLane);
     }
 
     [Xunit.Fact(DisplayName = "ModelFitHistory_best_fit_uses_real_failures_not_total_failures")]
@@ -250,8 +272,15 @@ public sealed class ModelOutcomeScorecardTests
                 WorkDir,
                 exitCode,
                 exitCode == 0 ? "ok" : "worker produced substantive failure output",
-                exitCode == 0 ? string.Empty : "powershell.exe: ParserError: Missing closing quote in command argument.",
+                exitCode == 0 ? string.Empty : "error",
             at));
+        if (exitCode != 0)
+        {
+            kernel.RecordTaskNote(
+                goal.Id,
+                task.Id,
+                "CLASSIFIER rule=real-failure; outcome_class=real-failure; verdict=UnknownFailure");
+        }
     }
 
     private static ModelFitHistoryRow Row(int seconds, WorkTaskStatus outcome, string rule)

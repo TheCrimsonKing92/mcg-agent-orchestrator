@@ -713,25 +713,6 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification)));
         }
 
-        if (verification.ExitCode != 0 &&
-            HasPromptRetryRealFailureEvidence(verification))
-        {
-            return BuildOutcome(
-                TaskOutcomeRules.RealFailure,
-                task,
-                verification,
-                workerResultPresent,
-                hasCommittedChanges,
-                new DispatchOutcome(
-                DispatchOutcomeKind.UnknownFailure,
-                exitCode,
-                hasZeroByteOutput,
-                null,
-                null,
-                RecoveryRecommendation.AutoRetry,
-                BuildRealFailureEvidenceSummary(verification)));
-        }
-
         return BuildOutcome(
             TaskOutcomeRules.UnknownFailure,
             task,
@@ -1110,28 +1091,6 @@ public static class DispatchFailureClassifier
             ? TruncateEvidence(line)
             : BuildEvidenceSummary(verification);
 
-    private static string BuildRealFailureEvidenceSummary(TaskVerificationRecord verification)
-    {
-        var substantiveLines = GetSubstantiveStandardErrorLines(verification)
-            .TakeLast(3)
-            .ToArray();
-
-        return substantiveLines.Length == 0
-            ? BuildEvidenceSummary(verification)
-            : $"real-failure stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
-    }
-
-    private static bool HasPromptRetryRealFailureEvidence(TaskVerificationRecord verification)
-    {
-        var substantiveLines = GetSubstantiveStandardErrorLines(verification).ToArray();
-        return substantiveLines.Length >= 3 ||
-            substantiveLines.Any(IsScriptingOrEnvironmentFailureLine);
-    }
-
-    private static IEnumerable<string> GetSubstantiveStandardErrorLines(TaskVerificationRecord verification) =>
-        GetStandardErrorEvidenceLines(verification)
-            .Where(line => !IsRunnerBookkeepingLine(line));
-
     private static IEnumerable<string> GetStandardErrorEvidenceLines(TaskVerificationRecord verification)
     {
         foreach (var line in EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true))
@@ -1139,15 +1098,6 @@ public static class DispatchFailureClassifier
             yield return line;
         }
     }
-
-    private static bool IsScriptingOrEnvironmentFailureLine(string line) =>
-        line.Contains("ParserError", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("powershell.exe", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("CommandNotFoundException", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("NativeCommandError", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("No such file or directory", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("cannot access the file", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("is not recognized", StringComparison.OrdinalIgnoreCase);
 
     private static string BuildVerifiedNoNewCommitEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
     {

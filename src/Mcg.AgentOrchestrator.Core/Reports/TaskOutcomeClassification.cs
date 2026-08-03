@@ -46,6 +46,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule UnknownFailure = new("unknown-failure", TaskOutcomeClass.UnknownEra);
 
     private static readonly TaskOutcomeRule RecoverableSubscriptionLimitLegacy = new("recoverable-subscription-limit", TaskOutcomeClass.Environmental);
+    private static readonly TaskOutcomeRule ProviderSandbox1312Legacy = new("provider-sandbox1312", TaskOutcomeClass.ManufacturedFixed);
 
     public static IReadOnlyList<TaskOutcomeRule> Produced { get; } =
     [
@@ -74,6 +75,7 @@ internal static class TaskOutcomeRules
 
     public static IReadOnlyDictionary<string, TaskOutcomeRule> Known { get; } = Produced
         .Append(RecoverableSubscriptionLimitLegacy)
+        .Append(ProviderSandbox1312Legacy)
         .ToDictionary(rule => rule.Token, StringComparer.OrdinalIgnoreCase);
 }
 

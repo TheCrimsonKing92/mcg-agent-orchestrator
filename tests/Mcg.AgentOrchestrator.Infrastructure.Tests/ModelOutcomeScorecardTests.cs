@@ -164,8 +164,12 @@ public sealed class ModelOutcomeScorecardTests
             WorkDir,
             1,
             stdout,
-            "powershell.exe: ParserError: Missing closing quote in command argument.",
+            "Error: task failed",
             DateTimeOffset.UtcNow);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+        kernel.RecordTaskNote(
+            goal.Id,
+            task.Id,
+            "CLASSIFIER rule=real-failure; outcome_class=real-failure; verdict=UnknownFailure");
     }
 }
