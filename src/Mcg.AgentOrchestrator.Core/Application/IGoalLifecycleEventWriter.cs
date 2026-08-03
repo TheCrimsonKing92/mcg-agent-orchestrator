@@ -9,6 +9,13 @@ public interface IGoalLifecycleEventWriter
     void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName);
     void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt);
     void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures);
+    void AppendAcceptanceCriterionWaived(
+        GoalId goalId,
+        string criterion,
+        string actor,
+        DateTimeOffset recordedAt,
+        string reason,
+        string capturedAcceptanceCriteriaHash);
     void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch);
     void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha);
     void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source);
@@ -47,6 +54,7 @@ public sealed class NullGoalLifecycleEventWriter : IGoalLifecycleEventWriter
     public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
     public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) { }
     public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures) { }
+    public void AppendAcceptanceCriterionWaived(GoalId goalId, string criterion, string actor, DateTimeOffset recordedAt, string reason, string capturedAcceptanceCriteriaHash) { }
     public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
     public void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha) { }
     public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }

@@ -183,6 +183,11 @@ public sealed class ProgressiveReviewGlanceTests
             VerificationClass.TestVerifiable,
             [],
             []));
+        kernel.WaiveAcceptanceCriterion(
+            goal.Id,
+            "1",
+            "requires a conductor-owned external harness",
+            "operator:miles");
         kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["retry feedback is not the criteria correction overlay"]);
         kernel.RecordTaskNote(
             goal.Id,
@@ -209,7 +214,7 @@ public sealed class ProgressiveReviewGlanceTests
             new RecordingGlanceEvents(),
             utcNow: () => now,
             options: new ProgressiveReviewGlanceOptions(
-                CriteriaCorrectionOverlayCharacterLimit: 320,
+                CriteriaCorrectionOverlayCharacterLimit: 450,
                 CriteriaCorrectionOverlayItemLimit: 3,
                 ChangedFilePromptLimit: 5,
                 ChangedFileListCharacterLimit: 80,
@@ -227,6 +232,9 @@ public sealed class ProgressiveReviewGlanceTests
         Xunit.Assert.Contains("ACCEPTANCE", inputs.AcceptanceSection, StringComparison.Ordinal);
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("Correct criterion B", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("supersedes=\"criterion B\"", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("status=waived", StringComparison.Ordinal));
+        Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("reason=\"requires a conductor-owned external harness\"", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(inputs.CriteriaCorrectionOverlay, item => item.Contains("correction=\"WAIVED:", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(inputs.CriteriaCorrectionOverlay, item => item.Contains("retry feedback", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain(inputs.CriteriaCorrectionOverlay, item => item.Contains("xxxxxxxxxx", StringComparison.Ordinal));
         Xunit.Assert.Contains(inputs.CriteriaCorrectionOverlay, item => item.Contains("more criteria correction", StringComparison.Ordinal));
@@ -838,6 +846,7 @@ public sealed class ProgressiveReviewGlanceTests
         public void AppendTaskDispatched(GoalId goalId, TaskId taskId, AgentRole role, string workerName) { }
         public void AppendWorkerProgress(GoalId goalId, long stdoutBytes, long stderrBytes, DateTimeOffset lastProgressAt) { }
         public void AppendAcceptanceResult(GoalId goalId, bool pass, IReadOnlyList<string> failures) { }
+        public void AppendAcceptanceCriterionWaived(GoalId goalId, string criterion, string actor, DateTimeOffset recordedAt, string reason, string capturedAcceptanceCriteriaHash) { }
         public void AppendGoalLanded(GoalId goalId, string integrationBranch, string goalBranch) { }
         public void AppendGoalLandedFromAncestry(GoalId goalId, string goalBranch, string branchTip, string mainSha) { }
         public void AppendGoalEscalated(GoalId goalId, GoalLifecycleState state, string reason, string source) { }

@@ -173,21 +173,29 @@ public sealed class Goal
     {
         var normalizedSuperseded = RequireText(correction.SupersededCriterion, nameof(correction.SupersededCriterion));
         var normalizedCorrection = RequireText(correction.Correction, nameof(correction.Correction));
-        var normalizedActor = RequireText(correction.Actor, nameof(correction.Actor));
+        var normalizedActor = NormalizeSingleLine(correction.Actor, nameof(correction.Actor));
         var normalized = correction with
         {
             SupersededCriterion = normalizedSuperseded,
             Correction = normalizedCorrection,
-            Actor = normalizedActor
+            Actor = normalizedActor,
+            CapturedAcceptanceCriteriaHash = NormalizeOptionalText(correction.CapturedAcceptanceCriteriaHash)
         };
 
-        if (_effectiveAcceptanceCriteriaCorrections.Any(existing =>
-            string.Equals(existing.SupersededCriterion, normalized.SupersededCriterion, StringComparison.Ordinal) &&
-            string.Equals(existing.Correction, normalized.Correction, StringComparison.Ordinal) &&
-            string.Equals(existing.Actor, normalized.Actor, StringComparison.Ordinal) &&
-            existing.RecordedAt == normalized.RecordedAt &&
-            existing.SourceTaskId == normalized.SourceTaskId &&
-            existing.SourceKind == normalized.SourceKind))
+        var duplicate = normalized.IsWaiver
+            ? _effectiveAcceptanceCriteriaCorrections.Any(existing =>
+                existing.IsWaiver &&
+                string.Equals(existing.SupersededCriterion, normalized.SupersededCriterion, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(existing.Actor, normalized.Actor, StringComparison.OrdinalIgnoreCase))
+            : _effectiveAcceptanceCriteriaCorrections.Any(existing =>
+                !existing.IsWaiver &&
+                string.Equals(existing.SupersededCriterion, normalized.SupersededCriterion, StringComparison.Ordinal) &&
+                string.Equals(existing.Correction, normalized.Correction, StringComparison.Ordinal) &&
+                string.Equals(existing.Actor, normalized.Actor, StringComparison.Ordinal) &&
+                existing.RecordedAt == normalized.RecordedAt &&
+                existing.SourceTaskId == normalized.SourceTaskId &&
+                existing.SourceKind == normalized.SourceKind);
+        if (duplicate)
         {
             return false;
         }
@@ -256,7 +264,9 @@ public sealed class Goal
                     correction.Actor,
                     correction.RecordedAt,
                     correction.SourceTaskId?.Value,
-                    correction.SourceKind)).ToList(),
+                    correction.SourceKind,
+                    correction.IsWaiver,
+                    correction.CapturedAcceptanceCriteriaHash)).ToList(),
             AutomaticAcceptanceRetryCount: AutomaticAcceptanceRetryCount,
             OperatorAcceptanceRegateCount: OperatorAcceptanceRegateCount);
     }
@@ -332,7 +342,9 @@ public sealed class Goal
                 correction.Actor,
                 correction.RecordedAt,
                 correction.SourceTaskId is null ? null : new TaskId(correction.SourceTaskId),
-                correction.SourceKind));
+                correction.SourceKind,
+                correction.IsWaiver,
+                correction.CapturedAcceptanceCriteriaHash));
         }
 
         goal.RestoreAcceptanceRetryCounts(
@@ -357,6 +369,13 @@ public sealed class Goal
 
         return value.Trim();
     }
+
+    private static string NormalizeSingleLine(string value, string parameterName) =>
+        string.Join(' ', RequireText(value, parameterName)
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    private static string? NormalizeOptionalText(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string? NormalizeSha(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

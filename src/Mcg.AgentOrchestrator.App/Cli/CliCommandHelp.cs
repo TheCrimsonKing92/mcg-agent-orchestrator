@@ -13,6 +13,7 @@ internal static class CliCommandHelp
     public const string VerifyManualUsage = "Usage: verify-manual <task-number> <passed|failed> <note> | verify-manual <task-number> <passed|failed> --text-file <path>";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
+    public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
     public const string AnswerUsage = "Usage: answer <request-id> <answer> | answer <request-id> --text-file <path>";
     public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss <goal-id-prefix> | attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
@@ -120,6 +121,11 @@ internal static class CliCommandHelp
         AcceptanceRetryUsage,
         "Re-run an environmentally failed acceptance gate without retrying worker tasks.",
         ["--confirm-acceptance-retry", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry GoalAmend = new(
+        GoalAmendUsage,
+        "Waive one acceptance criterion on an in-flight goal with durable audit provenance.",
+        ["--waive", "--reason", "--reason-file", "--text-file", "--actor", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Answer = new(
         AnswerUsage,
@@ -443,6 +449,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("acceptance-retry", StringComparison.OrdinalIgnoreCase))
         {
             entry = AcceptanceRetry;
+            return true;
+        }
+
+        if (args[0].Equals("goal-amend", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = GoalAmend;
             return true;
         }
 

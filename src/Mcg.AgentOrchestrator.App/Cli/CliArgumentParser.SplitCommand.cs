@@ -144,6 +144,11 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return SplitTargetCommandWithValueFlags(command, remainder, "--title", "--description", "--priority", "--tags", "--status");
     }
 
+    if (command.Equals("goal-amend", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitTargetCommandWithValueFlags(command, remainder, "--waive", "--reason", "--reason-file", "--text-file", "--actor");
+    }
+
     if (command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
     {
         return SplitTargetTextCommandWithFileFlags(command, remainder, "--reason-file", "--text-file");

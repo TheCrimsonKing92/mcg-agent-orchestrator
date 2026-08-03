@@ -11,7 +11,27 @@ public sealed class ProgressiveReviewSteeringTests
         var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
         var root = CreateGitRepository("mcg-steer-warm");
         var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
-        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var (kernel, goal, task) = RunningDeveloper(
+            root,
+            now,
+            head,
+            sessionId: "session-12345678",
+            clockOffsetAfterDispatch: TimeSpan.FromSeconds(1));
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Keep the warm dispatch scoped",
+            ["preserve the accepted implementation", "  use a conductor-owned measurement  ", "ship the operator receipt"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
+        var originalPrompt = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+        var cancelledPromptPath = task.LastDispatch.PromptPath!;
+        File.WriteAllText(cancelledPromptPath, originalPrompt);
+        kernel.WaiveAcceptanceCriterion(
+            goal.Id,
+            "use a conductor-owned measurement",
+            "the worker cannot drive the real conductor:",
+            "operator:miles");
         var store = new InMemoryProgressiveReviewSteeringStore();
         var intent = Intent(goal, task, now, "fix the scoped slice");
         store.EnqueueIntentAsync(intent).GetAwaiter().GetResult();
@@ -60,9 +80,12 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.True(order.IndexOf("start") > order.IndexOf("probe:6001"));
         var receipt = Assert.Single(store.Receipts);
         Assert.Equal("warm-resume", receipt.Decision);
+        Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("AcceptanceCriteriaHash:Passed:", StringComparison.Ordinal));
+        Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("NoCriteriaCorrectionSinceCapture:Passed:", StringComparison.Ordinal));
         Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
         Assert.Contains(receipt.AdmissionChecks, check => check.StartsWith("SameGoal:Passed:", StringComparison.Ordinal));
-        Assert.Equal(308, receipt.CancelledInputTokens);
+        var expectedCancelledInputTokens = Math.Max(1, File.ReadAllText(cancelledPromptPath).Length / 4);
+        Assert.Equal(expectedCancelledInputTokens, receipt.CancelledInputTokens);
         Assert.True(receipt.SteeredInputTokens > 0);
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
     }
@@ -421,10 +444,10 @@ public sealed class ProgressiveReviewSteeringTests
         var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
         var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
         Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
-        File.WriteAllText(task.LastDispatch.PromptPath!, "Acceptance criteria:\n- old criterion\n");
+        File.WriteAllText(task.LastDispatch.PromptPath!, "Acceptance criteria:\n- original criterion\n");
         kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
             "contract",
-            ["new criterion"],
+            ["changed criterion"],
             VerificationClass.TestVerifiable,
             [],
             []));
@@ -914,10 +937,12 @@ public sealed class ProgressiveReviewSteeringTests
         string root,
         DateTimeOffset dispatchedAt,
         string? worktreeHead,
-        string? sessionId)
+        string? sessionId,
+        TimeSpan? clockOffsetAfterDispatch = null)
     {
         Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "logs"));
-        var kernel = new AgentOrchestratorKernel();
+        var clock = new TestClock(dispatchedAt);
+        var kernel = new AgentOrchestratorKernel(clock);
         var task = new TaskSpec(new TaskId("developer-task-0001"), "Implement feature.\n\nACCEPTANCE\n- Stay scoped", AgentRole.Developer);
         var goal = kernel.CreateGoal(new GoalId("goal-progressive-review-0001"), "Progressive review steering goal", [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
@@ -947,6 +972,10 @@ public sealed class ProgressiveReviewSteeringTests
             null,
             OwnedProcessIds: [6001]);
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        if (clockOffsetAfterDispatch is { } offset)
+        {
+            clock.Advance(offset);
+        }
         return (kernel, goal, task);
     }
 
@@ -1021,6 +1050,8 @@ public sealed class ProgressiveReviewSteeringTests
 
     private sealed class TestClock(DateTimeOffset utcNow) : IClock
     {
-        public DateTimeOffset UtcNow { get; } = utcNow;
+        public DateTimeOffset UtcNow { get; private set; } = utcNow;
+
+        public void Advance(TimeSpan duration) => UtcNow = UtcNow.Add(duration);
     }
 }

@@ -60,7 +60,8 @@ public sealed record InquiryAdmissionContext(
     DateTimeOffset? LatestCriteriaCorrectionAt,
     DateTimeOffset? LatestIntegrationChangeAt,
     bool SessionConsumedByNonForkedInquiry,
-    int SessionTurnCount);
+    int SessionTurnCount,
+    bool? CriteriaCorrectionSinceCapture = null);
 
 public sealed record InquiryAdmissionDecision(IReadOnlyList<InquiryAdmissionCheck> Checks)
 {
@@ -125,10 +126,11 @@ public static class InquiryResumeAdmission
                 "parent provider session is not retired",
                 "parent provider session is retired"),
             CheckSpawnHead(parentDispatch, context),
-            CheckNotAfter(
+            CheckCriteriaCorrection(
                 InquiryAdmissionCheckKind.NoCriteriaCorrectionSinceCapture,
                 context.LatestCriteriaCorrectionAt,
                 parentDispatch.DispatchedAt,
+                context.CriteriaCorrectionSinceCapture,
                 "no criteria correction recorded after parent dispatch",
                 "criteria correction recorded after parent dispatch"),
             CheckNotAfter(
@@ -204,6 +206,24 @@ public static class InquiryResumeAdmission
         return candidate is null || candidate <= cutoff
             ? Pass(kind, passed)
             : Fail(kind, $"{failedPrefix}: {candidate:u}");
+    }
+
+    private static InquiryAdmissionCheck CheckCriteriaCorrection(
+        InquiryAdmissionCheckKind kind,
+        DateTimeOffset? candidate,
+        DateTimeOffset cutoff,
+        bool? correctionSinceCapture,
+        string passed,
+        string failedPrefix)
+    {
+        if (correctionSinceCapture.HasValue)
+        {
+            return correctionSinceCapture.Value
+                ? Fail(kind, candidate is null ? failedPrefix : $"{failedPrefix}: {candidate:u}")
+                : Pass(kind, passed);
+        }
+
+        return CheckNotAfter(kind, candidate, cutoff, passed, failedPrefix);
     }
 
     private static InquiryAdmissionCheck Check(InquiryAdmissionCheckKind kind, bool passed, string passReason, string failReason) =>

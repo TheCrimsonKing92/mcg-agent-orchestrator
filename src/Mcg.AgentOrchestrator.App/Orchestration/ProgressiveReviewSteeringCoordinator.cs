@@ -247,6 +247,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         var requestedProvider = ResolveCurrentProviderKind(task);
         var requestedModel = ResolveCurrentModelName(goal, task);
         var latestIntegrationChange = LatestIntegrationChangeAfter(_workspace.GoalLifecycleEventsDirectory, goal.Id, originalDispatch.DispatchedAt);
+        var uncapturedCriteriaCorrection = FindUncapturedCriteriaCorrection(goal, originalDispatch.DispatchedAt);
         var context = new InquiryAdmissionContext(
             goal.Id,
             task.Id,
@@ -257,13 +258,11 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             currentHead,
             _capturedHeadIsAncestor(currentWorktree, originalDispatch.WorktreeHeadSha, currentHead),
             _utcNow(),
-            goal.EffectiveAcceptanceCriteriaCorrections
-                .Where(correction => correction.RecordedAt > originalDispatch.DispatchedAt)
-                .Select(correction => (DateTimeOffset?)correction.RecordedAt)
-                .FirstOrDefault(),
+            uncapturedCriteriaCorrection?.RecordedAt,
             latestIntegrationChange,
             false,
-            Math.Max(1, EstimateTokens(ProgressiveReviewGlanceCoordinator.ReadTranscriptTail(originalProcess))));
+            Math.Max(1, EstimateTokens(ProgressiveReviewGlanceCoordinator.ReadTranscriptTail(originalProcess))),
+            CriteriaCorrectionSinceCapture: uncapturedCriteriaCorrection is not null);
         var decision = InquiryResumeAdmission.Evaluate(
             goal,
             task,
@@ -770,13 +769,18 @@ Evidence: {intent.MisdirectionEvidence}
         if (goal.RefinedSpec is null)
             return Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, "goal has no refined acceptance criteria hash to compare");
 
+        var currentCriteria = BuildEffectiveAcceptanceCriteriaSnapshot(goal);
+        var currentHash = HashText(string.Join("\n", currentCriteria));
+        if (FindLatestValidAcceptanceCriteriaCaptureIndex(goal, currentHash) >= 0)
+        {
+            return Pass(
+                InquiryAdmissionCheckKind.AcceptanceCriteriaHash,
+                $"audited waiver re-captured effective acceptance criteria hash {currentHash[..16]}");
+        }
+
         if (!TryReadText(originalDispatch.PromptPath, out var prompt))
             return Fail(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, "spawn prompt unavailable; cannot compare acceptance criteria hash");
 
-        var currentCriteria = goal.RefinedSpec.AcceptanceCriteria
-            .Select(criterion => criterion.Trim())
-            .ToArray();
-        var currentHash = HashText(string.Join("\n", currentCriteria));
         if (prompt.Contains(currentHash, StringComparison.OrdinalIgnoreCase))
             return Pass(InquiryAdmissionCheckKind.AcceptanceCriteriaHash, $"acceptance criteria hash {currentHash[..16]} unchanged from spawn prompt");
 
@@ -805,6 +809,9 @@ Evidence: {intent.MisdirectionEvidence}
                 continue;
             }
 
+            if (criteria.Count > 0 && rawLine.Length > 0 && char.IsWhiteSpace(rawLine[0]))
+                continue;
+
             if (line.StartsWith("## ", StringComparison.Ordinal) ||
                 line.EndsWith(":", StringComparison.Ordinal))
             {
@@ -822,6 +829,48 @@ Evidence: {intent.MisdirectionEvidence}
         }
 
         return criteria;
+    }
+
+    private static IReadOnlyList<string> BuildEffectiveAcceptanceCriteriaSnapshot(Goal goal)
+    {
+        return EffectiveAcceptanceCriteriaVersion.BuildSnapshot(
+            goal.RefinedSpec!,
+            goal.EffectiveAcceptanceCriteriaCorrections);
+    }
+
+    private static EffectiveAcceptanceCriteriaCorrection? FindUncapturedCriteriaCorrection(
+        Goal goal,
+        DateTimeOffset dispatchedAt)
+    {
+        var corrections = goal.EffectiveAcceptanceCriteriaCorrections;
+        var currentHash = goal.RefinedSpec is null
+            ? null
+            : EffectiveAcceptanceCriteriaVersion.ComputeHash(goal.RefinedSpec, corrections);
+        var captureIndex = currentHash is null
+            ? -1
+            : FindLatestValidAcceptanceCriteriaCaptureIndex(goal, currentHash);
+
+        if (captureIndex >= 0)
+        {
+            return captureIndex + 1 < corrections.Count ? corrections[captureIndex + 1] : null;
+        }
+
+        return corrections.FirstOrDefault(correction => correction.RecordedAt >= dispatchedAt);
+    }
+
+    private static int FindLatestValidAcceptanceCriteriaCaptureIndex(Goal goal, string currentHash)
+    {
+        for (var index = goal.EffectiveAcceptanceCriteriaCorrections.Count - 1; index >= 0; index--)
+        {
+            var correction = goal.EffectiveAcceptanceCriteriaCorrections[index];
+            if (correction.IsWaiver &&
+                string.Equals(correction.CapturedAcceptanceCriteriaHash, currentHash, StringComparison.OrdinalIgnoreCase))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private static InquiryAdmissionCheck BuildBranchMovementCheck(TaskDispatchRecord originalDispatch, string? currentHead, bool capturedHeadIsAncestor)
@@ -964,7 +1013,9 @@ Evidence: {intent.MisdirectionEvidence}
                 var source = correction.SourceTaskId is null
                     ? correction.SourceKind.ToString()
                     : $"{correction.SourceKind}:{correction.SourceTaskId.Value}";
-                return $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
+                return correction.IsWaiver
+                    ? $"criterion=\"{correction.SupersededCriterion}\"; status=waived; reason=\"{correction.WaiverReason}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}"
+                    : $"supersedes=\"{correction.SupersededCriterion}\"; correction=\"{correction.Correction}\"; actor={correction.Actor}; recordedAt={correction.RecordedAt:u}; source={source}";
             })
             .ToArray();
     }

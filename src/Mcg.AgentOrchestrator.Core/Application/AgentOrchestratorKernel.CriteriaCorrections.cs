@@ -4,6 +4,54 @@ public sealed partial class AgentOrchestratorKernel
 {
     private const string CriteriaCorrectionActor = "operator";
 
+    public EffectiveAcceptanceCriteriaCorrection WaiveAcceptanceCriterion(
+        GoalId goalId,
+        string criterionReference,
+        string reason,
+        string actor = CriteriaCorrectionActor)
+    {
+        var goal = GetGoal(goalId);
+        if (goal.Status == GoalStatus.Draft || goal.IsTerminal)
+        {
+            throw new InvalidOperationException(
+                $"Goal '{goal.Id.Value[..8]}' is {goal.Status}; acceptance criteria can only be waived on an in-flight goal.");
+        }
+
+        var spec = goal.RefinedSpec
+            ?? throw new InvalidOperationException($"Goal '{goal.Id.Value[..8]}' has no refined acceptance criteria to waive.");
+        var criterion = ResolveAcceptanceCriterion(spec.AcceptanceCriteria, criterionReference).Trim();
+        var normalizedReason = NormalizeWaiverLine(reason, nameof(reason));
+        var normalizedActor = NormalizeWaiverLine(actor, nameof(actor));
+        var pendingWaiver = EffectiveAcceptanceCriteriaCorrection.Waiver(
+            criterion,
+            normalizedReason,
+            normalizedActor,
+            _clock.UtcNow);
+        var capturedHash = EffectiveAcceptanceCriteriaVersion.ComputeHash(
+            spec,
+            goal.EffectiveAcceptanceCriteriaCorrections.Append(pendingWaiver));
+        var waiver = pendingWaiver with { CapturedAcceptanceCriteriaHash = capturedHash };
+
+        if (!goal.AddEffectiveAcceptanceCriteriaCorrection(waiver))
+        {
+            throw new InvalidOperationException(
+                $"Acceptance criterion '{criterion}' already has this waiver recorded by {normalizedActor} at {waiver.RecordedAt:u}.");
+        }
+        Append(
+            goal,
+            null,
+            ProgressKind.GoalPolicyDecision,
+            $"Acceptance criterion waived by {normalizedActor}: {criterion}; reason: {normalizedReason}");
+        _eventWriter.AppendAcceptanceCriterionWaived(
+            goal.Id,
+            criterion,
+            normalizedActor,
+            waiver.RecordedAt,
+            normalizedReason,
+            capturedHash);
+        return waiver;
+    }
+
     private void RecordEffectiveAcceptanceCriteriaCorrections(
         Goal goal,
         TaskId? taskId,
@@ -96,4 +144,52 @@ public sealed partial class AgentOrchestratorKernel
 
         return findings.Count == 0 ? [blocker.Trim()] : findings;
     }
+
+    private static string ResolveAcceptanceCriterion(
+        IReadOnlyList<string> criteria,
+        string criterionReference)
+    {
+        var reference = RequireWaiverText(criterionReference, nameof(criterionReference));
+        if (criteria.Count == 0)
+        {
+            throw new InvalidOperationException("The refined specification has no acceptance criteria to waive.");
+        }
+
+        var numericReference = reference.StartsWith("criterion ", StringComparison.OrdinalIgnoreCase)
+            ? reference["criterion ".Length..].Trim()
+            : reference.TrimStart('#');
+        if (int.TryParse(
+                numericReference,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var ordinal))
+        {
+            if (ordinal < 1 || ordinal > criteria.Count)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(criterionReference),
+                    $"Acceptance criterion number must be between 1 and {criteria.Count}.");
+            }
+
+            return criteria[ordinal - 1];
+        }
+
+        return criteria.FirstOrDefault(criterion => string.Equals(criterion.Trim(), reference, StringComparison.OrdinalIgnoreCase))
+            ?? throw new KeyNotFoundException(
+                $"Acceptance criterion '{reference}' was not found. Use its 1-based number or exact text.");
+    }
+
+    private static string RequireWaiverText(string value, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException("Value cannot be empty.", parameterName);
+        }
+
+        return value.Trim();
+    }
+
+    private static string NormalizeWaiverLine(string value, string parameterName) =>
+        string.Join(' ', RequireWaiverText(value, parameterName)
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 }

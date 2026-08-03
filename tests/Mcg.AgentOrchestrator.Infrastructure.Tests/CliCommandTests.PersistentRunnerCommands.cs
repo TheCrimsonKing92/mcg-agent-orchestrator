@@ -886,6 +886,71 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains("provenance: operator", output);
     }
 
+    [Xunit.Fact]
+    public async Task GoalAmendWaivePersistsBriefAndAuditEvent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Implement the slice", AgentRole.Developer);
+        var reviewer = new TaskSpec(TaskId.New(), "Review the slice", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Recover acceptance scope", [developer, reviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Ship recoverable acceptance scope",
+            ["focused tests pass", "  measure unavailable makespan  "],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repository.SaveAsync(kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var reasonPath = Path.Combine(root, "waiver-reason.txt");
+        await File.WriteAllTextAsync(reasonPath, "requires conductor evidence:\r\nno worker substitute is acceptable");
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                CliArgumentParser.SplitCommand(
+                    $"goal-amend {goal.Id.Value[..8]} --waive 2 --reason-file {reasonPath} --actor operator:miles"),
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.True(changed);
+        });
+
+        var restored = await repository.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        var waiver = Xunit.Assert.Single(restoredGoal.EffectiveAcceptanceCriteriaCorrections);
+        var brief = restored.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        var eventPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{goal.Id.Value}.jsonl");
+        var auditLine = File.ReadLines(eventPath).Single(line =>
+        {
+            using var document = JsonDocument.Parse(line);
+            return document.RootElement.GetProperty("eventType").GetString() == "AcceptanceCriterionWaived";
+        });
+        using var auditEvent = JsonDocument.Parse(auditLine);
+
+        Xunit.Assert.Contains("Acceptance criterion waived", output);
+        Xunit.Assert.Contains("criterion=2", output);
+        Xunit.Assert.Equal("measure unavailable makespan", waiver.SupersededCriterion);
+        Xunit.Assert.Equal("requires conductor evidence: no worker substitute is acceptable", waiver.WaiverReason);
+        Xunit.Assert.Contains("- [WAIVED] measure unavailable makespan", brief);
+        Xunit.Assert.Contains("Reason: requires conductor evidence: no worker substitute is acceptable", brief);
+        Xunit.Assert.Equal("measure unavailable makespan", auditEvent.RootElement.GetProperty("criterion").GetString());
+        Xunit.Assert.Equal("operator:miles", auditEvent.RootElement.GetProperty("actor").GetString());
+        Xunit.Assert.Equal("requires conductor evidence: no worker substitute is acceptable", auditEvent.RootElement.GetProperty("reason").GetString());
+        Xunit.Assert.True(auditEvent.RootElement.TryGetProperty("recordedAt", out _));
+        Xunit.Assert.Equal(waiver.CapturedAcceptanceCriteriaHash, auditEvent.RootElement.GetProperty("capturedAcceptanceCriteriaHash").GetString());
+        Xunit.Assert.All(restoredGoal.Tasks, task => Xunit.Assert.Null(task.LastDispatch));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_ignores_volatile_snapshot_churn")]
     public void PersistentRunnerAcceptanceIgnoresVolatileSnapshotChurn()
     {

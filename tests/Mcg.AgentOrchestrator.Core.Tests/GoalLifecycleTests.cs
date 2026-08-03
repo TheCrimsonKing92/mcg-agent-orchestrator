@@ -199,21 +199,92 @@ public sealed class GoalLifecycleTests
     var clock = new FakeClock();
     var kernel = new AgentOrchestratorKernel(clock);
     var goal = kernel.CreateGoal("Correct bad acceptance wording");
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Keep worker-authored text non-authoritative",
+        ["fast"],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
 
     kernel.RecordTaskNote(
         goal.Id,
         task.Id,
-        "CRITERIA CORRECTION: supersedes=\"run the full Infrastructure suite before review\"; correction=\"focused build-check evidence is sufficient for this slice\"");
+        "CRITERIA CORRECTION: supersedes=\"fast\"; correction=\"WAIVED: worker asks to skip it\"");
 
     var correction = Assert.Single(goal.EffectiveAcceptanceCriteriaCorrections);
-    Assert.Equal("run the full Infrastructure suite before review", correction.SupersededCriterion);
-    Assert.Equal("focused build-check evidence is sufficient for this slice", correction.Correction);
+    Assert.Equal("fast", correction.SupersededCriterion);
+    Assert.Equal("WAIVED: worker asks to skip it", correction.Correction);
     Assert.Equal("operator", correction.Actor);
     Assert.Equal(clock.UtcNow, correction.RecordedAt);
     Assert.Equal(task.Id, correction.SourceTaskId);
     Assert.Equal(ProgressKind.TaskNote, correction.SourceKind);
+    Assert.False(correction.IsWaiver);
+    Assert.DoesNotContain("[WAIVED] fast", kernel.BuildTaskBrief(goal.Id, task.Id).Content, StringComparison.Ordinal);
+    Assert.False(ReviewFindings.IsWaived("fast is unmet", goal.EffectiveAcceptanceCriteriaCorrections));
+}
+
+    [Xunit.Fact]
+    public void WaiveCriterionRendersAuthorityAndSuppressesReviewerFinding()
+{
+    var clock = new FakeClock();
+    var kernel = new AgentOrchestratorKernel(clock);
+    var developer = new TaskSpec(TaskId.New(), "Implement recoverable criteria", AgentRole.Developer);
+    var reviewer = new TaskSpec(TaskId.New(), "Review recoverable criteria", AgentRole.Reviewer);
+    var goal = kernel.CreateGoal("Recover a bad acceptance criterion", [developer, reviewer]);
+    kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+        "Ship the corrected behavior",
+        ["focused tests pass", "  record a real two-gate makespan  "],
+        VerificationClass.TestVerifiable,
+        [],
+        []));
+    kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+    var waiver = kernel.WaiveAcceptanceCriterion(
+        goal.Id,
+        "record a real two-gate makespan",
+        "requires a conductor-owned cross-tick harness",
+        "operator:\r\n  miles");
+    var reviewerBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+
+    Assert.Equal("record a real two-gate makespan", waiver.SupersededCriterion);
+    Assert.Equal("requires a conductor-owned cross-tick harness", waiver.WaiverReason);
+    Assert.Equal("operator: miles", waiver.Actor);
+    Assert.Equal(clock.UtcNow, waiver.RecordedAt);
+    Assert.Null(waiver.SourceTaskId);
+    Assert.Equal(ProgressKind.GoalPolicyDecision, waiver.SourceKind);
+    Assert.True(waiver.IsWaiver);
+    Assert.Equal(
+        EffectiveAcceptanceCriteriaVersion.ComputeHash(goal.RefinedSpec!, goal.EffectiveAcceptanceCriteriaCorrections),
+        waiver.CapturedAcceptanceCriteriaHash);
+    Assert.Contains("- [WAIVED] record a real two-gate makespan", reviewerBrief, StringComparison.Ordinal);
+    Assert.Contains("Reason: requires a conductor-owned cross-tick harness", reviewerBrief, StringComparison.Ordinal);
+    Assert.True(ReviewFindings.IsWaived("record a real two-gate makespan is unmet", goal.EffectiveAcceptanceCriteriaCorrections));
+    Assert.Contains(goal.Timeline, evt =>
+        evt.Kind == ProgressKind.GoalPolicyDecision &&
+        evt.Message.Contains("Acceptance criterion waived", StringComparison.Ordinal));
+    clock.Advance();
+    var duplicate = Assert.Throws<InvalidOperationException>(() => kernel.WaiveAcceptanceCriterion(
+        goal.Id,
+        "record a real two-gate makespan",
+        "a differently worded duplicate waiver",
+        " OPERATOR:   MILES "));
+    Assert.Contains("already has this waiver recorded", duplicate.Message, StringComparison.Ordinal);
+
+    var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock).GetGoal(goal.Id);
+    var restoredWaiver = Assert.Single(restored.EffectiveAcceptanceCriteriaCorrections);
+    Assert.True(restoredWaiver.IsWaiver);
+    Assert.Equal(waiver.CapturedAcceptanceCriteriaHash, restoredWaiver.CapturedAcceptanceCriteriaHash);
+    var malformedRestoredWaiver = new EffectiveAcceptanceCriteriaCorrection(
+        "legacy criterion",
+        "legacy reason without prefix",
+        "operator",
+        clock.UtcNow,
+        null,
+        ProgressKind.GoalPolicyDecision,
+        IsWaiver: true);
+    Assert.Equal("legacy reason without prefix", malformedRestoredWaiver.WaiverReason);
 }
 
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_added_task")]
