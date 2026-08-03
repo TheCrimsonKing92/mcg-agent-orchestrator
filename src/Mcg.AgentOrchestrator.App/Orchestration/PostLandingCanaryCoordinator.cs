@@ -654,7 +654,7 @@ internal static class PostLandingCanaryFactory
     {
         var events = CreateEventStore(workspace, ensureSchema: true);
         var operatorItems = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-        var circuit = new AcceptanceEngineCircuitBreaker(events, operatorItems);
+        var circuit = CreateCircuit(workspace, events, operatorItems, progress);
         var coordinator = new PostLandingCanaryCoordinator(
             PostLandingCanaryConfiguration.Load(AppContext.BaseDirectory),
             new PostLandingCanaryRunner(
@@ -676,14 +676,18 @@ internal static class PostLandingCanaryFactory
                 CreateEventStore(
                     workspace,
                     ensureSchema: !File.Exists(workspace.RunEventStorePath)),
-                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+                stateReader: CreateBoundedStateReader(workspace),
+                stateUnavailableFallback: CreateStateUnavailableFallback(workspace));
         }
         catch
         {
-            // Defer SQLite access so Read() can surface the outage without blocking landings.
+            // Defer SQLite access so Read() can report Unavailable under the explicit landing policy.
             return new AcceptanceEngineCircuitBreaker(
                 CreateEventStore(workspace, ensureSchema: false),
-                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
+                CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
+                stateReader: CreateBoundedStateReader(workspace),
+                stateUnavailableFallback: CreateStateUnavailableFallback(workspace));
         }
     }
 
@@ -753,6 +757,46 @@ internal static class PostLandingCanaryFactory
                 workspace.RunEventStorePath,
                 ensureSchema),
             workspace.RunEventStorePath);
+
+    private static AcceptanceEngineCircuitBreaker CreateCircuit(
+        OrchestratorWorkspace workspace,
+        PostLandingCanaryEventStore events,
+        ICollaborationItemStore operatorItems,
+        Action<string>? progress) =>
+        new(
+            events,
+            operatorItems,
+            stateReader: CreateBoundedStateReader(workspace),
+            stateUnavailableFallback: CreateStateUnavailableFallback(workspace, progress));
+
+    private static PostLandingCanaryEventStore CreateBoundedStateReader(OrchestratorWorkspace workspace) =>
+        new(
+            new SqliteRunEventStore(
+                workspace.RunEventStorePath,
+                ensureSchema: false,
+                busyTimeoutMilliseconds: AcceptanceEngineCircuitBreaker.StateReadAttemptBusyTimeoutMilliseconds,
+                maxBusyRetries: 1),
+            workspace.RunEventStorePath);
+
+    private static Action<string> CreateStateUnavailableFallback(
+        OrchestratorWorkspace workspace,
+        Action<string>? progress = null) =>
+        detail =>
+        {
+            try
+            {
+                progress?.Invoke(detail);
+            }
+            catch
+            {
+                // The required conduct event below is the durable fallback.
+            }
+
+            new ConductEventLogWriter(workspace.ConductEventsLogPath).AppendRequired(
+                "acceptance-engine-state-unavailable",
+                goalId: null,
+                detail);
+        };
 }
 
 internal sealed class PostLandingCanarySerializationLease : IDisposable

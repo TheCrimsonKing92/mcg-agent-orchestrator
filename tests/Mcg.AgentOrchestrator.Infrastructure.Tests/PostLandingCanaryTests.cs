@@ -593,7 +593,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", acceptance, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Post-main factory failure is nonblocking and raises an operator item")]
+    [Xunit.Fact(DisplayName = "Post-main factory failure is nonblocking, fails closed, and raises an operator item")]
     public async Task PostMainFactoryFailureDefersAndRaisesOperatorItem()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-canary-factory-failure", Guid.NewGuid().ToString("N"));
@@ -612,9 +612,11 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
             Assert.Equal(PostLandingCanaryDisposition.Deferred, disposition);
             Assert.Equal(
-                AcceptanceEngineHealth.Healthy,
+                AcceptanceEngineHealth.Unavailable,
                 PostLandingCanaryFactory.CreateCircuit(workspace).Read().Health);
-            Assert.Null(PostLandingCanaryFactory.BuildMutationBlockReason(workspace));
+            var blockReason = PostLandingCanaryFactory.BuildMutationBlockReason(workspace);
+            Assert.NotNull(blockReason);
+            Assert.Contains("health=Unavailable policy=FailClosed outcome=denied", blockReason, StringComparison.Ordinal);
             var item = Assert.Single((await CollaborationItemStore
                 .ForDirectory(workspace.OrchestratorDirectory)
                 .GetAttentionQueueAsync())
@@ -738,6 +740,35 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var item = Assert.Single(await fixture.OperatorItems.GetAttentionQueueAsync());
         Assert.Contains("health=Unavailable policy=FailOpen outcome=permitted", item.Body, StringComparison.Ordinal);
         Assert.DoesNotContain("healthy", item.Body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Unavailable-state item failure emits a non-database operator fallback")]
+    public void UnavailableStateItemFailureEmitsOperatorFallback()
+    {
+        using var fixture = new CanaryTestFixture();
+        var fallbackLines = new List<string>();
+        var operatorItems = new FakeCollaborationItemStore
+        {
+            PendingRaise = Task.FromException<CollaborationItem>(
+                new InvalidOperationException("collaboration store unavailable"))
+        };
+        var stateReader = new ToggleAcceptanceEngineStateReader(fixture.Events)
+        {
+            Throws = true
+        };
+        var circuit = new AcceptanceEngineCircuitBreaker(
+            fixture.Events,
+            operatorItems,
+            stateReader: stateReader,
+            stateUnavailableFallback: fallbackLines.Add);
+
+        var snapshot = circuit.Read();
+
+        Assert.Equal(AcceptanceEngineHealth.Unavailable, snapshot.Health);
+        var fallback = Assert.Single(fallbackLines);
+        Assert.Contains("result=operator-item-error", fallback, StringComparison.Ordinal);
+        Assert.Contains("health=Unavailable policy=FailClosed outcome=denied", fallback, StringComparison.Ordinal);
+        Assert.Contains("InvalidOperationException: collaboration store unavailable", fallback, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "A transient state-read failure retries and returns the persisted fact")]
