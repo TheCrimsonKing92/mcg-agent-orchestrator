@@ -15,7 +15,6 @@ Shared anchors:
 - operating-the-goal-loop
 - safety
 - evidence
-- dispositive-decision-discipline
 <!-- HARNESS-COUNTERPART-CONTRACT:END -->
 
 Attention is scarce. Preserve it.
