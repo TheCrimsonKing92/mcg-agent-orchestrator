@@ -223,7 +223,7 @@ internal static class OperatorInbox
                 item.TaskId,
                 taskNumber,
                 $"Human input required for {WorkItemLabel(taskNumber)}",
-                item.Question,
+                $"{item.Question} Requests: {item.OpenRequestCount} open / {item.TotalRequestCount} total.",
                 item.SuggestedAction,
                 item.SuggestedAction,
                 $"answer {item.RequestId.Value[..8]} <answer>",

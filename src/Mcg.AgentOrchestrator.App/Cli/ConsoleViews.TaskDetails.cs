@@ -150,7 +150,10 @@ public static void PrintPendingHumanInput(AgentOrchestratorKernel kernel)
     foreach (var request in pending)
     {
         var task = request.TaskId is null ? "goal" : request.TaskId.Value[..8];
-        Console.WriteLine($"{request.Id.Value[..8]} goal={request.GoalId.Value[..8]} task={task}: {OutputTextPreview.CreateSummary(request.Question).Text}");
+        var counts = kernel.GetHumanInputRequestCounts(request.GoalId, request.TaskId);
+        Console.WriteLine(
+            $"{request.Id.Value[..8]} goal={request.GoalId.Value[..8]} task={task} " +
+            $"requests={counts.Open} open / {counts.Total} total: {OutputTextPreview.CreateSummary(request.Question).Text}");
     }
 }
 

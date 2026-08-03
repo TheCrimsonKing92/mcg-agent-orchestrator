@@ -117,13 +117,24 @@ public sealed class AgentTaskRunner
         var hasCompleteWorkerResult = WorkerResultBlockers.HasCompleteWorkerResult(output);
         if (humanInputQuestion is not null)
         {
+            var rawQuestion = humanInputQuestion;
+            string? accompanyingBlocker = null;
             if (hasCompleteWorkerResult &&
-                WorkerResultBlockers.TryFindBlocker(output, out var accompanyingBlocker))
+                WorkerResultBlockers.TryFindBlocker(output, out accompanyingBlocker))
             {
                 humanInputQuestion += $"{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {accompanyingBlocker}";
             }
 
-            _kernel.RequestHumanInput(goal.Id, task.Id, humanInputQuestion);
+            _kernel.RequestHumanInputDeduplicated(
+                goal.Id,
+                task.Id,
+                humanInputQuestion,
+                questionFingerprint: HumanInputRequest.BuildQuestionFingerprint(rawQuestion),
+                blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                    task.Id,
+                    task.RequiredRole,
+                    rawQuestion,
+                    accompanyingBlocker));
             return new AgentTaskRunResult(goal, task, execution);
         }
 
@@ -131,11 +142,18 @@ public sealed class AgentTaskRunner
             task.RequiredRole is AgentRole.Planner or AgentRole.Researcher &&
             WorkerResultBlockers.TryFindPremiseInvalidEvidence(output, out var premiseEvidence))
         {
-            _kernel.RequestHumanInput(
+            var question =
+                $"{task.RequiredRole} reported premise-invalid: {premiseEvidence}. " +
+                "Clarify, supersede, or abandon the goal before Developer dispatch.";
+            _kernel.RequestHumanInputDeduplicated(
                 goal.Id,
                 task.Id,
-                $"{task.RequiredRole} reported premise-invalid: {premiseEvidence}. " +
-                "Clarify, supersede, or abandon the goal before Developer dispatch.");
+                question,
+                blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                    task.Id,
+                    task.RequiredRole,
+                    question,
+                    premiseEvidence));
             return new AgentTaskRunResult(goal, task, execution);
         }
 

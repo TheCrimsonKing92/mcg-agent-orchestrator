@@ -677,13 +677,21 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var goal = kernel.CreateGoal("Goal with human input");
         kernel.ActivateGoal(goal.Id, [agent]);
         var task = goal.Tasks.First(t => t.RequiredRole == AgentRole.Developer);
-        var request = kernel.RequestHumanInput(
+        var creation = kernel.RequestHumanInputDeduplicated(
             goal.Id,
             task.Id,
             "What should I do?",
             HumanWaitKind.ProviderAuth,
             suggestedDefaultAnswer: "unused",
-            resumeCommand: "provider auth resume");
+            resumeCommand: "provider auth resume",
+            blockerFingerprint: "stable-worker-result");
+        var request = creation.Request;
+        kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "  WHAT should I do? ",
+            HumanWaitKind.ProviderAuth,
+            blockerFingerprint: "stable-worker-result");
 
         await repo.SaveAsync(kernel);
         var restored = await repo.LoadAsync();
@@ -698,6 +706,94 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.False(restoredRequest.IsAutoDefaultable);
         Assert.False(restoredRequest.IsDismissible);
         Assert.Equal("provider auth resume", restoredRequest.ResumeCommand);
+        Assert.Equal(HumanInputRequest.BuildQuestionFingerprint("What should I do?"), restoredRequest.QuestionFingerprint);
+        Assert.Equal("stable-worker-result", restoredRequest.BlockerFingerprint);
+        Assert.Equal(1, restoredRequest.SuppressionCount);
+    }
+
+    [Xunit.Fact]
+    public async Task TickMerge_persists_answered_suppression_count_and_threshold_failure()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Persist answered duplicate suppression", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: "unchanged-blocker").Request;
+        kernel.SubmitHumanInput(request.Id, "Authorized.");
+        await repo.SaveAsync(kernel);
+
+        for (var expectedCount = 1; expectedCount <= 3; expectedCount++)
+        {
+            var baselineKernel = await repo.LoadAsync();
+            var baseline = baselineKernel.ExportSnapshot();
+            var tickKernel = AgentOrchestratorKernel.FromSnapshot(baseline);
+            tickKernel.RequestHumanInputDeduplicated(
+                goal.Id,
+                task.Id,
+                "Expand scope?",
+                blockerFingerprint: "unchanged-blocker");
+            var current = tickKernel.ExportSnapshot();
+
+            await repo.SaveGoalSnapshotsWithMergeAsync(
+                [new GoalSnapshotSaveRequest(
+                    baseline.Goals.Single(),
+                    current.Goals.Single(),
+                    current.HumanInputRequests)]);
+
+            var restored = await repo.LoadAsync();
+            Assert.Equal(expectedCount, restored.GetHumanInputRequest(request.Id).SuppressionCount);
+        }
+
+        var final = await repo.LoadAsync();
+        Assert.Equal(WorkTaskStatus.Failed, final.GetTask(goal.Id, task.Id).Status);
+        Assert.Single(final.GetGoal(goal.Id).Timeline.Where(item =>
+            item.Kind == ProgressKind.TaskFailed &&
+            item.Message.Contains("suppression threshold 3 reached", StringComparison.Ordinal)));
+    }
+
+    [Xunit.Fact]
+    public async Task TickMerge_stale_open_request_preserves_answer_and_max_count()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve an out-of-band answer", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: "unchanged-blocker").Request;
+        await repo.SaveAsync(kernel);
+
+        var staleKernel = await repo.LoadAsync();
+        var staleBaseline = staleKernel.ExportSnapshot();
+        var operatorKernel = await repo.LoadAsync();
+        operatorKernel.SubmitHumanInput(request.Id, "Authorized.");
+        await repo.SaveAsync(operatorKernel);
+
+        staleKernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: "unchanged-blocker");
+        var staleCurrent = staleKernel.ExportSnapshot();
+        await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(
+                staleBaseline.Goals.Single(),
+                staleCurrent.Goals.Single(),
+                staleCurrent.HumanInputRequests)]);
+
+        var restored = await repo.LoadAsync();
+        var restoredRequest = restored.GetHumanInputRequest(request.Id);
+        Assert.True(restoredRequest.IsCompleted);
+        Assert.Equal("Authorized.", restoredRequest.Answer);
+        Assert.Equal(1, restoredRequest.SuppressionCount);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_upsert_updates_existing_row")]
@@ -1258,6 +1354,43 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(
             restored.GetGoal(goal.Id).Timeline,
             item => item.Kind == ProgressKind.HumanInputRequested);
+    }
+
+    [Xunit.Fact]
+    public async Task TransactGoalStateAsync_serializes_matching_request_creation()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Serialize matching human input", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        await repo.SaveAsync(kernel);
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            await repo.TransactGoalStateAsync<bool>(
+                goal.Id,
+                (state, _) =>
+                {
+                    Assert.NotNull(state);
+                    var transactionKernel = AgentOrchestratorKernel.FromSnapshot(
+                        new OrchestratorSnapshot([state.Goal], state.HumanInputRequests));
+                    transactionKernel.RequestHumanInputDeduplicated(
+                        goal.Id,
+                        task.Id,
+                        attempt == 0 ? "Authorize scope expansion?" : " authorize   SCOPE expansion? ",
+                        blockerFingerprint: "unchanged-worker-result");
+                    var snapshot = transactionKernel.ExportSnapshot();
+                    return Task.FromResult<(bool ShouldSave, GoalStateSnapshot? NewState, bool Result)>(
+                        (true, new GoalStateSnapshot(snapshot.Goals.Single(), snapshot.HumanInputRequests), true));
+                });
+        }
+
+        var restored = await repo.LoadAsync();
+        var request = Assert.Single(restored.GetPendingHumanInput(goal.Id));
+        Assert.Equal(1, request.SuppressionCount);
+        Assert.Equal(new HumanInputRequestCounts(1, 1), restored.GetHumanInputRequestCounts(goal.Id, task.Id));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_mid_tick_retry_and_tick_task_state")]

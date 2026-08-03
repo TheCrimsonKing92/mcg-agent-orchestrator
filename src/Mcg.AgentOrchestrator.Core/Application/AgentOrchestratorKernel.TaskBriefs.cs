@@ -118,6 +118,19 @@ public sealed partial class AgentOrchestratorKernel
         var pendingInput = GetPendingHumanInput(goalId)
             .Where(request => request.TaskId == taskId || request.TaskId is null)
             .ToList();
+        var resolvedInput = HumanInputRequests
+            .Where(request =>
+                request.GoalId == goalId &&
+                (request.TaskId == taskId || request.TaskId is null) &&
+                request.IsCompleted &&
+                !request.WasDismissed &&
+                !request.IsSyntheticParkedHumanWaitCompletion &&
+                request.SupersededByRequestId is null &&
+                !string.IsNullOrWhiteSpace(request.Answer))
+            .OrderByDescending(request => request.AnsweredAt)
+            .Take(8)
+            .OrderBy(request => request.AnsweredAt)
+            .ToList();
         var complexity = TaskComplexityEstimator.Estimate(task.Description, goal.Objective, task.RequiredRole);
         var timeline = PromptContextFormatter.SelectPromptTimelineEvents(
             goal.Timeline.Where(evt => (evt.TaskId == taskId || evt.TaskId is null) && !IsRedundantBriefTimelineEvent(task, evt)),
@@ -327,6 +340,23 @@ public sealed partial class AgentOrchestratorKernel
             }
             pendingInputLines.Add(string.Empty);
             segments.Add(TaskBriefSegment.Fixed(pendingInputLines));
+        }
+
+        if (resolvedInput.Count > 0)
+        {
+            var resolvedInputLines = new List<string>
+            {
+                "## Resolved Human Input",
+                "Apply these operator decisions. Do not ask the same question again unless the underlying blocker has materially changed."
+            };
+            foreach (var request in resolvedInput)
+            {
+                resolvedInputLines.Add(
+                    $"- {request.Id}: {PromptContextFormatter.TrimPromptBlock(request.Question)} " +
+                    $"→ {PromptContextFormatter.TrimPromptBlock(request.Answer!)}");
+            }
+            resolvedInputLines.Add(string.Empty);
+            segments.Add(TaskBriefSegment.Fixed(resolvedInputLines));
         }
 
         if (task.LastExecution is not null)

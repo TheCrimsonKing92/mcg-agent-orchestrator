@@ -92,7 +92,8 @@ public enum ProgressKind
     ReviewerEvidenceRunRecorded = 23,
     ReviewFindingContractViolationRecorded = 24,
     PreReviewEvidenceRecorded = 25,
-    TaskRequeueSkipped = 26
+    TaskRequeueSkipped = 26,
+    DuplicateHumanInputSuppressed = 27
 }
 
 public enum TaskAttentionKind

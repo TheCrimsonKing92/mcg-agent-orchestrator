@@ -48,12 +48,13 @@ public sealed partial class AgentOrchestratorKernel
 
         foreach (var request in pendingInput)
         {
+            var counts = GetHumanInputRequestCounts(goalId, request.TaskId);
             blockers.Add(new GoalAcceptanceBlocker(
                 GoalAcceptanceBlockerKind.PendingHumanInput,
                 request.TaskId,
                 request.Id,
-                request.Question,
-                "Answer the pending human input request."));
+                $"{request.Question} Requests: {counts.Open} open / {counts.Total} total.",
+                $"Answer the pending human input request. Requests: {counts.Open} open / {counts.Total} total."));
         }
 
         foreach (var taskGate in gate.Tasks.Where(task => task.GateStatus != VerificationGateStatus.Passed))
