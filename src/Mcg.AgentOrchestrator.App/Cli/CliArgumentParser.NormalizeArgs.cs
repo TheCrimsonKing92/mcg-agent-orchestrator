@@ -198,6 +198,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         }
 
         var targetIndex = args[1].Equals("--goal", StringComparison.OrdinalIgnoreCase) ? 3 : 1;
+        if (targetIndex >= args.Length)
+        {
+            return args;
+        }
+
         var beforeRoleIndex = Array.FindIndex(
             args,
             targetIndex + 1,

@@ -2241,6 +2241,16 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
     }
 
     [Xunit.Fact]
+    public void AddTask_GoalTargetWithoutRole_PreservesArgsForUsageError()
+    {
+        var args = new[] { "add-task", "--goal", "abcdef12" };
+
+        var normalized = CliArgumentParser.NormalizeArgs(args);
+
+        Xunit.Assert.Equal(args, normalized);
+    }
+
+    [Xunit.Fact]
     public void AddTask_GoalTarget_AddsTaskToNamedGoal()
     {
         var workspace = CreateRefinedWorkspace(CreateTempDirectory());
