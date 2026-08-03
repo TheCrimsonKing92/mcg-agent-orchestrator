@@ -1985,10 +1985,6 @@ public sealed class DispatchProcessHostTests
         try { wrapper?.Kill(entireProcessTree: true); } catch { }
         try { wrapper?.Dispose(); } catch { }
 
-        Assert.True(
-            ProcessCommandLines.Read([Environment.ProcessId]).ContainsKey(Environment.ProcessId),
-            "Grandchild fixture teardown could not enumerate process command lines; orphan verification did not run.");
-
         foreach (var fixtureProcessId in FindFixturePwshProcessIds(fixtureRoot))
         {
             TryKillProcess(fixtureProcessId);
@@ -2011,7 +2007,12 @@ public sealed class DispatchProcessHostTests
         try
         {
             var processIds = processes.Select(process => process.Id).ToArray();
-            var commandLines = ProcessCommandLines.Read(processIds);
+            if (processIds.Length == 0)
+            {
+                return [];
+            }
+
+            var commandLines = ReadFixtureProcessCommandLines(processIds, TimeSpan.FromSeconds(5));
             return commandLines
                 .Where(pair => pair.Value.Contains(fixtureRoot, StringComparison.OrdinalIgnoreCase))
                 .Select(pair => pair.Key)
@@ -2023,6 +2024,94 @@ public sealed class DispatchProcessHostTests
             {
                 process.Dispose();
             }
+        }
+    }
+
+    private static IReadOnlyDictionary<int, string> ReadFixtureProcessCommandLines(
+        IReadOnlyList<int> processIds,
+        TimeSpan timeout)
+    {
+        var commandLines = ProcessCommandLines.Read(processIds);
+        var unresolvedProcessIds = processIds
+            .Where(processId => !commandLines.ContainsKey(processId) && IsProcessAlive(processId))
+            .ToArray();
+        if (unresolvedProcessIds.Length == 0)
+        {
+            return commandLines;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new InvalidOperationException(
+                $"Grandchild fixture teardown could not read command lines for live pwsh processes: [{string.Join(',', unresolvedProcessIds)}].");
+        }
+
+        const string command =
+            "$filter = (($env:MCG_FIXTURE_PROCESS_IDS -split ',') | ForEach-Object { 'ProcessId = ' + $_ }) -join ' OR '; " +
+            "$items = @(Get-CimInstance -ClassName Win32_Process -Filter $filter -ErrorAction Stop | Select-Object ProcessId,CommandLine); " +
+            "ConvertTo-Json -InputObject $items -Compress";
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }.WithArguments(WorkerShell.BaseArguments().Concat([command]));
+        startInfo.Environment["MCG_FIXTURE_PROCESS_IDS"] = string.Join(',', unresolvedProcessIds);
+
+        using var query = ProcessTreeGuiSuppression.Start(startInfo);
+        var stdoutTask = query.StandardOutput.ReadToEndAsync();
+        var stderrTask = query.StandardError.ReadToEndAsync();
+        if (!query.WaitForExit((int)timeout.TotalMilliseconds))
+        {
+            try { query.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException(
+                $"Grandchild fixture command-line enumeration timed out after {timeout.TotalSeconds:0} seconds for live pwsh processes: [{string.Join(',', unresolvedProcessIds)}].");
+        }
+
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
+        if (query.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Grandchild fixture command-line enumeration failed with exit code {query.ExitCode} for live pwsh processes: [{string.Join(',', unresolvedProcessIds)}]. {stderr.Trim()}");
+        }
+
+        using var document = JsonDocument.Parse(stdout);
+        foreach (var item in document.RootElement.EnumerateArray())
+        {
+            if (item.TryGetProperty("ProcessId", out var processIdElement) &&
+                item.TryGetProperty("CommandLine", out var commandLineElement) &&
+                processIdElement.TryGetInt32(out var processId) &&
+                commandLineElement.GetString() is { Length: > 0 } processCommandLine)
+            {
+                commandLines[processId] = processCommandLine;
+            }
+        }
+
+        var stillUnresolved = unresolvedProcessIds
+            .Where(processId => !commandLines.ContainsKey(processId) && IsProcessAlive(processId))
+            .ToArray();
+        if (stillUnresolved.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Grandchild fixture teardown could not read command lines for live pwsh processes: [{string.Join(',', stillUnresolved)}].");
+        }
+
+        return commandLines;
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch
+        {
+            return false;
         }
     }
 
