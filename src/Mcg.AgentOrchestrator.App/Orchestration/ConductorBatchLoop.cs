@@ -1571,6 +1571,14 @@ internal sealed class ConductorBatchLoop
     {
         if (outcome is ConductorAdvanceOutcome.Held held)
         {
+            if (held.State is GoalLifecycleState.Running
+                or GoalLifecycleState.AwaitingVerification
+                or GoalLifecycleState.Verifying)
+            {
+                ClearGoalHold(kernel, goal, changedGoalIds);
+                return;
+            }
+
             TrackGoalHold(
                 kernel,
                 goal,
@@ -1596,29 +1604,48 @@ internal sealed class ConductorBatchLoop
         HashSet<GoalId> changedGoalIds,
         List<string> tickLines)
     {
-        var observation = kernel.ObserveGoalHold(
-            goal.Id,
-            state,
-            blocker,
-            observedAt,
-            stallThreshold);
-        if (observation.StateChanged)
+        try
         {
-            changedGoalIds.Add(goal.Id);
-        }
+            var observation = kernel.ObserveGoalHold(
+                goal.Id,
+                state,
+                blocker,
+                observedAt,
+                stallThreshold);
+            if (observation.StateChanged)
+            {
+                changedGoalIds.Add(goal.Id);
+            }
 
-        if (!observation.BecameStalled)
+            if (!observation.BecameStalled)
+            {
+                return;
+            }
+
+            var repeatedForSeconds = Math.Max(
+                0,
+                (long)(observedAt - observation.Hold.StartedAt).TotalSeconds);
+            EmitProgress(
+                $"GOAL_STALLED goal={goal.Id.Value[..8]} state={Sanitize(state)} " +
+                $"repeatedForSeconds={repeatedForSeconds} blocker={Sanitize(blocker)}",
+                tickLines);
+        }
+        catch (Exception ex)
         {
-            return;
+            // The watchdog is diagnostic safety infrastructure. A persistence or event-stream
+            // failure here must not take down the conductor loop it is meant to protect.
+            try
+            {
+                Console.Error.WriteLine(
+                    $"GOAL_STALL_TRACKING_FAILED goal={goal.Id.Value[..8]} " +
+                    $"exception={ex.GetType().Name} message={SanitizeHandoffDetail(ex.Message)}");
+                Console.Error.Flush();
+            }
+            catch
+            {
+                // Console diagnostics are best effort during fault isolation.
+            }
         }
-
-        var repeatedForSeconds = Math.Max(
-            0,
-            (long)(observedAt - observation.Hold.StartedAt).TotalSeconds);
-        EmitProgress(
-            $"GOAL_STALLED goal={goal.Id.Value[..8]} state={Sanitize(state)} " +
-            $"repeatedForSeconds={repeatedForSeconds} blocker={Sanitize(blocker)}",
-            tickLines);
     }
 
     private static void ClearGoalHold(

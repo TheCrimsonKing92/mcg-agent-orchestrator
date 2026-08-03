@@ -9080,6 +9080,41 @@ public sealed class ConductorBatchLoopTests
     }
 
     [Xunit.Fact]
+    public void GoalStall_EventStreamFailure_DoesNotStopLoop()
+    {
+        var root = CreateTempDirectory("mcg-goal-stall-event-failure");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var now = new DateTimeOffset(2026, 8, 3, 1, 30, 0, TimeSpan.Zero);
+        var writer = new ConductEventLogWriter(
+            logPath,
+            utcNow: () => now,
+            beforeRequiredEventDrain: () => throw new InvalidOperationException("event stream unavailable"));
+        var (kernel, goal) = SimpleGoal("keep conducting when the stall event stream fails");
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
+
+        var summary = new ConductorBatchLoop(
+            conductEventLogWriter: writer,
+            utcNow: () => now).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ =>
+                {
+                    now = now.AddMinutes(11);
+                    return false;
+                },
+                goalStallThreshold: TimeSpan.FromMinutes(10));
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.NotNull(goal.CurrentHold?.StalledAt);
+    }
+
+    [Xunit.Fact]
     public void GoalStall_ChangedBlocker_DoesNotEmit()
     {
         var root = CreateTempDirectory("mcg-goal-stall-change");
@@ -9117,19 +9152,87 @@ public sealed class ConductorBatchLoopTests
     }
 
     [Xunit.Fact]
-    public void GoalStall_NormalProgress_LeavesNoHold()
+    public void GoalStall_LiveWorkerPastThreshold_DoesNotEmit()
     {
-        var (kernel, goal) = SimpleGoal("make normal progress");
+        var root = CreateTempDirectory("mcg-goal-stall-live-worker");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var now = new DateTimeOffset(2026, 8, 3, 3, 0, 0, TimeSpan.Zero);
+        var (kernel, goal) = SimpleGoal("keep a healthy worker running");
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("test-worker", "test.exe", root, now));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(
+                1234,
+                "test.exe",
+                root,
+                Path.Combine(root, "worker.out.log"),
+                Path.Combine(root, "worker.err.log"),
+                Path.Combine(root, "worker.exit.txt"),
+                now,
+                null,
+                null,
+                OwnedProcessIds: [1234]));
 
-        new ConductorBatchLoop().Run(
+        new ConductorBatchLoop(
+            conductEventLogWriter: new ConductEventLogWriter(logPath, utcNow: () => now),
+            utcNow: () => now).Run(
             kernel,
-            MakeDriver(),
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: 1,
-            goalStallThreshold: TimeSpan.Zero);
+            maxIterations: 2,
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: _ =>
+            {
+                now = now.AddMinutes(11);
+                return false;
+            },
+            goalStallThreshold: TimeSpan.FromMinutes(10));
 
         Assert.Null(goal.CurrentHold);
+        Assert.DoesNotContain(
+            File.ReadAllLines(logPath).Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!),
+            record => record.EventKind == "goal-stalled");
+    }
+
+    [Xunit.Fact]
+    public void GoalStall_VerifyingGatePastThreshold_DoesNotEmit()
+    {
+        var root = CreateTempDirectory("mcg-goal-stall-verifying");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var now = new DateTimeOffset(2026, 8, 3, 4, 0, 0, TimeSpan.Zero);
+        var (originalKernel, goal) = SimpleGoal("keep a healthy acceptance gate running");
+        var kernel = WithGoalStatus(originalKernel, goal.Id, GoalStatus.Verifying);
+
+        new ConductorBatchLoop(
+            conductEventLogWriter: new ConductEventLogWriter(logPath, utcNow: () => now),
+            utcNow: () => now).Run(
+                kernel,
+                MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ =>
+                {
+                    now = now.AddMinutes(11);
+                    return false;
+                },
+                goalStallThreshold: TimeSpan.FromMinutes(10));
+
+        Assert.Null(kernel.GetGoal(goal.Id).CurrentHold);
+        Assert.DoesNotContain(
+            File.ReadAllLines(logPath).Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!),
+            record => record.EventKind == "goal-stalled");
     }
 }
 
