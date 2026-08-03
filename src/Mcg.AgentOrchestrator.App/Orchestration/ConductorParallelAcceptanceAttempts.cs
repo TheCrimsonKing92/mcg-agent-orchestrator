@@ -99,6 +99,9 @@ internal delegate ConductorParallelAcceptanceRunResult? ConductorParallelAccepta
     ConductorParallelAcceptanceCandidate candidate,
     ConductorAutonomyPolicy policy);
 
+internal sealed class ConductorParallelAcceptanceAttemptCompletionGateViolationException(string message)
+    : InvalidOperationException(message);
+
 internal sealed class ConductorParallelAcceptanceAttemptCompletionGateForTests
 {
     internal const int Capacity = 2;
@@ -126,13 +129,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCompletionGateForTests
         {
             if (_heldAttempts.Count >= Capacity)
             {
-                throw new InvalidOperationException(
+                throw new ConductorParallelAcceptanceAttemptCompletionGateViolationException(
                     $"Test acceptance-attempt completion gate capacity {Capacity} is exhausted.");
             }
 
             if (_heldAttempts.ContainsKey(attempt.AttemptId))
             {
-                throw new InvalidOperationException(
+                throw new ConductorParallelAcceptanceAttemptCompletionGateViolationException(
                     $"Acceptance attempt '{attempt.AttemptId}' is already held by the test completion gate.");
             }
 
@@ -504,6 +507,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             }
 
             return ConductorParallelAcceptanceAttemptDecision.Started(launched);
+        }
+        catch (ConductorParallelAcceptanceAttemptCompletionGateViolationException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

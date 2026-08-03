@@ -8,7 +8,7 @@ public sealed class ConductorCrossTickTests
 {
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
-    public async Task ParallelAcceptanceFairness_LiveOldest_AllowsSecondSlotAcrossTicks()
+    public async Task ParallelAcceptanceFairness_LiveOldest_AllowsDeclaredCapacityAcrossTicks()
     {
         await RunFairnessScenario(0);
         await RunFairnessScenario(1);
@@ -21,6 +21,9 @@ public sealed class ConductorCrossTickTests
         await using var fixture = new HoldingAcceptanceAttemptsAcrossTicksFixture(time);
         var kernel = new AgentOrchestratorKernel();
         var running = CreateGoal(kernel, "Update src/RunningAcrossTicks.cs");
+        // After tick 1, keep the live goal out of the rebuilt active-candidate list. Under the
+        // pre-fix waiter selection it remains the oldest waiter; recording it as served would
+        // reset the bounded-overtake counter and mask the cross-tick fairness regression.
         var rejectRunningCandidateRebuild = false;
         var paidWorkerStartCount = 0;
         var driver = CreateDriver(
@@ -47,9 +50,11 @@ public sealed class ConductorCrossTickTests
         rejectRunningCandidateRebuild = true;
         var primer = CreateGoal(kernel, "Update src/PrimerAcrossTicks.cs");
         PassVerification(kernel, primer, time.GetUtcNow());
-        fixture.RunTickForTests(kernel, driver);
+        BatchTickSummary? primerTick = null;
+        fixture.RunTickForTests(kernel, driver, tick => primerTick = tick);
 
         var primerHandle = fixture.RequiredHandleForTests(primer);
+        AssertCandidateRebuildRejected(primerTick!, running);
         Assert.Equal(2, fixture.HeldAttemptCapacity);
         Assert.Equal(2, fixture.HeldAttemptCount);
         Assert.True(fixture.AttemptCoordinator.HasLiveAttempt(running.Id.Value));
@@ -66,6 +71,7 @@ public sealed class ConductorCrossTickTests
         BatchTickSummary? admissionTick = null;
         fixture.RunTickForTests(kernel, driver, tick => admissionTick = tick);
 
+        AssertCandidateRebuildRejected(admissionTick!, running);
         Assert.Contains(admissionTick!.ProgressLines!, line =>
             line.Contains($"ACCEPTANCE goal={waiting.Id.Value[..8]}", StringComparison.Ordinal) &&
             line.Contains("result=started", StringComparison.Ordinal));
@@ -78,12 +84,34 @@ public sealed class ConductorCrossTickTests
         Assert.Equal(0, paidWorkerStartCount);
 
         var waitingHandle = fixture.RequiredHandleForTests(waiting);
+        var excess = CreateGoal(kernel, "Update src/ExcessAcrossTicks.cs");
+        var excessCandidate = ConductorParallelAcceptanceCandidate.Create(
+            excess,
+            slotIndex: 1,
+            [$"src/{excess.Id.Value}.cs"]);
+        var gateViolation = Assert.Throws<ConductorParallelAcceptanceAttemptCompletionGateViolationException>(() =>
+            fixture.AttemptCoordinator.Evaluate(
+                excessCandidate,
+                ConductorAutonomyPolicy.Conservative,
+                (candidate, _) => ConductorParallelAcceptanceRunResult.Accepted(
+                    candidate,
+                    AcceptanceVerificationSummary.PassedWithNoUnmetCriteria)));
+        Assert.Contains("capacity 2 is exhausted", gateViolation.Message, StringComparison.Ordinal);
+        Assert.Equal(2, fixture.HeldAttemptCount);
+
         waitingHandle.CompleteForTests();
         Assert.True(fixture.AttemptCoordinator.HasLiveAttempt(running.Id.Value));
         Assert.False(fixture.AttemptCoordinator.HasLiveAttempt(waiting.Id.Value));
         runningHandle.CompleteForTests();
         Assert.Equal(0, fixture.HeldAttemptCount);
     }
+
+    private static void AssertCandidateRebuildRejected(BatchTickSummary tick, Goal running) =>
+        Assert.Contains(tick.ProgressLines!, line =>
+            line.Contains($"goal={running.Id.Value[..8]}", StringComparison.Ordinal) &&
+            line.Contains("result=held", StringComparison.Ordinal) &&
+            line.Contains("reason=parallel-acceptance-candidate", StringComparison.Ordinal) &&
+            line.Contains("running candidate scope temporarily unavailable", StringComparison.Ordinal));
 
     private static Goal CreateGoal(AgentOrchestratorKernel kernel, string objective) =>
         GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, objective);
