@@ -35,8 +35,7 @@ public sealed class ModelOutcomeScorecardTests
             Dispatch(kernel, goals[i], provider, model, baseTime.AddSeconds(i), exitCode: 1);
         }
 
-        var allTasks = goals.SelectMany(g => g.Tasks).ToList();
-        var scorecard = ModelOutcomeScorecard.Build(allTasks, windowSize: 6);
+        var scorecard = ModelOutcomeScorecard.Build(goals, windowSize: 6);
         var record = scorecard.Single(r => r.ProviderName == provider && r.ModelName == model);
 
         Assert.Equal(4, record.Completed);
@@ -68,9 +67,8 @@ public sealed class ModelOutcomeScorecardTests
         Dispatch(kernel, goals[1], provider, model, baseTime.AddSeconds(1), exitCode: 0);
         Dispatch(kernel, goals[2], provider, model, baseTime.AddSeconds(2), exitCode: 1);
 
-        var allTasks = goals.SelectMany(g => g.Tasks).ToList();
-        var first = ModelOutcomeScorecard.Build(allTasks, windowSize: 3);
-        var second = ModelOutcomeScorecard.Build(allTasks, windowSize: 3);
+        var first = ModelOutcomeScorecard.Build(goals, windowSize: 3);
+        var second = ModelOutcomeScorecard.Build(goals, windowSize: 3);
 
         var r1 = first.Single(r => r.ProviderName == provider && r.ModelName == model);
         var r2 = second.Single(r => r.ProviderName == provider && r.ModelName == model);
@@ -136,6 +134,87 @@ public sealed class ModelOutcomeScorecardTests
         Assert.Equal(TaskOutcomeClass.Environmental, classification.Class);
     }
 
+    [Xunit.Fact(DisplayName = "TaskOutcomeClassifier_producer_rule_catalog_has_exact_coverage")]
+    public void TaskOutcomeClassifierProducerRuleCatalogHasExactCoverage()
+    {
+        var declaredProducerRules = typeof(TaskOutcomeRules)
+            .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(field => field.FieldType == typeof(TaskOutcomeRule))
+            .Select(field => Assert.IsType<TaskOutcomeRule>(field.GetValue(null)))
+            .ToList();
+        var duplicateTokens = TaskOutcomeRules.Produced
+            .GroupBy(rule => rule.Token, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() != 1)
+            .Select(group => group.Key)
+            .ToList();
+
+        Assert.Empty(duplicateTokens);
+        Assert.Equal(
+            declaredProducerRules.Select(rule => rule.Token).OrderBy(token => token, StringComparer.OrdinalIgnoreCase),
+            TaskOutcomeRules.Produced.Select(rule => rule.Token).OrderBy(token => token, StringComparer.OrdinalIgnoreCase));
+        Assert.All(TaskOutcomeRules.Produced, rule =>
+        {
+            Assert.True(TaskOutcomeRules.Known.TryGetValue(rule.Token, out var known));
+            Assert.Equal(rule.Class, known!.Class);
+        });
+    }
+
+    [Xunit.Theory(DisplayName = "TaskOutcomeClassifier_non_merit_failures_never_become_real_failures")]
+    [Xunit.InlineData("silent-launch-failure", TaskOutcomeClass.Environmental)]
+    [Xunit.InlineData("provider-unknown", TaskOutcomeClass.UnknownEra)]
+    [Xunit.InlineData("unknown-failure", TaskOutcomeClass.UnknownEra)]
+    [Xunit.InlineData("tester-verification-inconclusive", TaskOutcomeClass.UnknownEra)]
+    [Xunit.InlineData("unrecognized-future-rule", TaskOutcomeClass.UnknownEra)]
+    public void TaskOutcomeClassifierNonMeritFailuresNeverBecomeRealFailures(
+        string rule,
+        TaskOutcomeClass expected)
+    {
+        var classification = TaskOutcomeClassifier.Classify(WorkTaskStatus.Failed, rule);
+
+        Assert.Equal(expected, classification.Class);
+        Assert.NotEqual(TaskOutcomeClass.RealFailure, classification.Class);
+    }
+
+    [Xunit.Fact(DisplayName = "TaskOutcomeClassifier_timeline_uses_producer_outcome_class_before_legacy_rule_fallback")]
+    public void TaskOutcomeClassifierTimelineUsesProducerOutcomeClassBeforeLegacyRuleFallback()
+    {
+        var goalId = GoalId.New();
+        var taskId = TaskId.New();
+        var timeline = new[]
+        {
+            new ProgressEvent(
+                goalId,
+                taskId,
+                ProgressKind.TaskNote,
+                "CLASSIFIER rule=provider-sandbox1312; outcome_class=manufactured-fixed; verdict=SandboxCommitBlocked",
+                DateTimeOffset.UtcNow)
+        };
+
+        var classification = TaskOutcomeClassifier.FromTimeline(timeline, taskId, WorkTaskStatus.Failed);
+
+        Assert.Equal("provider-sandbox1312", classification.Rule);
+        Assert.Equal(TaskOutcomeClass.ManufacturedFixed, classification.Class);
+    }
+
+    [Xunit.Fact(DisplayName = "LoopHealthReport_uses_timeline_outcome_class_for_failed_model_mix")]
+    public void LoopHealthReportUsesTimelineOutcomeClassForFailedModelMix()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Launch apparatus failure", [new TaskSpec(TaskId.New(), "task", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        Dispatch(kernel, goal, "OpenAI", "gpt-5.5", DateTimeOffset.UtcNow, exitCode: 1);
+        kernel.RecordTaskNote(
+            goal.Id,
+            goal.Tasks[0].Id,
+            "CLASSIFIER rule=silent-launch-failure; outcome_class=environmental; verdict=LaunchFailure");
+
+        var snapshot = LoopHealthReport.Build([goal], []);
+        var record = Assert.Single(snapshot.ModelOutcomeMix);
+
+        Assert.Equal(0, record.RealFailures);
+        Assert.Equal(1, record.EnvironmentalFailures);
+    }
+
     [Xunit.Fact(DisplayName = "ModelFitHistory_best_fit_uses_real_failures_not_total_failures")]
     public void ModelFitHistoryBestFitUsesRealFailuresNotTotalFailures()
     {
@@ -170,8 +249,8 @@ public sealed class ModelOutcomeScorecardTests
                 DispatchCommand,
                 WorkDir,
                 exitCode,
-                exitCode == 0 ? "ok" : "failed",
-                exitCode == 0 ? string.Empty : "error",
+                exitCode == 0 ? "ok" : "worker produced substantive failure output",
+                exitCode == 0 ? string.Empty : "powershell.exe: ParserError: Missing closing quote in command argument.",
             at));
     }
 

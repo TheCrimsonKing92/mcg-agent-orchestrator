@@ -926,6 +926,30 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.CommitAndVerify, outcome.RecoveryRecommendation);
     }
 
+    [Xunit.Fact(DisplayName = "Sandbox1312 producer paths emit the same canonical rule and outcome class")]
+    public void Sandbox1312ProducerPathsEmitSameRuleAndOutcomeClass()
+    {
+        var direct = DispatchFailureClassifier.ClassifyProviderFailure(
+            ProviderFailureKind.Sandbox1312,
+            1,
+            hasZeroByteOutput: false,
+            "sandbox denied the operation");
+        var dispatch = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "worker output", "provider failure") with
+            {
+                ProviderFailureKind = ProviderFailureKind.Sandbox1312
+            });
+
+        Xunit.Assert.Equal("provider-sandbox-1312", TaskOutcomeClassifier.TryExtractRule(direct.ClassifierReceipt));
+        Xunit.Assert.Equal(
+            TaskOutcomeClassifier.TryExtractRule(direct.ClassifierReceipt),
+            TaskOutcomeClassifier.TryExtractRule(dispatch.ClassifierReceipt));
+        Xunit.Assert.Equal(TaskOutcomeClass.ManufacturedFixed, direct.OutcomeClass);
+        Xunit.Assert.Equal(direct.OutcomeClass, dispatch.OutcomeClass);
+        Xunit.Assert.Equal(direct.OutcomeClass, TaskOutcomeClassifier.TryExtractClass(dispatch.ClassifierReceipt));
+    }
+
     [Xunit.Fact(DisplayName = "Classify reads sandbox commit evidence from middle of large log artifacts")]
     public void ClassifyReadsSandboxCommitEvidenceFromMiddleOfLargeLogArtifacts()
     {

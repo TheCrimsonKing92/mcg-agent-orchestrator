@@ -37,7 +37,8 @@ public sealed record DispatchOutcome(
     TimeSpan? Cooldown,
     RecoveryRecommendation RecoveryRecommendation,
     string EvidenceSummary,
-    string ClassifierReceipt = "");
+    string ClassifierReceipt = "",
+    TaskOutcomeClass OutcomeClass = TaskOutcomeClass.UnknownEra);
 
 public sealed record ProviderSubscriptionCooldown(
     string ProviderName,
@@ -65,7 +66,7 @@ public static class DispatchFailureClassifier
         return failureKind switch
         {
             ProviderFailureKind.RateLimit => WithClassifierReceipt(
-                "provider-rate-limit",
+                TaskOutcomeRules.ProviderRateLimit,
                 new DispatchOutcome(
                 DispatchOutcomeKind.RecoverableSubscriptionLimit,
                 exitCode,
@@ -76,7 +77,7 @@ public static class DispatchFailureClassifier
                 evidenceSummary),
                 exitCode),
             ProviderFailureKind.Connectivity => WithClassifierReceipt(
-                "provider-connectivity",
+                TaskOutcomeRules.ProviderConnectivity,
                 new DispatchOutcome(
                 DispatchOutcomeKind.ProviderConnectivity,
                 exitCode,
@@ -87,7 +88,7 @@ public static class DispatchFailureClassifier
                 evidenceSummary),
                 exitCode),
             ProviderFailureKind.Sandbox1312 => WithClassifierReceipt(
-                "provider-sandbox-1312",
+                TaskOutcomeRules.ProviderSandbox1312,
                 new DispatchOutcome(
                 DispatchOutcomeKind.SandboxCommitBlocked,
                 exitCode,
@@ -98,7 +99,7 @@ public static class DispatchFailureClassifier
                 evidenceSummary),
                 exitCode),
             _ => WithClassifierReceipt(
-                "provider-unknown",
+                TaskOutcomeRules.ProviderUnknown,
                 new DispatchOutcome(
                 DispatchOutcomeKind.UnknownFailure,
                 exitCode,
@@ -379,7 +380,7 @@ public static class DispatchFailureClassifier
             }
 
             return BuildOutcome(
-                "tester-verification-inconclusive",
+                TaskOutcomeRules.TesterVerificationInconclusive,
                 task,
                 verification,
                 workerResultPresent,
@@ -400,7 +401,7 @@ public static class DispatchFailureClassifier
             testsStatus == WorkerResultBlockers.TestsStatus.Fail)
         {
             return BuildOutcome(
-                "succeeded-worker-result-failing-tests",
+                TaskOutcomeRules.SucceededWorkerResultFailingTests,
                 task,
                 verification,
                 workerResultPresent,
@@ -418,7 +419,7 @@ public static class DispatchFailureClassifier
         if (HasGreenCommittedWorkerResultEvidence(verification, workerResultPresent, hasCommittedChanges))
         {
             return BuildOutcome(
-                "committed-worker-result-evidence",
+                TaskOutcomeRules.CommittedWorkerResultEvidence,
                 task,
                 verification,
                 workerResultPresent,
@@ -436,7 +437,7 @@ public static class DispatchFailureClassifier
         if (IsRetryRoundVerifiedNoNewCommit(task, verification, workerResultPresent, hasCommittedChanges))
         {
             return BuildOutcome(
-                "verified-no-new-commit",
+                TaskOutcomeRules.VerifiedNoNewCommit,
                 task,
                 verification,
                 workerResultPresent,
@@ -454,7 +455,7 @@ public static class DispatchFailureClassifier
         if (IsRetryRoundWithoutCommitOrDeferral(task, verification, workerResultPresent, hasCommittedChanges))
         {
             return BuildOutcome(
-                "retry-round-produced-no-commit-and-no-deferral",
+                TaskOutcomeRules.RetryRoundProducedNoCommitAndNoDeferral,
                 task,
                 verification,
                 workerResultPresent,
@@ -473,7 +474,7 @@ public static class DispatchFailureClassifier
             HasDispatchCompletionEvidence(task, verification, workerResultPresent, hasCommittedChanges))
         {
             return BuildOutcome(
-                "succeeded-dispatch-completion-evidence",
+                TaskOutcomeRules.SucceededDispatchCompletionEvidence,
                 task,
                 verification,
                 workerResultPresent,
@@ -491,7 +492,7 @@ public static class DispatchFailureClassifier
         if (TryBuildDirtyDispatchRecovery(task, out _))
         {
             return BuildOutcome(
-                "dirty-dispatch-recovery",
+                TaskOutcomeRules.DirtyDispatchRecovery,
                 task,
                 verification,
                 workerResultPresent,
@@ -513,22 +514,19 @@ public static class DispatchFailureClassifier
                 exitCode,
                 hasZeroByteOutput,
                 BuildEvidenceSummary(verification));
-            return providerOutcome with
-            {
-                ClassifierReceipt = BuildClassifierReceipt(
-                    $"provider-{providerFailureKind}",
-                    task,
-                    verification,
-                    workerResultPresent,
-                    hasCommittedChanges,
-                    providerOutcome.Kind)
-            };
+            return BuildOutcome(
+                TaskOutcomeRules.ProviderSandbox1312,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                providerOutcome);
         }
 
         if (IsRecoverableProviderAuthenticationFailure(verification))
         {
             return BuildOutcome(
-                "provider-authentication",
+                TaskOutcomeRules.ProviderAuthentication,
                 task,
                 verification,
                 workerResultPresent,
@@ -546,7 +544,7 @@ public static class DispatchFailureClassifier
         if (IsRecoverableProviderConnectivityFailure(verification))
         {
             return BuildOutcome(
-                "provider-connectivity",
+                TaskOutcomeRules.ProviderConnectivity,
                 task,
                 verification,
                 workerResultPresent,
@@ -572,7 +570,7 @@ public static class DispatchFailureClassifier
                     retryAfter = retryAfterAbs - now;
             }
             return BuildOutcome(
-                "subscription-limit",
+                TaskOutcomeRules.SubscriptionLimit,
                 task,
                 verification,
                 workerResultPresent,
@@ -590,7 +588,7 @@ public static class DispatchFailureClassifier
         if (IsPreflightFailure(verification))
         {
             return BuildOutcome(
-                "preflight-failure",
+                TaskOutcomeRules.PreflightFailure,
                 task,
                 verification,
                 workerResultPresent,
@@ -608,7 +606,7 @@ public static class DispatchFailureClassifier
         if (IsSilentLaunchFailure(verification))
         {
             return BuildOutcome(
-                "silent-launch-failure",
+                TaskOutcomeRules.SilentLaunchFailure,
                 task,
                 verification,
                 workerResultPresent,
@@ -626,7 +624,7 @@ public static class DispatchFailureClassifier
         if (IsTransientEmptyOutputDispatchFlake(verification))
         {
             return BuildOutcome(
-                "empty-output-flake",
+                TaskOutcomeRules.EmptyOutputFlake,
                 task,
                 verification,
                 workerResultPresent,
@@ -644,7 +642,7 @@ public static class DispatchFailureClassifier
         if (IsSandboxCommitBlockedFailure(verification))
         {
             return BuildOutcome(
-                "sandbox-commit-blocked",
+                TaskOutcomeRules.SandboxCommitBlocked,
                 task,
                 verification,
                 workerResultPresent,
@@ -662,7 +660,7 @@ public static class DispatchFailureClassifier
         if (IsProviderNeutralProgressStallFailure(verification))
         {
             return BuildOutcome(
-                "provider-neutral-progress-stall",
+                TaskOutcomeRules.ProviderNeutralProgressStall,
                 task,
                 verification,
                 workerResultPresent,
@@ -682,7 +680,7 @@ public static class DispatchFailureClassifier
             TryGetRecoverableSubscriptionLimitLine(verification, out _))
         {
             return BuildOutcome(
-                "provider-rate-limit",
+                TaskOutcomeRules.ProviderRateLimit,
                 task,
                 verification,
                 workerResultPresent,
@@ -700,7 +698,7 @@ public static class DispatchFailureClassifier
         if (IsRecoverableProviderModelRejectionFailure(verification))
         {
             return BuildOutcome(
-                "provider-model-rejection",
+                TaskOutcomeRules.ProviderModelRejection,
                 task,
                 verification,
                 workerResultPresent,
@@ -719,7 +717,7 @@ public static class DispatchFailureClassifier
             HasPromptRetryRealFailureEvidence(verification))
         {
             return BuildOutcome(
-                "real-failure",
+                TaskOutcomeRules.RealFailure,
                 task,
                 verification,
                 workerResultPresent,
@@ -735,7 +733,7 @@ public static class DispatchFailureClassifier
         }
 
         return BuildOutcome(
-            "unknown-failure",
+            TaskOutcomeRules.UnknownFailure,
             task,
             verification,
             workerResultPresent,
@@ -751,24 +749,25 @@ public static class DispatchFailureClassifier
     }
 
     private static DispatchOutcome BuildOutcome(
-        string rule,
+        TaskOutcomeRule rule,
         TaskSpec task,
         TaskVerificationRecord verification,
         bool workerResultPresent,
         bool hasCommittedChanges,
         DispatchOutcome outcome) =>
-        outcome with
+        (outcome with { OutcomeClass = rule.Class }) with
         {
             ClassifierReceipt = AppendEvidenceReceipt(
                 BuildClassifierReceipt(rule, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind),
                 outcome)
         };
 
-    private static DispatchOutcome WithClassifierReceipt(string rule, DispatchOutcome outcome, int exitCode) =>
-        outcome with
+    private static DispatchOutcome WithClassifierReceipt(TaskOutcomeRule rule, DispatchOutcome outcome, int exitCode) =>
+        (outcome with { OutcomeClass = rule.Class }) with
         {
             ClassifierReceipt = AppendEvidenceReceipt(
-                $"CLASSIFIER rule={rule}; exit_code={exitCode}; exit_artifact=direct-provider-failure; " +
+                $"CLASSIFIER rule={rule.Token}; outcome_class={TaskOutcomeClassifier.FormatClass(rule.Class)}; " +
+                $"exit_code={exitCode}; exit_artifact=direct-provider-failure; " +
                 "stdout_bytes=unknown; stderr_bytes=unknown; heartbeat_stdout_bytes=unknown; " +
                 $"worker_result=absent; commit=none; verdict={outcome.Kind}",
                 outcome)
@@ -785,7 +784,7 @@ public static class DispatchFailureClassifier
     }
 
     private static string BuildClassifierReceipt(
-        string rule,
+        TaskOutcomeRule rule,
         TaskSpec task,
         TaskVerificationRecord verification,
         bool workerResultPresent,
@@ -806,7 +805,8 @@ public static class DispatchFailureClassifier
 
         var childExitCode = verification.ChildExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
 
-        return $"CLASSIFIER rule={rule}; exit_code={verification.ExitCode}; root_exit_code={verification.ExitCode}; " +
+        return $"CLASSIFIER rule={rule.Token}; outcome_class={TaskOutcomeClassifier.FormatClass(rule.Class)}; " +
+            $"exit_code={verification.ExitCode}; root_exit_code={verification.ExitCode}; " +
             $"child_exit_code={childExitCode}; exit_artifact=verification-record; " +
             $"stdout_bytes={stdoutBytes}; stderr_bytes={stderrBytes}; heartbeat_stdout_bytes={heartbeat}; " +
             $"duration_ms={duration}; worker_result={workerResult}; commit={commitProvenance}; verdict={verdict}";

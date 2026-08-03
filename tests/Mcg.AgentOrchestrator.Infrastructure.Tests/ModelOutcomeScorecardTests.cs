@@ -164,7 +164,7 @@ public sealed class ModelOutcomeScorecardTests
             WorkDir,
             1,
             stdout,
-            "Error: task failed",
+            "powershell.exe: ParserError: Missing closing quote in command argument.",
             DateTimeOffset.UtcNow);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
     }

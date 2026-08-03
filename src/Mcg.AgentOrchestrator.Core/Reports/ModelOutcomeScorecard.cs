@@ -33,10 +33,10 @@ public static class ModelOutcomeScorecard
     public const int MinSamplesForConfidence = 2;
 
     public static IReadOnlyList<ModelOutcomeRecord> Build(
-        IEnumerable<TaskSpec> tasks,
+        IEnumerable<Goal> goals,
         int windowSize = DefaultWindowSize)
     {
-        return Build(tasks.Select(TryCreateLegacyRow).Where(row => row is not null).Cast<ModelFitHistoryRow>(), windowSize);
+        return Build(ModelFitHistory.FromGoals(goals), windowSize);
     }
 
     public static IReadOnlyList<ModelOutcomeRecord> Build(
@@ -66,34 +66,6 @@ public static class ModelOutcomeScorecard
                 return BuildRecord(group.Key.ProviderName, group.Key.ModelName, group.Key.DispatchLane, recent);
             })
             .ToList();
-    }
-
-    private static ModelFitHistoryRow? TryCreateLegacyRow(TaskSpec task)
-    {
-        if (task.LastDispatch is not { ProviderName: { Length: > 0 } providerName, ModelName: { Length: > 0 } modelName } dispatch ||
-            task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Failed))
-        {
-            return null;
-        }
-
-        var fit = ModelFitEvidence.TryParseNote(ModelFitEvidence.FindLatestNote(task));
-        var outcomeClass = task.Status == WorkTaskStatus.Completed
-            ? TaskOutcomeClass.Success
-            : TaskOutcomeClass.RealFailure;
-        return new ModelFitHistoryRow(
-            string.Empty,
-            task.Id.Value,
-            task.RequiredRole,
-            providerName,
-            modelName,
-            dispatch.TaskComplexity,
-            fit?.TaskShape,
-            task.Status,
-            ModelFitHistory.NormalizeSelfRating(fit?.Fit),
-            task.LastVerification?.CompletedAt ?? dispatch.DispatchedAt,
-            null,
-            outcomeClass,
-            dispatch.DispatchLane ?? dispatch.WorkerName);
     }
 
     private static ModelOutcomeRecord BuildRecord(
