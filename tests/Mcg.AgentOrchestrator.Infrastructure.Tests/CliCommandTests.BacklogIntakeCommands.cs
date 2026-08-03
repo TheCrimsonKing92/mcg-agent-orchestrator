@@ -1208,19 +1208,98 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         ExecuteCliAndCapture(["backlog-supersede", old.Id[..8], replacement.Id[..8]], kernel, workspace);
         ExecuteCliAndCapture(["backlog-link", replacement.Id[..8], duplicate.Id[..8]], kernel, workspace);
         ExecuteCliAndCapture(["backlog-link", replacement.Id[..8], related.Id[..8], "--related"], kernel, workspace);
-        var defaultList = ExecuteCliAndCapture(["backlog-list"], kernel, workspace);
-        var allList = ExecuteCliAndCapture(["backlog-list", "--all"], kernel, workspace);
+        var list = ExecuteCliAndCapture(["backlog-list"], kernel, workspace);
         var updated = await store.GetByExactIdAsync(old.Id);
 
         Xunit.Assert.Equal("Updated old", updated!.Title);
         Xunit.Assert.Equal("Updated body", updated.Body);
         Xunit.Assert.Equal("high", updated.Priority);
-        Xunit.Assert.DoesNotContain(old.Id, defaultList);
-        Xunit.Assert.DoesNotContain(duplicate.Id, defaultList);
-        Xunit.Assert.Contains(replacement.Id, defaultList);
-        Xunit.Assert.Contains($"[Superseded→{replacement.Id[..8]}]", allList);
-        Xunit.Assert.Contains($"[Dup→{replacement.Id[..8]}]", allList);
-        Xunit.Assert.Contains($"[Related→{related.Id[..8]}]", defaultList);
+        Xunit.Assert.Contains(old.Id, list);
+        Xunit.Assert.Contains(duplicate.Id, list);
+        Xunit.Assert.Contains(replacement.Id, list);
+        Xunit.Assert.Contains($"[Superseded→{replacement.Id[..8]}]", list);
+        Xunit.Assert.Contains($"[Dup→{replacement.Id[..8]}]", list);
+        Xunit.Assert.Contains($"[Related→{related.Id[..8]}]", list);
+    }
+
+
+    [Xunit.Fact]
+    public async Task BacklogList_AllItems_ShowsStatusGoalAndExactTitleReadOnly()
+    {
+        // Parallel-safe: the SQLite store and kernel are scoped to this test's unique temp root.
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var items = new List<BacklogItem>();
+        for (var index = 0; index < 7; index++)
+        {
+            items.Add(await store.AddAsync($"Filed defect {index}: exact title", $"Body {index}"));
+        }
+
+        await store.CloseAsync(items[6].Id);
+        var kernel = new AgentOrchestratorKernel();
+        ExecuteCliAndCapture(
+            ["backlog-intake", items[2].Title, "--create-simple-goal"],
+            kernel,
+            workspace);
+        var linkedGoal = Xunit.Assert.Single(kernel.Goals);
+        var goalCountBeforeList = kernel.Goals.Count;
+
+        var first = ExecuteCliAndCapture(["backlog-list"], kernel, workspace);
+        var second = ExecuteCliAndCapture(["backlog-list"], kernel, workspace);
+        var rows = first.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains(" | status=", StringComparison.Ordinal))
+            .ToArray();
+
+        Xunit.Assert.Equal(7, rows.Length);
+        Xunit.Assert.Contains("Backlog list: 7 item(s) from backlog store", first);
+        Xunit.Assert.Equal(first, second);
+        Xunit.Assert.Equal(goalCountBeforeList, kernel.Goals.Count);
+        Xunit.Assert.Contains(rows, row => row.Contains($"{items[0].Id} | status=open | goal=- | title={items[0].Title}", StringComparison.Ordinal));
+        Xunit.Assert.Contains(rows, row => row.Contains($"{items[2].Id} | status=claimed | goal={linkedGoal.Id.Value} | title={items[2].Title}", StringComparison.Ordinal));
+        Xunit.Assert.Contains(rows, row => row.Contains($"{items[6].Id} | status=closed | goal=- | title={items[6].Title}", StringComparison.Ordinal));
+
+        var claimedRow = Xunit.Assert.Single(rows.Where(row => row.Contains(items[2].Id, StringComparison.Ordinal)));
+        var emittedTitle = claimedRow[(claimedRow.IndexOf(" | title=", StringComparison.Ordinal) + " | title=".Length)..];
+        var roundTrip = ExecuteCliAndCapture(["backlog-intake", emittedTitle], kernel, workspace);
+        Xunit.Assert.Contains($"## {items[2].Title}", roundTrip);
+        Xunit.Assert.Contains("Backlog intake: 1 item(s) from backlog store", roundTrip);
+    }
+
+
+    [Xunit.Fact]
+    public void BacklogList_EmptyStore_ReportsZero()
+    {
+        // Parallel-safe: the SQLite store and kernel are scoped to this test's unique temp root.
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+
+        var output = ExecuteCliAndCapture(["backlog-list"], new AgentOrchestratorKernel(), workspace);
+
+        Xunit.Assert.Equal($"Backlog list: 0 item(s) from backlog store{Environment.NewLine}", output);
+    }
+
+
+    [Xunit.Fact]
+    public async Task BacklogIntake_Unfiltered_DisclosesSelectionAndWithheldCount()
+    {
+        // Parallel-safe: the SQLite store and kernel are scoped to this test's unique temp root.
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        for (var index = 0; index < 7; index++)
+        {
+            await store.AddAsync($"Intake candidate {index}", $"Body {index}");
+        }
+
+        var kernel = new AgentOrchestratorKernel();
+        var output = ExecuteCliAndCapture(["backlog-intake"], kernel, workspace);
+
+        Xunit.Assert.Contains("Backlog intake: 5 of 7 item(s) from backlog store", output);
+        Xunit.Assert.Contains("filter: first 5 open, non-superseded, canonical non-decision-record items in filing order", output);
+        Xunit.Assert.Contains("2 withheld", output);
+        Xunit.Assert.Contains("Use `backlog-list` to see all items.", output);
+        Xunit.Assert.Empty(kernel.Goals);
     }
 
 

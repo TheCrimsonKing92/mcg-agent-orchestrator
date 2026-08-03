@@ -11,22 +11,37 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
     {
         case "backlog-list":
         {
-            var all = parts.Any(p => p.Equals("--all", StringComparison.OrdinalIgnoreCase));
             var limit = ParseOptionalLimit(parts);
             var status = GetFlagValue(parts, "--status");
             var text = GetFlagValue(parts, "--text");
-            var hasConstraints = limit is not null || !string.IsNullOrWhiteSpace(status) || !string.IsNullOrWhiteSpace(text);
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
-            var items = ApplyBacklogListFilters(store.ListAsync(all).GetAwaiter().GetResult(), status, text, limit);
-            if (items.Count == 0)
+            var goalsByBacklogItem = context.Kernel.Goals
+                .Where(goal => goal.SourceBacklogItemId is not null)
+                .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+                .GroupBy(goal => goal.SourceBacklogItemId!, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            var filtersByListingStatus = IsBacklogListingStatus(status);
+            var items = ApplyBacklogListFilters(
+                store.ListAsync(includeAll: true).GetAwaiter().GetResult(),
+                filtersByListingStatus ? null : status,
+                text,
+                filtersByListingStatus ? null : limit);
+            if (filtersByListingStatus)
             {
-                Console.WriteLine(all
-                    ? hasConstraints ? "No matching backlog items." : "No backlog items."
-                    : hasConstraints ? "No matching open backlog items. Use --all to include closed items." : "No open backlog items. Use --all to include closed items.");
-                return false;
+                items = items
+                    .Where(item => RenderBacklogListingStatus(item, FindLinkedGoal(goalsByBacklogItem, item.Id))
+                        .Equals(status, StringComparison.OrdinalIgnoreCase))
+                    .Take(limit ?? int.MaxValue)
+                    .ToArray();
             }
+
             foreach (var item in items)
-                Console.WriteLine($"{RenderBacklogListTag(item)} {item.Id} - {item.Title}{RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)}");
+            {
+                var linkedGoal = FindLinkedGoal(goalsByBacklogItem, item.Id);
+                var goalId = linkedGoal?.Id.Value ?? "-";
+                Console.WriteLine($"{RenderBacklogListTag(item)}{RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | title={item.Title}");
+            }
+            Console.WriteLine($"Backlog list: {items.Count} item(s) from backlog store");
             return false;
         }
 
@@ -402,6 +417,23 @@ internal static string RenderBacklogListSuffix(BacklogItem item)
         .Select(link => $"[Related→{ShortBacklogId(link.OtherId(item.Id))}]")
         .ToArray();
     return related.Length == 0 ? "" : " " + string.Join(' ', related);
+}
+
+private static Goal? FindLinkedGoal(IReadOnlyDictionary<string, Goal> goalsByBacklogItem, string backlogItemId) =>
+    goalsByBacklogItem.TryGetValue(backlogItemId, out var goal) ? goal : null;
+
+private static bool IsBacklogListingStatus(string? status) =>
+    status is not null &&
+    (status.Equals("open", StringComparison.OrdinalIgnoreCase) ||
+     status.Equals("claimed", StringComparison.OrdinalIgnoreCase) ||
+     status.Equals("closed", StringComparison.OrdinalIgnoreCase));
+
+private static string RenderBacklogListingStatus(BacklogItem item, Goal? linkedGoal)
+{
+    if (item.Status != BacklogItemStatus.Open)
+        return "closed";
+
+    return linkedGoal is null ? "open" : "claimed";
 }
 
 internal static IReadOnlyList<BacklogItem> ApplyBacklogListFilters(
