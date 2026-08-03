@@ -726,7 +726,7 @@ public static class DispatchFailureClassifier
             null,
             null,
             RecoveryRecommendation.OperatorNeeded,
-            BuildEvidenceSummary(verification)));
+            BuildUnknownFailureEvidenceSummary(verification)));
     }
 
     private static DispatchOutcome BuildOutcome(
@@ -1091,6 +1091,17 @@ public static class DispatchFailureClassifier
             ? TruncateEvidence(line)
             : BuildEvidenceSummary(verification);
 
+    private static string BuildUnknownFailureEvidenceSummary(TaskVerificationRecord verification)
+    {
+        var substantiveLines = GetSubstantiveStandardErrorLines(verification)
+            .TakeLast(3)
+            .ToArray();
+
+        return substantiveLines.Length == 0
+            ? BuildEvidenceSummary(verification)
+            : $"unknown-failure stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
+    }
+
     private static IEnumerable<string> GetStandardErrorEvidenceLines(TaskVerificationRecord verification)
     {
         foreach (var line in EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true))
@@ -1098,6 +1109,9 @@ public static class DispatchFailureClassifier
             yield return line;
         }
     }
+
+    private static IEnumerable<string> GetSubstantiveStandardErrorLines(TaskVerificationRecord verification) =>
+        GetStandardErrorEvidenceLines(verification).Where(line => !IsRunnerBookkeepingLine(line));
 
     private static string BuildVerifiedNoNewCommitEvidenceSummary(TaskSpec task, TaskVerificationRecord verification)
     {
