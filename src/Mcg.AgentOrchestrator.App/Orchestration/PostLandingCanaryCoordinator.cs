@@ -736,10 +736,13 @@ internal static class PostLandingCanaryFactory
     internal static string? BuildMutationBlockReason(OrchestratorWorkspace workspace)
     {
         var snapshot = CreateCircuit(workspace).Read();
-        return snapshot.AllowsAcceptance
+        var decision = AcceptanceEngineAcceptanceGate.Decide(
+            snapshot.Health,
+            AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
+        return decision.Allowed
             ? null
-            : $"acceptance engine circuit is {snapshot.Health} for {snapshot.LandingSha ?? "unknown-sha"}; " +
-              $"reason={snapshot.FailureReason ?? "canary-pending"}";
+            : $"{decision.Reason}; landing={snapshot.LandingSha ?? "unknown-sha"}; " +
+              $"failure={snapshot.FailureReason ?? "canary-pending"}";
     }
 
     private static PostLandingCanaryEventStore CreateEventStore(

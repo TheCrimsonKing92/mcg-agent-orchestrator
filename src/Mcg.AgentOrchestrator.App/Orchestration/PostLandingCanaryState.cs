@@ -9,7 +9,84 @@ internal enum AcceptanceEngineHealth
 {
     Healthy,
     Pending,
-    Unhealthy
+    Unhealthy,
+    Unavailable
+}
+
+internal enum AcceptanceEngineUnavailablePolicy
+{
+    FailOpen,
+    FailClosed
+}
+
+internal sealed record AcceptanceEngineAcceptanceDecision(
+    bool Allowed,
+    AcceptanceEngineHealth Health,
+    AcceptanceEngineUnavailablePolicy PolicyApplied,
+    string Reason);
+
+internal static class AcceptanceEngineAcceptanceGate
+{
+    // An unreadable safety circuit cannot vouch for the verifier. Pausing landings is reversible;
+    // landing past a genuinely tripped circuit is not. Change this one value to change the default.
+    internal const AcceptanceEngineUnavailablePolicy DefaultUnavailablePolicy =
+        AcceptanceEngineUnavailablePolicy.FailClosed;
+
+    internal static AcceptanceEngineAcceptanceDecision Decide(
+        AcceptanceEngineHealth health,
+        AcceptanceEngineUnavailablePolicy unavailablePolicy) =>
+        health switch
+        {
+            AcceptanceEngineHealth.Healthy => Decision(
+                allowed: true,
+                health,
+                unavailablePolicy,
+                "acceptance engine state was read and is healthy"),
+            AcceptanceEngineHealth.Pending => Decision(
+                allowed: false,
+                health,
+                unavailablePolicy,
+                "post-landing canary evaluation is pending"),
+            AcceptanceEngineHealth.Unhealthy => Decision(
+                allowed: false,
+                health,
+                unavailablePolicy,
+                "acceptance engine circuit is tripped"),
+            AcceptanceEngineHealth.Unavailable => unavailablePolicy switch
+            {
+                AcceptanceEngineUnavailablePolicy.FailOpen => Decision(
+                    allowed: true,
+                    health,
+                    unavailablePolicy,
+                    "acceptance engine state could not be checked, proceeding under policy FailOpen"),
+                AcceptanceEngineUnavailablePolicy.FailClosed => Decision(
+                    allowed: false,
+                    health,
+                    unavailablePolicy,
+                    "acceptance engine state could not be checked, blocking under policy FailClosed"),
+                _ => Decision(
+                    allowed: false,
+                    health,
+                    unavailablePolicy,
+                    "unrecognized unavailable-state policy; defaulting to deny")
+            },
+            _ => Decision(
+                allowed: false,
+                health,
+                unavailablePolicy,
+                "unrecognized acceptance-engine health; defaulting to deny")
+        };
+
+    private static AcceptanceEngineAcceptanceDecision Decision(
+        bool allowed,
+        AcceptanceEngineHealth health,
+        AcceptanceEngineUnavailablePolicy unavailablePolicy,
+        string detail) =>
+        new(
+            allowed,
+            health,
+            unavailablePolicy,
+            $"health={health} policy={unavailablePolicy} outcome={(allowed ? "permitted" : "denied")}; {detail}");
 }
 
 internal sealed record AcceptanceEngineHealthSnapshot(
@@ -20,8 +97,6 @@ internal sealed record AcceptanceEngineHealthSnapshot(
     DateTimeOffset UpdatedAt,
     string? OperatorNote = null)
 {
-    internal bool AllowsAcceptance => Health == AcceptanceEngineHealth.Healthy;
-
     internal static AcceptanceEngineHealthSnapshot Healthy(DateTimeOffset now, string? note = null) =>
         new(AcceptanceEngineHealth.Healthy, null, null, null, now, note);
 }
@@ -149,7 +224,13 @@ internal static class PostLandingCanaryEventIds
         $"post-landing-canary:{landingSha.ToLowerInvariant()}:{suffix}";
 }
 
-internal sealed class PostLandingCanaryEventStore
+internal interface IAcceptanceEngineStateReader
+{
+    Task<IReadOnlyList<PostLandingCanaryEvent>> ReadProjectionEventsAsync(
+        CancellationToken cancellationToken = default);
+}
+
+internal sealed class PostLandingCanaryEventStore : IAcceptanceEngineStateReader
 {
     private const int ReadPageSize = 5000;
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -266,7 +347,7 @@ internal sealed class PostLandingCanaryEventStore
         .OrderBy(item => item.Sequence)
         .ToArray();
 
-    internal async Task<IReadOnlyList<PostLandingCanaryEvent>> ReadProjectionEventsAsync(
+    public async Task<IReadOnlyList<PostLandingCanaryEvent>> ReadProjectionEventsAsync(
         CancellationToken cancellationToken = default)
     {
         var clearRecord = await _store
@@ -415,37 +496,77 @@ internal sealed class AcceptanceEngineCircuitBreaker
 {
     internal const string OperatorItemCorrelationKey = "acceptance-engine:unhealthy-episode";
     internal const string StateUnavailableOperatorItemCorrelationKey = "acceptance-engine:canary-state-unavailable";
+    internal const int StateReadMaxAttempts = 3;
+    private static readonly TimeSpan StateReadRetryDelay = TimeSpan.FromMilliseconds(20);
+    private static readonly TimeSpan StateReadTotalBudget = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan OperatorItemWriteBudget = TimeSpan.FromMilliseconds(250);
     private readonly PostLandingCanaryEventStore _events;
+    private readonly IAcceptanceEngineStateReader _stateReader;
     private readonly ICollaborationItemStore? _operatorItems;
     private readonly Func<DateTimeOffset> _utcNow;
 
     internal AcceptanceEngineCircuitBreaker(
         PostLandingCanaryEventStore events,
         ICollaborationItemStore? operatorItems = null,
-        Func<DateTimeOffset>? utcNow = null)
+        Func<DateTimeOffset>? utcNow = null,
+        IAcceptanceEngineStateReader? stateReader = null)
     {
         _events = events;
+        _stateReader = stateReader ?? events;
         _operatorItems = operatorItems;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
 
-    internal AcceptanceEngineHealthSnapshot Read()
+    internal AcceptanceEngineHealthSnapshot Read(
+        AcceptanceEngineUnavailablePolicy unavailablePolicy =
+            AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy)
     {
+        using var cancellation = new CancellationTokenSource();
         try
         {
-            return ReadAsync().GetAwaiter().GetResult();
+            return ReadWithRetryAsync(cancellation.Token)
+                .WaitAsync(StateReadTotalBudget)
+                .GetAwaiter()
+                .GetResult();
         }
         catch (Exception ex)
         {
-            RaiseStateUnavailableItem(ex);
+            cancellation.Cancel();
+            var decision = AcceptanceEngineAcceptanceGate.Decide(
+                AcceptanceEngineHealth.Unavailable,
+                unavailablePolicy);
+            RaiseStateUnavailableItem(ex, decision);
             return new AcceptanceEngineHealthSnapshot(
-                AcceptanceEngineHealth.Healthy,
+                AcceptanceEngineHealth.Unavailable,
                 null,
                 "state-unavailable",
                 null,
                 _utcNow(),
-                $"canary state unavailable; landings remain enabled: {ex.GetType().Name}: {ex.Message}");
+                $"canary state unavailable; {decision.Reason}; {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    private async Task<AcceptanceEngineHealthSnapshot> ReadWithRetryAsync(
+        CancellationToken cancellationToken)
+    {
+        Exception? lastFailure = null;
+        for (var attempt = 1; attempt <= StateReadMaxAttempts; attempt++)
+        {
+            try
+            {
+                return await ReadAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                lastFailure = ex;
+                if (attempt < StateReadMaxAttempts)
+                {
+                    await Task.Delay(StateReadRetryDelay, cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        throw lastFailure ?? new InvalidOperationException("Acceptance-engine state read failed without an exception.");
     }
 
     internal async Task<AcceptanceEngineHealthSnapshot> ReadAsync(
@@ -456,7 +577,7 @@ internal sealed class AcceptanceEngineCircuitBreaker
             return emergency;
         }
 
-        var events = await _events.ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false);
+        var events = await _stateReader.ReadProjectionEventsAsync(cancellationToken).ConfigureAwait(false);
         await ResolveStateUnavailableItemAsync(cancellationToken).ConfigureAwait(false);
         var clear = events.FirstOrDefault(item => item.Kind == PostLandingCanaryEventKind.Cleared);
         var receipts = new Dictionary<string, PostLandingCanaryEvent>(StringComparer.OrdinalIgnoreCase);
@@ -536,7 +657,9 @@ internal sealed class AcceptanceEngineCircuitBreaker
             clear?.Payload.OperatorNote);
     }
 
-    private void RaiseStateUnavailableItem(Exception exception)
+    private void RaiseStateUnavailableItem(
+        Exception exception,
+        AcceptanceEngineAcceptanceDecision decision)
     {
         if (_operatorItems is null)
         {
@@ -546,12 +669,16 @@ internal sealed class AcceptanceEngineCircuitBreaker
         var detail = $"{exception.GetType().Name}: {exception.Message}";
         try
         {
+            using var cancellation = new CancellationTokenSource(OperatorItemWriteBudget);
             _operatorItems.RaiseAsync(
                     CollaborationItemType.Verify,
                     goalId: null,
                     subject: "Post-landing canary state is unavailable",
-                    body: $"Canary state could not be read; landings remain enabled.\n{detail}",
-                    correlationKey: StateUnavailableOperatorItemCorrelationKey)
+                    body:
+                        $"Canary state could not be read after {StateReadMaxAttempts} attempts; {decision.Reason}.\n{detail}",
+                    correlationKey: StateUnavailableOperatorItemCorrelationKey,
+                    cancellationToken: cancellation.Token)
+                .WaitAsync(OperatorItemWriteBudget)
                 .GetAwaiter()
                 .GetResult();
         }

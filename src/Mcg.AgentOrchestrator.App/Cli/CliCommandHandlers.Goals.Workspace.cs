@@ -53,10 +53,13 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
 
         case "merge":
             var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
-            if (!engineHealth.AllowsAcceptance)
+            var engineDecision = AcceptanceEngineAcceptanceGate.Decide(
+                engineHealth.Health,
+                AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
+            if (!engineDecision.Allowed)
             {
                 Console.WriteLine(
-                    $"Workspace merge blocked: acceptance engine circuit is {engineHealth.Health}. " +
+                    $"Workspace merge blocked: {engineDecision.Reason}. " +
                     "Repair it, then run acceptance-engine clear <note>.");
                 return false;
             }
