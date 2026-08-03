@@ -1868,7 +1868,7 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.Verified, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
     }
 
-    [Xunit.Theory(DisplayName = "Post-landing canary sink failure cannot skip successful-landing callbacks")]
+    [Xunit.Theory(DisplayName = "Post-landing canary sink failure stays non-blocking and cannot skip successful-landing callbacks")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
     public void PostLandingCanaryFailureCannotSkipSuccessfulLandingCallbacks(bool breakSqliteStore)
@@ -1918,7 +1918,7 @@ public sealed class ConductorDriverTests
 
             Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
             Assert.True(afterSuccessfulLandingCalled);
-            Assert.Equal(AcceptanceEngineHealth.Unhealthy, circuit.Read().Health);
+            Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
         }
         finally
         {
