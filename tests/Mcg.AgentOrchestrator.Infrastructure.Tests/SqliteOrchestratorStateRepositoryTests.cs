@@ -978,8 +978,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(2, record.Failed);
         Assert.Equal(2, record.SelfRatedAdequate);
         Assert.Equal(1, record.SelfRatedUnderpowered);
-        Assert.Equal(1, record.Divergence);
-        Assert.Equal(ModelOutcomeRecommendation.Avoid, record.Recommendation);
+        Assert.Equal(0, record.RealFailures);
+        Assert.Equal(2, record.UnknownEraFailures);
+        Assert.Equal(0, record.Divergence);
+        Assert.Equal(ModelOutcomeRecommendation.Neutral, record.Recommendation);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_best_fit_for_role_prefers_non_underpowered_model")]
