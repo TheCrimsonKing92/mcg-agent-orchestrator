@@ -49,9 +49,11 @@ internal static class BacklogIntakePlanner
         var repositoryRoot = ResolveRepositoryRoot(backlogStorePath);
         var scopeContext = new GoalFileScopeDerivationContext(repositoryRoot);
         var store = new BacklogStore(backlogStorePath);
-        var totalItemCount = store.ListAsync(includeAll: true).GetAwaiter().GetResult().Count;
-        var items = store.ListAsync().GetAwaiter().GetResult()
+        var eligibleItems = store.ListAsync().GetAwaiter().GetResult()
             .Where(item => !item.Title.StartsWith("Decision record", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var totalItemCount = eligibleItems.Length;
+        var items = eligibleItems
             .Where(item => MatchesFilter(item, headingFilter))
             .Take(maxItems)
             .Select(item => BuildItem(

@@ -353,7 +353,7 @@ public sealed class CliHelpTests
             result =>
             {
                 Xunit.Assert.Equal(0, result.ExitCode);
-                Xunit.Assert.Contains("No matching open backlog items.", result.StandardOutput);
+                Xunit.Assert.Contains("Backlog list: 0 item(s) from backlog store", result.StandardOutput);
             });
 
         await AssertCliSkipsOrphanWorktreeCleanupAsync(
@@ -485,7 +485,7 @@ public sealed class CliHelpTests
             Xunit.Assert.False(changed);
         });
 
-        Xunit.Assert.Contains("No matching backlog items.", output);
+        Xunit.Assert.Contains("Backlog list: 0 item(s) from backlog store", output);
     }
 
     private static string CreateTempDirectory()

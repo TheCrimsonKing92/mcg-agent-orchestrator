@@ -424,8 +424,7 @@ private static Goal? FindLinkedGoal(IReadOnlyDictionary<string, Goal> goalsByBac
 
 private static bool IsBacklogListingStatus(string? status) =>
     status is not null &&
-    (status.Equals("open", StringComparison.OrdinalIgnoreCase) ||
-     status.Equals("claimed", StringComparison.OrdinalIgnoreCase) ||
+    (status.Equals("claimed", StringComparison.OrdinalIgnoreCase) ||
      status.Equals("closed", StringComparison.OrdinalIgnoreCase));
 
 private static string RenderBacklogListingStatus(BacklogItem item, Goal? linkedGoal)

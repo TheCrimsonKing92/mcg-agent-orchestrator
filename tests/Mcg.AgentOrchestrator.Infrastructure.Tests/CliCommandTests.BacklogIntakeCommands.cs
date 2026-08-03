@@ -1247,6 +1247,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         var first = ExecuteCliAndCapture(["backlog-list"], kernel, workspace);
         var second = ExecuteCliAndCapture(["backlog-list"], kernel, workspace);
+        var open = ExecuteCliAndCapture(["backlog-list", "--status", "open"], kernel, workspace);
         var rows = first.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
             .Where(line => line.Contains(" | status=", StringComparison.Ordinal))
             .ToArray();
@@ -1258,6 +1259,9 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains(rows, row => row.Contains($"{items[0].Id} | status=open | goal=- | title={items[0].Title}", StringComparison.Ordinal));
         Xunit.Assert.Contains(rows, row => row.Contains($"{items[2].Id} | status=claimed | goal={linkedGoal.Id.Value} | title={items[2].Title}", StringComparison.Ordinal));
         Xunit.Assert.Contains(rows, row => row.Contains($"{items[6].Id} | status=closed | goal=- | title={items[6].Title}", StringComparison.Ordinal));
+        Xunit.Assert.Contains($"{items[0].Id} | status=open | goal=- | title={items[0].Title}", open);
+        Xunit.Assert.Contains($"{items[2].Id} | status=claimed | goal={linkedGoal.Id.Value} | title={items[2].Title}", open);
+        Xunit.Assert.DoesNotContain(items[6].Id, open);
 
         var claimedRow = Xunit.Assert.Single(rows.Where(row => row.Contains(items[2].Id, StringComparison.Ordinal)));
         var emittedTitle = claimedRow[(claimedRow.IndexOf(" | title=", StringComparison.Ordinal) + " | title=".Length)..];
@@ -1276,7 +1280,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
         var output = ExecuteCliAndCapture(["backlog-list"], new AgentOrchestratorKernel(), workspace);
 
-        Xunit.Assert.Equal($"Backlog list: 0 item(s) from backlog store{Environment.NewLine}", output);
+        Xunit.Assert.Contains("Backlog list: 0 item(s) from backlog store", output);
     }
 
 
@@ -1287,10 +1291,15 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         var store = new BacklogStore(workspace.BacklogStorePath);
+        var eligibleItems = new List<BacklogItem>();
         for (var index = 0; index < 7; index++)
         {
-            await store.AddAsync($"Intake candidate {index}", $"Body {index}");
+            eligibleItems.Add(await store.AddAsync($"Intake candidate {index}", $"Body {index}"));
         }
+        var closed = await store.AddAsync("Closed intake candidate", "Closed body");
+        await store.CloseAsync(closed.Id);
+        var superseded = await store.AddAsync("Superseded intake candidate", "Superseded body");
+        await store.SupersedeAsync(superseded.Id, eligibleItems[0].Id);
 
         var kernel = new AgentOrchestratorKernel();
         var output = ExecuteCliAndCapture(["backlog-intake"], kernel, workspace);
