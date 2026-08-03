@@ -2065,6 +2065,15 @@ internal sealed class ConductorBatchLoop
         }
     }
 
+    internal static void ResetParallelAcceptanceFairnessForTests()
+    {
+        lock (ParallelAcceptanceFairnessGate)
+        {
+            s_parallelAcceptanceOldestWaiter = null;
+            s_parallelAcceptanceConsecutiveOvertakes = 0;
+        }
+    }
+
     private static void RecordParallelAcceptanceFairnessGrant(string goalId, string? oldestGoalId)
     {
         if (string.IsNullOrWhiteSpace(oldestGoalId))
