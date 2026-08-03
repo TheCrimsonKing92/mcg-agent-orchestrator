@@ -505,6 +505,8 @@ internal sealed record ProcessSummaryDto(
     int ProcessId,
     bool IsRunning,
     int? ExitCode,
+    int? ChildProcessId,
+    int? ChildExitCode,
     bool WasCancelled,
     string StandardOutputPath,
     string StandardErrorPath,

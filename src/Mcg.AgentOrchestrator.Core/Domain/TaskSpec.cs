@@ -117,9 +117,12 @@ public sealed class TaskSpec
                     LastVerification.ProviderFailureKind,
                     LastVerification.ReviewFindingTouchedAnchors,
                     LastVerification.ReviewedCommit,
-                    LastVerification.MergedReviewFindings,
-                    LastVerification.WorkerResultPresent,
-                    LastVerification.ReviewFindingContractViolation),
+                     LastVerification.MergedReviewFindings,
+                     LastVerification.WorkerResultPresent,
+                     LastVerification.ReviewFindingContractViolation,
+                     LastVerification.DispatchStartedAt,
+                     LastVerification.ChildProcessId,
+                     LastVerification.ChildExitCode),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -134,9 +137,12 @@ public sealed class TaskSpec
                     verification.ProviderFailureKind,
                     verification.ReviewFindingTouchedAnchors,
                     verification.ReviewedCommit,
-                    verification.MergedReviewFindings,
-                    verification.WorkerResultPresent,
-                    verification.ReviewFindingContractViolation))
+                     verification.MergedReviewFindings,
+                     verification.WorkerResultPresent,
+                     verification.ReviewFindingContractViolation,
+                     verification.DispatchStartedAt,
+                     verification.ChildProcessId,
+                     verification.ChildExitCode))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -186,7 +192,10 @@ public sealed class TaskSpec
                             LastProcess.ResourceAccounting.IoBytes,
                             LastProcess.ResourceAccounting.Reaped,
                             LastProcess.ResourceAccounting.AccountingSource),
-                    LastProcess.WasCancelledByConductor),
+                     LastProcess.WasCancelledByConductor,
+                     LastProcess.ChildExitRecordPath,
+                     LastProcess.ChildProcessId,
+                     LastProcess.ChildExitCode),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -247,8 +256,11 @@ public sealed class TaskSpec
                     WorkerResultPresent: verification.WorkerResultPresent,
                     ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
                     ReviewedCommit: verification.ReviewedCommit,
-                    MergedReviewFindings: verification.MergedReviewFindings,
-                    ReviewFindingContractViolation: verification.ReviewFindingContractViolation));
+                     MergedReviewFindings: verification.MergedReviewFindings,
+                     ReviewFindingContractViolation: verification.ReviewFindingContractViolation,
+                     DispatchStartedAt: verification.DispatchStartedAt,
+                     ChildProcessId: verification.ChildProcessId,
+                     ChildExitCode: verification.ChildExitCode));
             }
         }
 
@@ -268,8 +280,11 @@ public sealed class TaskSpec
                 WorkerResultPresent: snapshot.LastVerification.WorkerResultPresent,
                 ReviewFindingTouchedAnchors: snapshot.LastVerification.ReviewFindingTouchedAnchors,
                 ReviewedCommit: snapshot.LastVerification.ReviewedCommit,
-                MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings,
-                ReviewFindingContractViolation: snapshot.LastVerification.ReviewFindingContractViolation);
+                 MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings,
+                 ReviewFindingContractViolation: snapshot.LastVerification.ReviewFindingContractViolation,
+                 DispatchStartedAt: snapshot.LastVerification.DispatchStartedAt,
+                 ChildProcessId: snapshot.LastVerification.ChildProcessId,
+                 ChildExitCode: snapshot.LastVerification.ChildExitCode);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);
@@ -328,7 +343,10 @@ public sealed class TaskSpec
                         snapshot.LastProcess.ResourceAccounting.IoBytes,
                         snapshot.LastProcess.ResourceAccounting.Reaped,
                         snapshot.LastProcess.ResourceAccounting.AccountingSource),
-                snapshot.LastProcess.WasCancelledByConductor));
+                 snapshot.LastProcess.WasCancelledByConductor,
+                 snapshot.LastProcess.ChildExitRecordPath,
+                 snapshot.LastProcess.ChildProcessId,
+                 snapshot.LastProcess.ChildExitCode));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);
@@ -368,6 +386,7 @@ public sealed class TaskSpec
         // results without consuming Developer or Reviewer convergence allowances.
         var dispatchFlakeKind = DispatchFailureClassifier.Classify(this, verification).Kind;
         EmptyOutputRetryCount = dispatchFlakeKind is
+            DispatchOutcomeKind.LaunchFailure or
             DispatchOutcomeKind.EmptyOutputFlake or
             DispatchOutcomeKind.PreflightFailure or
             DispatchOutcomeKind.VerificationInconclusive

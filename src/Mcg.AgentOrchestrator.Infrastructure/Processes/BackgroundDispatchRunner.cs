@@ -247,6 +247,8 @@ public sealed class BackgroundDispatchRunner
         var stdoutPath = Path.Combine(logRoot, $"{prefix}.out.log");
         var stderrPath = Path.Combine(logRoot, $"{prefix}.err.log");
         var exitCodePath = Path.Combine(logRoot, $"{prefix}.exit.txt");
+        var childExitRecordPath = Path.Combine(logRoot, $"{prefix}.child-exit.json");
+        var hostDiagnosticPath = Path.Combine(logRoot, $"{prefix}.host.err.log");
         var heartbeatPath = Path.Combine(logRoot, $"{prefix}.heartbeat.json");
         var startGatePath = Path.Combine(logRoot, $"{prefix}.start-gate");
 
@@ -323,7 +325,9 @@ public sealed class BackgroundDispatchRunner
             PrepTaskId: useSandbox ? taskId.Value : null,
             PrepRecordPath: prepRecordPath,
             PrepHeartbeatPath: prepHeartbeatPath,
-            PrepExitCodePath: prepExitCodePath));
+            PrepExitCodePath: prepExitCodePath,
+            ChildExitRecordPath: childExitRecordPath,
+            HostDiagnosticPath: hostDiagnosticPath));
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, performs sandbox prep off the conductor tick,
@@ -395,7 +399,8 @@ public sealed class BackgroundDispatchRunner
             _clock.UtcNow,
             null,
             null,
-            OwnedProcessIds: [process.Id]);
+            OwnedProcessIds: [process.Id],
+            ChildExitRecordPath: childExitRecordPath);
 
         kernel.RecordTaskProcessStarted(goalId, taskId, record);
         try
@@ -1249,11 +1254,14 @@ public sealed class BackgroundDispatchRunner
         {
             TryWriteExitCode(processRecord.ExitCodePath, exitCode);
         }
+        var hasChildExitRecord = TryReadChildExitRecord(processRecord.ChildExitRecordPath, out var childExitRecord);
         var completed = processRecord with
         {
             CompletedAt = _clock.UtcNow,
             ExitCode = exitCode,
-            ResourceAccounting = resourceAccounting
+            ResourceAccounting = resourceAccounting,
+            ChildProcessId = hasChildExitRecord ? childExitRecord.ProcessId : null,
+            ChildExitCode = hasChildExitRecord ? childExitRecord.ExitCode : null
         };
 
         // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
@@ -1280,7 +1288,10 @@ public sealed class BackgroundDispatchRunner
             HasCommittedChanges: hasCommittedChanges,
             HeartbeatStandardOutputBytes: heartbeatStdoutBytes,
             ProviderFailureKind: providerFailureKind,
-            HumanInputQuestion: humanInputQuestion);
+            HumanInputQuestion: humanInputQuestion,
+            DispatchStartedAt: processRecord.StartedAt,
+            ChildProcessId: completed.ChildProcessId,
+            ChildExitCode: completed.ChildExitCode);
 
         var outcome = new DispatchRefreshOutcome(
             completed,
@@ -2406,6 +2417,44 @@ public sealed class BackgroundDispatchRunner
 
         exitCode = 1;
         return true;
+    }
+
+    private static bool TryReadChildExitRecord(
+        string? path,
+        out DispatchProcessHost.DispatchChildExitRecord record)
+    {
+        record = new DispatchProcessHost.DispatchChildExitRecord(0, 0, default);
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            var parsed = JsonSerializer.Deserialize<DispatchProcessHost.DispatchChildExitRecord>(
+                stream,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+            if (parsed is null || parsed.ProcessId <= 0)
+            {
+                return false;
+            }
+
+            record = parsed;
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private ProcessLogSnapshot ReadProcessLogBestEffort(TaskProcessRecord processRecord, string path)
@@ -3625,7 +3674,7 @@ public sealed class BackgroundDispatchRunner
             var stderrLen = (long)standardError.Length;
 
             var classification = ClassifyDispatch(
-                exitCode, fileLen, readLen, standardOutput, standardError, out var reason);
+                exitCode, fileLen, readLen, stderrLen, standardOutput, standardError, out var reason);
 
             var dispatchState = new DispatchStateSurface(_clock, _isStillRunning).Evaluate(goalId, task);
 
@@ -3656,6 +3705,7 @@ public sealed class BackgroundDispatchRunner
         int exitCode,
         long fileLen,
         long readLen,
+        long stderrLen,
         string standardOutput,
         string standardError,
         out string reason)
@@ -3673,10 +3723,10 @@ public sealed class BackgroundDispatchRunner
             return "rate-limited";
         }
 
-        if (exitCode != 0 && fileLen == 0 && readLen == 0)
+        if (exitCode != 0 && fileLen == 0 && readLen == 0 && stderrLen == 0)
         {
-            reason = "exit non-zero with empty output file and empty captured stdout";
-            return "genuine-failure";
+            reason = "root exited non-zero with zero bytes on both redirected streams";
+            return "launch-failure";
         }
 
         reason = exitCode == 0

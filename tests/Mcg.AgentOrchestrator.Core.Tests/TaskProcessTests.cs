@@ -194,15 +194,53 @@ public sealed class TaskProcessTests
     kernel.ActivateGoal(goal.Id, DefaultAgents());
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "dotnet test", "C:\\repo", clock.UtcNow));
-    kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(5678, "dotnet test", "C:\\repo", "out.log", "err.log", "exit.txt", clock.UtcNow, null, null, OwnedProcessIds: [5678, 6789]));
+    var startedAt = clock.UtcNow;
+    var started = new TaskProcessRecord(
+        5678,
+        "dotnet test",
+        "C:\\repo",
+        "out.log",
+        "err.log",
+        "exit.txt",
+        startedAt,
+        null,
+        null,
+        OwnedProcessIds: [5678, 6789],
+        ChildExitRecordPath: "child-exit.json");
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, started);
+    var completedAt = startedAt.AddSeconds(27);
+    var completed = started with
+    {
+        CompletedAt = completedAt,
+        ExitCode = 1,
+        ChildProcessId = 6789,
+        ChildExitCode = 23
+    };
+    var verification = new TaskVerificationRecord(
+        "dotnet test",
+        "C:\\repo",
+        1,
+        string.Empty,
+        string.Empty,
+        completedAt,
+        DispatchStartedAt: startedAt,
+        ChildProcessId: 6789,
+        ChildExitCode: 23);
+    kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, completed, verification);
 
     var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
     var restoredTask = restored.GetTask(goal.Id, task.Id);
 
     Assert.Equal(5678, restoredTask.LastProcess!.ProcessId);
     Assert.Equal("dotnet test", restoredTask.LastProcess.Command);
-    Assert.True(restoredTask.LastProcess.IsRunning);
+    Assert.False(restoredTask.LastProcess.IsRunning);
     Assert.True(restoredTask.LastProcess.TrackedProcessIds.SequenceEqual([5678, 6789]));
+    Assert.Equal("child-exit.json", restoredTask.LastProcess.ChildExitRecordPath);
+    Assert.Equal(6789, restoredTask.LastProcess.ChildProcessId);
+    Assert.Equal(23, restoredTask.LastProcess.ChildExitCode);
+    Assert.Equal(startedAt, restoredTask.LastVerification!.DispatchStartedAt);
+    Assert.Equal(6789, restoredTask.LastVerification.ChildProcessId);
+    Assert.Equal(23, restoredTask.LastVerification.ChildExitCode);
 }
     [Xunit.Fact(DisplayName = "RecordTaskProcessCancelled_marks_task_cancelled")]
     public void RecordTaskProcessCancelledMarksTaskCancelled()

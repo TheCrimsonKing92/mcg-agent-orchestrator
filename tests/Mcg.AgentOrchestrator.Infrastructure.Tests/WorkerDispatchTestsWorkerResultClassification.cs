@@ -2063,8 +2063,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(1, task.LastVerification!.ExitCode);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_empty_stdout_nonzero_exit_records_empty_output_retry")]
-    public void BackgroundDispatchRunnerEmptyStdoutNonzeroExitRecordsEmptyOutputRetry()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_short_zero_byte_streams_nonzero_root_exit_records_launch_retry")]
+    public void BackgroundDispatchRunnerShortZeroByteStreamsRecordsLaunchRetry()
 {
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
@@ -2075,14 +2075,24 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         string.Empty,
         clock,
         taskDescription: "Verify behavior with automated and manual checks",
-        verificationPlan: "Run the focused tests and confirm the acceptance criteria.");
+        verificationPlan: "Run the focused tests and confirm the acceptance criteria.",
+        childExitCode: 23);
     File.WriteAllText(process.ExitCodePath, "1");
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Equal(999999, task.LastProcess!.ProcessId);
+    Assert.Equal(1, task.LastProcess.ExitCode);
+    Assert.Equal(888888, task.LastProcess.ChildProcessId);
+    Assert.Equal(23, task.LastProcess.ChildExitCode);
+    Assert.Equal(888888, task.LastVerification.ChildProcessId);
+    Assert.Equal(23, task.LastVerification.ChildExitCode);
     Assert.Equal(1, task.EmptyOutputRetryCount);
+    Assert.Equal(
+        DispatchOutcomeKind.LaunchFailure,
+        DispatchFailureClassifier.Classify(task, task.LastVerification).Kind);
     Assert.True(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
 }
 
@@ -2892,8 +2902,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.NotEmpty(record.Timestamp);
 }
 
-    [Xunit.Fact(DisplayName = "DispatchDiagnostic_exit1_empty_output_yields_genuine_failure_record")]
-    public void DispatchDiagnosticExit1EmptyOutputYieldsGenuineFailureRecord()
+    [Xunit.Fact(DisplayName = "DispatchDiagnostic_exit1_zero_byte_streams_yields_launch_failure_record")]
+    public void DispatchDiagnosticExit1EmptyOutputYieldsLaunchFailureRecord()
 {
     var root = CreateTempDirectory();
     var stdout = Path.Combine(root, "abc12345-def67890-20260623.out.log");
@@ -2924,7 +2934,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(1, record.ExitCode);
     Assert.Equal(0L, record.FileLen);
     Assert.Equal(0L, record.ReadLen);
-    Assert.Equal("genuine-failure", record.Classification);
+    Assert.Equal("launch-failure", record.Classification);
 }
 
     [Xunit.Fact(DisplayName = "DispatchDiagnostic_exit1_rate_limit_in_stderr_yields_rate_limited_record")]

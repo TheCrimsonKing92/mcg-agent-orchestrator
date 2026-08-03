@@ -783,15 +783,69 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("sandbox-preflight-failure", outcome.EvidenceSummary);
     }
 
-    [Xunit.Fact(DisplayName = "Classify returns EmptyOutputFlake for empty subscription output with nonzero exit")]
-    public void ClassifyEmptyOutputFlake()
+    [Xunit.Fact(DisplayName = "Classify returns LaunchFailure for short nonzero exit with both streams empty")]
+    public void ClassifySilentLaunchFailure()
     {
-        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, ""));
+        var completedAt = DateTimeOffset.Parse("2026-08-03T03:22:50Z");
+        var verification = new TaskVerificationRecord(
+            "claude -p --model claude-opus-5 --permission-mode plan",
+            "C:\\repo",
+            1,
+            string.Empty,
+            string.Empty,
+            completedAt,
+            DispatchStartedAt: completedAt - TimeSpan.FromSeconds(51),
+            ChildProcessId: 32164,
+            ChildExitCode: 23);
 
-        Xunit.Assert.Equal(DispatchOutcomeKind.EmptyOutputFlake, outcome.Kind);
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.LaunchFailure, outcome.Kind);
         Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.True(outcome.HasZeroByteOutput);
         Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Contains("rule=silent-launch-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("duration_ms=51000", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("root_exit_code=1", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("child_exit_code=23", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify preserves worker failure when either redirected stream has output")]
+    public void ClassifyWorkerFailureWithOutputDoesNotRetryAsLaunchFailure()
+    {
+        var completedAt = DateTimeOffset.Parse("2026-08-03T03:22:50Z");
+        var verification = new TaskVerificationRecord(
+            "claude -p",
+            "C:\\repo",
+            1,
+            string.Empty,
+            "worker reported a genuine failure",
+            completedAt,
+            DispatchStartedAt: completedAt - TimeSpan.FromSeconds(27));
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.NotEqual(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify does not call long-running empty worker exit a launch failure")]
+    public void ClassifyLongRunningEmptyFailureDoesNotRetryAsLaunchFailure()
+    {
+        var completedAt = DateTimeOffset.Parse("2026-08-03T03:22:50Z");
+        var verification = new TaskVerificationRecord(
+            "claude -p",
+            "C:\\repo",
+            1,
+            string.Empty,
+            string.Empty,
+            completedAt,
+            DispatchStartedAt: completedAt - DispatchFailureClassifier.SilentLaunchFailureMaxDuration - TimeSpan.FromSeconds(1));
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.NotEqual(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
     }
 
     [Xunit.Fact(DisplayName = "Classify preserves exit zero empty output failover when heartbeat has no bytes")]

@@ -265,6 +265,129 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_records_selected_child_exit_separately_from_root_exit")]
+    public void DispatchProcessHostRecordsSelectedChildExitSeparately()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-child-exit-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        Task<int>? runTask = null;
+        var gatePath = Path.Combine(dir, "release-child");
+        try
+        {
+            var stdoutPath = Path.Combine(dir, "out.log");
+            var stderrPath = Path.Combine(dir, "err.log");
+            var exitPath = Path.Combine(dir, "exit.txt");
+            var childExitPath = Path.Combine(dir, "child-exit.json");
+            var heartbeatPath = Path.Combine(dir, "heartbeat.json");
+            var childScriptPath = Path.Combine(dir, "silent-child.ps1");
+            var shell = EscapePowerShellSingleQuoted(WorkerShell.Executable);
+            File.WriteAllText(
+                childScriptPath,
+                $"while (!(Test-Path -LiteralPath '{EscapePowerShellSingleQuoted(gatePath)}')) {{ [void][Math]::Sqrt(1234567) }}{Environment.NewLine}exit 23",
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            var command =
+                $"& '{shell}' -NoProfile -NonInteractive -InputFormat None -File " +
+                $"'{EscapePowerShellSingleQuoted(childScriptPath)}'; exit 1";
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                command,
+                dir,
+                stdoutPath,
+                stderrPath,
+                exitPath,
+                heartbeatPath,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                Provider: WorkerSandboxProvider.Claude,
+                ChildExitRecordPath: childExitPath,
+                HeartbeatIntervalMilliseconds: 25);
+            var parametersPath = Path.Combine(dir, "dispatch.json");
+            DispatchProcessHost.WriteParameters(parametersPath, parameters);
+
+            runTask = Task.Run(() => DispatchProcessHost.Run(parametersPath));
+            var childWasObserved = SpinWait.SpinUntil(
+                () =>
+                {
+                    try
+                    {
+                        if (!File.Exists(heartbeatPath))
+                            return false;
+
+                        using var heartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath));
+                        return heartbeat.RootElement.GetProperty("childPid").ValueKind == JsonValueKind.Number &&
+                            heartbeat.RootElement.GetProperty("ownedPids").GetArrayLength() > 1;
+                    }
+                    catch (IOException)
+                    {
+                        return false;
+                    }
+                    catch (JsonException)
+                    {
+                        return false;
+                    }
+                },
+                TimeSpan.FromSeconds(10));
+            Assert.True(childWasObserved, "Dispatch host did not observe the silent child before the fixture timeout.");
+            File.WriteAllText(gatePath, "release");
+            var rootExitCode = runTask.GetAwaiter().GetResult();
+
+            Assert.Equal(1, rootExitCode);
+            Assert.Equal("1", File.ReadAllText(exitPath).Trim());
+            Assert.Equal(0, new FileInfo(stdoutPath).Length);
+            Assert.Equal(0, new FileInfo(stderrPath).Length);
+            using var childExit = JsonDocument.Parse(File.ReadAllText(childExitPath));
+            Assert.True(childExit.RootElement.GetProperty("processId").GetInt32() > 0);
+            Assert.Equal(23, childExit.RootElement.GetProperty("exitCode").GetInt32());
+        }
+        finally
+        {
+            try { File.WriteAllText(gatePath, "release"); } catch { }
+            try { runTask?.Wait(TimeSpan.FromSeconds(5)); } catch { }
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_records_failed_stderr_diagnostic_append_in_fallback_artifact")]
+    public void DispatchProcessHostRecordsFailedDiagnosticAppend()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcg-dispatch-host-diagnostic-fallback-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var stderrDirectory = Path.Combine(dir, "stderr-is-a-directory");
+            Directory.CreateDirectory(stderrDirectory);
+            var hostDiagnosticPath = Path.Combine(dir, "host.err.log");
+            var heartbeatPath = Path.Combine(dir, "heartbeat.json");
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output should-not-launch",
+                Path.Combine(dir, "missing-working-directory"),
+                Path.Combine(dir, "out.log"),
+                stderrDirectory,
+                Path.Combine(dir, "exit.txt"),
+                heartbeatPath,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                HostDiagnosticPath: hostDiagnosticPath);
+            var parametersPath = Path.Combine(dir, "dispatch.json");
+            DispatchProcessHost.WriteParameters(parametersPath, parameters);
+
+            var exitCode = DispatchProcessHost.Run(parametersPath);
+
+            Assert.Equal(1, exitCode);
+            var fallback = File.ReadAllText(hostDiagnosticPath);
+            Assert.Contains("stderr diagnostic append failed", fallback, StringComparison.Ordinal);
+            Assert.Contains("original failure", fallback, StringComparison.Ordinal);
+            using var heartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath));
+            Assert.Contains(
+                "stderr diagnostic append failed",
+                heartbeat.RootElement.GetProperty("hostDiagnosticWriteFailure").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_low_integrity_path_removes_windowsapps_and_prepends_shell_dir")]
     public void LowIntegrityPathRemovesWindowsAppsAndPrependsShellDir()
     {

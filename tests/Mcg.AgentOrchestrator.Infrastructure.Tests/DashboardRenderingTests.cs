@@ -3111,7 +3111,9 @@ public sealed class DashboardRenderingTests
         exitPath,
         DateTimeOffset.Parse("2026-06-12T19:59:00Z"),
         null,
-        null);
+        null,
+        ChildProcessId: 654,
+        ChildExitCode: 23);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, DateTimeOffset.Parse("2026-06-12T19:58:00Z")));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     var heartbeatPath = BackgroundDispatchRunner.GetHeartbeatPath(process);
@@ -3132,6 +3134,8 @@ public sealed class DashboardRenderingTests
     Assert.Equal<int>([321, 987], detail.LastProcess.Heartbeat.OwnedProcessIds);
     Assert.Equal(99, detail.LastProcess.Heartbeat.StandardOutputBytes);
     Assert.Equal(11, detail.LastProcess.Heartbeat.StandardErrorBytes);
+    Assert.Equal(654, detail.LastProcess.ChildProcessId);
+    Assert.Equal(23, detail.LastProcess.ChildExitCode);
     Assert.NotNull(detail.LastProcess.HeartbeatAgeSeconds);
     Assert.NotNull(detail.LastProcess.HeartbeatIdleDurationSeconds);
     Assert.Equal(99, detail.LastProcess.HeartbeatStdoutBytes);
@@ -3143,8 +3147,11 @@ public sealed class DashboardRenderingTests
     Assert.NotNull(logs.HeartbeatIdleDurationSeconds);
     Assert.Equal(99, logs.HeartbeatStdoutBytes);
     Assert.Equal(11, logs.HeartbeatStderrBytes);
+    Assert.Equal(654, logs.ChildProcessId);
+    Assert.Equal(23, logs.ChildExitCode);
     Assert.Equal(heartbeatPath, logs.HeartbeatPath);
     Assert.Equal(heartbeatPath, workSummary.Tasks.Single().LastProcess!.Heartbeat.Path);
+    Assert.Equal(23, workSummary.Tasks.Single().LastProcess!.ChildExitCode);
     Assert.Contains("heartbeat running", html, StringComparison.Ordinal);
     Assert.Contains("owned_pids=321,987", html, StringComparison.Ordinal);
     Assert.Contains("stdout_bytes=99", html, StringComparison.Ordinal);

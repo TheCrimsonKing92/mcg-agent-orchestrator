@@ -676,6 +676,7 @@ public static class GoalTimingReport
             or DispatchOutcomeKind.ProviderAuthentication
             or DispatchOutcomeKind.ProviderModelRejection
             or DispatchOutcomeKind.PreflightFailure
+            or DispatchOutcomeKind.LaunchFailure
             or DispatchOutcomeKind.EmptyOutputFlake
             or DispatchOutcomeKind.RecoverableSubscriptionLimit;
 

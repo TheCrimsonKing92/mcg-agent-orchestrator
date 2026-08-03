@@ -17,6 +17,7 @@ public enum DispatchOutcomeKind
     VerifiedSuccess,
     RecoverableSubscriptionLimit,
     PreflightFailure,
+    LaunchFailure,
     EmptyOutputFlake,
     SandboxCommitBlocked,
     ProviderNeutralProgressStall,
@@ -53,6 +54,7 @@ public static class DispatchFailureClassifier
     }
 
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
+    public static readonly TimeSpan SilentLaunchFailureMaxDuration = TimeSpan.FromMinutes(1);
 
     public static DispatchOutcome ClassifyProviderFailure(
         ProviderFailureKind failureKind,
@@ -197,6 +199,11 @@ public static class DispatchFailureClassifier
             return false;
         }
 
+        if (IsSilentLaunchFailure(verification))
+        {
+            return true;
+        }
+
         // exit 0 with evidence the worker actually produced output is never a transient empty-output flake.
         // The heartbeat stdout-byte count is the flush-race-proof signal: a worker that streamed bytes per its
         // heartbeat genuinely ran (the out.log file read can race the exit flush and momentarily report empty,
@@ -215,8 +222,7 @@ public static class DispatchFailureClassifier
 
         if (verification.ExitCode != 0)
         {
-            return string.IsNullOrWhiteSpace(verification.StandardOutput) &&
-                !HasSubstantiveStandardError(verification.StandardError);
+            return false;
         }
 
         if (!string.IsNullOrWhiteSpace(verification.StandardOutput) ||
@@ -226,6 +232,25 @@ public static class DispatchFailureClassifier
         }
 
         return true;
+    }
+
+    public static bool IsSilentLaunchFailure(TaskVerificationRecord verification)
+    {
+        if (verification.ExitCode == 0 ||
+            IsPreflightFailure(verification) ||
+            IsDispatchRecoveryPolicyDiagnostic(verification) ||
+            HasArtifactEvidence(verification.WorkerResultPresent, verification.HasCommittedChanges) ||
+            !HasZeroByteStandardOutput(verification) ||
+            !HasZeroByteStandardError(verification))
+        {
+            return false;
+        }
+
+        if (verification.DispatchStartedAt is not { } startedAt)
+            return false;
+
+        var duration = verification.CompletedAt - startedAt;
+        return duration >= TimeSpan.Zero && duration <= SilentLaunchFailureMaxDuration;
     }
 
     private static bool IsDispatchRecoveryPolicyDiagnostic(TaskVerificationRecord verification) =>
@@ -253,6 +278,17 @@ public static class DispatchFailureClassifier
         }
 
         return new FileInfo(verification.StandardOutputPath).Length > 0;
+    }
+
+    private static bool HasZeroByteStandardError(TaskVerificationRecord verification)
+    {
+        if (!string.IsNullOrWhiteSpace(verification.StandardErrorPath) &&
+            File.Exists(verification.StandardErrorPath))
+        {
+            return new FileInfo(verification.StandardErrorPath).Length == 0;
+        }
+
+        return verification.StandardError.Length == 0;
     }
 
     private static bool HasSubstantiveStandardError(string standardError)
@@ -558,6 +594,24 @@ public static class DispatchFailureClassifier
                 BuildPreflightFailureEvidenceSummary(verification)));
         }
 
+        if (IsSilentLaunchFailure(verification))
+        {
+            return BuildOutcome(
+                "silent-launch-failure",
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.LaunchFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                "root process exited nonzero before either redirected stream received worker output"));
+        }
+
         if (IsTransientEmptyOutputDispatchFlake(verification))
         {
             return BuildOutcome(
@@ -734,10 +788,17 @@ public static class DispatchFailureClassifier
             : "unknown";
         var workerResult = DescribeWorkerResult(verification, workerResultPresent);
         var commitProvenance = DescribeCommitProvenance(task, verification, hasCommittedChanges);
+        var duration = verification.DispatchStartedAt is { } startedAt
+            ? Math.Max(0, (long)(verification.CompletedAt - startedAt).TotalMilliseconds)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "unknown";
 
-        return $"CLASSIFIER rule={rule}; exit_code={verification.ExitCode}; exit_artifact=verification-record; " +
+        var childExitCode = verification.ChildExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+
+        return $"CLASSIFIER rule={rule}; exit_code={verification.ExitCode}; root_exit_code={verification.ExitCode}; " +
+            $"child_exit_code={childExitCode}; exit_artifact=verification-record; " +
             $"stdout_bytes={stdoutBytes}; stderr_bytes={stderrBytes}; heartbeat_stdout_bytes={heartbeat}; " +
-            $"worker_result={workerResult}; commit={commitProvenance}; verdict={verdict}";
+            $"duration_ms={duration}; worker_result={workerResult}; commit={commitProvenance}; verdict={verdict}";
     }
 
     private static long GetOutputByteCount(string? path, string output)

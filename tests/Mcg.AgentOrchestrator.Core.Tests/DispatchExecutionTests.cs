@@ -1981,7 +1981,8 @@ private static string StructuredReviewerResult(
         1,
         string.Empty,
         string.Empty,
-        clock.UtcNow));
+        clock.UtcNow,
+        DispatchStartedAt: clock.UtcNow - TimeSpan.FromSeconds(30)));
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.EmptyOutputRetryCount);

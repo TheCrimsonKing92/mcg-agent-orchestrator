@@ -60,7 +60,10 @@ public sealed record TaskVerificationRecord(
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
     string? ReviewedCommit = null,
     IReadOnlyList<ReviewFinding>? MergedReviewFindings = null,
-    ReviewFindingContractViolation? ReviewFindingContractViolation = null)
+    ReviewFindingContractViolation? ReviewFindingContractViolation = null,
+    DateTimeOffset? DispatchStartedAt = null,
+    int? ChildProcessId = null,
+    int? ChildExitCode = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -169,7 +172,10 @@ public sealed record TaskProcessRecord(
     bool WasCancelled = false,
     IReadOnlyList<int>? OwnedProcessIds = null,
     TaskProcessResourceAccounting? ResourceAccounting = null,
-    bool WasCancelledByConductor = false)
+    bool WasCancelledByConductor = false,
+    string? ChildExitRecordPath = null,
+    int? ChildProcessId = null,
+    int? ChildExitCode = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 

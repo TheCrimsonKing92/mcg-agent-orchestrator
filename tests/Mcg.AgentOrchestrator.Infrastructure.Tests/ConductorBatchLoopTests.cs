@@ -5489,7 +5489,14 @@ public sealed class ConductorBatchLoopTests
         kernel.RecordTaskDispatch(goal.Id, developer.Id,
             new TaskDispatchRecord("test-worker", "dev.exe", "C:\\goal", now));
         kernel.RecordDispatchExecutionResult(goal.Id, developer.Id,
-            new TaskVerificationRecord("dev.exe", "C:\\goal", 1, "", "", now));
+            new TaskVerificationRecord(
+                "dev.exe",
+                "C:\\goal",
+                1,
+                "",
+                "",
+                now,
+                DispatchStartedAt: now - TimeSpan.FromSeconds(30)));
 
         Assert.Equal(WorkTaskStatus.Failed, kernel.GetTask(goal.Id, developer.Id).Status);
         Assert.Equal(1, developer.EmptyOutputRetryCount);
