@@ -620,14 +620,9 @@ internal sealed class ConductorBatchLoop
                     kernel,
                     onlyGoalId,
                     setAsideGoals);
-                var boundedBlockedRecheckGoals = CountRecheckableNonTerminalGoals(
-                    kernel,
-                    onlyGoalId,
-                    setAsideGoals,
-                    BatchSetAsideCondition.PreLandingRebaseConflict);
                 if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0)
                 {
-                    if (boundedBlockedRecheckGoals > 0)
+                    if (recheckableBlockedGoals > 0)
                     {
                         blockedRecheckCycles++;
                         if (maxIterations.HasValue &&
