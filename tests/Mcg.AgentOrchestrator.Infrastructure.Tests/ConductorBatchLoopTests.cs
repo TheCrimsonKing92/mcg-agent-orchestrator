@@ -6835,6 +6835,7 @@ public sealed class ConductorBatchLoopTests
                 now, null, null, OwnedProcessIds: [333]));
 
         var killed = new List<int>();
+        var sleeps = 0;
         var runner = new BackgroundDispatchRunner(
             isStillRunning: _ => false,
             tryKillOwnedProcess: pid =>
@@ -6850,9 +6851,16 @@ public sealed class ConductorBatchLoopTests
                 driver,
                 ConductorAutonomyPolicy.Conservative,
                 NoStopPath(),
-                onlyGoalId: escalatedGoal.Id.Value);
+                onlyGoalId: escalatedGoal.Id.Value,
+                sleepFunc: _ =>
+                {
+                    sleeps++;
+                    return false;
+                });
 
         Assert.Equal(1, summary.Escalated);
+        Assert.Equal("blocked-recheck-exhausted", summary.StopReason);
+        Assert.Equal(1, sleeps);
         Xunit.Assert.Equal([111, 222], killed);
         Assert.True(kernel.GetTask(escalatedGoal.Id, escalatedTask.Id).LastProcess!.WasCancelled);
         Assert.False(kernel.GetTask(otherGoal.Id, otherTask.Id).LastProcess!.WasCancelled);

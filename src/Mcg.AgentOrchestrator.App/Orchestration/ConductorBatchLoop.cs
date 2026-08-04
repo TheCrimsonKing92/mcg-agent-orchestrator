@@ -10,6 +10,7 @@ internal sealed class ConductorBatchLoop
     internal const string StopFileName = ".conduct-stop";
     internal const int DefaultMaxVerifyRetries = 2;
     internal const int DefaultWatchIntervalSeconds = 15;
+    internal const int DefaultBlockedRecheckCycles = 2;
     internal const int WatchStopPollIntervalSeconds = 5;
     internal const int QuietSummaryEveryTicks = 20;
     internal const int DefaultMaxBusyWriteAttempts = 1;
@@ -625,14 +626,25 @@ internal sealed class ConductorBatchLoop
                     if (recheckableBlockedGoals > 0)
                     {
                         blockedRecheckCycles++;
-                        if (maxIterations.HasValue &&
-                            totalTicks + blockedRecheckCycles >= maxIterations.Value)
+                        var blockedRecheckBudget = maxIterations ??
+                            (keepAliveWhenIdle && watchInterval is not null
+                                ? null
+                                : DefaultBlockedRecheckCycles);
+                        var blockedRecheckBudgetUsed = maxIterations.HasValue
+                            ? totalTicks + blockedRecheckCycles
+                            : blockedRecheckCycles;
+                        if (blockedRecheckBudget.HasValue &&
+                            blockedRecheckBudgetUsed >= blockedRecheckBudget.Value)
                         {
-                            StopLoop(
-                                "max-iter",
-                                $"max={maxIterations.Value} blockedRechecks={blockedRecheckCycles}");
-                            Console.WriteLine(
-                                $"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks and {blockedRecheckCycles} blocked rechecks.");
+                            var exhaustedExplicitIterationBudget = maxIterations.HasValue;
+                            var exhaustedStopReason = exhaustedExplicitIterationBudget
+                                ? "max-iter"
+                                : "blocked-recheck-exhausted";
+                            StopLoop(exhaustedStopReason,
+                                $"max={blockedRecheckBudget.Value} blockedRechecks={blockedRecheckCycles}");
+                            Console.WriteLine(exhaustedExplicitIterationBudget
+                                ? $"[conduct --loop] Max iterations ({blockedRecheckBudget.Value}) reached after {totalTicks} ticks and {blockedRecheckCycles} blocked rechecks."
+                                : $"[conduct --loop] Blocked recheck budget ({blockedRecheckBudget.Value}) exhausted after {totalTicks} ticks and {blockedRecheckCycles} blocked rechecks.");
                             DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                             TryPersistCheckpoint(
                                 persistTick,
@@ -640,7 +652,7 @@ internal sealed class ConductorBatchLoop
                                 kernel,
                                 totalTicks,
                                 onlyGoalId,
-                                "max-iterations",
+                                exhaustedExplicitIterationBudget ? "max-iterations" : "blocked-recheck-exhausted",
                                 null,
                                 busyWriteDelay);
                             break;
