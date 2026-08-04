@@ -282,6 +282,37 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_register_fails_and_rolls_back_when_durable_registry_write_fails")]
+    public void WorkerProcessJobsRegisterFailsAndRollsBackWhenDurableRegistryWriteFails()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
+        var dbPath = Path.Combine(root, "state.db");
+        Directory.CreateDirectory(root);
+        File.WriteAllBytes(dbPath, []);
+        Process? wrapper = null;
+        try
+        {
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+            wrapper = StartLongRunningShell();
+
+            Assert.False(WorkerProcessJobs.TryRegister(wrapper, "failed-durable-registration"));
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            WorkerProcessJobs.ClearRegistryForTests();
+            if (wrapper is not null)
+            {
+                try { wrapper.Kill(entireProcessTree: true); } catch { }
+                wrapper.Dispose();
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ProgramStartupLifecycle_non_cleanup_command_configures_registry_and_retains_live_worker")]
     public void ProgramStartupLifecycleNonCleanupCommandConfiguresRegistryAndRetainsLiveWorker()
     {
@@ -549,7 +580,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
 
     private static Process StartLongRunningShell()
     {
-        return Process.Start(new ProcessStartInfo
+        var process = Process.Start(new ProcessStartInfo
         {
             FileName = WorkerShell.Executable,
             UseShellExecute = false,
@@ -561,6 +592,15 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 "Start-Sleep -Seconds 9999"
             ])))
             ?? throw new InvalidOperationException("Failed to start wrapper process.");
+
+        if (SpawnProcessIdentityReader.TryReadForRegistration(process, out _))
+        {
+            return process;
+        }
+
+        try { process.Kill(entireProcessTree: true); } catch { }
+        process.Dispose();
+        throw new InvalidOperationException("Started wrapper process did not expose a durable identity within the registration window.");
     }
 
     private static int WaitForPidFile(string path)

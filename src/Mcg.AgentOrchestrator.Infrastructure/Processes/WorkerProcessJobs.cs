@@ -220,6 +220,11 @@ public static class WorkerProcessJobs
             return false;
         }
 
+        if (!SpawnProcessIdentityReader.TryReadForRegistration(process, out var identity))
+        {
+            return false;
+        }
+
         try
         {
             var group = OwnedProcessGroup.Attach(process);
@@ -227,10 +232,25 @@ public static class WorkerProcessJobs
             var snapshot = group.TryReadAccounting(out var registrationAccounting)
                 ? registrationAccounting with { AccountingSource = "snapshot" }
                 : null;
-            if (Jobs.TryAdd(process.Id, new RegisteredJob(group, duplicate, snapshot)))
+            var registeredJob = new RegisteredJob(group, duplicate, snapshot);
+            if (Jobs.TryAdd(process.Id, registeredJob))
             {
-                RegisterDurable(process, ownerId);
-                return true;
+                if (RegisterDurable(identity, ownerId))
+                {
+                    return true;
+                }
+
+                if (Jobs.TryRemove(process.Id, out var failedRegistration))
+                {
+                    ReadAccountingAndDispose(
+                        failedRegistration,
+                        kill: true,
+                        captureAccounting: false,
+                        preferDuplicate: false,
+                        out _);
+                }
+
+                return false;
             }
 
             ReadAccountingAndDispose(group, kill: false, captureAccounting: false, out _);
@@ -529,23 +549,24 @@ public static class WorkerProcessJobs
             .ToArray();
     }
 
-    private static void RegisterDurable(Process process, string? ownerId)
+    private static bool RegisterDurable(SpawnProcessIdentity identity, string? ownerId)
     {
         var registry = Registry;
-        if (registry is null || !SpawnProcessIdentityReader.TryRead(process, out var identity))
+        if (registry is null)
         {
-            return;
+            return true;
         }
 
         try
         {
             registry.Register(
-                string.IsNullOrWhiteSpace(ownerId) ? $"pid:{process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : ownerId,
+                string.IsNullOrWhiteSpace(ownerId) ? $"pid:{identity.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : ownerId,
                 identity);
+            return true;
         }
         catch
         {
-            // Registry durability is a lifecycle backstop; failed diagnostics must not prevent spawn.
+            return false;
         }
     }
 

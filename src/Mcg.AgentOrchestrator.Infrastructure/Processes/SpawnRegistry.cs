@@ -221,6 +221,9 @@ internal sealed class SpawnRegistry
 
 internal static class SpawnProcessIdentityReader
 {
+    private const int RegistrationReadAttempts = 10;
+    private const int RegistrationReadDelayMilliseconds = 25;
+
     public static bool TryRead(Process process, out SpawnProcessIdentity identity)
     {
         try
@@ -243,6 +246,37 @@ internal static class SpawnProcessIdentityReader
             identity = default!;
             return false;
         }
+    }
+
+    public static bool TryReadForRegistration(Process process, out SpawnProcessIdentity identity)
+    {
+        for (var attempt = 0; attempt < RegistrationReadAttempts; attempt++)
+        {
+            if (TryRead(process, out identity))
+            {
+                return true;
+            }
+
+            try
+            {
+                if (process.HasExited)
+                {
+                    break;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                break;
+            }
+
+            if (attempt < RegistrationReadAttempts - 1)
+            {
+                Thread.Sleep(RegistrationReadDelayMilliseconds);
+            }
+        }
+
+        identity = default!;
+        return false;
     }
 
     public static SpawnTrackedProcessStatus EvaluateTrackedProcess(
