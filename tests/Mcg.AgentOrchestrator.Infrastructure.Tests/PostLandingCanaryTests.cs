@@ -593,7 +593,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("PostLandingCanaryFactory.HandleLandingAfterMainAdvanced(", acceptance, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Post-main factory failure is nonblocking and raises an operator item")]
+    [Xunit.Fact(DisplayName = "Post-main factory failure is nonblocking, fails closed, and raises an operator item")]
     public async Task PostMainFactoryFailureDefersAndRaisesOperatorItem()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-canary-factory-failure", Guid.NewGuid().ToString("N"));
@@ -612,9 +612,11 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
             Assert.Equal(PostLandingCanaryDisposition.Deferred, disposition);
             Assert.Equal(
-                AcceptanceEngineHealth.Healthy,
+                AcceptanceEngineHealth.Unavailable,
                 PostLandingCanaryFactory.CreateCircuit(workspace).Read().Health);
-            Assert.Null(PostLandingCanaryFactory.BuildMutationBlockReason(workspace));
+            var blockReason = PostLandingCanaryFactory.BuildMutationBlockReason(workspace);
+            Assert.NotNull(blockReason);
+            Assert.Contains("health=Unavailable policy=FailClosed outcome=denied", blockReason, StringComparison.Ordinal);
             var item = Assert.Single((await CollaborationItemStore
                 .ForDirectory(workspace.OrchestratorDirectory)
                 .GetAttentionQueueAsync())
@@ -629,34 +631,164 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         }
     }
 
-    [Xunit.Fact(DisplayName = "Unreadable canary state stays nonblocking and raises one operator item")]
-    public async Task UnreadableStateStaysHealthyAndRaisesOperatorItem()
+    [Xunit.Theory(DisplayName = "Acceptance permission is an explicit health and unavailable-policy decision")]
+    [Xunit.InlineData((int)AcceptanceEngineHealth.Healthy, (int)AcceptanceEngineUnavailablePolicy.FailOpen, true)]
+    [Xunit.InlineData((int)AcceptanceEngineHealth.Healthy, (int)AcceptanceEngineUnavailablePolicy.FailClosed, true)]
+    [Xunit.InlineData((int)AcceptanceEngineHealth.Pending, (int)AcceptanceEngineUnavailablePolicy.FailOpen, false)]
+    [Xunit.InlineData((int)AcceptanceEngineHealth.Pending, (int)AcceptanceEngineUnavailablePolicy.FailClosed, false)]
+    [Xunit.InlineData((int)AcceptanceEngineHealth.Unhealthy, (int)AcceptanceEngineUnavailablePolicy.FailOpen, false)]
+    [Xunit.InlineData((int)AcceptanceEngineHealth.Unhealthy, (int)AcceptanceEngineUnavailablePolicy.FailClosed, false)]
+    [Xunit.InlineData((int)AcceptanceEngineHealth.Unavailable, (int)AcceptanceEngineUnavailablePolicy.FailOpen, true)]
+    [Xunit.InlineData((int)AcceptanceEngineHealth.Unavailable, (int)AcceptanceEngineUnavailablePolicy.FailClosed, false)]
+    public void AcceptancePermissionRequiresHealthAndUnavailablePolicy(
+        int healthValue,
+        int policyValue,
+        bool expectedAllowed)
     {
-        var root = Path.Combine(Path.GetTempPath(), "mcg-canary-state-unreadable", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        var workspace = OrchestratorWorkspace.ForDirectory(root);
-        Directory.CreateDirectory(workspace.RunEventStorePath);
-        try
-        {
-            var operatorItems = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
-            var events = new PostLandingCanaryEventStore(
-                new SqliteRunEventStore(workspace.RunEventStorePath, ensureSchema: false),
-                workspace.RunEventStorePath);
-            var circuit = new AcceptanceEngineCircuitBreaker(events, operatorItems);
+        var health = (AcceptanceEngineHealth)healthValue;
+        var policy = (AcceptanceEngineUnavailablePolicy)policyValue;
+        var decision = AcceptanceEngineAcceptanceGate.Decide(health, policy);
 
-            var health = circuit.Read();
+        Assert.Equal(expectedAllowed, decision.Allowed);
+        Assert.Equal(health, decision.Health);
+        Assert.Equal(policy, decision.PolicyApplied);
+        Assert.Contains($"health={health}", decision.Reason, StringComparison.Ordinal);
+        Assert.Contains($"policy={policy}", decision.Reason, StringComparison.Ordinal);
+        Assert.Contains(expectedAllowed ? "outcome=permitted" : "outcome=denied", decision.Reason, StringComparison.Ordinal);
+    }
 
-            Assert.Equal(AcceptanceEngineHealth.Healthy, health.Health);
-            Assert.Equal("state-unavailable", health.FailureReason);
-            Assert.True(health.AllowsAcceptance);
-            var item = Assert.Single(await operatorItems.GetAttentionQueueAsync());
-            Assert.Contains("state is unavailable", item.Subject, StringComparison.Ordinal);
-            Assert.Contains("landings remain enabled", item.Body, StringComparison.Ordinal);
-        }
-        finally
+    [Xunit.Fact(DisplayName = "Unknown acceptance health and unavailable policy values deny")]
+    public void AcceptanceGateDefaultsUnknownValuesToDeny()
+    {
+        var unknownHealth = AcceptanceEngineAcceptanceGate.Decide(
+            (AcceptanceEngineHealth)int.MaxValue,
+            AcceptanceEngineUnavailablePolicy.FailOpen);
+        var unknownPolicy = AcceptanceEngineAcceptanceGate.Decide(
+            AcceptanceEngineHealth.Unavailable,
+            (AcceptanceEngineUnavailablePolicy)int.MaxValue);
+
+        Assert.False(unknownHealth.Allowed);
+        Assert.False(unknownPolicy.Allowed);
+        Assert.Contains("defaulting to deny", unknownHealth.Reason, StringComparison.Ordinal);
+        Assert.Contains("defaulting to deny", unknownPolicy.Reason, StringComparison.Ordinal);
+        Assert.Null(typeof(AcceptanceEngineHealthSnapshot).GetProperty("AllowsAcceptance"));
+    }
+
+    [Xunit.Fact(DisplayName = "Persisted Unhealthy plus unreadable state fails closed without overwriting the circuit")]
+    public async Task UnreadablePersistedUnhealthyStateFailsClosedAndRemainsPersisted()
+    {
+        using var fixture = new CanaryTestFixture();
+        var (coordinator, _) = fixture.CreateCoordinator(new FakeRunner((_, _) => Task.FromResult(
+            PostLandingCanaryOutcome.Failed(PostLandingCanaryFailureReason.Reject, "persisted verifier failure"))));
+        await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-persisted-unhealthy", ["engine/unhealthy"]),
+            CancellationToken.None);
+        PostLandingCanaryEmergencyCircuit.Clear(fixture.DbPath);
+        var stateReader = new ToggleAcceptanceEngineStateReader(fixture.Events)
         {
-            try { Directory.Delete(root, recursive: true); } catch { }
-        }
+            Throws = true
+        };
+        var circuit = new AcceptanceEngineCircuitBreaker(
+            fixture.Events,
+            fixture.OperatorItems,
+            stateReader: stateReader);
+
+        var unavailable = circuit.Read();
+        var decision = AcceptanceEngineAcceptanceGate.Decide(
+            unavailable.Health,
+            AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
+
+        Assert.Equal(AcceptanceEngineHealth.Unavailable, unavailable.Health);
+        Assert.Equal("state-unavailable", unavailable.FailureReason);
+        Assert.False(decision.Allowed);
+        Assert.Equal(AcceptanceEngineUnavailablePolicy.FailClosed, decision.PolicyApplied);
+        Assert.Equal(AcceptanceEngineCircuitBreaker.StateReadMaxAttempts, stateReader.Attempts);
+        Assert.Contains("InvalidOperationException: simulated SQLite lock", unavailable.OperatorNote, StringComparison.Ordinal);
+        var item = Assert.Single((await fixture.OperatorItems.GetAttentionQueueAsync())
+            .Where(item => item.CorrelationKey == AcceptanceEngineCircuitBreaker.StateUnavailableOperatorItemCorrelationKey));
+        Assert.Contains("health=Unavailable policy=FailClosed outcome=denied", item.Body, StringComparison.Ordinal);
+        Assert.Contains("InvalidOperationException: simulated SQLite lock", item.Body, StringComparison.Ordinal);
+
+        stateReader.Throws = false;
+        var recovered = circuit.Read();
+        Assert.Equal(AcceptanceEngineHealth.Unhealthy, recovered.Health);
+        Assert.Equal("sha-persisted-unhealthy", recovered.LandingSha);
+    }
+
+    [Xunit.Fact(DisplayName = "Explicit fail-open records Unavailable, policy, and permitted outcome")]
+    public async Task UnreadableStateFailOpenIsTruthfulAndRecorded()
+    {
+        using var fixture = new CanaryTestFixture();
+        var stateReader = new ToggleAcceptanceEngineStateReader(fixture.Events)
+        {
+            Throws = true
+        };
+        var circuit = new AcceptanceEngineCircuitBreaker(
+            fixture.Events,
+            fixture.OperatorItems,
+            stateReader: stateReader);
+
+        var unavailable = circuit.Read(AcceptanceEngineUnavailablePolicy.FailOpen);
+        var decision = AcceptanceEngineAcceptanceGate.Decide(
+            unavailable.Health,
+            AcceptanceEngineUnavailablePolicy.FailOpen);
+
+        Assert.Equal(AcceptanceEngineHealth.Unavailable, unavailable.Health);
+        Assert.True(decision.Allowed);
+        Assert.Contains("could not be checked, proceeding under policy FailOpen", decision.Reason, StringComparison.Ordinal);
+        Assert.Contains("health=Unavailable policy=FailOpen outcome=permitted", unavailable.OperatorNote, StringComparison.Ordinal);
+        var item = Assert.Single(await fixture.OperatorItems.GetAttentionQueueAsync());
+        Assert.Contains("health=Unavailable policy=FailOpen outcome=permitted", item.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("healthy", item.Body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Unavailable-state item failure emits a non-database operator fallback")]
+    public void UnavailableStateItemFailureEmitsOperatorFallback()
+    {
+        using var fixture = new CanaryTestFixture();
+        var fallbackLines = new List<string>();
+        var operatorItems = new FakeCollaborationItemStore
+        {
+            PendingRaise = Task.FromException<CollaborationItem>(
+                new InvalidOperationException("collaboration store unavailable"))
+        };
+        var stateReader = new ToggleAcceptanceEngineStateReader(fixture.Events)
+        {
+            Throws = true
+        };
+        var circuit = new AcceptanceEngineCircuitBreaker(
+            fixture.Events,
+            operatorItems,
+            stateReader: stateReader,
+            stateUnavailableFallback: fallbackLines.Add);
+
+        var snapshot = circuit.Read();
+
+        Assert.Equal(AcceptanceEngineHealth.Unavailable, snapshot.Health);
+        var fallback = Assert.Single(fallbackLines);
+        Assert.Contains("result=operator-item-error", fallback, StringComparison.Ordinal);
+        Assert.Contains("health=Unavailable policy=FailClosed outcome=denied", fallback, StringComparison.Ordinal);
+        Assert.Contains("InvalidOperationException: collaboration store unavailable", fallback, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "A transient state-read failure retries and returns the persisted fact")]
+    public async Task TransientStateReadFailureRetriesBeforeDeclaringUnavailable()
+    {
+        using var fixture = new CanaryTestFixture();
+        var stateReader = new ToggleAcceptanceEngineStateReader(fixture.Events)
+        {
+            FailuresRemaining = 2
+        };
+        var circuit = new AcceptanceEngineCircuitBreaker(
+            fixture.Events,
+            fixture.OperatorItems,
+            stateReader: stateReader);
+
+        var health = circuit.Read();
+
+        Assert.Equal(AcceptanceEngineHealth.Healthy, health.Health);
+        Assert.Equal(3, stateReader.Attempts);
+        Assert.Empty(await fixture.OperatorItems.GetAttentionQueueAsync());
     }
 
     [Xunit.Fact(DisplayName = "Acceptance-engine CLI reports and explicitly clears the typed circuit")]
@@ -1108,6 +1240,28 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             throw new NotSupportedException();
     }
 
+    private sealed class ToggleAcceptanceEngineStateReader(PostLandingCanaryEventStore inner)
+        : IAcceptanceEngineStateReader
+    {
+        internal bool Throws { get; set; }
+        internal int FailuresRemaining { get; set; }
+        internal int Attempts { get; private set; }
+
+        public Task<IReadOnlyList<PostLandingCanaryEvent>> ReadProjectionEventsAsync(
+            CancellationToken cancellationToken = default)
+        {
+            Attempts++;
+            if (Throws || FailuresRemaining > 0)
+            {
+                FailuresRemaining = Math.Max(0, FailuresRemaining - 1);
+                return Task.FromException<IReadOnlyList<PostLandingCanaryEvent>>(
+                    new InvalidOperationException("simulated SQLite lock"));
+            }
+
+            return inner.ReadProjectionEventsAsync(cancellationToken);
+        }
+    }
+
     private sealed class CanaryTestFixture : IDisposable
     {
         private readonly string _root;
@@ -1128,6 +1282,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
         internal SqliteRunEventStore RawStore { get; }
         internal CollaborationItemStore OperatorItems { get; }
+        internal PostLandingCanaryEventStore Events => _events;
         internal string Root => _root;
         internal string DbPath => OrchestratorWorkspace.ForDirectory(_root).RunEventStorePath;
 

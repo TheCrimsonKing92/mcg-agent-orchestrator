@@ -977,10 +977,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             CliArgumentParser.RequirePartCount(parts, 2, "land <goal-id-prefix>");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
             var landEngineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
-            if (!landEngineHealth.AllowsAcceptance)
+            var landEngineDecision = AcceptanceEngineAcceptanceGate.Decide(
+                landEngineHealth.Health,
+                AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
+            if (!landEngineDecision.Allowed)
             {
                 Console.WriteLine(
-                    $"Land blocked: acceptance engine circuit is {landEngineHealth.Health}. " +
+                    $"Land blocked: {landEngineDecision.Reason}. " +
                     "Repair it, then run acceptance-engine clear <note>.");
                 return false;
             }

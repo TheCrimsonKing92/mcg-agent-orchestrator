@@ -1975,7 +1975,9 @@ public sealed class ConductorDriverTests
 
             Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
             Assert.True(afterSuccessfulLandingCalled);
-            Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+            Assert.Equal(
+                breakSqliteStore ? AcceptanceEngineHealth.Unavailable : AcceptanceEngineHealth.Healthy,
+                circuit.Read().Health);
         }
         finally
         {

@@ -36,10 +36,13 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
     }
 
     var engineHealth = PostLandingCanaryFactory.CreateCircuit(context.Workspace).Read();
-    if (!engineHealth.AllowsAcceptance)
+    var engineDecision = AcceptanceEngineAcceptanceGate.Decide(
+        engineHealth.Health,
+        AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
+    if (!engineDecision.Allowed)
     {
         Console.WriteLine(
-            $"BLOCKER step=acceptance-engine reason={engineHealth.Health.ToString().ToLowerInvariant()} " +
+            $"BLOCKER step=acceptance-engine reason=\"{engineDecision.Reason}\" " +
             $"landing={engineHealth.LandingSha ?? "unknown"} failure={engineHealth.FailureReason ?? "pending"} " +
             "action=\"Repair the acceptance engine, then run acceptance-engine clear <note>.\"");
         return false;

@@ -73,12 +73,20 @@ public sealed record RunEventMaintenanceResult(
 
 public sealed class SqliteRunEventStore : IRunEventStore
 {
-    private const int MaxBusyRetries = 6;
+    private const int DefaultMaxBusyRetries = 6;
     private readonly string _dbPath;
+    private readonly int _busyTimeoutMilliseconds;
+    private readonly int _maxBusyRetries;
 
-    public SqliteRunEventStore(string dbPath, bool ensureSchema = true)
+    public SqliteRunEventStore(
+        string dbPath,
+        bool ensureSchema = true,
+        int busyTimeoutMilliseconds = 30000,
+        int maxBusyRetries = DefaultMaxBusyRetries)
     {
         _dbPath = dbPath;
+        _busyTimeoutMilliseconds = Math.Max(0, busyTimeoutMilliseconds);
+        _maxBusyRetries = Math.Max(1, maxBusyRetries);
         if (ensureSchema)
         {
             EnsureSchema();
@@ -360,7 +368,7 @@ public sealed class SqliteRunEventStore : IRunEventStore
 
     private SqliteConnection OpenConnection()
     {
-        return OpenConnection(30000);
+        return OpenConnection(_busyTimeoutMilliseconds);
     }
 
     private SqliteConnection OpenConnection(int busyTimeoutMilliseconds)
@@ -668,7 +676,7 @@ public sealed class SqliteRunEventStore : IRunEventStore
     private static bool IsTransientLock(SqliteException ex) =>
         ex.SqliteErrorCode == 5 || ex.SqliteErrorCode == 6;
 
-    private static async Task<T> WithBusyRetryAsync<T>(Func<Task<T>> operation, CancellationToken ct)
+    private async Task<T> WithBusyRetryAsync<T>(Func<Task<T>> operation, CancellationToken ct)
     {
         var delayMs = 50;
         for (var attempt = 1; ; attempt++)
@@ -677,7 +685,7 @@ public sealed class SqliteRunEventStore : IRunEventStore
             {
                 return await operation();
             }
-            catch (SqliteException ex) when (attempt < MaxBusyRetries && IsTransientLock(ex))
+            catch (SqliteException ex) when (attempt < _maxBusyRetries && IsTransientLock(ex))
             {
                 await Task.Delay(delayMs, ct);
                 delayMs = Math.Min(delayMs * 2, 1000);

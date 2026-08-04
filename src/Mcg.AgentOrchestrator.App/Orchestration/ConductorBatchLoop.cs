@@ -135,10 +135,18 @@ internal sealed class ConductorBatchLoop
             }
 
             var snapshot = (_acceptanceEngineCircuit ?? _postLandingCanary?.CircuitBreaker)?.Read();
-            return snapshot is { AllowsAcceptance: false }
-                ? $"acceptance engine circuit is {snapshot.Health} for {snapshot.LandingSha ?? "unknown-sha"}; " +
-                  $"reason={snapshot.FailureReason ?? "canary-pending"}"
-                : null;
+            if (snapshot is null)
+            {
+                return null;
+            }
+
+            var decision = AcceptanceEngineAcceptanceGate.Decide(
+                snapshot.Health,
+                AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
+            return decision.Allowed
+                ? null
+                : $"{decision.Reason}; landing={snapshot.LandingSha ?? "unknown-sha"}; " +
+                  $"failure={snapshot.FailureReason ?? "canary-pending"}";
         };
         try
         {
@@ -2443,17 +2451,25 @@ internal sealed class ConductorBatchLoop
             policy.Name,
             new ConductorAdvanceOutcome.Held(GoalLifecycleState.Verified, reason));
 
-    private static string BuildAcceptanceEngineHoldReason(AcceptanceEngineHealthSnapshot snapshot) =>
-        $"Acceptance engine circuit is {snapshot.Health.ToString().ToLowerInvariant()}" +
-        (string.IsNullOrWhiteSpace(snapshot.LandingSha) ? string.Empty : $" for landing {snapshot.LandingSha}") +
-        (string.IsNullOrWhiteSpace(snapshot.FailureReason) ? string.Empty : $" ({snapshot.FailureReason})") +
-        "; acceptance and landing are blocked until the canary passes or an operator runs acceptance-engine clear.";
+    private static string BuildAcceptanceEngineHoldReason(AcceptanceEngineHealthSnapshot snapshot)
+    {
+        var decision = AcceptanceEngineAcceptanceGate.Decide(
+            snapshot.Health,
+            AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
+        return $"{decision.Reason}" +
+               (string.IsNullOrWhiteSpace(snapshot.LandingSha) ? string.Empty : $"; landing={snapshot.LandingSha}") +
+               (string.IsNullOrWhiteSpace(snapshot.FailureReason) ? string.Empty : $"; failure={snapshot.FailureReason}") +
+               "; acceptance and landing are blocked until the canary passes or an operator runs acceptance-engine clear.";
+    }
 
     internal static bool IsAcceptanceEngineCircuitHoldRequired(
         GoalStatus goalStatus,
         AcceptanceEngineHealthSnapshot? snapshot) =>
         goalStatus == GoalStatus.Verified &&
-        snapshot is { AllowsAcceptance: false };
+        snapshot is not null &&
+        !AcceptanceEngineAcceptanceGate.Decide(
+            snapshot.Health,
+            AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy).Allowed;
 
     private static ConductorAdvanceResult ParallelAcceptanceTerminal(
         ConductorDriver driver,

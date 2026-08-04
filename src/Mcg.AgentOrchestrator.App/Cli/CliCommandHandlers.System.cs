@@ -210,9 +210,13 @@ internal static partial class CliCommandHandlers
                     (parts.Count == 2 && parts[1].Equals("status", StringComparison.OrdinalIgnoreCase)))
                 {
                     var health = circuit.Read();
+                    var decision = AcceptanceEngineAcceptanceGate.Decide(
+                        health.Health,
+                        AcceptanceEngineAcceptanceGate.DefaultUnavailablePolicy);
                     Console.WriteLine(
                         $"Acceptance engine: {health.Health}; landing={health.LandingSha ?? "none"}; " +
-                        $"reason={health.FailureReason ?? "none"}; receipt={health.ReceiptReference ?? "none"}");
+                        $"reason={health.FailureReason ?? "none"}; receipt={health.ReceiptReference ?? "none"}; " +
+                        $"decision=\"{decision.Reason}\"");
                     return false;
                 }
 
