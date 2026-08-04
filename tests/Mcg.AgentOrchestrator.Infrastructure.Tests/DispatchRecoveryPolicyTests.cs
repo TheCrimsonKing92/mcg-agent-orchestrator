@@ -278,8 +278,8 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Contains("unavailable_reason=invalid", decision.Reason, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_unavailable_worktree_inspection_marks_stale_with_apparatus_blocker")]
-    public void BackgroundDispatchRunnerUnavailableWorktreeInspectionMarksStaleWithApparatusBlocker()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_unavailable_worktree_inspection_holds_unknown_state")]
+    public void BackgroundDispatchRunnerUnavailableWorktreeInspectionHoldsUnknownState()
     {
         var root = CreateTempDirectory();
         var missingWorktree = Path.Combine(root, "missing-worktree");
@@ -305,13 +305,12 @@ public sealed class DispatchRecoveryPolicyTests
         var outcome = new BackgroundDispatchRunner(new TestClock(Now), isStillRunning: _ => false)
             .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
-        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Equal("worktree-inspection-unavailable", outcome.RecoveryDecision.Blocker);
-        Xunit.Assert.Contains("worktree state=unavailable", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
-        Xunit.Assert.Contains("reason=directory-missing", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("worktree inspection unavailable", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("unavailable_reason=directory-missing", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
         Xunit.Assert.Contains("git_receipt=git-not-run", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
-        Xunit.Assert.NotNull(outcome.Verification);
-        Xunit.Assert.Contains("worktree-inspection-unavailable", outcome.Verification!.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.Null(outcome.Verification);
     }
 
     [Xunit.Fact(DisplayName = "DispatchStateSurface_classifies_apparatus_hold_as_wedged_not_running")]

@@ -480,8 +480,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(WorkTaskStatus.Running, task.Status);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_fails_dead_worker_when_exit_file_is_unreadable")]
-    public void BackgroundDispatchRunnerReconcileFailsDeadWorkerWhenExitFileIsUnreadable()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_holds_dead_worker_when_exit_file_is_unreadable")]
+    public void BackgroundDispatchRunnerReconcileHoldsDeadWorkerWhenExitFileIsUnreadable()
     {
         var root = CreateTempDirectory();
         var stdout = Path.Combine(root, "out.log");
@@ -518,10 +518,11 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
                 .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
-            Assert.NotNull(outcome.Verification);
-            Assert.Equal(1, outcome.ProcessRecord.ExitCode);
-            Assert.Equal(clock.UtcNow, outcome.ProcessRecord.CompletedAt);
-            Assert.True(outcome.Verification!.StandardError.Contains("exit code could not be read", StringComparison.Ordinal));
+            Assert.Null(outcome.Verification);
+            Assert.Null(outcome.ProcessRecord.ExitCode);
+            Assert.Null(outcome.ProcessRecord.CompletedAt);
+            Assert.Equal(DispatchRecoveryAction.Hold, outcome.RecoveryDecision!.Action);
+            Assert.Contains("state=Unreadable", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
             Assert.Equal(WorkTaskStatus.Running, task.Status);
         }
     }

@@ -2,13 +2,12 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
-public sealed class FailureTriageDecisionTests : GoalWorktreeTestBase
+public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
 {
     [Xunit.Fact(DisplayName = "FailureTriagePlanner_uses_typed_preflight_outcome_for_permission_repair")]
     public void FailureTriagePlannerUsesTypedPreflightOutcomeForPermissionRepair()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateSeededDispatchRepository();
         try
         {
             var (kernel, goal, task, agents) = CreateActiveGoal("Typed preflight triage");
@@ -35,14 +34,14 @@ public sealed class FailureTriageDecisionTests : GoalWorktreeTestBase
         }
         finally
         {
-            DeleteDirectory(repo);
+            _ = GoalWorktrees.DeleteDirectory(repo);
         }
     }
 
     [Xunit.Fact(DisplayName = "FailureTriagePlanner_does_not_treat_quoted_permission_test_text_as_apparatus_failure")]
     public void FailureTriagePlannerDoesNotTreatQuotedPermissionTestTextAsApparatusFailure()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateSeededDispatchRepository();
         try
         {
             var (kernel, goal, task, agents) = CreateActiveGoal("Permission negative control");
@@ -70,14 +69,14 @@ public sealed class FailureTriageDecisionTests : GoalWorktreeTestBase
         }
         finally
         {
-            DeleteDirectory(repo);
+            _ = GoalWorktrees.DeleteDirectory(repo);
         }
     }
 
     [Xunit.Fact(DisplayName = "GoalHealthEvaluator_uses_typed_task_status_instead_of_recovery_display_text")]
     public void GoalHealthEvaluatorUsesTypedTaskStatus()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateSeededDispatchRepository();
         try
         {
             var (kernel, goal, task, agents) = CreateActiveGoal("Typed health");
@@ -97,14 +96,14 @@ public sealed class FailureTriageDecisionTests : GoalWorktreeTestBase
         }
         finally
         {
-            DeleteDirectory(repo);
+            _ = GoalWorktrees.DeleteDirectory(repo);
         }
     }
 
     [Xunit.Fact(DisplayName = "GoalHealthEvaluator_does_not_reclassify_completed_task_from_non_success_classifier_detail")]
     public void GoalHealthEvaluatorDoesNotReclassifyCompletedTaskFromNonSuccessClassifierDetail()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateSeededDispatchRepository();
         try
         {
             var (kernel, goal, task, agents) = CreateActiveGoal("Completed health negative control");
@@ -140,7 +139,7 @@ public sealed class FailureTriageDecisionTests : GoalWorktreeTestBase
         }
         finally
         {
-            DeleteDirectory(repo);
+            _ = GoalWorktrees.DeleteDirectory(repo);
         }
     }
 

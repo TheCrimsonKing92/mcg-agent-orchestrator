@@ -1253,16 +1253,6 @@ public sealed class BackgroundDispatchRunner
             // verification (TaskSpec.RecordVerification via ModelFitEvidence); it never
             // gates the dispatch.
         }
-        else if (completedWorktreeInspection is { IsAvailable: false } unavailableInspection)
-        {
-            exitCode = 1;
-            var inspectionState = unavailableInspection.IsUnsafe ? "unsafe" : "unavailable";
-            standardErrorDiagnostic = AppendDiagnostic(
-                standardErrorDiagnostic ?? string.Empty,
-                $"Developer/Tester dispatch worktree inspection was {inspectionState}; refusing to infer clean state or silently skip commit-on-behalf. " +
-                $"unavailable_reason={unavailableInspection.UnavailableReason ?? "unknown"}; git_receipt={unavailableInspection.GitReceipt}.");
-        }
-
         if (task.LastDispatch is { } completedDispatch && !IsLocalDispatch(completedDispatch))
         {
             var reapNote = ReapWorktreeBuildDaemons(processRecord.WorkingDirectory);
@@ -2121,7 +2111,7 @@ public sealed class BackgroundDispatchRunner
 
                 if (task.Status != WorkTaskStatus.Running ||
                     task.LastProcess is not { IsRunning: true } process ||
-                    (ReadExitCode(process.ExitCodePath).Kind is ExitCodeReadKind.Valid or ExitCodeReadKind.Invalid) ||
+                    ReadExitCode(process.ExitCodePath).Kind != ExitCodeReadKind.Missing ||
                     AnyTrackedProcessStillRunning(process))
                 {
                     continue;
