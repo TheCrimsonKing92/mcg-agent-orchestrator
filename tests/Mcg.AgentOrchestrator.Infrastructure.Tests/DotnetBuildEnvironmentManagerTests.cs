@@ -18,6 +18,29 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Equal(nameof(Thread.Sleep), DotnetBuildEnvironmentManager.DefaultLeaseSleepForTests.Method.Name);
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_nested_hermetic_profile_preserves_shared_LocalLow_grid")]
+    public void DotnetBuildEnvironmentManagerNestedHermeticProfilePreservesSharedLocalLowGrid()
+    {
+        var realLocalAppData = Path.Combine(Path.GetTempPath(), "real-profile", "AppData", "Local");
+        var redirectedKnownFolder = Path.Combine(Path.GetTempPath(), "mcg-hvp", "AppData", "Local");
+
+        var resolved = DotnetBuildEnvironmentManager.ResolveIsolatedRootBase(
+            overridden: null,
+            localAppDataVariable: realLocalAppData,
+            localAppDataKnownFolder: redirectedKnownFolder,
+            tempPath: Path.GetTempPath(),
+            isWindows: true);
+
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(
+                realLocalAppData,
+                "..",
+                "LocalLow",
+                DotnetBuildEnvironmentManager.RootDirectoryName)),
+            resolved);
+        Assert.DoesNotContain(redirectedKnownFolder, resolved, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_goal_lease_with_metadata_and_cleanup")]
     public void DotnetBuildEnvironmentManagerReusesGoalLeaseWithMetadataAndCleanup()
     {

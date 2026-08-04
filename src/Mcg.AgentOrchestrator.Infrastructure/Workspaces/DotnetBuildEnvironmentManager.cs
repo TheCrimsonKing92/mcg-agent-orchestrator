@@ -893,22 +893,42 @@ public static class DotnetBuildEnvironmentManager
 
     private static string IsolatedRootBase()
     {
-        var overridden = Environment.GetEnvironmentVariable(IsolatedRootOverrideVariable);
+        return ResolveIsolatedRootBase(
+            Environment.GetEnvironmentVariable(IsolatedRootOverrideVariable),
+            Environment.GetEnvironmentVariable("LOCALAPPDATA"),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Path.GetTempPath(),
+            OperatingSystem.IsWindows());
+    }
+
+    internal static string ResolveIsolatedRootBase(
+        string? overridden,
+        string? localAppDataVariable,
+        string? localAppDataKnownFolder,
+        string tempPath,
+        bool isWindows)
+    {
         if (!string.IsNullOrWhiteSpace(overridden))
         {
             return overridden;
         }
 
-        if (OperatingSystem.IsWindows())
+        if (isWindows)
         {
-            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            // Nested hermetic acceptance processes redirect USERPROFILE, so GetFolderPath can resolve
+            // beneath mcg-hvp even though the parent explicitly preserved the real LOCALAPPDATA. Prefer
+            // that inherited value so C# callers share the same machine-user Low-integrity slot grid as
+            // Invoke-IsolatedDotnet.ps1 and Invoke-WorkerBuildCheck.ps1.
+            var localAppData = string.IsNullOrWhiteSpace(localAppDataVariable)
+                ? localAppDataKnownFolder
+                : localAppDataVariable;
             if (!string.IsNullOrWhiteSpace(localAppData))
             {
                 return Path.GetFullPath(Path.Combine(localAppData, "..", "LocalLow", RootDirectoryName));
             }
         }
 
-        return Path.Combine(Path.GetTempPath(), RootDirectoryName);
+        return Path.Combine(tempPath, RootDirectoryName);
     }
 
     private static string BuildSlotExecutionLockPath(int slotIndex)
