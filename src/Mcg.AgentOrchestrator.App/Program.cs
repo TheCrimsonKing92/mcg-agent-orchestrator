@@ -417,12 +417,11 @@ static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
         command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
 }
 
-// Startup cleanup owns process/worktree lifecycle. Commands designed to observe a live conductor or enqueue
-// an operator intent must never acquire that authority merely because they hydrate state.
+// Worktree cleanup remains lifecycle-owning. Worker registry setup and orphan classification are safe for
+// every command because reaping requires positive dead/recycled owner-process evidence.
 static bool RunsStartupCleanup(IReadOnlyList<string> startupArgs) =>
     !CliPersistentStateRunner.SkipsKernelState(startupArgs) &&
-    !CliPersistentStateRunner.RequiresKernelBacklogState(startupArgs) &&
-    !CliPersistentStateRunner.IsConductorConcurrentOperatorCommand(startupArgs);
+    !CliPersistentStateRunner.RequiresKernelBacklogState(startupArgs);
 
 static int ExitCompletedStartupCommand(int exitCode)
 {
@@ -472,12 +471,15 @@ internal static class ProgramStartupLifecycle
         string executionDirectory)
     {
         WorkerProcessJobs.ConfigureRegistry(stateStorePath);
-        if (!runsStartupCleanup || authorityTransferRequested)
+        if (authorityTransferRequested)
         {
             return;
         }
 
         WorkerProcessJobs.SweepStartupOrphans();
-        GoalWorktreeOrphanSweepScheduler.SweepNow(executionDirectory);
+        if (runsStartupCleanup)
+        {
+            GoalWorktreeOrphanSweepScheduler.SweepNow(executionDirectory);
+        }
     }
 }

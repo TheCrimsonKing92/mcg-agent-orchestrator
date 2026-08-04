@@ -509,18 +509,6 @@ internal static class CliPersistentStateRunner
             OperatorIntentVerbs.Retry or
             OperatorIntentVerbs.VerifyManual;
 
-    // These commands are the minimal observe/control surface intentionally usable while a conductor owns
-    // live workers. They may read state or write the operator-intent inbox, but never own startup cleanup.
-    internal static bool IsConductorConcurrentOperatorCommand(IReadOnlyList<string> args)
-    {
-        if (IsInboxBackedGoalScopedTaskMutationCommand(args) || IsOperatorIntentStatusCommand(args))
-        {
-            return true;
-        }
-
-        return args.Count > 0 && args[0].ToLowerInvariant() is "status" or "logs";
-    }
-
     private static bool IsOperatorIntentStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
         args[0].Equals("operator-intent-status", StringComparison.OrdinalIgnoreCase);
