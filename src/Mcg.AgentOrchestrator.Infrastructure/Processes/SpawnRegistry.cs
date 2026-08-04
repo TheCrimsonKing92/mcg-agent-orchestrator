@@ -20,6 +20,14 @@ internal sealed record SpawnRegistryEntry(
 
 internal sealed record SpawnProcessIdentity(int ProcessId, DateTimeOffset StartedAt, string ImagePath);
 
+internal sealed record SpawnProcessIdentityReadResult(
+    SpawnProcessIdentity? Identity,
+    int Attempts,
+    string Evidence)
+{
+    public bool Succeeded => Identity is not null;
+}
+
 internal sealed class SpawnRegistry
 {
     private readonly string _dbPath;
@@ -32,10 +40,14 @@ internal sealed class SpawnRegistry
     public void Register(string ownerId, SpawnProcessIdentity identity)
     {
         using var ownerProcess = Process.GetCurrentProcess();
-        Register(
-            ownerId,
-            identity,
-            SpawnProcessIdentityReader.TryRead(ownerProcess, out var ownerIdentity) ? ownerIdentity : null);
+        var ownerRead = SpawnProcessIdentityReader.ReadForRegistration(ownerProcess);
+        if (!ownerRead.Succeeded)
+        {
+            throw new InvalidOperationException(
+                $"Cannot durably register process {identity.ProcessId}: owner identity unavailable ({ownerRead.Evidence}).");
+        }
+
+        Register(ownerId, identity, ownerRead.Identity!);
     }
 
     internal void Register(
@@ -138,6 +150,29 @@ internal sealed class SpawnRegistry
             cmd.Parameters.AddWithValue("$id", id);
             cmd.ExecuteNonQuery();
         });
+    }
+
+    public bool TryMarkReleasedEntry(long id, string? expectedDiagnostic, string diagnostic)
+    {
+        var updated = false;
+        WithWriteConnection(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE spawn_registry
+                SET released_at = $released_at,
+                    last_diagnostic = $diagnostic
+                WHERE id = $id
+                  AND released_at IS NULL
+                  AND (($expected_diagnostic IS NULL AND last_diagnostic IS NULL) OR last_diagnostic = $expected_diagnostic)
+                """;
+            cmd.Parameters.AddWithValue("$released_at", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
+            cmd.Parameters.AddWithValue("$expected_diagnostic", (object?)expectedDiagnostic ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$id", id);
+            updated = cmd.ExecuteNonQuery() == 1;
+        });
+        return updated;
     }
 
     public void RecordDiagnostic(long id, string diagnostic)
@@ -250,33 +285,83 @@ internal static class SpawnProcessIdentityReader
 
     public static bool TryReadForRegistration(Process process, out SpawnProcessIdentity identity)
     {
-        for (var attempt = 0; attempt < RegistrationReadAttempts; attempt++)
+        var result = ReadForRegistration(process);
+        identity = result.Identity!;
+        return result.Succeeded;
+    }
+
+    internal static SpawnProcessIdentityReadResult ReadForRegistration(Process process)
+    {
+        return ReadForRegistration(
+            process,
+            static candidate => TryRead(candidate, out var identity) ? identity : null,
+            static delayMilliseconds => Thread.Sleep(delayMilliseconds),
+            RegistrationReadAttempts,
+            RegistrationReadDelayMilliseconds);
+    }
+
+    internal static SpawnProcessIdentityReadResult ReadForRegistration(
+        Process process,
+        Func<Process, SpawnProcessIdentity?> readIdentity,
+        Action<int> delay,
+        int maxAttempts,
+        int delayMilliseconds)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(readIdentity);
+        ArgumentNullException.ThrowIfNull(delay);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(delayMilliseconds);
+
+        var reason = "identity-unavailable";
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            if (TryRead(process, out identity))
+            try
             {
-                return true;
+                var identity = readIdentity(process);
+                if (identity is not null)
+                {
+                    return new SpawnProcessIdentityReadResult(
+                        identity,
+                        attempt,
+                        $"status=read attempts={attempt.ToString(CultureInfo.InvariantCulture)}");
+                }
+
+                reason = "identity-unavailable";
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+            {
+                reason = $"reader-{ex.GetType().Name}";
             }
 
             try
             {
                 if (process.HasExited)
                 {
-                    break;
+                    return new SpawnProcessIdentityReadResult(
+                        null,
+                        attempt,
+                        $"status=unavailable attempts={attempt.ToString(CultureInfo.InvariantCulture)} reason=process-exited");
                 }
             }
-            catch (InvalidOperationException)
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
             {
-                break;
+                return new SpawnProcessIdentityReadResult(
+                    null,
+                    attempt,
+                    $"status=unavailable attempts={attempt.ToString(CultureInfo.InvariantCulture)} reason=state-{ex.GetType().Name}");
             }
 
-            if (attempt < RegistrationReadAttempts - 1)
+            if (attempt < maxAttempts)
             {
-                Thread.Sleep(RegistrationReadDelayMilliseconds);
+                delay(delayMilliseconds);
             }
         }
 
-        identity = default!;
-        return false;
+        return new SpawnProcessIdentityReadResult(
+            null,
+            maxAttempts,
+            $"status=unavailable attempts={maxAttempts.ToString(CultureInfo.InvariantCulture)} reason={reason}");
     }
 
     public static SpawnTrackedProcessStatus EvaluateTrackedProcess(

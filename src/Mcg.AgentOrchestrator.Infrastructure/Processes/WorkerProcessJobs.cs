@@ -62,15 +62,16 @@ public static class WorkerProcessJobs
 
             if (victimStatus == SpawnTrackedProcessStatus.DeadOrRecycled)
             {
-                registry.MarkReleasedEntry(
+                _ = registry.TryMarkReleasedEntry(
                     entry.Id,
+                    entry.LastDiagnostic,
                     BuildSweepDiagnostic("already-dead-or-recycled", entry, ownerLiveness, ownerEvidence, sweeper, victimEvidence));
                 continue;
             }
 
             using (process)
             {
-                if (IsProtectedProcessOrAncestor(entry.ProcessId) || ProtectedPidIsDescendantOf(entry.ProcessId))
+                if (IsProtectedProcessOrAncestor(entry.ProcessId) || IsProtectedDescendant(entry.ProcessId))
                 {
                     registry.RecordDiagnostic(
                         entry.Id,
@@ -218,9 +219,8 @@ public static class WorkerProcessJobs
         return TryRegister(
             process,
             ownerId,
-            static candidate => SpawnProcessIdentityReader.TryReadForRegistration(candidate, out var identity)
-                ? identity
-                : null);
+            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
+            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity);
     }
 
     internal static bool TryRegister(
@@ -228,22 +228,55 @@ public static class WorkerProcessJobs
         string? ownerId,
         Func<Process, SpawnProcessIdentity?> readIdentity)
     {
+        return TryRegister(process, ownerId, readIdentity, readIdentity);
+    }
+
+    internal static bool TryRegister(
+        Process process,
+        string? ownerId,
+        Func<Process, SpawnProcessIdentity?> readVictimIdentity,
+        Func<Process, SpawnProcessIdentity?> readOwnerIdentity)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(readVictimIdentity);
+        ArgumentNullException.ThrowIfNull(readOwnerIdentity);
+
         if (IsProtectedProcessOrAncestor(process.Id))
         {
             return false;
         }
 
+        if (Jobs.ContainsKey(process.Id))
+        {
+            return true;
+        }
+
+        var registry = Registry;
         OwnedProcessGroup? group = null;
         Microsoft.Win32.SafeHandles.SafeFileHandle? duplicate = null;
         try
         {
             group = OwnedProcessGroup.Attach(process);
-            var identity = readIdentity(process);
-            if (identity is null)
+            SpawnProcessIdentity? victimIdentity = null;
+            SpawnProcessIdentity? ownerIdentity = null;
+            if (registry is not null)
             {
-                ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
-                group = null;
-                return false;
+                victimIdentity = readVictimIdentity(process);
+                if (victimIdentity is null)
+                {
+                    ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
+                    group = null;
+                    return false;
+                }
+
+                using var ownerProcess = Process.GetCurrentProcess();
+                ownerIdentity = readOwnerIdentity(ownerProcess);
+                if (ownerIdentity is null)
+                {
+                    ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
+                    group = null;
+                    return false;
+                }
             }
 
             duplicate = group.TryDuplicateAccountingHandle(out var duplicateHandle) ? duplicateHandle : null;
@@ -255,7 +288,7 @@ public static class WorkerProcessJobs
             {
                 group = null;
                 duplicate = null;
-                if (RegisterDurable(identity, ownerId))
+                if (registry is null || RegisterDurable(registry, victimIdentity!, ownerIdentity!, ownerId))
                 {
                     return true;
                 }
@@ -278,11 +311,12 @@ public static class WorkerProcessJobs
             duplicate?.Dispose();
             duplicate = null;
         }
-        catch (Win32Exception)
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
         {
-        }
-        catch (InvalidOperationException)
-        {
+            if (group is null && !Jobs.ContainsKey(process.Id))
+            {
+                TryTerminateUnregisteredProcess(process);
+            }
         }
         finally
         {
@@ -580,24 +614,39 @@ public static class WorkerProcessJobs
             .ToArray();
     }
 
-    private static bool RegisterDurable(SpawnProcessIdentity identity, string? ownerId)
+    private static bool RegisterDurable(
+        SpawnRegistry registry,
+        SpawnProcessIdentity identity,
+        SpawnProcessIdentity ownerIdentity,
+        string? ownerId)
     {
-        var registry = Registry;
-        if (registry is null)
-        {
-            return true;
-        }
-
         try
         {
             registry.Register(
                 string.IsNullOrWhiteSpace(ownerId) ? $"pid:{identity.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : ownerId,
-                identity);
+                identity,
+                ownerIdentity);
             return true;
         }
         catch
         {
             return false;
+        }
+    }
+
+    private static void TryTerminateUnregisteredProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                _ = process.WaitForExit(5000);
+            }
+        }
+        catch
+        {
+            // Best-effort fallback after job attachment itself failed. The caller still receives false.
         }
     }
 
@@ -684,7 +733,7 @@ public static class WorkerProcessJobs
 
     private static bool IsProtectedProcessOrAncestor(int processId)
     {
-        return IsProtectedProcess(processId) || IsProtectedDescendant(processId);
+        return IsProtectedProcess(processId) || ProtectedPidIsDescendantOf(processId);
     }
 
     private static bool CanKillProcess(int processId, bool allowProtectedDescendant)
