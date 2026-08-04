@@ -717,7 +717,6 @@ public sealed class BackgroundDispatchRunner
         var exitRead = ReadExitCode(processRecord.ExitCodePath);
         if (exitRead.Kind == ExitCodeReadKind.Valid)
         {
-            var exitCode = exitRead.ExitCode!.Value;
             if (AnyOwnedWorkerProcessStillRunning(processRecord, observedHeartbeat))
             {
                 outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
@@ -1866,6 +1865,18 @@ public sealed class BackgroundDispatchRunner
         var result = InspectGoalWorktreeCore(workingDirectory, goalId, dispatchedAt);
         _worktreeInspectionCache[key] = result;
         return result;
+    }
+
+    private bool TryInspectGoalWorktree(
+        string workingDirectory,
+        GoalId goalId,
+        DateTimeOffset dispatchedAt,
+        out GoalWorktreeDispatchEvidence evidence,
+        bool forceRefresh = false)
+    {
+        var inspection = InspectGoalWorktree(workingDirectory, goalId, dispatchedAt, forceRefresh);
+        evidence = inspection.Evidence;
+        return inspection.IsAvailable;
     }
 
     private static GoalWorktreeInspectionResult InspectGoalWorktreeCore(

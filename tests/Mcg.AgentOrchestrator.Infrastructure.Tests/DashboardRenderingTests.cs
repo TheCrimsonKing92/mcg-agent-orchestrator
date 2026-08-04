@@ -2209,6 +2209,43 @@ public sealed class DashboardRenderingTests
     Xunit.Assert.Contains(dto.SourceSummaries, summary => summary.StartsWith("capacity:", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "Dashboard_action_recommendation_keeps_permission_test_failure_on_code_retry_path")]
+    public void DashboardActionRecommendationKeepsPermissionTestFailureOnCodeRetryPath()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Fix PermissionTests assertion.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Permission diagnostic negative control", [task]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "dotnet test --filter PermissionTests",
+            root,
+            1,
+            "PermissionTests failed: assertion quoted 'access denied' and 'not writable'.",
+            "1 test failed",
+            DateTimeOffset.UtcNow));
+
+        var report = DashboardActionRecommendationPlanner.Build(
+            kernel,
+            goal,
+            agents,
+            WorkerProfileCatalog.Default(),
+            root,
+            AutonomyPolicy.Observe);
+        var dto = DashboardResponseMapper.ToDashboardActionRecommendationReportDto(report);
+        var recommendations = dto.Secondary.ToList();
+        if (dto.Primary is not null)
+        {
+            recommendations.Insert(0, dto.Primary);
+        }
+        var triage = recommendations.Single(item => item.Source == DashboardActionRecommendationSource.FailureTriage);
+
+        Xunit.Assert.Equal("retry 1 <note> --autonomy observe", triage.SuggestedCommand);
+        Xunit.Assert.DoesNotContain("worker-profile-check", triage.SuggestedCommand, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Latest verification failed", triage.Reason, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "DashboardNextActionControls_surface_prior_subscription_model_fit_before_handoff")]
     public void DashboardNextActionControlsSurfacePriorSubscriptionModelFitBeforeHandoff()
 {

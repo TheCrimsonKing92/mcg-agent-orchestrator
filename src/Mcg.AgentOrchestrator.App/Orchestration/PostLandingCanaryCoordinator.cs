@@ -271,16 +271,17 @@ internal sealed class PostLandingCanaryCoordinator
                     PostLandingCanaryFailureReason.Timeout,
                     $"canary exceeded hard timeout of {_configuration.TimeoutSeconds} seconds");
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
                 timeoutCts.Cancel();
                 if (runTask is not null)
                 {
                     await ConfirmRunnerTerminatedAsync(runTask).ConfigureAwait(false);
                 }
+                runnerException = ex;
                 outcome = PostLandingCanaryOutcome.Failed(
-                    PostLandingCanaryFailureReason.Timeout,
-                    $"canary exceeded hard timeout of {_configuration.TimeoutSeconds} seconds");
+                    PostLandingCanaryFailureReason.InfrastructureError,
+                    $"runner cancelled internally: {ex.GetType().Name}: {ex.Message}");
             }
             catch (Exception ex)
             {

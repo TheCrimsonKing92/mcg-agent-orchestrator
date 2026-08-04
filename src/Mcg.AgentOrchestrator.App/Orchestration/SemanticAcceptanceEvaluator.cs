@@ -376,17 +376,28 @@ internal static class SemanticAcceptanceEvaluator
         CancellationToken cancellationToken)
     {
         var effectiveTimeout = judge.JudgeTimeout ?? perJudgeTimeout;
+        using var deadlineCts = new CancellationTokenSource(effectiveTimeout);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            deadlineCts.Token);
         try
         {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(effectiveTimeout);
-            var verdict = await judge.JudgeAsync(inputs, timeoutCts.Token).ConfigureAwait(false);
+            var verdict = await judge.JudgeAsync(inputs, linkedCts.Token).ConfigureAwait(false);
             return new JudgeVerdict(judge.Name, verdict);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested)
         {
             return new JudgeVerdict(judge.Name, SemanticAcceptanceVerdict.Invalid(
                 $"Judge '{judge.Name}' timed out after {effectiveTimeout.TotalSeconds:F0}s."));
+        }
+        catch (OperationCanceledException ex)
+        {
+            return new JudgeVerdict(judge.Name, SemanticAcceptanceVerdict.Invalid(
+                $"Judge '{judge.Name}' cancelled internally: {ex.GetType().Name}: {ex.Message}"));
         }
         catch (Exception ex)
         {

@@ -130,7 +130,7 @@ public sealed class DispatchStateSurface
             process,
             processTree.HasLiveProcess,
             staleBudget,
-            worktreeState.IsDirty == true);
+            ToRecoveryWorktreeInspection(worktreeState, _inspectWorktree));
         var kind = Classify(process, recovery, processTree, heartbeatStatus, artifactsStatus);
         return new DispatchAuthoritativeState(
             kind,
@@ -264,6 +264,31 @@ public sealed class DispatchStateSurface
             commitsAfterDispatch,
             statusEntries,
             error);
+    }
+
+    private static DispatchWorktreeInspectionStatus ToRecoveryWorktreeInspection(
+        DispatchWorktreeState worktree,
+        bool inspectionRequested)
+    {
+        if (!inspectionRequested)
+        {
+            return DispatchWorktreeInspectionStatus.NotRequired;
+        }
+
+        if (worktree.IsDirty is { } isDirty && string.IsNullOrWhiteSpace(worktree.Error))
+        {
+            return DispatchWorktreeInspectionStatus.Available(isDirty, worktree.WorkingDirectory);
+        }
+
+        var reason = !worktree.Exists
+            ? "directory-missing"
+            : !worktree.IsGitWorktree
+                ? "git-metadata-missing"
+                : "git-inspection-failed";
+        return DispatchWorktreeInspectionStatus.Unavailable(
+            worktree.WorkingDirectory,
+            reason,
+            worktree.Error ?? "worktree-state-unavailable");
     }
 
     private DispatchStateKind Classify(

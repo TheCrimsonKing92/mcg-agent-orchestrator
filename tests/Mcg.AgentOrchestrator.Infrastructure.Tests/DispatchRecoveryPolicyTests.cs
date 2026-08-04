@@ -195,6 +195,122 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Contains("action='reconcile-from-exit'", task.LastVerification!.StandardError, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_invalid_exit_artifact_holds_without_manufacturing_exit_one")]
+    public void BackgroundDispatchRunnerInvalidExitArtifactHoldsWithoutManufacturingExitOne()
+    {
+        var root = CreateTempDirectory();
+        var process = new TaskProcessRecord(
+            999999,
+            "codex exec prompt",
+            root,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "worker.exit.txt"),
+            Now.AddMinutes(-20),
+            null,
+            null);
+        File.WriteAllText(process.StandardOutputPath, string.Empty);
+        File.WriteAllText(process.StandardErrorPath, string.Empty);
+        File.WriteAllText(process.ExitCodePath, "partial-write");
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Hold invalid exit receipt", [new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var outcome = new BackgroundDispatchRunner(new TestClock(Now), isStillRunning: _ => false)
+            .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Contains("state=Invalid", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("content=partial-write", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Null(outcome.ProcessRecord.ExitCode);
+        Xunit.Assert.Null(task.LastVerification);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_unreadable_exit_artifact_holds_with_typed_evidence")]
+    public void BackgroundDispatchRunnerUnreadableExitArtifactHoldsWithTypedEvidence()
+    {
+        var root = CreateTempDirectory();
+        var process = new TaskProcessRecord(
+            999999,
+            "codex exec prompt",
+            root,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "worker.exit.txt"),
+            Now.AddMinutes(-20),
+            null,
+            null);
+        File.WriteAllText(process.StandardOutputPath, string.Empty);
+        File.WriteAllText(process.StandardErrorPath, string.Empty);
+        File.WriteAllText(process.ExitCodePath, "0");
+        using var exclusiveLock = new FileStream(process.ExitCodePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Hold unreadable exit receipt", [new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var outcome = new BackgroundDispatchRunner(new TestClock(Now), isStillRunning: _ => false)
+            .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Contains("state=Unreadable", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("IOException", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Null(outcome.ProcessRecord.ExitCode);
+        Xunit.Assert.Null(task.LastVerification);
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_invalid_heartbeat_is_apparatus_hold_not_stale_budget")]
+    public void DispatchRecoveryPolicyInvalidHeartbeatIsApparatusHoldNotStaleBudget()
+    {
+        var process = CreateProcess();
+        File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), "{not-json");
+
+        var decision = CreatePolicy().Evaluate(process, hasLiveProcess: false, staleRetryBudgetRemaining: 1);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, decision.Action);
+        Xunit.Assert.Equal("heartbeat-invalid", decision.Blocker);
+        Xunit.Assert.Contains("unavailable_reason=invalid", decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_unavailable_worktree_inspection_holds_unknown_state")]
+    public void BackgroundDispatchRunnerUnavailableWorktreeInspectionHoldsUnknownState()
+    {
+        var root = CreateTempDirectory();
+        var missingWorktree = Path.Combine(root, "missing-worktree");
+        var process = new TaskProcessRecord(
+            999999,
+            "codex exec prompt",
+            missingWorktree,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "worker.exit.txt"),
+            Now.AddMinutes(-20),
+            null,
+            null);
+        File.WriteAllText(process.StandardOutputPath, string.Empty);
+        File.WriteAllText(process.StandardErrorPath, string.Empty);
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Hold unknown worktree state", [new TaskSpec(TaskId.New(), "Implement change", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, missingWorktree, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var outcome = new BackgroundDispatchRunner(new TestClock(Now), isStillRunning: _ => false)
+            .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal("worktree-inspection-unavailable", outcome.RecoveryDecision.Blocker);
+        Xunit.Assert.Contains("unavailable_reason=directory-missing", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("git_receipt=git-not-run", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Null(task.LastVerification);
+    }
+
     private static DispatchRecoveryPolicy CreatePolicy() => new(new TestClock(Now));
 
     private static TaskProcessRecord CreateProcess()

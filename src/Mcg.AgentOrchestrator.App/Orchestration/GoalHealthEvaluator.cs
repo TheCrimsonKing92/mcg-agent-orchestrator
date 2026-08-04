@@ -62,18 +62,23 @@ internal static class GoalHealthEvaluator
             return Report(GoalHealthDisposition.ProviderLimited, 55, $"Wait until {deferredUntil:u} or route deferred work to an alternate provider.", $"subscription-plan {prefix}");
         }
 
-        var failedTask = recovery.TaskFindings.FirstOrDefault(finding =>
-            finding.Finding.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-            finding.SuggestedCommand.StartsWith("retry ", StringComparison.OrdinalIgnoreCase));
+        var failedTask = goal.Tasks.FirstOrDefault(task =>
+            task.Status == WorkTaskStatus.Failed ||
+            (task.LastVerification is { } verification &&
+             DispatchFailureClassifier.Classify(task, verification).Kind != DispatchOutcomeKind.VerifiedSuccess));
         if (failedTask is not null)
         {
-            reasons.Add(failedTask.Finding);
-            return Report(GoalHealthDisposition.Blocked, 25, "Repair or retry the failed task before continuing.", failedTask.SuggestedCommand);
+            var failedFinding = recovery.TaskFindings.FirstOrDefault(finding => finding.TaskId == failedTask.Id);
+            var taskNumber = goal.Tasks.TakeWhile(task => task.Id != failedTask.Id).Count() + 1;
+            reasons.Add(failedFinding?.Finding ?? $"task {taskNumber} has typed status {failedTask.Status}");
+            return Report(
+                GoalHealthDisposition.Blocked,
+                25,
+                "Repair or retry the failed task before continuing.",
+                failedFinding?.SuggestedCommand ?? $"retry {taskNumber} <note>");
         }
 
-        var staleProcess = recovery.TaskFindings.FirstOrDefault(finding =>
-            finding.Finding.Contains("not alive", StringComparison.OrdinalIgnoreCase) ||
-            finding.Finding.Contains("still alive", StringComparison.OrdinalIgnoreCase));
+        var staleProcess = recovery.TaskFindings.FirstOrDefault(finding => finding.RecoveryDecision is not null);
         if (staleProcess is not null)
         {
             reasons.Add(staleProcess.Finding);

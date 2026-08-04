@@ -289,6 +289,22 @@ public sealed class SemanticAcceptanceTests : IDisposable
         Assert.Equal(true, report.Consensus);
     }
 
+    [Xunit.Fact(DisplayName = "SemanticAcceptanceEvaluator_records_internal_judge_cancellation_without_claiming_timeout")]
+    public async Task EvaluatorRecordsInternalJudgeCancellationWithoutClaimingTimeout()
+    {
+        var report = await SemanticAcceptanceEvaluator.EvaluateAsync(
+            [new InternallyCancelledJudge()],
+            SampleInputs(),
+            TimeSpan.FromSeconds(30));
+
+        var verdict = Assert.Single(report.Verdicts).Verdict;
+        Assert.False(verdict.IsValid);
+        var error = Assert.Single(verdict.ValidationErrors);
+        Assert.Contains("cancelled internally", error, StringComparison.Ordinal);
+        Assert.Contains("TaskCanceledException", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("timed out", error, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Xunit.Fact(DisplayName = "ModelRegistrySemanticJudge_completes_through_provider_and_parses_verdict")]
     public async Task ModelRegistryJudgeCompletesAndParses()
     {
@@ -1120,6 +1136,21 @@ public sealed class SemanticAcceptanceTests : IDisposable
 
         public Task<SemanticAcceptanceVerdict> JudgeAsync(SemanticAcceptanceInputs inputs, CancellationToken cancellationToken)
             => throw new InvalidOperationException("judge boom");
+    }
+
+    private sealed class InternallyCancelledJudge : ISemanticJudge
+    {
+        public string Name => "internally-cancelled";
+        public TimeSpan? JudgeTimeout => null;
+
+        public Task<SemanticAcceptanceVerdict> JudgeAsync(
+            SemanticAcceptanceInputs inputs,
+            CancellationToken cancellationToken)
+        {
+            using var internalCancellation = new CancellationTokenSource();
+            internalCancellation.Cancel();
+            return Task.FromCanceled<SemanticAcceptanceVerdict>(internalCancellation.Token);
+        }
     }
 
     private sealed class FakeJudgeProvider(string providerName, string text) : IModelProvider
