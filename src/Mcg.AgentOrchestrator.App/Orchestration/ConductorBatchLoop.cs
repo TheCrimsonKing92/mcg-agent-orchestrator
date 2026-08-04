@@ -627,7 +627,7 @@ internal sealed class ConductorBatchLoop
                     {
                         blockedRecheckCycles++;
                         var blockedRecheckBudget = maxIterations ??
-                            (keepAliveWhenIdle && watchInterval is not null
+                            (watchInterval is not null
                                 ? null
                                 : DefaultBlockedRecheckCycles);
                         var blockedRecheckBudgetUsed = maxIterations.HasValue

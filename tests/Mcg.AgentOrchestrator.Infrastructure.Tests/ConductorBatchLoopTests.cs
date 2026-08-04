@@ -5829,6 +5829,60 @@ public sealed class ConductorBatchLoopTests
             evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void BatchLoopWatchRechecksBlockedGoalUntilMaxDuration()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        _ = CreateVerifiedSimpleGoal(kernel, "Keep watching landing conflict");
+        var now = DateTimeOffset.Parse("2026-08-04T00:00:00Z");
+        var rebaseChecks = 0;
+        var conflictChecks = 0;
+        var sleeps = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            rebaseOntoMain: _ =>
+            {
+                rebaseChecks++;
+                return new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.Conflict,
+                    "goal/test",
+                    "Conflict remains.",
+                    ["docs/test-design-discipline.md"],
+                    "workspace rebase");
+            },
+            recheckPreLandingRebaseConflict: _ =>
+            {
+                conflictChecks++;
+                return new LandingEscalationRecheckResult(
+                    ConditionResolved: false,
+                    Status: "MergeTreeConflict",
+                    Observation: "Read-only merge-tree check still conflicts with main.",
+                    EvidenceFingerprint: "branch=conflicted;main=current");
+            },
+            runAcceptance: _ => true);
+
+        var summary = new ConductorBatchLoop(utcNow: () => now).Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: interval =>
+            {
+                sleeps++;
+                now = now.Add(interval);
+                return false;
+            },
+            maxDuration: TimeSpan.FromSeconds(3));
+
+        Assert.Equal("max-duration", summary.StopReason);
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, rebaseChecks);
+        Assert.Equal(2, conflictChecks);
+        Assert.Equal(3, sleeps);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(false, 2, 0, 1)]
     [Xunit.InlineData(true, 3, 1, 2)]
