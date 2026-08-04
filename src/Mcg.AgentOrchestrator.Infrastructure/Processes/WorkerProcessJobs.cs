@@ -215,26 +215,46 @@ public static class WorkerProcessJobs
 
     public static bool TryRegister(Process process, string? ownerId = null)
     {
+        return TryRegister(
+            process,
+            ownerId,
+            static candidate => SpawnProcessIdentityReader.TryReadForRegistration(candidate, out var identity)
+                ? identity
+                : null);
+    }
+
+    internal static bool TryRegister(
+        Process process,
+        string? ownerId,
+        Func<Process, SpawnProcessIdentity?> readIdentity)
+    {
         if (IsProtectedProcessOrAncestor(process.Id))
         {
             return false;
         }
 
-        if (!SpawnProcessIdentityReader.TryReadForRegistration(process, out var identity))
-        {
-            return false;
-        }
-
+        OwnedProcessGroup? group = null;
+        Microsoft.Win32.SafeHandles.SafeFileHandle? duplicate = null;
         try
         {
-            var group = OwnedProcessGroup.Attach(process);
-            var duplicate = group.TryDuplicateAccountingHandle(out var duplicateHandle) ? duplicateHandle : null;
+            group = OwnedProcessGroup.Attach(process);
+            var identity = readIdentity(process);
+            if (identity is null)
+            {
+                ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
+                group = null;
+                return false;
+            }
+
+            duplicate = group.TryDuplicateAccountingHandle(out var duplicateHandle) ? duplicateHandle : null;
             var snapshot = group.TryReadAccounting(out var registrationAccounting)
                 ? registrationAccounting with { AccountingSource = "snapshot" }
                 : null;
             var registeredJob = new RegisteredJob(group, duplicate, snapshot);
             if (Jobs.TryAdd(process.Id, registeredJob))
             {
+                group = null;
+                duplicate = null;
                 if (RegisterDurable(identity, ownerId))
                 {
                     return true;
@@ -254,13 +274,24 @@ public static class WorkerProcessJobs
             }
 
             ReadAccountingAndDispose(group, kill: false, captureAccounting: false, out _);
+            group = null;
             duplicate?.Dispose();
+            duplicate = null;
         }
         catch (Win32Exception)
         {
         }
         catch (InvalidOperationException)
         {
+        }
+        finally
+        {
+            if (group is not null)
+            {
+                ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
+            }
+
+            duplicate?.Dispose();
         }
 
         return false;

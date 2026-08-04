@@ -31,8 +31,16 @@ internal sealed class OwnedProcessGroup : IDisposable
     public static OwnedProcessGroup Attach(Process process)
     {
         var group = Create();
-        group.Add(process);
-        return group;
+        try
+        {
+            group.Add(process);
+            return group;
+        }
+        catch
+        {
+            group.Dispose();
+            throw;
+        }
     }
 
     public void Add(Process process)

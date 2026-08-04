@@ -196,6 +196,48 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_startup_sweep_retains_exact_worker_when_victim_image_mismatches")]
+    public void WorkerProcessJobsStartupSweepRetainsExactWorkerWhenVictimImageMismatches()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? worker = null;
+        Process? owner = null;
+        try
+        {
+            worker = StartLongRunningShell();
+            owner = StartLongRunningShell();
+            Assert.True(SpawnProcessIdentityReader.TryRead(worker, out var workerIdentity));
+            Assert.True(SpawnProcessIdentityReader.TryRead(owner, out var ownerIdentity));
+            owner.Kill(entireProcessTree: true);
+            Assert.True(owner.WaitForExit(5000));
+            var unverifiedWorkerIdentity = workerIdentity with { ImagePath = workerIdentity.ImagePath + ".different" };
+            new SpawnRegistry(dbPath).Register("victim-image-mismatch", unverifiedWorkerIdentity, ownerIdentity);
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+
+            var reaped = WorkerProcessJobs.SweepStartupOrphans();
+
+            Assert.Equal(0, reaped);
+            Assert.True(IsRunning(worker.Id));
+            var retained = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Contains("retain-unknown-victim", retained.LastDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("image mismatch", retained.LastDiagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            WorkerProcessJobs.ClearRegistryForTests();
+            if (worker is not null)
+            {
+                try { worker.Kill(entireProcessTree: true); } catch { }
+                worker.Dispose();
+            }
+
+            owner?.Dispose();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_concurrent_startup_sweeps_claim_exact_worker_once")]
     public void WorkerProcessJobsConcurrentStartupSweepsClaimExactWorkerOnce()
     {
@@ -307,6 +349,73 @@ public sealed class WorkerProcessJobsTests : IDisposable
             {
                 try { wrapper.Kill(entireProcessTree: true); } catch { }
                 wrapper.Dispose();
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_register_identity_failure_kills_attached_process_tree")]
+    public void WorkerProcessJobsRegisterIdentityFailureKillsAttachedProcessTree()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
+        var dbPath = Path.Combine(root, "state.db");
+        var marker = Path.Combine(root, "child.pid");
+        var startSignal = Path.Combine(root, "start-child");
+        Directory.CreateDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? wrapper = null;
+        int? childPid = null;
+        try
+        {
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+            wrapper = Process.Start(new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }.WithArguments(
+                WorkerShell.BaseArguments().Concat([
+                    $"while (-not (Test-Path -LiteralPath '{startSignal}')) {{ Start-Sleep -Milliseconds 25 }}; " +
+                    "$p = Start-Process ping.exe -ArgumentList '-n 9999 127.0.0.1' -PassThru -WindowStyle Hidden; " +
+                    $"Set-Content -LiteralPath '{marker}' -Value $p.Id; " +
+                    "Start-Sleep -Seconds 9999"
+                ])))
+                ?? throw new InvalidOperationException("Failed to start wrapper process.");
+
+            Assert.False(WorkerProcessJobs.TryRegister(
+                wrapper,
+                "identity-read-failure",
+                _ =>
+                {
+                    File.WriteAllText(startSignal, "go");
+                    childPid = WaitForPidFile(marker);
+                    return null;
+                }));
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(5)));
+            Assert.True(WaitUntilNotRunning(Assert.IsType<int>(childPid), TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            WorkerProcessJobs.ClearRegistryForTests();
+            if (wrapper is not null)
+            {
+                try { wrapper.Kill(entireProcessTree: true); } catch { }
+                wrapper.Dispose();
+            }
+
+            if (childPid is { } remainingChildPid)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(remainingChildPid); } catch { }
             }
 
             try { Directory.Delete(root, recursive: true); } catch { }

@@ -326,7 +326,7 @@ internal static class SpawnProcessIdentityReader
                 evidence = $"victim pid={entry.ProcessId} image mismatch recorded={entry.ImagePath} observed={live.ImagePath}";
                 process.Dispose();
                 process = null;
-                return SpawnTrackedProcessStatus.DeadOrRecycled;
+                return SpawnTrackedProcessStatus.Unknown;
             }
 
             evidence = $"victim pid={entry.ProcessId} identity matches started_at={entry.ProcessStartedAt:O} image={live.ImagePath}";
