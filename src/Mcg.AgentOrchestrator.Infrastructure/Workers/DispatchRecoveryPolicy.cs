@@ -20,6 +20,33 @@ public sealed record DispatchRecoveryDecision(
     string Reason,
     string? Blocker = null);
 
+public enum DispatchWorktreeInspectionAvailability
+{
+    NotRequired,
+    Available,
+    Unavailable
+}
+
+public sealed record DispatchWorktreeInspectionStatus(
+    DispatchWorktreeInspectionAvailability Availability,
+    bool HasDirtyEvidence,
+    string EvidencePath,
+    string? UnavailableReason = null,
+    string? GitReceipt = null)
+{
+    public static DispatchWorktreeInspectionStatus NotRequired { get; } =
+        new(DispatchWorktreeInspectionAvailability.NotRequired, false, "worktree-inspection-not-required");
+
+    public static DispatchWorktreeInspectionStatus Available(bool hasDirtyEvidence, string evidencePath) =>
+        new(DispatchWorktreeInspectionAvailability.Available, hasDirtyEvidence, evidencePath);
+
+    public static DispatchWorktreeInspectionStatus Unavailable(
+        string evidencePath,
+        string reason,
+        string gitReceipt) =>
+        new(DispatchWorktreeInspectionAvailability.Unavailable, false, evidencePath, reason, gitReceipt);
+}
+
 public sealed class DispatchRecoveryPolicy
 {
     public static readonly TimeSpan DefaultRecentHeartbeatGrace = TimeSpan.FromMinutes(5);
@@ -45,10 +72,11 @@ public sealed class DispatchRecoveryPolicy
         TaskProcessRecord process,
         bool hasLiveProcess,
         int staleRetryBudgetRemaining = 0,
-        bool hasDirtyWorktreeEvidence = false)
+        DispatchWorktreeInspectionStatus? worktreeInspection = null)
     {
         var exitPath = process.ExitCodePath;
         var heartbeat = ProcessLogReader.ReadHeartbeat(process, _clock.UtcNow);
+        worktreeInspection ??= DispatchWorktreeInspectionStatus.NotRequired;
 
         if (!hasLiveProcess && File.Exists(exitPath))
         {
@@ -60,13 +88,33 @@ public sealed class DispatchRecoveryPolicy
 
         if (!hasLiveProcess)
         {
-            var heartbeatEvidence = heartbeat.IsAvailable ? heartbeat.Path : "heartbeat-absent";
+            if (!heartbeat.IsAvailable && heartbeat.UnavailableReason is not "missing")
+            {
+                var unavailableReason = heartbeat.UnavailableReason ?? "unknown";
+                return Decision(
+                    DispatchRecoveryAction.Hold,
+                    heartbeat.Path,
+                    $"heartbeat apparatus unavailable; unavailable_reason={unavailableReason}",
+                    $"heartbeat-{unavailableReason}");
+            }
+
+            if (worktreeInspection.Availability == DispatchWorktreeInspectionAvailability.Unavailable)
+            {
+                return Decision(
+                    DispatchRecoveryAction.Hold,
+                    worktreeInspection.EvidencePath,
+                    $"worktree inspection unavailable; unavailable_reason={worktreeInspection.UnavailableReason ?? "unknown"}; " +
+                    $"git_receipt={worktreeInspection.GitReceipt ?? "none"}",
+                    "worktree-inspection-unavailable");
+            }
+
+            var heartbeatEvidence = heartbeat.Path;
             var heartbeatStale = !heartbeat.IsAvailable ||
                 heartbeat.HeartbeatAge is null ||
                 heartbeat.HeartbeatAge >= _recentHeartbeatGrace;
             if (heartbeatStale)
             {
-                if (staleRetryBudgetRemaining > 0 && !hasDirtyWorktreeEvidence)
+                if (staleRetryBudgetRemaining > 0 && !worktreeInspection.HasDirtyEvidence)
                 {
                     return Decision(
                         DispatchRecoveryAction.MarkStale,
@@ -80,7 +128,7 @@ public sealed class DispatchRecoveryPolicy
                 return Decision(
                     staleRetryBudgetRemaining <= 0 ? DispatchRecoveryAction.BudgetExhausted : DispatchRecoveryAction.MarkStale,
                     heartbeatEvidence,
-                    $"no live process, exit-absent, heartbeat {(heartbeat.IsAvailable ? "stale" : "absent")}",
+                    $"no live process, exit-absent, heartbeat {(heartbeat.IsAvailable ? "stale" : $"unavailable reason={heartbeat.UnavailableReason ?? "unknown"}")}",
                     blocker);
             }
 
@@ -128,10 +176,10 @@ public sealed class DispatchRecoveryPolicy
 
         return Decision(
             DispatchRecoveryAction.Hold,
-            heartbeat.IsAvailable ? heartbeat.Path : "heartbeat-absent",
+            heartbeat.Path,
             heartbeat.IsAvailable
                 ? "live process has no terminal artifact and has not exceeded live-idle policy"
-                : "live process has no heartbeat; CPU sampling unavailable, holding pending other detectors");
+                : $"live process heartbeat unavailable reason={heartbeat.UnavailableReason ?? "unknown"}; CPU sampling unavailable, holding pending other detectors");
     }
 
     public static string ToActionName(DispatchRecoveryAction action) =>
