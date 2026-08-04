@@ -501,7 +501,6 @@ public sealed class BackgroundDispatchRunner
             {
                 var process = task.LastProcess;
                 if (task.Status is WorkTaskStatus.WaitingForHuman or
-                                   WorkTaskStatus.Completed or
                                    WorkTaskStatus.Failed or
                                    WorkTaskStatus.Cancelled ||
                     process is null ||
