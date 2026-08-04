@@ -4105,6 +4105,15 @@ public sealed class ConductorBatchLoopTests
                 startInfo.Environment.Remove(key);
             }
 
+            var bootstrapToken = Guid.NewGuid().ToString("N");
+            var bootstrapActivationPath = Path.Combine(root, "bootstrap.activate");
+            File.WriteAllText(bootstrapActivationPath, bootstrapToken);
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_READY_PATH"] = Path.Combine(root, "bootstrap.ready");
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_ACTIVATE_PATH"] = bootstrapActivationPath;
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_TOKEN"] = bootstrapToken;
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_INCUMBENT_PID"] = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_WAIT_SECONDS"] = "5";
+
             parent = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start parent conductor process.");
             var stdoutTask = parent.StandardOutput.ReadToEndAsync();
             var stderrTask = parent.StandardError.ReadToEndAsync();
@@ -5820,6 +5829,111 @@ public sealed class ConductorBatchLoopTests
             evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact]
+    public void BatchLoopWatchRechecksBlockedGoalUntilMaxDuration()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        _ = CreateVerifiedSimpleGoal(kernel, "Keep watching landing conflict");
+        var now = DateTimeOffset.Parse("2026-08-04T00:00:00Z");
+        var rebaseChecks = 0;
+        var conflictChecks = 0;
+        var sleeps = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            rebaseOntoMain: _ =>
+            {
+                rebaseChecks++;
+                return new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.Conflict,
+                    "goal/test",
+                    "Conflict remains.",
+                    ["docs/test-design-discipline.md"],
+                    "workspace rebase");
+            },
+            recheckPreLandingRebaseConflict: _ =>
+            {
+                conflictChecks++;
+                return new LandingEscalationRecheckResult(
+                    ConditionResolved: false,
+                    Status: "MergeTreeConflict",
+                    Observation: "Read-only merge-tree check still conflicts with main.",
+                    EvidenceFingerprint: "branch=conflicted;main=current");
+            },
+            runAcceptance: _ => true);
+
+        var summary = new ConductorBatchLoop(utcNow: () => now).Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            watchInterval: TimeSpan.FromSeconds(1),
+            sleepFunc: interval =>
+            {
+                sleeps++;
+                now = now.Add(interval);
+                return false;
+            },
+            maxDuration: TimeSpan.FromSeconds(3));
+
+        Assert.Equal("max-duration", summary.StopReason);
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, rebaseChecks);
+        Assert.Equal(2, conflictChecks);
+        Assert.Equal(3, sleeps);
+    }
+
+    [Xunit.Fact]
+    public void BatchLoopOneShotEscalationRechecksBeforeStopping()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        _ = CreateVerifiedSimpleGoal(kernel, "Recheck one-shot landing conflict");
+        var rebaseChecks = 0;
+        var conflictChecks = 0;
+        var sleeps = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            rebaseOntoMain: _ =>
+            {
+                rebaseChecks++;
+                return new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.Conflict,
+                    "goal/test",
+                    "Conflict remains.",
+                    ["docs/test-design-discipline.md"],
+                    "workspace rebase");
+            },
+            recheckPreLandingRebaseConflict: _ =>
+            {
+                conflictChecks++;
+                return new LandingEscalationRecheckResult(
+                    ConditionResolved: false,
+                    Status: "MergeTreeConflict",
+                    Observation: "Read-only merge-tree check still conflicts with main.",
+                    EvidenceFingerprint: "branch=conflicted;main=current");
+            },
+            runAcceptance: _ => true);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            sleepFunc: _ =>
+            {
+                sleeps++;
+                Assert.True(sleeps <= 1, "One-shot blocked rechecks exceeded their deterministic sleep bound.");
+                return false;
+            });
+
+        Assert.Equal("blocked-recheck-exhausted", summary.StopReason);
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, rebaseChecks);
+        Assert.Equal(2, conflictChecks);
+        Assert.Equal(1, sleeps);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(false, 2, 0, 1)]
     [Xunit.InlineData(true, 3, 1, 2)]
@@ -6826,6 +6940,7 @@ public sealed class ConductorBatchLoopTests
                 now, null, null, OwnedProcessIds: [333]));
 
         var killed = new List<int>();
+        var sleeps = 0;
         var runner = new BackgroundDispatchRunner(
             isStillRunning: _ => false,
             tryKillOwnedProcess: pid =>
@@ -6841,9 +6956,16 @@ public sealed class ConductorBatchLoopTests
                 driver,
                 ConductorAutonomyPolicy.Conservative,
                 NoStopPath(),
-                onlyGoalId: escalatedGoal.Id.Value);
+                onlyGoalId: escalatedGoal.Id.Value,
+                sleepFunc: _ =>
+                {
+                    sleeps++;
+                    return false;
+                });
 
         Assert.Equal(1, summary.Escalated);
+        Assert.Equal("blocked-recheck-exhausted", summary.StopReason);
+        Assert.Equal(1, sleeps);
         Xunit.Assert.Equal([111, 222], killed);
         Assert.True(kernel.GetTask(escalatedGoal.Id, escalatedTask.Id).LastProcess!.WasCancelled);
         Assert.False(kernel.GetTask(otherGoal.Id, otherTask.Id).LastProcess!.WasCancelled);
@@ -9644,6 +9766,56 @@ public sealed class ConductorBatchLoopTests
                 line,
                 new JsonSerializerOptions(JsonSerializerDefaults.Web))!),
             record => record.EventKind == "goal-stalled");
+    }
+
+    [Xunit.Fact]
+    public void EmptyLoop_RecordsDurableStartAndTerminalStop()
+    {
+        var events = new List<RunEventAppend>();
+        var now = new DateTimeOffset(2026, 8, 3, 12, 0, 0, TimeSpan.Zero);
+        var recorder = new ConductorLifecycleRecorder(
+            new DelegateRunEventStore(evt => events.Add(evt)),
+            () => now,
+            () => "empty-loop");
+
+        var summary = new ConductorBatchLoop(
+            utcNow: () => now,
+            lifecycleRecorder: recorder).Run(
+                new AgentOrchestratorKernel(),
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath());
+
+        Assert.Equal("all-terminal", summary.StopReason);
+        Assert.Equal(["start", "stop"], events.Select(evt => evt.Operation));
+        Assert.Equal("all-terminal", events[1].Status);
+    }
+
+    private sealed class DelegateRunEventStore(Action<RunEventAppend> append) : IRunEventStore
+    {
+        public Task<RunEventRecord> AppendAsync(
+            RunEventAppend evt,
+            CancellationToken cancellationToken = default)
+        {
+            append(evt);
+            return Task.FromResult(new RunEventRecord(
+                1,
+                Guid.NewGuid().ToString("N"),
+                evt.OccurredAt ?? DateTimeOffset.MinValue,
+                evt.EventType,
+                evt.GoalId,
+                evt.Operation,
+                evt.Status,
+                evt.Detail,
+                evt.PayloadJson));
+        }
+
+        public Task<IReadOnlyList<RunEventRecord>> ReadSinceAsync(
+            long afterSequence = 0,
+            string? goalId = null,
+            int maxCount = 500,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<RunEventRecord>>([]);
     }
 }
 

@@ -18,29 +18,82 @@ internal static class AssemblyTempRedirect
             return;
         }
 
-        foreach (var candidate in EnumerateCandidateRoots())
+        var candidate = SelectWritableRoot(EnumerateCandidateRoots(), TryPrepareRoot);
+        if (candidate is null)
+        {
+            return;
+        }
+
+        Environment.SetEnvironmentVariable("TMP", candidate, EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable("TEMP", candidate, EnvironmentVariableTarget.Process);
+    }
+
+    internal static string? SelectWritableRoot(
+        IEnumerable<string> candidates,
+        Func<string, bool> tryPrepareRoot)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (tryPrepareRoot(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryPrepareRoot(string candidate)
+    {
+        var probePath = Path.Combine(candidate, $".write-probe-{Guid.NewGuid():N}");
+
+        try
+        {
+            Directory.CreateDirectory(candidate);
+            using (new FileStream(
+                       probePath,
+                       FileMode.CreateNew,
+                       FileAccess.Write,
+                       FileShare.None,
+                       bufferSize: 1,
+                       FileOptions.DeleteOnClose))
+            {
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return false;
+        }
+        finally
         {
             try
             {
-                Directory.CreateDirectory(candidate);
+                File.Delete(probePath);
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
             {
-                continue;
+                // A failed candidate is already unusable for test scratch files.
             }
-
-            Environment.SetEnvironmentVariable("TMP", candidate, EnvironmentVariableTarget.Process);
-            Environment.SetEnvironmentVariable("TEMP", candidate, EnvironmentVariableTarget.Process);
-            return;
         }
     }
 
     private static IEnumerable<string> EnumerateCandidateRoots()
     {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (!string.IsNullOrEmpty(localAppData))
+        // The acceptance gate preserves the real LOCALAPPDATA variable while repointing
+        // USERPROFILE to its hermetic profile. GetFolderPath expands the known-folder value
+        // against that repointed profile, so consult the preserved variable first.
+        foreach (var localAppData in new[]
+                 {
+                     Environment.GetEnvironmentVariable("LOCALAPPDATA"),
+                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+                 })
         {
-            yield return Path.Combine(localAppData, "Temp", "Low", "mcg-tests");
+            if (!string.IsNullOrEmpty(localAppData))
+            {
+                yield return Path.Combine(localAppData, "Temp", "Low", "mcg-tests");
+            }
         }
 
         yield return Path.Combine(AppContext.BaseDirectory, ".test-tmp");

@@ -10,6 +10,7 @@ internal sealed class ConductorBatchLoop
     internal const string StopFileName = ".conduct-stop";
     internal const int DefaultMaxVerifyRetries = 2;
     internal const int DefaultWatchIntervalSeconds = 15;
+    internal const int DefaultBlockedRecheckCycles = 2;
     internal const int WatchStopPollIntervalSeconds = 5;
     internal const int QuietSummaryEveryTicks = 20;
     internal const int DefaultMaxBusyWriteAttempts = 1;
@@ -46,6 +47,7 @@ internal sealed class ConductorBatchLoop
     private readonly PostLandingCanaryCoordinator? _postLandingCanary;
     private readonly AcceptanceEngineCircuitBreaker? _acceptanceEngineCircuit;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
+    private readonly ConductorLifecycleRecorder? _lifecycleRecorder;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
@@ -71,7 +73,8 @@ internal sealed class ConductorBatchLoop
         bool selfRelaunchEnabled = DefaultSelfRelaunchEnabled,
         PostLandingCanaryCoordinator? postLandingCanary = null,
         AcceptanceEngineCircuitBreaker? acceptanceEngineCircuit = null,
-        Func<string, GoalStatus?>? evictedGoalStatusLookup = null)
+        Func<string, GoalStatus?>? evictedGoalStatusLookup = null,
+        ConductorLifecycleRecorder? lifecycleRecorder = null)
     {
         _sweep = measuredSweep ?? (kernel =>
         {
@@ -92,6 +95,7 @@ internal sealed class ConductorBatchLoop
         _postLandingCanary = postLandingCanary;
         _acceptanceEngineCircuit = postLandingCanary?.CircuitBreaker ?? acceptanceEngineCircuit;
         _conductEventLogWriter = conductEventLogWriter;
+        _lifecycleRecorder = lifecycleRecorder;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _evictedGoalStatusLookup = evictedGoalStatusLookup ?? (_ => null);
     }
@@ -126,6 +130,10 @@ internal sealed class ConductorBatchLoop
         var canaryTasks = new List<Task<PostLandingCanaryDisposition>>();
         var canaryTasksGate = new object();
         CurrentConductEventLogWriter.Value = _conductEventLogWriter;
+        var totalTicks = 0;
+        var blockedRecheckCycles = 0;
+        string? stopReason = null;
+        ConductorLifecycleSession? lifecycleSession = null;
         driver.LandingMutationBlocker = () =>
         {
             var existingBlock = previousLandingMutationBlocker?.Invoke();
@@ -160,7 +168,6 @@ internal sealed class ConductorBatchLoop
         var lastGoalDisposition = new Dictionary<string, string>(StringComparer.Ordinal);
         var unscopedDispatchableTicks = new Dictionary<string, int>(StringComparer.Ordinal);
         var goalProjectionCache = new GoalProjectionCache();
-        var totalTicks = 0;
         var totalAdvanced = 0;
         var totalHeld = 0;
         var totalEscalated = 0;
@@ -178,6 +185,20 @@ internal sealed class ConductorBatchLoop
         if (effectiveGoalStallThreshold < TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(goalStallThreshold));
+        }
+        lifecycleSession = _lifecycleRecorder?.Start(
+            policy.Name,
+            onlyGoalId,
+            started,
+            maxIterations,
+            maxDuration);
+
+        void StopLoop(string reason, string? detail = null)
+        {
+            stopReason ??= reason;
+            lifecycleSession?.Stop(reason, totalTicks, detail);
+            EmitProgress($"LOOP_STOP tick={totalTicks} reason={reason}" +
+                         (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
         }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
         if ((_selfRelaunchEnabled && _selfRelaunch is not null) ||
@@ -233,7 +254,7 @@ internal sealed class ConductorBatchLoop
             if (IsStopRequested(stopFilePath))
             {
                 stopRequested = true;
-                EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file");
+                StopLoop("stop-file");
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop", null, busyWriteDelay);
@@ -244,7 +265,7 @@ internal sealed class ConductorBatchLoop
                 maxIterations.HasValue &&
                 totalTicks >= maxIterations.Value)
             {
-                EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-iter max={maxIterations.Value}");
+                StopLoop("max-iter", $"max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-iterations", null, busyWriteDelay);
@@ -255,7 +276,7 @@ internal sealed class ConductorBatchLoop
                 maxDuration.HasValue &&
                 _utcNow() - started >= maxDuration.Value)
             {
-                EmitProgress($"LOOP_STOP tick={totalTicks} reason=max-duration seconds={(int)maxDuration.Value.TotalSeconds}");
+                StopLoop("max-duration", $"seconds={(int)maxDuration.Value.TotalSeconds}");
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-duration", null, busyWriteDelay);
@@ -572,7 +593,7 @@ internal sealed class ConductorBatchLoop
                     if (IsStopRequested(stopFilePath))
                     {
                         stopRequested = true;
-                        EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-after-operator-intent");
+                        StopLoop("stop-after-operator-intent");
                         DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                         TryPersistCheckpoint(
                             persistTick,
@@ -592,13 +613,59 @@ internal sealed class ConductorBatchLoop
                     }
                 }
 
-                // Daemon keep-alive: when configured (and watching), an empty backlog is NOT a reason to
-                // exit — sleep and keep polling so goals submitted later are ingested by the sweep and
-                // driven. A one-shot `conduct --loop` (keepAliveWhenIdle=false) still completes here.
-                if (keepAliveWhenIdle && watchInterval is not null)
+                // Daemon keep-alive polls an empty backlog. Independently, any set-aside non-terminal goal
+                // must reach another sweep/recheck even for a non-daemon invocation; otherwise a transient
+                // escalation is indistinguishable from terminal completion and only a manual relaunch can
+                // recover it.
+                var recheckableBlockedGoals = CountRecheckableNonTerminalGoals(
+                    kernel,
+                    onlyGoalId,
+                    setAsideGoals);
+                if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0)
                 {
-                    var idleInterval = GetWatchFallbackInterval(kernel, onlyGoalId, watchInterval.Value);
-                    EmitProgress($"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
+                    if (recheckableBlockedGoals > 0)
+                    {
+                        blockedRecheckCycles++;
+                        var blockedRecheckBudget = maxIterations ??
+                            (watchInterval is not null
+                                ? null
+                                : DefaultBlockedRecheckCycles);
+                        var blockedRecheckBudgetUsed = maxIterations.HasValue
+                            ? totalTicks + blockedRecheckCycles
+                            : blockedRecheckCycles;
+                        if (blockedRecheckBudget.HasValue &&
+                            blockedRecheckBudgetUsed >= blockedRecheckBudget.Value &&
+                            unscopedDispatchableTicks.Count == 0)
+                        {
+                            var exhaustedExplicitIterationBudget = maxIterations.HasValue;
+                            var exhaustedStopReason = exhaustedExplicitIterationBudget
+                                ? "max-iter"
+                                : "blocked-recheck-exhausted";
+                            StopLoop(exhaustedStopReason,
+                                $"max={blockedRecheckBudget.Value} blockedRechecks={blockedRecheckCycles}");
+                            Console.WriteLine(exhaustedExplicitIterationBudget
+                                ? $"[conduct --loop] Max iterations ({blockedRecheckBudget.Value}) reached after {totalTicks} ticks and {blockedRecheckCycles} blocked rechecks."
+                                : $"[conduct --loop] Blocked recheck budget ({blockedRecheckBudget.Value}) exhausted after {totalTicks} ticks and {blockedRecheckCycles} blocked rechecks.");
+                            DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                            TryPersistCheckpoint(
+                                persistTick,
+                                persistGoalTick,
+                                kernel,
+                                totalTicks,
+                                onlyGoalId,
+                                exhaustedExplicitIterationBudget ? "max-iterations" : "blocked-recheck-exhausted",
+                                null,
+                                busyWriteDelay);
+                            break;
+                        }
+                    }
+
+                    var configuredInterval = watchInterval ?? TimeSpan.FromSeconds(DefaultWatchIntervalSeconds);
+                    var idleInterval = GetWatchFallbackInterval(kernel, onlyGoalId, configuredInterval);
+                    EmitProgress(
+                        recheckableBlockedGoals > 0
+                            ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals} seconds={(int)idleInterval.TotalSeconds}"
+                            : $"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
                         : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
@@ -616,7 +683,7 @@ internal sealed class ConductorBatchLoop
                     if (idleSleep == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
                     {
                         stopRequested = true;
-                        EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-while-idle");
+                        StopLoop("stop-while-idle");
                         DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                         TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-while-idle", null, busyWriteDelay);
                         break;
@@ -625,11 +692,17 @@ internal sealed class ConductorBatchLoop
                     continue;
                 }
 
-                EmitProgress($"LOOP_STOP tick={totalTicks} reason=all-done-or-escalated");
+                var remainingNonTerminalGoals = kernel.Goals.Count(goal =>
+                    (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
+                    !IsTerminalGoal(goal));
+                StopLoop(
+                    remainingNonTerminalGoals == 0 ? "all-terminal" : "no-recheckable-work",
+                    remainingNonTerminalGoals == 0 ? null : $"nonTerminalGoals={remainingNonTerminalGoals}");
                 Console.WriteLine($"[conduct --loop] All goals done or escalated; loop complete after {totalTicks} ticks.");
                 break;
             }
 
+            blockedRecheckCycles = 0;
             totalTicks++;
             var tickLines = new List<string>();
             foreach (var line in preTickTimingLines)
@@ -728,8 +801,8 @@ internal sealed class ConductorBatchLoop
                     {
                         ClearGoalHold(kernel, goal, changedGoalIds);
                         escalatedGoals.Add(goal.Id.Value);
-                        SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals, selfClearedSetAsideEntries);
                         ReapGoalOnce(kernel, goal, reapedGoals);
+                        SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals, selfClearedSetAsideEntries);
                         tickEscalated++;
                     }
                     else
@@ -789,8 +862,8 @@ internal sealed class ConductorBatchLoop
 
                     escalatedGoals.Add(goal.Id.Value);
                     ClearGoalHold(kernel, goal, changedGoalIds);
-                    SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals, selfClearedSetAsideEntries);
                     ReapGoalOnce(kernel, goal, reapedGoals);
+                    SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals, selfClearedSetAsideEntries);
                     tickEscalated++;
                     FinishGoalWalk("verified-escalation");
                     continue;
@@ -873,8 +946,8 @@ internal sealed class ConductorBatchLoop
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
                         kernel.RecordGoalPolicyDecision(goal.Id, msg);
                         escalatedGoals.Add(goal.Id.Value);
-                        SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
                         ReapGoalOnce(kernel, goal, reapedGoals);
+                        SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
                         tickEscalated++;
                         FinishGoalWalk("advance-fault");
                         continue;
@@ -938,7 +1011,7 @@ internal sealed class ConductorBatchLoop
 
                 if (result.WasExecuted)        { tickAdvanced++; }
                 else if (result.IsHeld)        { tickHeld++; }
-                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals, selfClearedSetAsideEntries); ReapGoalOnce(kernel, goal, reapedGoals); }
+                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); ReapGoalOnce(kernel, goal, reapedGoals); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals, selfClearedSetAsideEntries); }
                 else if (result.IsDone)        { tickDone++;      completedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
                 goalProjectionCache.Invalidate(goal.Id);
                 FinishGoalWalk(result.Outcome.GetType().Name);
@@ -1043,7 +1116,13 @@ internal sealed class ConductorBatchLoop
             {
                 if (watchInterval is null)
                 {
-                    EmitProgress($"LOOP_STOP tick={totalTicks} reason=no-progress-no-watch");
+                    if (CountRecheckableNonTerminalGoals(kernel, onlyGoalId, setAsideGoals) > 0)
+                    {
+                        onTick?.Invoke(tickSummary);
+                        continue;
+                    }
+
+                    StopLoop("no-progress-no-watch");
                     Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                     TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "no-progress", tickLines, busyWriteDelay);
@@ -1078,7 +1157,7 @@ internal sealed class ConductorBatchLoop
                 if (sleepResult == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
                 {
                     stopRequested = true;
-                    EmitProgress($"LOOP_STOP tick={totalTicks} reason=stop-file-during-sleep");
+                    StopLoop("stop-file-during-sleep");
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                     TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-during-sleep", tickLines, busyWriteDelay);
@@ -1093,6 +1172,10 @@ internal sealed class ConductorBatchLoop
 
         AwaitCanaryTasks(canaryTasks, canaryTasksGate);
         ConductorLoopHandoffResult? handoff = selfRelaunchHandoff;
+        if (selfRelaunchHandoff is not null && stopReason is null)
+        {
+            StopLoop("self-relaunch-handoff");
+        }
         if (maxDurationReached && _handoffOnMaxDuration is not null)
         {
             var landedGoalDelta = GetCompletedGoalIds(kernel).Except(initiallyCompletedGoalIds, StringComparer.Ordinal).Count();
@@ -1101,10 +1184,15 @@ internal sealed class ConductorBatchLoop
             EmitHandoffProgress(totalTicks, handoff);
         }
 
-        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff);
+        if (stopReason is null)
+        {
+            StopLoop("loop-return");
+        }
+        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason);
         }
         finally
         {
+            lifecycleSession?.Stop("unintended-exit", totalTicks);
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.LandingMutationBlocker = previousLandingMutationBlocker;
@@ -3075,6 +3163,17 @@ internal sealed class ConductorBatchLoop
             && !excludedGoals.Contains(goal.Id.Value)
             && goal.Status == GoalStatus.Parked);
 
+    private static int CountRecheckableNonTerminalGoals(
+        AgentOrchestratorKernel kernel,
+        string? onlyGoalId,
+        IReadOnlyDictionary<string, BatchSetAsideEntry> setAsideGoals,
+        BatchSetAsideCondition? condition = null) =>
+        kernel.Goals.Count(goal =>
+            (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
+            !IsTerminalGoal(goal) &&
+            setAsideGoals.TryGetValue(goal.Id.Value, out var entry) &&
+            (!condition.HasValue || entry.Condition == condition.Value));
+
     private static bool IsPreWalkExcludedGoal(Goal goal) =>
         goal.Status == GoalStatus.Parked || IsPreWalkExcludedTerminalGoal(goal);
 
@@ -3327,7 +3426,8 @@ public sealed record BatchLoopSummary(
     int Retried,
     int Done,
     bool StopRequested,
-    ConductorLoopHandoffResult? Handoff = null);
+    ConductorLoopHandoffResult? Handoff = null,
+    string? StopReason = null);
 
 public sealed record ConductorLoopHandoffRequest(
     int Tick,

@@ -73,6 +73,8 @@ internal static class CliCommandHelp
             "--stall-warning-seconds",
             "--stall-warning-minutes",
             "--unscoped-stall-ticks",
+            ConductorContinuitySupervisor.ChildFlag,
+            ConductorContinuitySupervisor.ExitArtifactFlag,
             "--help",
             "-h"
         ]);

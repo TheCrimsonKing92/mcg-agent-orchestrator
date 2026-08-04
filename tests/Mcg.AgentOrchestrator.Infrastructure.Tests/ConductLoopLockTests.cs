@@ -259,7 +259,7 @@ public sealed class ConductLoopLockTests
     }
 
     [Theory(DisplayName = "ConductLoopLock_named_orderly_exit_releases_lock")]
-    [InlineData("all-done-or-escalated", "all-done-or-escalated")]
+    [InlineData("all-done-or-escalated", "all-terminal")]
     [InlineData("max-duration-expiry", "max-duration")]
     [InlineData("stop-sentinel", "stop-file")]
     public void NamedOrderlyExitReleasesLock(string orderlyExit, string loggedReason)

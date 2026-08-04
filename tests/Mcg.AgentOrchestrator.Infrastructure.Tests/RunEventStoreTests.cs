@@ -182,8 +182,8 @@ public sealed class RunEventStoreTests
         Assert.All(storedLines, line => Assert.True(line!.Length <= ConductorTickPusher.MaxPersistedProgressLineChars));
     }
 
-    [Xunit.Fact(DisplayName = "SqliteRunEventStore_maintenance_prunes_old_ticks_and_preserves_goal_operations_for_cursor_reads")]
-    public async Task SqliteRunEventStoreMaintenancePrunesOldTicksAndPreservesGoalOperationsForCursorReads()
+    [Xunit.Fact]
+    public async Task Maintenance_PrunesTicksAndKeepsDurableEvents()
     {
         var store = new SqliteRunEventStore(TempDb());
         var now = DateTimeOffset.Parse("2026-07-16T12:00:00Z");
@@ -195,6 +195,14 @@ public sealed class RunEventStoreTests
             "Begin",
             "before prune",
             null,
+            OccurredAt: now.AddDays(-30)));
+        var lifecycleStop = await store.AppendAsync(new RunEventAppend(
+            RunEventTypes.ConductorLifecycle,
+            null,
+            "stop",
+            "all-terminal",
+            "reason=all-terminal ticks=12",
+            "{\"generationId\":\"generation-1\"}",
             OccurredAt: now.AddDays(-30)));
         var oldTick = await store.AppendAsync(new RunEventAppend(
             RunEventTypes.ConductorTick,
@@ -234,6 +242,12 @@ public sealed class RunEventStoreTests
         Assert.Contains(all, evt => evt.Sequence == recentTick.Sequence);
         Assert.Contains(all, evt => evt.Sequence == firstGoalOperation.Sequence);
         Assert.Contains(all, evt => evt.Sequence == secondGoalOperation.Sequence);
+        Assert.Contains(all, evt => evt.Sequence == lifecycleStop.Sequence);
+
+        var lifecycleStops = await store.ReadByTypeSinceAsync(
+            RunEventTypes.ConductorLifecycle,
+            operation: "stop");
+        Assert.Equal(lifecycleStop.Sequence, Assert.Single(lifecycleStops).Sequence);
 
         var afterFirst = await store.ReadSinceAsync(firstGoalOperation.Sequence, goalId: goalId);
         var resumed = Assert.Single(afterFirst);

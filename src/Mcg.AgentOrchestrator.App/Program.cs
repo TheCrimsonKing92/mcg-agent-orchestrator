@@ -115,6 +115,29 @@ catch (ArgumentException ex)
     return 1;
 }
 
+if (ConductorContinuitySupervisor.ShouldSupervise(
+        startupArgs,
+        ProgramStartupLifecycle.IsAuthorityTransferRequested(startupArgs)))
+{
+    try
+    {
+        var supervisor = new ConductorContinuitySupervisor(
+            new SystemConductorSupervisorProcessHost(),
+            new SqliteRunEventStore(workspace.RunEventStorePath));
+        return await supervisor.RunAsync(
+            startupArgs,
+            workspace.ExecutionDirectory,
+            Path.Combine(workspace.OrchestratorDirectory, "continuity"),
+            activeProject.Name,
+            tenantSelection.TenantName);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+        return 1;
+    }
+}
+
 try
 {
     GoalWorktreeOrphanSweepScheduler.Configure(
