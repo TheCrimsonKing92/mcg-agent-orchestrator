@@ -5883,6 +5883,57 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(3, sleeps);
     }
 
+    [Xunit.Fact]
+    public void BatchLoopOneShotEscalationRechecksBeforeStopping()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        _ = CreateVerifiedSimpleGoal(kernel, "Recheck one-shot landing conflict");
+        var rebaseChecks = 0;
+        var conflictChecks = 0;
+        var sleeps = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            rebaseOntoMain: _ =>
+            {
+                rebaseChecks++;
+                return new GoalWorktreeRebaseResult(
+                    GoalWorktreeRebaseStatus.Conflict,
+                    "goal/test",
+                    "Conflict remains.",
+                    ["docs/test-design-discipline.md"],
+                    "workspace rebase");
+            },
+            recheckPreLandingRebaseConflict: _ =>
+            {
+                conflictChecks++;
+                return new LandingEscalationRecheckResult(
+                    ConditionResolved: false,
+                    Status: "MergeTreeConflict",
+                    Observation: "Read-only merge-tree check still conflicts with main.",
+                    EvidenceFingerprint: "branch=conflicted;main=current");
+            },
+            runAcceptance: _ => true);
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            sleepFunc: _ =>
+            {
+                sleeps++;
+                Assert.True(sleeps <= 1, "One-shot blocked rechecks exceeded their deterministic sleep bound.");
+                return false;
+            });
+
+        Assert.Equal("blocked-recheck-exhausted", summary.StopReason);
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(1, rebaseChecks);
+        Assert.Equal(2, conflictChecks);
+        Assert.Equal(1, sleeps);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(false, 2, 0, 1)]
     [Xunit.InlineData(true, 3, 1, 2)]

@@ -1116,6 +1116,12 @@ internal sealed class ConductorBatchLoop
             {
                 if (watchInterval is null)
                 {
+                    if (CountRecheckableNonTerminalGoals(kernel, onlyGoalId, setAsideGoals) > 0)
+                    {
+                        onTick?.Invoke(tickSummary);
+                        continue;
+                    }
+
                     StopLoop("no-progress-no-watch");
                     Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
