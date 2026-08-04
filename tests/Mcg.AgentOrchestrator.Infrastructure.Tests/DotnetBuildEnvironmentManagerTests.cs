@@ -471,13 +471,23 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
     }
 
-    [Xunit.Fact(DisplayName = "InvokeWorkerBuildCheck_preserves_per_goal_root_outside_firewall_test_slots")]
-    public void InvokeWorkerBuildCheckPreservesPerGoalRootOutsideFirewallTestSlots()
+    [Xunit.Fact(DisplayName = "InvokeWorkerBuildCheck_preserves_per_goal_root_and_shared_build_slot_grid")]
+    public void InvokeWorkerBuildCheckPreservesPerGoalRootAndSharedBuildSlotGrid()
     {
         var source = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-WorkerBuildCheck.ps1"));
+        var isolatedDotnetSource = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
+        var rootResolverStart = source.IndexOf("function Get-IsolatedRootBase", StringComparison.Ordinal);
+        var rootResolverEnd = source.IndexOf("function Get-HostTempBase", rootResolverStart, StringComparison.Ordinal);
+        var isolatedRootResolverStart = isolatedDotnetSource.IndexOf("function Get-IsolatedRootBase", StringComparison.Ordinal);
+        var isolatedRootResolverEnd = isolatedDotnetSource.IndexOf("function Get-HostTempBase", isolatedRootResolverStart, StringComparison.Ordinal);
 
         Assert.Contains(@"goals\$safeGoalPrefix""", source, StringComparison.Ordinal);
         Assert.Contains(@"build-slots\$buildSlotName.lock""", source, StringComparison.Ordinal);
+        Assert.True(rootResolverStart >= 0 && rootResolverEnd > rootResolverStart);
+        Assert.True(isolatedRootResolverStart >= 0 && isolatedRootResolverEnd > isolatedRootResolverStart);
+        Assert.Equal(
+            isolatedDotnetSource[isolatedRootResolverStart..isolatedRootResolverEnd],
+            source[rootResolverStart..rootResolverEnd]);
         Assert.DoesNotContain(@"slots\operator-build", source, StringComparison.Ordinal);
         Assert.DoesNotContain(@"operators\worker-build", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Get-StableSlotName", source, StringComparison.Ordinal);

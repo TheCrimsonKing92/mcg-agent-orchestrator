@@ -54,6 +54,15 @@ function Get-IsolatedRootBase {
         return $env:MCG_DOTNET_ISOLATED_ROOT
     }
 
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT -and
+        -not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        # DispatchProcessHost redirects TEMP into each worker's private sandbox. LocalLow is the
+        # machine-user shared Low-integrity location, so workers and the acceptance lane resolve
+        # the same four authoritative build-slot locks without widening worker write access.
+        $localLow = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "..\LocalLow"))
+        return (Join-Path $localLow "mcg-dotnet-isolated")
+    }
+
     return (Join-Path ([System.IO.Path]::GetTempPath()) "mcg-dotnet-isolated")
 }
 
