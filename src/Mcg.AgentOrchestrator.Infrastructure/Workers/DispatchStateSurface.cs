@@ -303,7 +303,7 @@ public sealed class DispatchStateSurface
             return DispatchStateKind.Completed;
         }
 
-        if (recovery.Action == DispatchRecoveryAction.ReconcileFromExit || (!tree.HasLiveProcess && artifacts.ExitCodeExists))
+        if (recovery.Action == DispatchRecoveryAction.ReconcileFromExit)
         {
             return DispatchStateKind.ExitedAwaitingReconcile;
         }

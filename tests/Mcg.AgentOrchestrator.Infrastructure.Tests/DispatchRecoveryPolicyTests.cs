@@ -220,14 +220,50 @@ public sealed class DispatchRecoveryPolicyTests
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, process.StartedAt));
         kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
 
-        var outcome = new BackgroundDispatchRunner(new TestClock(Now), isStillRunning: _ => false)
-            .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+        var runner = new BackgroundDispatchRunner(new TestClock(Now), isStillRunning: _ => false);
+        var state = new DispatchStateSurface(
+                new TestClock(Now),
+                isProcessAlive: _ => false,
+                readCommandLines: _ => new Dictionary<int, string>(),
+                inspectWorktree: false)
+            .Evaluate(goal.Id, task);
+        var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
+        Xunit.Assert.Equal(DispatchStateKind.WedgedProcess, state.Kind);
+        Xunit.Assert.Equal("exit-artifact-invalid", state.RecoveryDecision.Blocker);
         Xunit.Assert.Equal(DispatchRecoveryAction.Hold, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Contains("state=Invalid", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
         Xunit.Assert.Contains("content=partial-write", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
         Xunit.Assert.Null(outcome.ProcessRecord.ExitCode);
         Xunit.Assert.Null(task.LastVerification);
+
+        runner.ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, task.Status);
+        Xunit.Assert.Empty(kernel.HumanInputRequests);
+        Xunit.Assert.Contains(
+            kernel.GetTimeline(goal.Id),
+            evt => evt.TaskId == task.Id &&
+                evt.Message.Contains("DispatchApparatusHoldObserved: observation=1/2", StringComparison.Ordinal) &&
+                evt.Message.Contains("blocker='exit-artifact-invalid'", StringComparison.Ordinal));
+
+        var repeatedOutcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+        runner.ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, repeatedOutcome);
+
+        Xunit.Assert.Equal(WorkTaskStatus.WaitingForHuman, task.Status);
+        Xunit.Assert.Null(task.LastVerification);
+        Xunit.Assert.Null(task.LastProcess!.ExitCode);
+        Xunit.Assert.Null(task.LatestRetryAt);
+        var request = Xunit.Assert.Single(kernel.HumanInputRequests);
+        Xunit.Assert.Equal(HumanWaitKind.RecoveryChoice, request.Kind);
+        Xunit.Assert.Contains("exit-artifact-invalid", request.Question, StringComparison.Ordinal);
+        Xunit.Assert.Contains(process.ExitCodePath, request.Question, StringComparison.Ordinal);
+        Xunit.Assert.Equal(0, runner.SweepExitedProcesses(kernel, goal.Id));
+        Xunit.Assert.Equal(
+            2,
+            kernel.GetTimeline(goal.Id).Count(evt =>
+                evt.TaskId == task.Id &&
+                evt.Message.StartsWith("DispatchApparatusHoldObserved:", StringComparison.Ordinal)));
+        Xunit.Assert.Single(kernel.HumanInputRequests);
     }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_unreadable_exit_artifact_holds_with_typed_evidence")]

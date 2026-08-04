@@ -20,6 +20,79 @@ public sealed record DispatchRecoveryDecision(
     string Reason,
     string? Blocker = null);
 
+internal enum ExitCodeReadKind
+{
+    Missing,
+    Unreadable,
+    Invalid,
+    Valid
+}
+
+internal sealed record ExitCodeReadResult(
+    ExitCodeReadKind Kind,
+    int? ExitCode,
+    string Evidence);
+
+internal static class DispatchExitArtifactReader
+{
+    private const int EvidenceCharacterLimit = 256;
+
+    public static ExitCodeReadResult Read(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "file-missing");
+        }
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            var raw = reader.ReadToEnd();
+            var evidenceText = raw[..Math.Min(raw.Length, EvidenceCharacterLimit)];
+            var normalized = NormalizeEvidence(evidenceText);
+            if (raw.Length > EvidenceCharacterLimit)
+            {
+                normalized += "...";
+            }
+
+            return int.TryParse(raw.Trim(), out var exitCode)
+                ? new ExitCodeReadResult(ExitCodeReadKind.Valid, exitCode, $"content={normalized}")
+                : new ExitCodeReadResult(ExitCodeReadKind.Invalid, null, $"content={normalized}; chars_read={raw.Length}");
+        }
+        catch (FileNotFoundException)
+        {
+            return new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "file-missing");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "directory-missing");
+        }
+        catch (IOException ex)
+        {
+            return Unreadable(ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unreadable(ex);
+        }
+    }
+
+    private static ExitCodeReadResult Unreadable(Exception exception) =>
+        new(
+            ExitCodeReadKind.Unreadable,
+            null,
+            $"{exception.GetType().Name}: {NormalizeEvidence(exception.Message)}");
+
+    private static string NormalizeEvidence(string value)
+    {
+        var normalized = string.Join(
+            " ",
+            value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return string.IsNullOrWhiteSpace(normalized) ? "none" : normalized;
+    }
+}
+
 public enum DispatchWorktreeInspectionAvailability
 {
     NotRequired,
@@ -85,12 +158,23 @@ public sealed class DispatchRecoveryPolicy
         var heartbeat = ProcessLogReader.ReadHeartbeat(process, _clock.UtcNow);
         worktreeInspection ??= DispatchWorktreeInspectionStatus.NotRequired;
 
-        if (!hasLiveProcess && File.Exists(exitPath))
+        var exitArtifact = DispatchExitArtifactReader.Read(exitPath);
+        if (!hasLiveProcess && exitArtifact.Kind == ExitCodeReadKind.Valid)
         {
             return Decision(
                 DispatchRecoveryAction.ReconcileFromExit,
                 exitPath,
-                "no live process and exit artifact exists");
+                $"no live process and valid exit artifact exists; {exitArtifact.Evidence}");
+        }
+
+        if (!hasLiveProcess && exitArtifact.Kind is ExitCodeReadKind.Invalid or ExitCodeReadKind.Unreadable)
+        {
+            var artifactState = exitArtifact.Kind.ToString().ToLowerInvariant();
+            return Decision(
+                DispatchRecoveryAction.Hold,
+                exitPath,
+                $"exit artifact apparatus unavailable; state={exitArtifact.Kind}; evidence={exitArtifact.Evidence}",
+                $"exit-artifact-{artifactState}");
         }
 
         if (!hasLiveProcess)

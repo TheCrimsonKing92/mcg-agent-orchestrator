@@ -52,6 +52,8 @@ public sealed record InterruptedDispatchStateRead(
 
 public sealed class BackgroundDispatchRunner
 {
+    private const int ApparatusHoldObservationsBeforeEscalation = 2;
+    private const string ApparatusHoldReceiptPrefix = "DispatchApparatusHoldObserved:";
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
     public const string TestRewriteRealWorkerCommandsVariable = "MCG_ORCHESTRATOR_TEST_REWRITE_REAL_WORKER_COMMANDS";
 
@@ -498,7 +500,8 @@ public sealed class BackgroundDispatchRunner
             foreach (var task in goal.Tasks)
             {
                 var process = task.LastProcess;
-                if (process is null ||
+                if (task.Status != WorkTaskStatus.Running ||
+                    process is null ||
                     process.WasCancelled ||
                     HasProcessOnlyCompletionAlreadyApplied(task, process) ||
                     HasRecordedCompletionForProcess(task, process))
@@ -511,7 +514,10 @@ public sealed class BackgroundDispatchRunner
                     continue;
 
                 ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
-                reconciled++;
+                if (outcome.RecoveryDecision?.Action != DispatchRecoveryAction.Hold)
+                {
+                    reconciled++;
+                }
             }
         }
 
@@ -838,6 +844,54 @@ public sealed class BackgroundDispatchRunner
                 kernel.RequeueInterruptedDispatch(goalId, taskId, disposition.Message);
             }
         }
+
+        if (outcome.RecoveryDecision is
+            {
+                Action: DispatchRecoveryAction.Hold,
+                Blocker: { Length: > 0 } blocker
+            } apparatusHold)
+        {
+            RecordBoundedApparatusHold(kernel, goalId, taskId, apparatusHold, blocker);
+        }
+    }
+
+    private static void RecordBoundedApparatusHold(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        DispatchRecoveryDecision decision,
+        string blocker)
+    {
+        var priorObservations = kernel.GetTimeline(goalId).Count(evt =>
+            evt.TaskId == taskId &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.StartsWith(ApparatusHoldReceiptPrefix, StringComparison.Ordinal) &&
+            evt.Message.Contains($"blocker='{blocker}'", StringComparison.Ordinal));
+        var observation = priorObservations + 1;
+        var diagnostic = BuildRecoveryDiagnostic(decision);
+        kernel.RecordTaskNote(
+            goalId,
+            taskId,
+            $"{ApparatusHoldReceiptPrefix} observation={observation}/{ApparatusHoldObservationsBeforeEscalation}; {diagnostic}");
+
+        if (observation < ApparatusHoldObservationsBeforeEscalation)
+        {
+            return;
+        }
+
+        var fingerprint = $"dispatch-apparatus-hold:{taskId.Value}:{blocker}";
+        kernel.RequestHumanInputDeduplicated(
+            goalId,
+            taskId,
+            $"Dispatch recovery cannot determine the worker outcome after {observation} observations because blocker '{blocker}' remains. " +
+            $"Inspect and repair or remove the apparatus artifact at '{decision.EvidencePath}', then answer this request to resume. {diagnostic}",
+            HumanWaitKind.RecoveryChoice,
+            isAutoDefaultable: false,
+            isDismissible: false,
+            isAnswerRequired: true,
+            isExternallyBlocked: false,
+            questionFingerprint: fingerprint,
+            blockerFingerprint: fingerprint);
     }
 
     private bool TryBuildStaleDispatchAutoRequeueOutcome(
@@ -2461,46 +2515,7 @@ public sealed class BackgroundDispatchRunner
     }
 
     private static ExitCodeReadResult ReadExitCode(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "file-missing");
-        }
-
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            var raw = reader.ReadToEnd();
-            var evidenceText = raw[..Math.Min(raw.Length, 256)];
-            var normalized = NormalizeDiagnosticText(evidenceText);
-            if (raw.Length > 256)
-            {
-                normalized += "...";
-            }
-
-            if (int.TryParse(raw.Trim(), out var exitCode))
-            {
-                return new ExitCodeReadResult(ExitCodeReadKind.Valid, exitCode, $"content={normalized}");
-            }
-
-            return new ExitCodeReadResult(ExitCodeReadKind.Invalid, null, $"content={normalized}; chars_read={raw.Length}");
-        }
-        catch (IOException ex)
-        {
-            return new ExitCodeReadResult(
-                ExitCodeReadKind.Unreadable,
-                null,
-                $"{ex.GetType().Name}: {NormalizeDiagnosticText(ex.Message)}");
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            return new ExitCodeReadResult(
-                ExitCodeReadKind.Unreadable,
-                null,
-                $"{ex.GetType().Name}: {NormalizeDiagnosticText(ex.Message)}");
-        }
-    }
+        => DispatchExitArtifactReader.Read(path);
 
     private static bool TryReadChildExitRecord(
         string? path,
@@ -3856,19 +3871,6 @@ public sealed class BackgroundDispatchRunner
     {
         public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
     }
-
-    private enum ExitCodeReadKind
-    {
-        Missing,
-        Unreadable,
-        Invalid,
-        Valid
-    }
-
-    private sealed record ExitCodeReadResult(
-        ExitCodeReadKind Kind,
-        int? ExitCode,
-        string Evidence);
 
     private sealed record GoalWorktreeInspectionResult(
         bool IsAvailable,
