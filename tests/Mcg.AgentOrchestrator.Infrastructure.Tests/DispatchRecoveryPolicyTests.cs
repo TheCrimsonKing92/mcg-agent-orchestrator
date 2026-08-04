@@ -106,6 +106,7 @@ public sealed class DispatchRecoveryPolicyTests
         var exit = Path.Combine(root, "worker.exit.txt");
         File.WriteAllText(stdout, string.Empty);
         File.WriteAllText(stderr, string.Empty);
+        WriteWorkerResultArtifact(root);
         var clock = new TestClock(Now);
         var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Mark stale no exit");
@@ -134,6 +135,7 @@ public sealed class DispatchRecoveryPolicyTests
         var exit = Path.Combine(root, "worker.exit.txt");
         File.WriteAllText(stdout, string.Empty);
         File.WriteAllText(stderr, string.Empty);
+        WriteWorkerResultArtifact(root);
         var clock = new TestClock(Now);
         var kernel = new AgentOrchestratorKernel(clock);
         var goal = kernel.CreateGoal("Mark stale no exit");
@@ -454,6 +456,11 @@ public sealed class DispatchRecoveryPolicyTests
     }
 
     private static DispatchRecoveryPolicy CreatePolicy() => new(new TestClock(Now));
+
+    private static void WriteWorkerResultArtifact(string root) =>
+        File.WriteAllText(
+            Path.Combine(root, "WORKER_RESULT.md"),
+            "WORKER_RESULT:\nfiles: none\ncommands: none\ntests: deferred - fixture\nblockers: none\nEND_WORKER_RESULT");
 
     private static TaskProcessRecord CreateProcess()
     {
