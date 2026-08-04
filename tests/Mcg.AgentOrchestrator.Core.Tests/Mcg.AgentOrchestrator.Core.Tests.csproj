@@ -17,5 +17,6 @@
     <None Include="..\..\AGENTS.md" Link="AGENTS.md" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\CLAUDE.md" Link="CLAUDE.md" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\docs\dispositive-decision-discipline.md" Link="docs\dispositive-decision-discipline.md" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\test-design-discipline.md" Link="docs\test-design-discipline.md" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
