@@ -308,7 +308,8 @@ public sealed class DispatchStateSurface
             return DispatchStateKind.ExitedAwaitingReconcile;
         }
 
-        if (recovery.Action is DispatchRecoveryAction.ClassifyBlocker or DispatchRecoveryAction.Reap)
+        if (recovery.Action is DispatchRecoveryAction.ClassifyBlocker or DispatchRecoveryAction.Reap ||
+            recovery.Action == DispatchRecoveryAction.Hold && !string.IsNullOrWhiteSpace(recovery.Blocker))
         {
             return DispatchStateKind.WedgedProcess;
         }

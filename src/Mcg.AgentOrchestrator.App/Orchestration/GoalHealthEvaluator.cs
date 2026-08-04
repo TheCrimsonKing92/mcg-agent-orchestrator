@@ -63,9 +63,10 @@ internal static class GoalHealthEvaluator
         }
 
         var failedTask = goal.Tasks.FirstOrDefault(task =>
-            task.Status == WorkTaskStatus.Failed ||
+            task.Status is not WorkTaskStatus.Completed and not WorkTaskStatus.Cancelled &&
+            (task.Status == WorkTaskStatus.Failed ||
             (task.LastVerification is { } verification &&
-             DispatchFailureClassifier.Classify(task, verification).Kind != DispatchOutcomeKind.VerifiedSuccess));
+             DispatchFailureClassifier.Classify(task, verification).Kind != DispatchOutcomeKind.VerifiedSuccess)));
         if (failedTask is not null)
         {
             var failedFinding = recovery.TaskFindings.FirstOrDefault(finding => finding.TaskId == failedTask.Id);

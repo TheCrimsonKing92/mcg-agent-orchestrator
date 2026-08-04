@@ -277,8 +277,8 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Contains("unavailable_reason=invalid", decision.Reason, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_unavailable_worktree_inspection_holds_unknown_state")]
-    public void BackgroundDispatchRunnerUnavailableWorktreeInspectionHoldsUnknownState()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_unavailable_worktree_inspection_marks_stale_with_apparatus_blocker")]
+    public void BackgroundDispatchRunnerUnavailableWorktreeInspectionMarksStaleWithApparatusBlocker()
     {
         var root = CreateTempDirectory();
         var missingWorktree = Path.Combine(root, "missing-worktree");
@@ -304,11 +304,49 @@ public sealed class DispatchRecoveryPolicyTests
         var outcome = new BackgroundDispatchRunner(new TestClock(Now), isStillRunning: _ => false)
             .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
-        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Equal("worktree-inspection-unavailable", outcome.RecoveryDecision.Blocker);
-        Xunit.Assert.Contains("unavailable_reason=directory-missing", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("worktree state=unavailable", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains("reason=directory-missing", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
         Xunit.Assert.Contains("git_receipt=git-not-run", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
-        Xunit.Assert.Null(task.LastVerification);
+        Xunit.Assert.NotNull(outcome.Verification);
+        Xunit.Assert.Contains("worktree-inspection-unavailable", outcome.Verification!.StandardError, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchStateSurface_classifies_apparatus_hold_as_wedged_not_running")]
+    public void DispatchStateSurfaceClassifiesApparatusHoldAsWedgedNotRunning()
+    {
+        var root = CreateTempDirectory();
+        var process = new TaskProcessRecord(
+            999999,
+            "codex exec prompt",
+            root,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "worker.exit.txt"),
+            Now.AddMinutes(-20),
+            null,
+            null);
+        File.WriteAllText(process.StandardOutputPath, string.Empty);
+        File.WriteAllText(process.StandardErrorPath, string.Empty);
+        File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), "{not-json");
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Surface apparatus hold", [new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var state = new DispatchStateSurface(
+                new TestClock(Now),
+                isProcessAlive: _ => false,
+                readCommandLines: _ => new Dictionary<int, string>(),
+                inspectWorktree: false)
+            .Evaluate(goal.Id, task);
+
+        Xunit.Assert.Equal(DispatchStateKind.WedgedProcess, state.Kind);
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, state.RecoveryDecision.Action);
+        Xunit.Assert.Equal("heartbeat-invalid", state.RecoveryDecision.Blocker);
     }
 
     private static DispatchRecoveryPolicy CreatePolicy() => new(new TestClock(Now));

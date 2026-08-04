@@ -93,7 +93,50 @@ public sealed class FailureTriageDecisionTests : GoalWorktreeTestBase
 
             Assert.Equal(GoalHealthDisposition.Blocked, health.Disposition);
             Assert.Equal(25, health.Score);
-            Assert.Contains("typed status Failed", Assert.Single(health.Reasons), StringComparison.Ordinal);
+            Assert.Contains("task status is failed", Assert.Single(health.Reasons), StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalHealthEvaluator_does_not_reclassify_completed_task_from_non_success_classifier_detail")]
+    public void GoalHealthEvaluatorDoesNotReclassifyCompletedTaskFromNonSuccessClassifierDetail()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var (kernel, goal, task, agents) = CreateActiveGoal("Completed health negative control");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "worker verification",
+                repo,
+                0,
+                string.Join(Environment.NewLine,
+                    "WORKER_RESULT:",
+                    "files: none",
+                    "commands: none",
+                    "tests: fail - quoted historical result",
+                    "commit: none",
+                    "blockers: none",
+                    "model_fit: OpenAI/gpt-5.6-sol - adequate - test",
+                    "skills: none",
+                    "confidence: high",
+                    "END_WORKER_RESULT"),
+                string.Empty,
+                DateTimeOffset.UtcNow));
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Accepted by the owning workflow.");
+
+            var health = GoalHealthEvaluator.Build(
+                kernel,
+                goal,
+                agents,
+                WorkerProfileCatalog.Default(),
+                repo,
+                AutonomyPolicy.Observe);
+
+            Assert.NotEqual(GoalHealthDisposition.Blocked, health.Disposition);
+            Assert.DoesNotContain(health.Reasons, reason => reason.Contains("failed", StringComparison.OrdinalIgnoreCase));
         }
         finally
         {

@@ -592,6 +592,11 @@ public sealed class BackgroundDispatchRunner
                 ? DispatchWorktreeInspectionStatus.Available(
                     !inspection.Evidence.IsClean,
                     processRecord.WorkingDirectory)
+                : inspection.IsUnsafe
+                    ? DispatchWorktreeInspectionStatus.Unsafe(
+                        processRecord.WorkingDirectory,
+                        inspection.UnavailableReason ?? "unknown",
+                        inspection.GitReceipt)
                 : DispatchWorktreeInspectionStatus.Unavailable(
                     processRecord.WorkingDirectory,
                     inspection.UnavailableReason ?? "unknown",
@@ -774,7 +779,7 @@ public sealed class BackgroundDispatchRunner
         var result = ReadExitCode(path);
         for (var attempt = 0; attempt < attempts; attempt++)
         {
-            if (result.Kind is ExitCodeReadKind.Valid or ExitCodeReadKind.Missing)
+            if (result.Kind == ExitCodeReadKind.Valid)
             {
                 return result;
             }
@@ -1101,13 +1106,14 @@ public sealed class BackgroundDispatchRunner
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, decisionStandardOutput, decisionStandardError);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
-        if (RequiresFileChangeEvidence(task) &&
-            TryInspectGoalWorktree(
+        var completedWorktreeInspection = RequiresFileChangeEvidence(task)
+            ? InspectGoalWorktree(
                 processRecord.WorkingDirectory,
                 goalId,
                 task.LastDispatch!.DispatchedAt,
-                out var worktreeEvidence,
-                forceRefresh: true))
+                forceRefresh: true)
+            : null;
+        if (completedWorktreeInspection is { IsAvailable: true, Evidence: var worktreeEvidence })
         {
             hasCommittedChanges = worktreeEvidence.HasRelevantCommitAfterDispatch;
             // Default path: a Developer/Tester that edited the worktree and showed verification
@@ -1246,6 +1252,15 @@ public sealed class BackgroundDispatchRunner
             // The self-report is still parsed for the model-fit note when recording the
             // verification (TaskSpec.RecordVerification via ModelFitEvidence); it never
             // gates the dispatch.
+        }
+        else if (completedWorktreeInspection is { IsAvailable: false } unavailableInspection)
+        {
+            exitCode = 1;
+            var inspectionState = unavailableInspection.IsUnsafe ? "unsafe" : "unavailable";
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                $"Developer/Tester dispatch worktree inspection was {inspectionState}; refusing to infer clean state or silently skip commit-on-behalf. " +
+                $"unavailable_reason={unavailableInspection.UnavailableReason ?? "unknown"}; git_receipt={unavailableInspection.GitReceipt}.");
         }
 
         if (task.LastDispatch is { } completedDispatch && !IsLocalDispatch(completedDispatch))
@@ -1905,7 +1920,7 @@ public sealed class BackgroundDispatchRunner
 
         if (!string.Equals(branch.Output.Trim(), expectedBranch, StringComparison.Ordinal))
         {
-            return GoalWorktreeInspectionResult.Unavailable(
+            return GoalWorktreeInspectionResult.Unsafe(
                 "branch-mismatch",
                 $"expected={expectedBranch}; actual={NormalizeDiagnosticText(branch.Output)}");
         }
@@ -1953,8 +1968,9 @@ public sealed class BackgroundDispatchRunner
     private static string BuildGitInspectionReceipt(string operation, GitCli.GitResult result)
     {
         var detail = string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error;
+        var normalizedDetail = NormalizeDiagnosticText(detail);
         return $"operation={operation}; exit_code={result.ExitCode}; drain_timed_out={result.DrainTimedOut.ToString().ToLowerInvariant()}; " +
-            $"detail={NormalizeDiagnosticText(detail)[..Math.Min(NormalizeDiagnosticText(detail).Length, 256)]}";
+            $"detail={normalizedDetail[..Math.Min(normalizedDetail.Length, 256)]}";
     }
 
     private sealed record WorktreeInspectionCacheKey(
@@ -2105,7 +2121,7 @@ public sealed class BackgroundDispatchRunner
 
                 if (task.Status != WorkTaskStatus.Running ||
                     task.LastProcess is not { IsRunning: true } process ||
-                    ReadExitCode(process.ExitCodePath).Kind != ExitCodeReadKind.Missing ||
+                    (ReadExitCode(process.ExitCodePath).Kind is ExitCodeReadKind.Valid or ExitCodeReadKind.Invalid) ||
                     AnyTrackedProcessStillRunning(process))
                 {
                     continue;
@@ -2453,21 +2469,20 @@ public sealed class BackgroundDispatchRunner
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream);
-            var buffer = new char[257];
-            var read = reader.ReadBlock(buffer, 0, buffer.Length);
-            var raw = new string(buffer, 0, Math.Min(read, 256));
-            var normalized = NormalizeDiagnosticText(raw);
-            if (read > 256)
+            var raw = reader.ReadToEnd();
+            var evidenceText = raw[..Math.Min(raw.Length, 256)];
+            var normalized = NormalizeDiagnosticText(evidenceText);
+            if (raw.Length > 256)
             {
                 normalized += "...";
             }
 
-            if (int.TryParse(raw.Trim(), out var exitCode) && read <= 256)
+            if (int.TryParse(raw.Trim(), out var exitCode))
             {
                 return new ExitCodeReadResult(ExitCodeReadKind.Valid, exitCode, $"content={normalized}");
             }
 
-            return new ExitCodeReadResult(ExitCodeReadKind.Invalid, null, $"content={normalized}; chars_read={read}");
+            return new ExitCodeReadResult(ExitCodeReadKind.Invalid, null, $"content={normalized}; chars_read={raw.Length}");
         }
         catch (IOException ex)
         {
@@ -3855,15 +3870,19 @@ public sealed class BackgroundDispatchRunner
 
     private sealed record GoalWorktreeInspectionResult(
         bool IsAvailable,
+        bool IsUnsafe,
         GoalWorktreeDispatchEvidence Evidence,
         string? UnavailableReason,
         string GitReceipt)
     {
         public static GoalWorktreeInspectionResult Available(GoalWorktreeDispatchEvidence evidence) =>
-            new(true, evidence, null, "git-inspection-succeeded");
+            new(true, false, evidence, null, "git-inspection-succeeded");
+
+        public static GoalWorktreeInspectionResult Unsafe(string reason, string gitReceipt) =>
+            new(false, true, GoalWorktreeDispatchEvidence.Unknown, reason, gitReceipt);
 
         public static GoalWorktreeInspectionResult Unavailable(string reason, string gitReceipt) =>
-            new(false, GoalWorktreeDispatchEvidence.Unknown, reason, gitReceipt);
+            new(false, false, GoalWorktreeDispatchEvidence.Unknown, reason, gitReceipt);
     }
 
     private sealed record GoalWorktreeDispatchEvidence(

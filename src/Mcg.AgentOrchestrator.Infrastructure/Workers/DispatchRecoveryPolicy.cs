@@ -24,6 +24,7 @@ public enum DispatchWorktreeInspectionAvailability
 {
     NotRequired,
     Available,
+    Unsafe,
     Unavailable
 }
 
@@ -45,6 +46,12 @@ public sealed record DispatchWorktreeInspectionStatus(
         string reason,
         string gitReceipt) =>
         new(DispatchWorktreeInspectionAvailability.Unavailable, false, evidencePath, reason, gitReceipt);
+
+    public static DispatchWorktreeInspectionStatus Unsafe(
+        string evidencePath,
+        string reason,
+        string gitReceipt) =>
+        new(DispatchWorktreeInspectionAvailability.Unsafe, true, evidencePath, reason, gitReceipt);
 }
 
 public sealed class DispatchRecoveryPolicy
@@ -98,37 +105,35 @@ public sealed class DispatchRecoveryPolicy
                     $"heartbeat-{unavailableReason}");
             }
 
-            if (worktreeInspection.Availability == DispatchWorktreeInspectionAvailability.Unavailable)
-            {
-                return Decision(
-                    DispatchRecoveryAction.Hold,
-                    worktreeInspection.EvidencePath,
-                    $"worktree inspection unavailable; unavailable_reason={worktreeInspection.UnavailableReason ?? "unknown"}; " +
-                    $"git_receipt={worktreeInspection.GitReceipt ?? "none"}",
-                    "worktree-inspection-unavailable");
-            }
-
-            var heartbeatEvidence = heartbeat.Path;
+            var heartbeatEvidence = heartbeat.IsAvailable ? heartbeat.Path : "heartbeat-absent";
             var heartbeatStale = !heartbeat.IsAvailable ||
                 heartbeat.HeartbeatAge is null ||
                 heartbeat.HeartbeatAge >= _recentHeartbeatGrace;
             if (heartbeatStale)
             {
+                var worktreeUnavailable = worktreeInspection.Availability == DispatchWorktreeInspectionAvailability.Unavailable;
+                var worktreeUnsafe = worktreeInspection.Availability == DispatchWorktreeInspectionAvailability.Unsafe;
+                var worktreeReceipt = worktreeUnavailable || worktreeUnsafe
+                    ? $"; worktree state={(worktreeUnsafe ? "unsafe" : "unavailable")}; reason={worktreeInspection.UnavailableReason ?? "unknown"}; git_receipt={worktreeInspection.GitReceipt ?? "none"}"
+                    : string.Empty;
                 if (staleRetryBudgetRemaining > 0 && !worktreeInspection.HasDirtyEvidence)
                 {
                     return Decision(
                         DispatchRecoveryAction.MarkStale,
                         heartbeatEvidence,
-                        $"no live process, exit-absent, stale retry budget remaining={staleRetryBudgetRemaining}");
+                        $"no live process, exit-absent, stale retry budget remaining={staleRetryBudgetRemaining}{worktreeReceipt}",
+                        worktreeUnavailable ? "worktree-inspection-unavailable" : null);
                 }
 
                 var blocker = staleRetryBudgetRemaining <= 0
                     ? "stale-dispatch retry budget exhausted"
-                    : "stale-dispatch retry blocked by dirty worktree evidence";
+                    : worktreeUnsafe
+                        ? "stale-dispatch retry blocked by unsafe worktree evidence"
+                        : "stale-dispatch retry blocked by dirty worktree evidence";
                 return Decision(
                     staleRetryBudgetRemaining <= 0 ? DispatchRecoveryAction.BudgetExhausted : DispatchRecoveryAction.MarkStale,
                     heartbeatEvidence,
-                    $"no live process, exit-absent, heartbeat {(heartbeat.IsAvailable ? "stale" : $"unavailable reason={heartbeat.UnavailableReason ?? "unknown"}")}",
+                    $"no live process, exit-absent, heartbeat {(heartbeat.IsAvailable ? "stale" : $"unavailable reason={heartbeat.UnavailableReason ?? "unknown"}")}{worktreeReceipt}",
                     blocker);
             }
 
