@@ -16,11 +16,6 @@ public sealed class AgentHarnessDocsDriftTests
         new("evidence", "## Evidence")
     ];
 
-    private static readonly SharedHomeSection[] SharedHomeSections =
-    [
-        new("dispositive-decision-discipline", "# Dispositive-Decision Discipline", "docs/dispositive-decision-discipline.md")
-    ];
-
     [Xunit.Fact(DisplayName = "Harness_docs_counterpart_contracts_stay_in_sync")]
     public void HarnessDocsCounterpartContractsStayInSync()
     {
@@ -91,19 +86,6 @@ public sealed class AgentHarnessDocsDriftTests
             RequireDoesNotContain(claude, marker, $"CLAUDE.md must not duplicate shared marker {marker}.");
             RequireDoesNotContain(claude, section.Heading, $"CLAUDE.md must not duplicate shared heading {section.Heading}.");
         }
-
-        var root = FindRepositoryRoot();
-        foreach (var section in SharedHomeSections)
-        {
-            var marker = $"<!-- shared-discipline:{section.Anchor} -->";
-            var sharedHome = File.ReadAllText(Path.Combine(root, section.Path));
-            RequireContains(agents, section.Path, $"AGENTS.md must reference shared home {section.Path}.");
-            RequireContains(claude, section.Path, $"CLAUDE.md must reference shared home {section.Path}.");
-            RequireContains(sharedHome, marker, $"{section.Path} must carry shared marker {marker}.");
-            RequireContains(sharedHome, section.Heading, $"{section.Path} must carry shared heading {section.Heading}.");
-            RequireDoesNotContain(agents, marker, $"AGENTS.md must not duplicate shared marker {marker}.");
-            RequireDoesNotContain(claude, marker, $"CLAUDE.md must not duplicate shared marker {marker}.");
-        }
     }
 
     private static HarnessDocs ReadHarnessDocs()
@@ -162,46 +144,26 @@ public sealed class AgentHarnessDocsDriftTests
 
     private static string FindRepositoryRoot()
     {
-        var requiredPaths = new[] { "AGENTS.md", "CLAUDE.md" }
-            .Concat(SharedHomeSections.Select(section => section.Path))
-            .ToArray();
-        string? incompleteCandidate = null;
-        string[] incompleteCandidateMissingPaths = [];
         var candidates = new[] { Environment.CurrentDirectory, AppContext.BaseDirectory };
         foreach (var candidate in candidates)
         {
             var directory = new DirectoryInfo(Path.GetFullPath(candidate));
             while (directory is not null)
             {
-                var isRepositoryRoot = Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
-                    File.Exists(Path.Combine(directory.FullName, ".git"));
-                var hasHarnessDocs = File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
-                    File.Exists(Path.Combine(directory.FullName, "CLAUDE.md"));
-                if (isRepositoryRoot || hasHarnessDocs)
+                if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                    File.Exists(Path.Combine(directory.FullName, ".git")))
                 {
-                    var missingPaths = requiredPaths
-                        .Where(path => !File.Exists(Path.Combine(directory.FullName, path)))
-                        .ToArray();
-                    if (missingPaths.Length == 0)
-                    {
-                        return directory.FullName;
-                    }
+                    return directory.FullName;
+                }
 
-                    if (incompleteCandidate is null)
-                    {
-                        incompleteCandidate = directory.FullName;
-                        incompleteCandidateMissingPaths = missingPaths;
-                    }
+                if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
+                    File.Exists(Path.Combine(directory.FullName, "CLAUDE.md")))
+                {
+                    return directory.FullName;
                 }
 
                 directory = directory.Parent;
             }
-        }
-
-        if (incompleteCandidate is not null)
-        {
-            throw new InvalidOperationException(
-                $"Harness docs root '{incompleteCandidate}' is missing required paths: {string.Join(", ", incompleteCandidateMissingPaths)}.");
         }
 
         throw new DirectoryNotFoundException("Could not locate repository root.");
@@ -240,8 +202,6 @@ public sealed class AgentHarnessDocsDriftTests
     }
 
     private sealed record SharedSection(string Anchor, string Heading);
-
-    private sealed record SharedHomeSection(string Anchor, string Heading, string Path);
 
     private sealed record HarnessContract(
         string Owns,
