@@ -162,26 +162,46 @@ public sealed class AgentHarnessDocsDriftTests
 
     private static string FindRepositoryRoot()
     {
+        var requiredPaths = new[] { "AGENTS.md", "CLAUDE.md" }
+            .Concat(SharedHomeSections.Select(section => section.Path))
+            .ToArray();
+        string? incompleteCandidate = null;
+        string[] incompleteCandidateMissingPaths = [];
         var candidates = new[] { Environment.CurrentDirectory, AppContext.BaseDirectory };
         foreach (var candidate in candidates)
         {
             var directory = new DirectoryInfo(Path.GetFullPath(candidate));
             while (directory is not null)
             {
-                if (Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
-                    File.Exists(Path.Combine(directory.FullName, ".git")))
+                var isRepositoryRoot = Directory.Exists(Path.Combine(directory.FullName, ".git")) ||
+                    File.Exists(Path.Combine(directory.FullName, ".git"));
+                var hasHarnessDocs = File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
+                    File.Exists(Path.Combine(directory.FullName, "CLAUDE.md"));
+                if (isRepositoryRoot || hasHarnessDocs)
                 {
-                    return directory.FullName;
-                }
+                    var missingPaths = requiredPaths
+                        .Where(path => !File.Exists(Path.Combine(directory.FullName, path)))
+                        .ToArray();
+                    if (missingPaths.Length == 0)
+                    {
+                        return directory.FullName;
+                    }
 
-                if (File.Exists(Path.Combine(directory.FullName, "AGENTS.md")) &&
-                    File.Exists(Path.Combine(directory.FullName, "CLAUDE.md")))
-                {
-                    return directory.FullName;
+                    if (incompleteCandidate is null)
+                    {
+                        incompleteCandidate = directory.FullName;
+                        incompleteCandidateMissingPaths = missingPaths;
+                    }
                 }
 
                 directory = directory.Parent;
             }
+        }
+
+        if (incompleteCandidate is not null)
+        {
+            throw new InvalidOperationException(
+                $"Harness docs root '{incompleteCandidate}' is missing required paths: {string.Join(", ", incompleteCandidateMissingPaths)}.");
         }
 
         throw new DirectoryNotFoundException("Could not locate repository root.");
