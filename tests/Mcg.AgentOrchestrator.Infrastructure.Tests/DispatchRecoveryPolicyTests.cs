@@ -35,6 +35,38 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Contains("startup sweep interrupted worker", decision.Reason, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconciles_synthetic_artifact_as_terminal_interrupted_failure")]
+    public void BackgroundDispatchRunnerReconcilesSyntheticArtifactAsTerminalInterruptedFailure()
+    {
+        var process = CreateProcess();
+        File.WriteAllText(process.StandardOutputPath, "partial worker output");
+        File.WriteAllText(process.StandardErrorPath, string.Empty);
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", Now));
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Reconcile interrupted worker");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Researcher);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", process.Command, process.WorkingDirectory, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var outcome = new BackgroundDispatchRunner(new TestClock(Now), isStillRunning: _ => false)
+            .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+        BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Xunit.Assert.Equal(1, task.LastProcess!.ExitCode);
+        Xunit.Assert.NotNull(task.LastProcess.CompletedAt);
+        Xunit.Assert.Equal(DispatchExitArtifactOrigin.Synthetic, task.LastProcess.ExitArtifactOrigin);
+        Xunit.Assert.Equal("startup sweep interrupted worker", task.LastProcess.ExitArtifactReason);
+        Xunit.Assert.NotNull(task.LastVerification);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchExitArtifacts_round_trip_native_and_classify_legacy_integer")]
     public void DispatchExitArtifactsRoundTripNativeAndClassifyLegacyInteger()
     {

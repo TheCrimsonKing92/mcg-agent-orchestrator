@@ -759,22 +759,6 @@ public sealed class BackgroundDispatchRunner
         DispatchRecoveryDecision recoveryDecision,
         out DispatchRefreshOutcome outcome)
     {
-        if (DispatchExitArtifacts.TryRead(processRecord.ExitCodePath, out var existingArtifact) &&
-            existingArtifact.Origin == DispatchExitArtifactOrigin.Synthetic &&
-            processRecord.CompletedAt is null &&
-            recoveryDecision.Action == DispatchRecoveryAction.PreserveInterruptedWork)
-        {
-            outcome = new DispatchRefreshOutcome(
-                processRecord with
-                {
-                    ExitArtifactOrigin = existingArtifact.Origin,
-                    ExitArtifactReason = existingArtifact.Reason
-                },
-                null,
-                RecoveryDecision: recoveryDecision);
-            return false;
-        }
-
         var hasHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat);
         var observedHeartbeat = hasHeartbeat ? heartbeat : null;
         RecordProviderSessionFromHeartbeat(kernel, goalId, taskId, kernel.GetTask(goalId, taskId), observedHeartbeat);
@@ -1259,9 +1243,10 @@ public sealed class BackgroundDispatchRunner
                 task.LastDispatch.SandboxLowIntegrity != true &&
                 (successfulWorkerResult || worktreeEvidence.HasRelevantCommitAfterDispatch);
             var shouldCommitDirtyWorktree =
-                (exitCode == 0 && (normalIntegrityCommitEvidence || lowIntegrityConfinementEvidence)) ||
-                (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked) ||
-                (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit && lowIntegrityConfinementEvidence);
+                recoveryDecision?.Action != DispatchRecoveryAction.PreserveInterruptedWork &&
+                ((exitCode == 0 && (normalIntegrityCommitEvidence || lowIntegrityConfinementEvidence)) ||
+                 (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked) ||
+                 (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit && lowIntegrityConfinementEvidence));
 
             if (!worktreeEvidence.IsClean &&
                 shouldCommitDirtyWorktree)

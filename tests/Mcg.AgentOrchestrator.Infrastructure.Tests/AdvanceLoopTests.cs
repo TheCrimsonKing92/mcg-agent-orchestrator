@@ -533,7 +533,7 @@ public sealed class AdvanceLoopTests
     var exit = Path.Combine(root, "exit.txt");
     File.WriteAllText(stdout, "done");
     File.WriteAllText(stderr, string.Empty);
-    File.WriteAllText(exit, "0");
+    DispatchExitArtifacts.Write(exit, DispatchExitArtifacts.Native(0, "worker exited", clock));
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "old dispatch", root, clock));
     kernel.RecordTaskProcessStarted(
         goal.Id,

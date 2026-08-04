@@ -1463,13 +1463,14 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
         .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
-    Assert.Equal(WorkTaskStatus.Running, task.Status);
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.NotNull(task.LastProcess);
-    Assert.Null(task.LastProcess!.ExitCode);
-    Assert.Null(task.LastProcess.CompletedAt);
+    Assert.Equal(1, task.LastProcess!.ExitCode);
+    Assert.NotNull(task.LastProcess.CompletedAt);
     Assert.Equal(DispatchExitArtifactOrigin.Synthetic, task.LastProcess.ExitArtifactOrigin);
-    Assert.Equal("process missing with non-empty or dirty dispatch evidence", task.LastProcess.ExitArtifactReason);
-    Assert.Null(task.LastVerification);
+    Assert.Equal("process missing with dirty worktree evidence", task.LastProcess.ExitArtifactReason);
+    Assert.NotNull(task.LastVerification);
+    Assert.True(File.Exists(Path.Combine(worktree, "dirty.txt")));
     Assert.True(DispatchExitArtifacts.TryRead(process.ExitCodePath, out var artifact));
     Assert.Equal(DispatchExitArtifactOrigin.Synthetic, artifact.Origin);
     Assert.Contains(goal.Timeline, evt =>
@@ -1478,6 +1479,34 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.DoesNotContain(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_fails_output_only_dispatch_corpse")]
+    public void BackgroundDispatchRunnerReconcileFailsOutputOnlyDispatchCorpse()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-07-16T01:13:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Fail output-only stale dispatch");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var process = RecordStaleDeveloperDispatch(kernel, goal, task, worktree, root, now.AddMinutes(-40), "output-only");
+    File.WriteAllText(process.StandardOutputPath, "partial provider output");
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 23, 0, childPid: null, ownedCpuMs: 953);
+
+    new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastProcess!.ExitCode);
+    Assert.NotNull(task.LastProcess.CompletedAt);
+    Assert.Equal(DispatchExitArtifactOrigin.Synthetic, task.LastProcess.ExitArtifactOrigin);
+    Assert.DoesNotContain("dirty worktree", task.LastProcess.ExitArtifactReason ?? string.Empty, StringComparison.Ordinal);
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("InterruptedDispatchWorkPreserved", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_escalates_third_safe_stale_dispatch_corpse")]

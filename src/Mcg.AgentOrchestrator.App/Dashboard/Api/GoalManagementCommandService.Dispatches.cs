@@ -488,7 +488,7 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
     {
         if (task.Status != WorkTaskStatus.Assigned ||
             task.LastProcess is not { IsRunning: true } process ||
-            !TryReadExitCode(process.ExitCodePath, out var exitCode) ||
+            !DispatchExitArtifacts.TryRead(process.ExitCodePath, out var exitArtifact) ||
             HasLiveTrackedProcess(process))
         {
             continue;
@@ -497,13 +497,15 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
         var completed = process with
         {
             CompletedAt = DateTimeOffset.UtcNow,
-            ExitCode = exitCode
+            ExitCode = exitArtifact.ExitCode,
+            ExitArtifactOrigin = exitArtifact.Origin,
+            ExitArtifactReason = exitArtifact.Reason
         };
         kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, completed, verification: null);
         kernel.RecordTaskNote(
             goal.Id,
             task.Id,
-            $"Auto-cleared stale LastProcess.IsRunning before dispatch; pid {process.ProcessId} had exit artifact {process.ExitCodePath} with exit {exitCode}.");
+            $"Auto-cleared stale LastProcess.IsRunning before dispatch; pid {process.ProcessId} had exit artifact {process.ExitCodePath} with exit {exitArtifact.ExitCode}.");
     }
 }
 
@@ -545,24 +547,6 @@ private static bool IsProcessRunning(int processId)
     catch (System.ComponentModel.Win32Exception)
     {
         return true;
-    }
-}
-
-private static bool TryReadExitCode(string path, out int exitCode)
-{
-    exitCode = 0;
-    try
-    {
-        return File.Exists(path) &&
-            int.TryParse(File.ReadAllText(path).Trim(), out exitCode);
-    }
-    catch (IOException)
-    {
-        return false;
-    }
-    catch (UnauthorizedAccessException)
-    {
-        return false;
     }
 }
 
