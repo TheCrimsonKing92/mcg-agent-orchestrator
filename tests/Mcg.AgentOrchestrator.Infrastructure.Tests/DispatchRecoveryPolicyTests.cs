@@ -1,3 +1,4 @@
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -347,6 +348,39 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Equal(DispatchStateKind.WedgedProcess, state.Kind);
         Xunit.Assert.Equal(DispatchRecoveryAction.Hold, state.RecoveryDecision.Action);
         Xunit.Assert.Equal("heartbeat-invalid", state.RecoveryDecision.Blocker);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRecoveryPlanner_surfaces_apparatus_hold_as_not_alive_with_typed_blocker")]
+    public void GoalRecoveryPlannerSurfacesApparatusHoldAsNotAliveWithTypedBlocker()
+    {
+        var root = CreateTempDirectory();
+        var process = new TaskProcessRecord(
+            999999,
+            "codex exec prompt",
+            root,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "worker.exit.txt"),
+            Now.AddMinutes(-20),
+            null,
+            null);
+        File.WriteAllText(process.StandardOutputPath, string.Empty);
+        File.WriteAllText(process.StandardErrorPath, string.Empty);
+        File.WriteAllText(BackgroundDispatchRunner.GetHeartbeatPath(process), "{not-json");
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Plan apparatus hold recovery", [new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, root, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var report = GoalRecoveryPlanner.Build(kernel, goal, root, includeCleanupBackoff: false);
+
+        var finding = Xunit.Assert.Single(report.TaskFindings);
+        Xunit.Assert.Contains("is not alive", finding.Finding, StringComparison.Ordinal);
+        Xunit.Assert.Contains("apparatus blocker=heartbeat-invalid", finding.Finding, StringComparison.Ordinal);
+        Xunit.Assert.Equal("refresh-dispatch 1", finding.SuggestedCommand);
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, finding.RecoveryDecision!.Action);
     }
 
     private static DispatchRecoveryPolicy CreatePolicy() => new(new TestClock(Now));
