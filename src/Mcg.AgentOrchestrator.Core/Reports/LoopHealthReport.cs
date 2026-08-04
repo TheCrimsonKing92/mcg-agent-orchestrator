@@ -83,7 +83,7 @@ public static class LoopHealthReport
             }
         }
 
-        var modelMix = ModelOutcomeScorecard.Build(allTasks, modelOutcomeWindowSize);
+        var modelMix = ModelOutcomeScorecard.Build(window, modelOutcomeWindowSize);
 
         var receiptList = receipts?.ToList() ?? [];
         var goalStatusById = window.ToDictionary(g => g.Id.Value, g => g.Status, StringComparer.Ordinal);

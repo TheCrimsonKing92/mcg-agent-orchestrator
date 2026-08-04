@@ -883,8 +883,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("worker-cli", row.DispatchLane);
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_persists_outcome_rule_and_class")]
-    public async Task PersistsOutcomeRuleAndClass()
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_persists_producer_outcome_class_for_apparatus_failure")]
+    public async Task PersistsProducerOutcomeClassForApparatusFailure()
     {
         var db = TempDb();
         var repo = new SqliteOrchestratorStateRepository(db);
@@ -898,13 +898,17 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             exitCode: 1,
             "Model fit: OpenAI/gpt-5.5 - adequate - implementation - provider failed");
         var task = goal.Tasks.Single();
-        kernel.RecordTaskNote(goal.Id, task.Id, "CLASSIFIER rule=provider-connectivity; verdict=ProviderConnectivity");
+        kernel.RecordTaskNote(
+            goal.Id,
+            task.Id,
+            "CLASSIFIER rule=silent-launch-failure; outcome_class=environmental; verdict=LaunchFailure");
 
         await repo.SaveAsync(kernel);
 
         var row = Assert.Single(await repo.ListModelFitHistoryAsync());
-        Assert.Equal("provider-connectivity", row.OutcomeRule);
+        Assert.Equal("silent-launch-failure", row.OutcomeRule);
         Assert.Equal(TaskOutcomeClass.Environmental, row.OutcomeClass);
+        Assert.NotEqual(TaskOutcomeClass.RealFailure, row.OutcomeClass);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_TransactGoalAsync_updates_model_fit_history_rows")]
@@ -974,8 +978,10 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(2, record.Failed);
         Assert.Equal(2, record.SelfRatedAdequate);
         Assert.Equal(1, record.SelfRatedUnderpowered);
-        Assert.Equal(1, record.Divergence);
-        Assert.Equal(ModelOutcomeRecommendation.Avoid, record.Recommendation);
+        Assert.Equal(0, record.RealFailures);
+        Assert.Equal(2, record.UnknownEraFailures);
+        Assert.Equal(0, record.Divergence);
+        Assert.Equal(ModelOutcomeRecommendation.Neutral, record.Recommendation);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_best_fit_for_role_prefers_non_underpowered_model")]

@@ -566,8 +566,8 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("evidence=ERROR: You've hit your usage limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Classify treats substantive stderr without limit evidence as real failure")]
-    public void ClassifyTreatsSubstantiveStderrWithoutLimitEvidenceAsRealFailure()
+    [Xunit.Fact(DisplayName = "Classify treats scripting stderr without positive merit evidence as unknown")]
+    public void ClassifyTreatsScriptingStderrWithoutPositiveMeritEvidenceAsUnknown()
     {
         const string stderr =
             "WORKER_RESULT assembly failed before final marker\n" +
@@ -581,17 +581,16 @@ public sealed class DispatchOutcomeClassifyTests
         var classification = TaskOutcomeClassifier.Classify(WorkTaskStatus.Failed, TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
-        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
-        Xunit.Assert.Equal(TaskOutcomeClass.RealFailure, classification.Class);
-        Xunit.Assert.Contains("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
-        Xunit.Assert.Contains("real-failure stderr-tail", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Equal(TaskOutcomeClass.UnknownEra, classification.Class);
+        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("powershell.exe: ParserError", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=empty-output-flake", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Classify includes substantive stderr artifact tail in real failure receipt")]
-    public void ClassifyIncludesSubstantiveStderrArtifactTailInRealFailureReceipt()
+    [Xunit.Fact(DisplayName = "Classify keeps scripting stderr artifact tail out of real failures")]
+    public void ClassifyKeepsScriptingStderrArtifactTailOutOfRealFailures()
     {
         var stderrPath = Path.GetTempFileName();
         try
@@ -615,8 +614,9 @@ public sealed class DispatchOutcomeClassifyTests
             var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
 
             Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
-            Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
-            Xunit.Assert.Contains("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+            Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("outcome_class=unknown-era", outcome.ClassifierReceipt, StringComparison.Ordinal);
             Xunit.Assert.Contains("powershell.exe: ParserError", outcome.ClassifierReceipt, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
         }
@@ -743,7 +743,8 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.NotEqual(DispatchOutcomeKind.ProviderConnectivity, outcome.Kind);
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
-        Xunit.Assert.Contains("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("outcome_class=unknown-era", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
@@ -924,6 +925,30 @@ public sealed class DispatchOutcomeClassifyTests
 
         Xunit.Assert.Equal(DispatchOutcomeKind.SandboxCommitBlocked, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.CommitAndVerify, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact(DisplayName = "Sandbox1312 producer paths emit the same canonical rule and outcome class")]
+    public void Sandbox1312ProducerPathsEmitSameRuleAndOutcomeClass()
+    {
+        var direct = DispatchFailureClassifier.ClassifyProviderFailure(
+            ProviderFailureKind.Sandbox1312,
+            1,
+            hasZeroByteOutput: false,
+            "sandbox denied the operation");
+        var dispatch = DispatchFailureClassifier.Classify(
+            SimpleTask(),
+            Verification(1, "worker output", "provider failure") with
+            {
+                ProviderFailureKind = ProviderFailureKind.Sandbox1312
+            });
+
+        Xunit.Assert.Equal("provider-sandbox-1312", TaskOutcomeClassifier.TryExtractRule(direct.ClassifierReceipt));
+        Xunit.Assert.Equal(
+            TaskOutcomeClassifier.TryExtractRule(direct.ClassifierReceipt),
+            TaskOutcomeClassifier.TryExtractRule(dispatch.ClassifierReceipt));
+        Xunit.Assert.Equal(TaskOutcomeClass.ManufacturedFixed, direct.OutcomeClass);
+        Xunit.Assert.Equal(direct.OutcomeClass, dispatch.OutcomeClass);
+        Xunit.Assert.Equal(direct.OutcomeClass, TaskOutcomeClassifier.TryExtractClass(dispatch.ClassifierReceipt));
     }
 
     [Xunit.Fact(DisplayName = "Classify reads sandbox commit evidence from middle of large log artifacts")]

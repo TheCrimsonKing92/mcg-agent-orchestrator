@@ -167,5 +167,9 @@ public sealed class ModelOutcomeScorecardTests
             "Error: task failed",
             DateTimeOffset.UtcNow);
         kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+        kernel.RecordTaskNote(
+            goal.Id,
+            task.Id,
+            "CLASSIFIER rule=real-failure; outcome_class=real-failure; verdict=UnknownFailure");
     }
 }

@@ -15,31 +15,75 @@ public sealed record TaskOutcomeClassification(string? Rule, TaskOutcomeClass Cl
     public static TaskOutcomeClassification UnknownEra(string? rule = null) => new(rule, TaskOutcomeClass.UnknownEra);
 }
 
+internal sealed record TaskOutcomeRule(string Token, TaskOutcomeClass Class);
+
+internal static class TaskOutcomeRules
+{
+    public static readonly TaskOutcomeRule CommittedWorkerResultEvidence = new("committed-worker-result-evidence", TaskOutcomeClass.Success);
+    public static readonly TaskOutcomeRule VerifiedNoNewCommit = new("verified-no-new-commit", TaskOutcomeClass.Success);
+    public static readonly TaskOutcomeRule SucceededDispatchCompletionEvidence = new("succeeded-dispatch-completion-evidence", TaskOutcomeClass.Success);
+
+    public static readonly TaskOutcomeRule DirtyDispatchRecovery = new("dirty-dispatch-recovery", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule PreflightFailure = new("preflight-failure", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderAuthentication = new("provider-authentication", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderConnectivity = new("provider-connectivity", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderNeutralProgressStall = new("provider-neutral-progress-stall", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderModelRejection = new("provider-model-rejection", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderRateLimit = new("provider-rate-limit", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule SubscriptionLimit = new("subscription-limit", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule SilentLaunchFailure = new("silent-launch-failure", TaskOutcomeClass.Environmental);
+
+    public static readonly TaskOutcomeRule EmptyOutputFlake = new("empty-output-flake", TaskOutcomeClass.ManufacturedFixed);
+    public static readonly TaskOutcomeRule ProviderSandbox1312 = new("provider-sandbox-1312", TaskOutcomeClass.ManufacturedFixed);
+    public static readonly TaskOutcomeRule RetryRoundProducedNoCommitAndNoDeferral = new("retry-round-produced-no-commit-and-no-deferral", TaskOutcomeClass.ManufacturedFixed);
+    public static readonly TaskOutcomeRule SandboxCommitBlocked = new("sandbox-commit-blocked", TaskOutcomeClass.ManufacturedFixed);
+
+    public static readonly TaskOutcomeRule SucceededWorkerResultFailingTests = new("succeeded-worker-result-failing-tests", TaskOutcomeClass.RealFailure);
+    public static readonly TaskOutcomeRule RealFailure = new("real-failure", TaskOutcomeClass.RealFailure);
+
+    public static readonly TaskOutcomeRule ProviderUnknown = new("provider-unknown", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule TesterVerificationInconclusive = new("tester-verification-inconclusive", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule UnknownFailure = new("unknown-failure", TaskOutcomeClass.UnknownEra);
+
+    private static readonly TaskOutcomeRule RecoverableSubscriptionLimitLegacy = new("recoverable-subscription-limit", TaskOutcomeClass.Environmental);
+    private static readonly TaskOutcomeRule ProviderSandbox1312Legacy = new("provider-sandbox1312", TaskOutcomeClass.ManufacturedFixed);
+
+    public static IReadOnlyList<TaskOutcomeRule> Produced { get; } =
+    [
+        CommittedWorkerResultEvidence,
+        VerifiedNoNewCommit,
+        SucceededDispatchCompletionEvidence,
+        DirtyDispatchRecovery,
+        PreflightFailure,
+        ProviderAuthentication,
+        ProviderConnectivity,
+        ProviderNeutralProgressStall,
+        ProviderModelRejection,
+        ProviderRateLimit,
+        SubscriptionLimit,
+        SilentLaunchFailure,
+        EmptyOutputFlake,
+        ProviderSandbox1312,
+        RetryRoundProducedNoCommitAndNoDeferral,
+        SandboxCommitBlocked,
+        SucceededWorkerResultFailingTests,
+        RealFailure,
+        ProviderUnknown,
+        TesterVerificationInconclusive,
+        UnknownFailure
+    ];
+
+    public static IReadOnlyDictionary<string, TaskOutcomeRule> Known { get; } = Produced
+        .Append(RecoverableSubscriptionLimitLegacy)
+        .Append(ProviderSandbox1312Legacy)
+        .ToDictionary(rule => rule.Token, StringComparer.OrdinalIgnoreCase);
+}
+
 public static class TaskOutcomeClassifier
 {
     private const string ClassifierPrefix = "CLASSIFIER ";
     private const string RulePrefix = "rule=";
-
-    private static readonly HashSet<string> EnvironmentalRules = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "dirty-dispatch-recovery",
-        "preflight-failure",
-        "provider-authentication",
-        "provider-connectivity",
-        "provider-neutral-progress-stall",
-        "provider-model-rejection",
-        "provider-rate-limit",
-        "recoverable-subscription-limit",
-        "subscription-limit"
-    };
-
-    private static readonly HashSet<string> ManufacturedFixedRules = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "empty-output-flake",
-        "provider-sandbox-1312",
-        "retry-round-produced-no-commit-and-no-deferral",
-        "sandbox-commit-blocked"
-    };
+    private const string OutcomeClassPrefix = "outcome_class=";
 
     public static TaskOutcomeClassification Classify(WorkTaskStatus outcome, string? rule)
     {
@@ -59,17 +103,12 @@ public static class TaskOutcomeClassifier
             return TaskOutcomeClassification.UnknownEra();
         }
 
-        if (EnvironmentalRules.Contains(normalizedRule))
+        if (TaskOutcomeRules.Known.TryGetValue(normalizedRule, out var knownRule))
         {
-            return new TaskOutcomeClassification(normalizedRule, TaskOutcomeClass.Environmental);
+            return new TaskOutcomeClassification(normalizedRule, knownRule.Class);
         }
 
-        if (ManufacturedFixedRules.Contains(normalizedRule))
-        {
-            return new TaskOutcomeClassification(normalizedRule, TaskOutcomeClass.ManufacturedFixed);
-        }
-
-        return new TaskOutcomeClassification(normalizedRule, TaskOutcomeClass.RealFailure);
+        return TaskOutcomeClassification.UnknownEra(normalizedRule);
     }
 
     public static TaskOutcomeClassification FromTimeline(
@@ -79,15 +118,21 @@ public static class TaskOutcomeClassifier
         DateTimeOffset? completedAt = null,
         DateTimeOffset? before = null)
     {
-        var rule = timeline
+        var receipt = timeline
             .Select((evt, index) => (evt, index))
             .Where(item => item.evt.TaskId == taskId && item.evt.Kind is ProgressKind.TaskNote or ProgressKind.OperatorTaskNote)
             .Where(item => completedAt is null || item.evt.OccurredAt >= completedAt.Value)
             .Where(item => before is null || item.evt.OccurredAt <= before.Value)
             .OrderByDescending(item => item.evt.OccurredAt)
             .ThenByDescending(item => item.index)
-            .Select(item => TryExtractRule(item.evt.Message))
-            .FirstOrDefault(value => value is not null);
+            .Select(item => item.evt.Message)
+            .FirstOrDefault(message => TryExtractRule(message) is not null || TryExtractClass(message) is not null);
+        var rule = TryExtractRule(receipt);
+        if (outcome == WorkTaskStatus.Failed && TryExtractClass(receipt) is { } outcomeClass)
+        {
+            return new TaskOutcomeClassification(rule, outcomeClass);
+        }
+
         return Classify(outcome, rule);
     }
 
@@ -119,6 +164,36 @@ public static class TaskOutcomeClassifier
         }
 
         return end > start ? NormalizeRule(message[start..end]) : null;
+    }
+
+    public static TaskOutcomeClass? TryExtractClass(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message) ||
+            !message.Contains(ClassifierPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var classIndex = message.IndexOf(OutcomeClassPrefix, StringComparison.OrdinalIgnoreCase);
+        if (classIndex < 0)
+        {
+            return null;
+        }
+
+        var start = classIndex + OutcomeClassPrefix.Length;
+        var end = start;
+        while (end < message.Length)
+        {
+            var c = message[end];
+            if (!(char.IsLetterOrDigit(c) || c == '-'))
+            {
+                break;
+            }
+
+            end++;
+        }
+
+        return end > start ? ParseClass(message[start..end]) : TaskOutcomeClass.UnknownEra;
     }
 
     public static string FormatClass(TaskOutcomeClass outcomeClass) =>
