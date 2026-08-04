@@ -126,11 +126,18 @@ public sealed class DispatchStateSurface
         var artifactsStatus = ReadArtifacts(process, heartbeatStatus);
         var worktreeState = InspectWorktree(process.WorkingDirectory, task.LastDispatch?.DispatchedAt, _inspectWorktree);
         var staleBudget = DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task);
+        var recoveryWorktreeInspection =
+            _inspectWorktree &&
+            !processTree.HasLiveProcess &&
+            !artifactsStatus.ExitCodeExists &&
+            BackgroundDispatchRunner.RequiresFileChangeEvidence(task)
+                ? ToRecoveryWorktreeInspection(worktreeState)
+                : DispatchWorktreeInspectionStatus.NotRequired;
         var recovery = _recoveryPolicy.Evaluate(
             process,
             processTree.HasLiveProcess,
             staleBudget,
-            ToRecoveryWorktreeInspection(worktreeState, _inspectWorktree));
+            recoveryWorktreeInspection);
         var kind = Classify(process, recovery, processTree, heartbeatStatus, artifactsStatus);
         return new DispatchAuthoritativeState(
             kind,
@@ -266,15 +273,8 @@ public sealed class DispatchStateSurface
             error);
     }
 
-    private static DispatchWorktreeInspectionStatus ToRecoveryWorktreeInspection(
-        DispatchWorktreeState worktree,
-        bool inspectionRequested)
+    private static DispatchWorktreeInspectionStatus ToRecoveryWorktreeInspection(DispatchWorktreeState worktree)
     {
-        if (!inspectionRequested)
-        {
-            return DispatchWorktreeInspectionStatus.NotRequired;
-        }
-
         if (worktree.IsDirty is { } isDirty && string.IsNullOrWhiteSpace(worktree.Error))
         {
             return DispatchWorktreeInspectionStatus.Available(isDirty, worktree.WorkingDirectory);

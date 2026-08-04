@@ -1713,6 +1713,38 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
 
+    [Xunit.Fact]
+    public void BackgroundDispatchRunnerCompletedGitInspectionFailureFailsWithReceipt()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Developer,
+            "Implemented and verified the change.",
+            string.Empty,
+            clock,
+            worktree =>
+            {
+                File.WriteAllText(Path.Combine(worktree, "completed-change.txt"), "completed change");
+                RunGit(worktree, ["add", "-A"], clock.UtcNow.AddMinutes(1));
+                RunGit(worktree, ["commit", "-m", "Complete change"], clock.UtcNow.AddMinutes(1));
+            });
+        RunGit(process.WorkingDirectory, ["update-ref", "-d", $"refs/heads/{GoalWorktrees.BranchName(goal.Id)}"], clock.UtcNow.AddMinutes(2));
+        var branchReceipt = GitCli.Run(process.WorkingDirectory, "branch", "--show-current");
+        var headReceipt = GitCli.Run(process.WorkingDirectory, "rev-parse", "--short", "HEAD");
+        Assert.Equal(0, branchReceipt.ExitCode);
+        Assert.Equal(GoalWorktrees.BranchName(goal.Id), branchReceipt.Output.Trim());
+        Assert.NotEqual(0, headReceipt.ExitCode);
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.LastVerification!.ExitCode);
+        Assert.Contains("unavailable_reason=git-inspection-failed", task.LastVerification.StandardError, StringComparison.Ordinal);
+        Assert.Contains("git_receipt=operation=head", task.LastVerification.StandardError, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_no_change_rationale_without_source_change_fails")]
     public void BackgroundDispatchRunnerDeveloperNoChangeRationaleWithoutSourceChangeFails()
 {

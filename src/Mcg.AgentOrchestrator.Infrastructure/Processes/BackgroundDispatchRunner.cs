@@ -1253,6 +1253,18 @@ public sealed class BackgroundDispatchRunner
             // verification (TaskSpec.RecordVerification via ModelFitEvidence); it never
             // gates the dispatch.
         }
+        else if (completedWorktreeInspection is { IsAvailable: false } unavailableInspection)
+        {
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                $"Completed dispatch worktree inspection {(unavailableInspection.IsUnsafe ? "unsafe" : "unavailable")}; " +
+                $"unavailable_reason={unavailableInspection.UnavailableReason ?? "unknown"}; " +
+                $"git_receipt={unavailableInspection.GitReceipt}.");
+            if (string.Equals(unavailableInspection.UnavailableReason, "git-inspection-failed", StringComparison.Ordinal))
+            {
+                exitCode = 1;
+            }
+        }
         if (task.LastDispatch is { } completedDispatch && !IsLocalDispatch(completedDispatch))
         {
             var reapNote = ReapWorktreeBuildDaemons(processRecord.WorkingDirectory);
@@ -1417,7 +1429,7 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static bool RequiresFileChangeEvidence(TaskSpec task)
+    internal static bool RequiresFileChangeEvidence(TaskSpec task)
     {
         return task.LastDispatch is { } dispatch &&
             !IsLocalDispatch(dispatch) &&

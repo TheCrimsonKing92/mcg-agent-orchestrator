@@ -34,7 +34,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
         }
         finally
         {
-            _ = GoalWorktrees.DeleteDirectory(repo);
+            try { Directory.Delete(repo, recursive: true); } catch { }
         }
     }
 
@@ -69,7 +69,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
         }
         finally
         {
-            _ = GoalWorktrees.DeleteDirectory(repo);
+            try { Directory.Delete(repo, recursive: true); } catch { }
         }
     }
 
@@ -96,7 +96,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
         }
         finally
         {
-            _ = GoalWorktrees.DeleteDirectory(repo);
+            try { Directory.Delete(repo, recursive: true); } catch { }
         }
     }
 
@@ -139,7 +139,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
         }
         finally
         {
-            _ = GoalWorktrees.DeleteDirectory(repo);
+            try { Directory.Delete(repo, recursive: true); } catch { }
         }
     }
 

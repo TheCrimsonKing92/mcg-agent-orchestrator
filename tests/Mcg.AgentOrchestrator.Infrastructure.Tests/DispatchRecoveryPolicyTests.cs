@@ -349,6 +349,41 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Equal("heartbeat-invalid", state.RecoveryDecision.Blocker);
     }
 
+    [Xunit.Fact]
+    public void DispatchStateSurfaceReadOnlyMissingWorktreeMatchesRefreshStaleDisposition()
+    {
+        var root = CreateTempDirectory();
+        var missingWorktree = Path.Combine(root, "missing-worktree");
+        var process = new TaskProcessRecord(
+            999999,
+            "codex exec prompt",
+            missingWorktree,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "worker.exit.txt"),
+            Now.AddMinutes(-20),
+            null,
+            null);
+        File.WriteAllText(process.StandardOutputPath, string.Empty);
+        File.WriteAllText(process.StandardErrorPath, string.Empty);
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Read-only missing worktree", [new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, missingWorktree, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var state = new DispatchStateSurface(
+                new TestClock(Now),
+                isProcessAlive: _ => false,
+                readCommandLines: _ => new Dictionary<int, string>())
+            .Evaluate(goal.Id, task);
+
+        Xunit.Assert.Equal(DispatchStateKind.StaleCleanup, state.Kind);
+        Xunit.Assert.Equal(DispatchRecoveryAction.MarkStale, state.RecoveryDecision.Action);
+        Xunit.Assert.DoesNotContain("worktree-inspection", state.RecoveryDecision.Blocker ?? string.Empty, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "GoalRecoveryPlanner_surfaces_apparatus_hold_as_not_alive_with_typed_blocker")]
     public void GoalRecoveryPlannerSurfacesApparatusHoldAsNotAliveWithTypedBlocker()
     {
