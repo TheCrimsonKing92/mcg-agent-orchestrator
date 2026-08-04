@@ -37,10 +37,19 @@ internal static class AssemblyTempRedirect
 
     private static IEnumerable<string> EnumerateCandidateRoots()
     {
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        if (!string.IsNullOrEmpty(localAppData))
+        // The acceptance gate preserves the real LOCALAPPDATA variable while repointing
+        // USERPROFILE to its hermetic profile. GetFolderPath expands the known-folder value
+        // against that repointed profile, so consult the preserved variable first.
+        foreach (var localAppData in new[]
+                 {
+                     Environment.GetEnvironmentVariable("LOCALAPPDATA"),
+                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+                 })
         {
-            yield return Path.Combine(localAppData, "Temp", "Low", "mcg-tests");
+            if (!string.IsNullOrEmpty(localAppData))
+            {
+                yield return Path.Combine(localAppData, "Temp", "Low", "mcg-tests");
+            }
         }
 
         yield return Path.Combine(AppContext.BaseDirectory, ".test-tmp");
