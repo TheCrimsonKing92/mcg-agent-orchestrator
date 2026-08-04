@@ -4,6 +4,7 @@
     "slotCount": 4,
     "maxConcurrentShards": 4,
     "enforceStructuralCoverage": true,
+    "partitionVerdictFullRerunEveryN": 5,
     "laneEstimateComment": "estimatedSerialSeconds preserves each prior clean-receipt lane aggregate across class-disjoint split lanes; live four-wide contention remains a receipt-level acceptance check.",
     "timeouts": {
       "defaultMinutes": 40,

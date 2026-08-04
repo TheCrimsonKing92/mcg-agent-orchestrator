@@ -124,7 +124,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string PartitionVerdictJournalOperation = "acceptance:partition-verdict";
     private const string PartitionVerdictCacheJournalOperation = "acceptance:partition-verdict-cache";
     private const int MaxFocusedEvidenceTargets = 4;
-    private const int DefaultPartitionVerdictFullRerunEveryN = 5;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
@@ -199,7 +198,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static Func<string, string[]>? ResolveDeletedTestFilesForTests { get; set; }
     internal static Func<int>? ResolveShardCoreBudgetForTests { get; set; }
     internal static Action<string>? OnInfrastructureShardResourcesAcquiredForTests { get; set; }
-    internal static int PartitionVerdictFullRerunEveryN { get; set; } = DefaultPartitionVerdictFullRerunEveryN;
     // When true (default), a failed infrastructure-test PARTITION is re-run ONCE within the same
     // acceptance attempt; if the re-run passes, the failure was an intermittent flake and the partition
     // is treated as passed (Retried=true keeps it visible). A genuine red still fails both runs, so real
@@ -349,7 +347,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 worktreePath)
             : policyEffectiveChecks;
         var effectiveChecks = ExpandBroadInfrastructureChecks(structurallyCompleteChecks, infrastructureTestLanes);
-        var partitionVerdictCache = CreatePartitionVerdictCacheContext(worktreePath, goalId, effectiveChecks);
+        var partitionVerdictCache = CreatePartitionVerdictCacheContext(
+            worktreePath,
+            goalId,
+            effectiveChecks,
+            engineSettings.PartitionVerdictFullRerunEveryN);
         var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
             ? CreateDotnetTestBuildPhase(worktreePath, effectiveChecks, changedFiles, policyShardPlan)
             : null;
@@ -1955,7 +1957,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static PartitionVerdictCacheContext? CreatePartitionVerdictCacheContext(
         string worktreePath,
         GoalId? goalId,
-        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
+        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
+        int fullRerunEveryN)
     {
         if (goalId is null)
             return null;
@@ -1992,8 +1995,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 out _,
                 out var cacheKey) &&
             LatestGreenPartitionVerdict(journal, goalId.Value, cacheKey) is not null);
-        var backstopEveryN = Math.Max(1, PartitionVerdictFullRerunEveryN);
-        var forceFullRerun = reusableGreenExists && priorReuseAttemptCount + 1 >= backstopEveryN;
+        var forceFullRerun = reusableGreenExists && priorReuseAttemptCount + 1 >= fullRerunEveryN;
 
         return new PartitionVerdictCacheContext(
             goalId.Value,

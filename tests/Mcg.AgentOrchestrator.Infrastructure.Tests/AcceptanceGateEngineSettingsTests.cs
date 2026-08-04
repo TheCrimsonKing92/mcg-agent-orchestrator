@@ -10,6 +10,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
 
         Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
+        Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(18, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.All(
             settings.InfrastructureTestLanes,
@@ -70,6 +71,58 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "RealProcessShardBetaSmokeTests",
                 "WorkerDispatchJobAccountingTests"
             ]);
+    }
+
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_partition_verdict_full_rerun_cadence_defaults_and_loads")]
+    public void AcceptanceGateEnginePartitionVerdictFullRerunCadenceDefaultsAndLoads()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-engine-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Xunit.Assert.Equal(5, AcceptanceGateEngineSettings.Load(root).PartitionVerdictFullRerunEveryN);
+
+            Directory.CreateDirectory(Path.Combine(root, "config"));
+            File.WriteAllText(
+                Path.Combine(root, "config", "acceptance-manifest.json"),
+                """{ "version": 1, "engine": {} }""");
+            Xunit.Assert.Equal(5, AcceptanceGateEngineSettings.Load(root).PartitionVerdictFullRerunEveryN);
+
+            File.WriteAllText(
+                Path.Combine(root, "config", "acceptance-manifest.json"),
+                """{ "version": 1, "engine": { "partitionVerdictFullRerunEveryN": 3 } }""");
+            Xunit.Assert.Equal(3, AcceptanceGateEngineSettings.Load(root).PartitionVerdictFullRerunEveryN);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "AcceptanceGateEngine_rejects_invalid_partition_verdict_full_rerun_cadence")]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(-1)]
+    public void AcceptanceGateEngineRejectsInvalidPartitionVerdictFullRerunCadence(int cadence)
+    {
+        var root = CreateWorkspace($$"""
+            {
+              "version": 1,
+              "engine": { "partitionVerdictFullRerunEveryN": {{cadence}} }
+            }
+            """);
+        try
+        {
+            var error = Xunit.Assert.Throws<InvalidDataException>(
+                () => AcceptanceGateEngineSettings.Load(root));
+
+            Xunit.Assert.Contains("partitionVerdictFullRerunEveryN must be at least 1", error.Message);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_disabled_collections_spanning_lanes_share_an_exclusive_resource")]
@@ -476,6 +529,110 @@ public sealed class AcceptanceGateEngineSettingsTests
             buildLease?.Dispose();
             GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
             GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_combines_reused_and_fresh_partition_TRX")]
+    public async Task GoalAcceptanceVerifierStructuralCoverageCombinesReusedAndFreshPartitionTrx()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 1,
+                "enforceStructuralCoverage": true,
+                "partitionVerdictFullRerunEveryN": 5,
+                "infrastructureTestLanes": [
+                  { "name": "alpha", "filter": "FullyQualifiedName~AlphaTests" },
+                  { "name": "beta", "filter": "FullyQualifiedName~BetaTests" }
+                ]
+              },
+              "checks": [{
+                "name": "infrastructure tests",
+                "type": "dotnet-test",
+                "runner": "vstest",
+                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+              }]
+            }
+            """);
+        var goalId = new Mcg.AgentOrchestrator.Core.GoalId("12345678123456781234567812345678");
+        var previousPrefix = Environment.GetEnvironmentVariable(
+            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
+        var partitionExecutions = 0;
+        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-mixed-trx";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = _ => "main-mixed-trx";
+        GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = _ => "commit-mixed-trx";
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((arguments, _, _) =>
+            {
+                if (arguments.Contains("--list-tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "The following Tests are available:\n  AlphaTests.Runs\n  BetaTests.Runs"));
+                }
+
+                if (arguments.Length >= 2 &&
+                    arguments[0] == "dotnet" &&
+                    arguments[1] == "test")
+                {
+                    partitionExecutions++;
+                    var testName = arguments.Any(argument =>
+                        argument.Contains("AlphaTests", StringComparison.Ordinal))
+                            ? "AlphaTests.Runs"
+                            : "BetaTests.Runs";
+                    WriteVstestTrx(arguments, testName);
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                Path.Combine(root, ".orchestrator", "attempt-one"));
+            var first = await verifier.RunAsync(root, goalId);
+            Xunit.Assert.True(first.Passed);
+            Xunit.Assert.Equal(2, partitionExecutions);
+
+            var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+            var manifest = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+            manifest["engine"]!["infrastructureTestLanes"]![1]!["filter"] =
+                "FullyQualifiedName~BetaTestsChanged";
+            File.WriteAllText(manifestPath, manifest.ToJsonString());
+
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                Path.Combine(root, ".orchestrator", "attempt-two"));
+            var second = await verifier.RunAsync(root, goalId);
+
+            Xunit.Assert.True(second.Passed);
+            Xunit.Assert.Equal(3, partitionExecutions);
+            var cacheReceipt = Xunit.Assert.Single(
+                second.Checks!,
+                check => check.Name == "infrastructure partition verdict cache");
+            Xunit.Assert.Contains("partition_id=alpha,source_attempt_id=attempt-one", cacheReceipt.ResultSummary);
+            Xunit.Assert.Contains("{partition_id=beta,verdict=GREEN}", cacheReceipt.ResultSummary);
+            Xunit.Assert.Contains(second.Checks!, check =>
+                check.Name.StartsWith("structural test coverage", StringComparison.Ordinal) &&
+                check.Passed &&
+                check.ResultSummary!.Contains("discovered=2, executed=2", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable,
+                previousPrefix);
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictMainShaForTests = null;
+            GoalAcceptanceVerifier.ResolvePartitionVerdictVerifyingCommitShaForTests = null;
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             Directory.Delete(root, recursive: true);
         }
     }

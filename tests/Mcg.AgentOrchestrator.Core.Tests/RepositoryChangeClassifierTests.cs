@@ -139,6 +139,18 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains("engine.enforceStructuralCoverage", decision.SecurityCriticalChanges);
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_partition_verdict_full_rerun_cadence_change_to_trusted_review")]
+    public void RepositoryChangeClassifierRoutesPartitionVerdictFullRerunCadenceChangeToTrustedReview()
+    {
+        const string trusted = """{ "engine": { "partitionVerdictFullRerunEveryN": 5 } }""";
+        const string candidate = """{ "engine": { "partitionVerdictFullRerunEveryN": 10 } }""";
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.True(decision.RequiresTrustedReview);
+        Assert.Contains("engine.partitionVerdictFullRerunEveryN", decision.SecurityCriticalChanges);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_case_alias_matches_case_sensitive_engine_interpreter")]
     public void RepositoryChangeClassifierCaseAliasMatchesCaseSensitiveEngineInterpreter()
     {
