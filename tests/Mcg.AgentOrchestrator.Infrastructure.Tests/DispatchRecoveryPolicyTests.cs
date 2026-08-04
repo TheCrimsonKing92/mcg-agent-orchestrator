@@ -27,7 +27,12 @@ public sealed class DispatchRecoveryPolicyTests
             process.ExitCodePath,
             DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", Now));
 
-        var decision = CreatePolicy().Evaluate(process, hasLiveProcess: false, hasDirtyWorktreeEvidence: true);
+        var decision = CreatePolicy().Evaluate(
+            process,
+            hasLiveProcess: false,
+            worktreeInspection: DispatchWorktreeInspectionStatus.Available(
+                hasDirtyEvidence: true,
+                process.WorkingDirectory));
 
         Xunit.Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, decision.Action);
         Xunit.Assert.Equal("preserve-interrupted-work", decision.ActionName);
@@ -82,6 +87,22 @@ public sealed class DispatchRecoveryPolicyTests
         File.WriteAllText(process.ExitCodePath, "1");
         Xunit.Assert.True(DispatchExitArtifacts.TryRead(process.ExitCodePath, out var legacy));
         Xunit.Assert.Equal(DispatchExitArtifactOrigin.UnknownLegacy, legacy.Origin);
+    }
+
+    [Xunit.Theory(DisplayName = "DispatchExitArtifacts_rejects_malformed_typed_artifacts_without_throwing")]
+    [Xunit.InlineData("{\"exitCode\":1,\"origin\":99,\"reason\":\"unknown origin\",\"recordedAt\":\"2026-06-28T12:00:00Z\",\"version\":1}")]
+    [Xunit.InlineData("{\"exitCode\":1,\"origin\":2,\"reason\":null,\"recordedAt\":\"2026-06-28T12:00:00Z\",\"version\":1}")]
+    [Xunit.InlineData("{\"exitCode\":1,\"origin\":2,\"reason\":\"missing timestamp\",\"recordedAt\":\"0001-01-01T00:00:00Z\",\"version\":1}")]
+    public void DispatchExitArtifactsRejectsMalformedTypedArtifactsWithoutThrowing(string payload)
+    {
+        var process = CreateProcess();
+        File.WriteAllText(process.ExitCodePath, payload);
+
+        Xunit.Assert.False(DispatchExitArtifacts.TryRead(process.ExitCodePath, out _));
+        var read = DispatchExitArtifactReader.Read(process.ExitCodePath);
+        Xunit.Assert.Equal(ExitCodeReadKind.Invalid, read.Kind);
+        var decision = CreatePolicy().Evaluate(process, hasLiveProcess: false);
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, decision.Action);
     }
 
     [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_retries_stale_no_artifact_when_budget_remains")]
@@ -519,6 +540,28 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Contains("apparatus blocker=heartbeat-invalid", finding.Finding, StringComparison.Ordinal);
         Xunit.Assert.Equal("refresh-dispatch 1", finding.SuggestedCommand);
         Xunit.Assert.Equal(DispatchRecoveryAction.Hold, finding.RecoveryDecision!.Action);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRecoveryPlanner_surfaces_interrupted_work_as_not_alive_and_refreshable")]
+    public void GoalRecoveryPlannerSurfacesInterruptedWorkAsNotAliveAndRefreshable()
+    {
+        var process = CreateProcess();
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", Now));
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Plan interrupted work recovery", [new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, process.WorkingDirectory, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var report = GoalRecoveryPlanner.Build(kernel, goal, process.WorkingDirectory, includeCleanupBackoff: false);
+
+        var finding = Xunit.Assert.Single(report.TaskFindings);
+        Xunit.Assert.Contains("is not alive", finding.Finding, StringComparison.Ordinal);
+        Xunit.Assert.Equal("refresh-dispatch 1", finding.SuggestedCommand);
+        Xunit.Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, finding.RecoveryDecision!.Action);
     }
 
     private static DispatchRecoveryPolicy CreatePolicy() => new(new TestClock(Now));

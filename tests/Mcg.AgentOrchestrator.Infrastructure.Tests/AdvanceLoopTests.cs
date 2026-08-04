@@ -581,6 +581,73 @@ public sealed class AdvanceLoopTests
     }
 }
 
+    [Xunit.Fact(DisplayName = "SubscriptionDispatchReadyBatch_preserves_synthetic_exit_for_typed_reconciliation")]
+    public void SubscriptionDispatchReadyBatchPreservesSyntheticExitForTypedReconciliation()
+{
+    var root = CreateTempDirectory();
+    var workspace = OrchestratorWorkspace.ForDirectory(root);
+    var clock = DateTimeOffset.Parse("2026-07-11T01:49:19Z");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Inspect interrupted process state", AgentRole.Planner, "Record explicit verification.");
+    var goal = CreateRefinedGoal(kernel, "Preserve interrupted process before batch formation", [task]);
+    var agent = new AgentDefinition(
+        new AgentId("subscription-planner"),
+        "Subscription planner",
+        AgentRole.Planner,
+        new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+        Subscription: new SubscriptionLaunchProfile("codex-cli"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var stdout = Path.Combine(root, "out.log");
+    var stderr = Path.Combine(root, "err.log");
+    var exit = Path.Combine(root, "exit.txt");
+    File.WriteAllText(stdout, "partial work");
+    File.WriteAllText(stderr, string.Empty);
+    DispatchExitArtifacts.Write(exit, DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", clock));
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "old dispatch", root, clock));
+    kernel.RecordTaskProcessStarted(
+        goal.Id,
+        task.Id,
+        new TaskProcessRecord(28516, "old dispatch", root, stdout, stderr, exit, clock, null, null));
+
+    var snapshot = kernel.ExportSnapshot();
+    var goalSnapshot = snapshot.Goals.Single();
+    var staleAssignedSnapshot = goalSnapshot.Tasks.Single() with { Status = WorkTaskStatus.Assigned };
+    kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+    {
+        Goals = [goalSnapshot with { Tasks = [staleAssignedSnapshot] }]
+    });
+    goal = kernel.GetGoal(goal.Id);
+    task = goal.Tasks.Single();
+    var profiles = new WorkerProfileCatalog([new WorkerProfile("codex-cli", BlockingCodexProfileCommand)]);
+
+    var previousLiveness = GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch;
+    GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = _ => false;
+    try
+    {
+        var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
+            kernel,
+            workspace,
+            goal,
+            [agent],
+            profiles);
+
+        Assert.Empty(batch.Dispatches);
+        var preservedTask = kernel.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Assigned, preservedTask.Status);
+        Assert.True(preservedTask.LastProcess is { IsRunning: true });
+        Assert.Equal("old dispatch", preservedTask.LastDispatch!.Command);
+        Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("Auto-cleared stale LastProcess.IsRunning before dispatch", StringComparison.Ordinal));
+    }
+    finally
+    {
+        GoalManagementCommandService.IsTrackedProcessRunningForReadyBatch = previousLiveness;
+    }
+}
+
     [Xunit.Fact(DisplayName = "SubscriptionDispatchReadyBatch_does_not_clear_live_child_pid_with_exit_artifact")]
     public void SubscriptionDispatchReadyBatchDoesNotClearLiveChildPidWithExitArtifact()
 {

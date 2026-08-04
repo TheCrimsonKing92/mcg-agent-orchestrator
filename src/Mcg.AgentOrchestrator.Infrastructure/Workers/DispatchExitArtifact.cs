@@ -24,6 +24,12 @@ public static class DispatchExitArtifacts
 
     public static void Write(string path, DispatchExitArtifact artifact)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (!IsValidAuthoredArtifact(artifact))
+        {
+            throw new ArgumentException("Dispatch exit artifacts must have version 1, Native or Synthetic origin, a reason, and a recorded timestamp.", nameof(artifact));
+        }
+
         var directory = Path.GetDirectoryName(path);
         if (!string.IsNullOrWhiteSpace(directory))
         {
@@ -66,7 +72,7 @@ public static class DispatchExitArtifacts
             }
 
             var parsed = JsonSerializer.Deserialize<DispatchExitArtifact>(payload, SerializerOptions);
-            if (parsed is null || parsed.Version != 1 || parsed.Origin == DispatchExitArtifactOrigin.None)
+            if (!IsValidAuthoredArtifact(parsed))
             {
                 return false;
             }
@@ -79,4 +85,11 @@ public static class DispatchExitArtifacts
             return false;
         }
     }
+
+    private static bool IsValidAuthoredArtifact(DispatchExitArtifact? artifact) =>
+        artifact is not null &&
+        artifact.Version == 1 &&
+        artifact.Origin is DispatchExitArtifactOrigin.Native or DispatchExitArtifactOrigin.Synthetic &&
+        !string.IsNullOrWhiteSpace(artifact.Reason) &&
+        artifact.RecordedAt != default;
 }

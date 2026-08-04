@@ -489,6 +489,7 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
         if (task.Status != WorkTaskStatus.Assigned ||
             task.LastProcess is not { IsRunning: true } process ||
             !DispatchExitArtifacts.TryRead(process.ExitCodePath, out var exitArtifact) ||
+            exitArtifact.Origin == DispatchExitArtifactOrigin.Synthetic ||
             HasLiveTrackedProcess(process))
         {
             continue;

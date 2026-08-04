@@ -214,7 +214,9 @@ public sealed class TaskProcessTests
         CompletedAt = completedAt,
         ExitCode = 1,
         ChildProcessId = 6789,
-        ChildExitCode = 23
+        ChildExitCode = 23,
+        ExitArtifactOrigin = DispatchExitArtifactOrigin.Synthetic,
+        ExitArtifactReason = "startup sweep interrupted worker"
     };
     var verification = new TaskVerificationRecord(
         "dotnet test",
@@ -238,6 +240,8 @@ public sealed class TaskProcessTests
     Assert.Equal("child-exit.json", restoredTask.LastProcess.ChildExitRecordPath);
     Assert.Equal(6789, restoredTask.LastProcess.ChildProcessId);
     Assert.Equal(23, restoredTask.LastProcess.ChildExitCode);
+    Assert.Equal(DispatchExitArtifactOrigin.Synthetic, restoredTask.LastProcess.ExitArtifactOrigin);
+    Assert.Equal("startup sweep interrupted worker", restoredTask.LastProcess.ExitArtifactReason);
     Assert.Equal(startedAt, restoredTask.LastVerification!.DispatchStartedAt);
     Assert.Equal(6789, restoredTask.LastVerification.ChildProcessId);
     Assert.Equal(23, restoredTask.LastVerification.ChildExitCode);

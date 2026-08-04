@@ -101,8 +101,13 @@ internal static class DispatchExitArtifactReader
             null,
             $"{exception.GetType().Name}: {NormalizeEvidence(exception.Message)}");
 
-    private static string NormalizeEvidence(string value)
+    private static string NormalizeEvidence(string? value)
     {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "none";
+        }
+
         var normalized = string.Join(
             " ",
             value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));

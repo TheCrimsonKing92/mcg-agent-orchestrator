@@ -42,22 +42,29 @@ public static class WorkerProcessJobs
             var ownerLiveness = SpawnProcessIdentityReader.EvaluateOwner(entry, out var ownerEvidence);
             if (ownerLiveness != SpawnOwnerLiveness.DeadOrRecycled)
             {
-                registry.RecordDiagnostic(
-                    entry.Id,
-                    BuildSweepDiagnostic(
-                        ownerLiveness == SpawnOwnerLiveness.Live ? "retain-live-owner" : "retain-unknown-owner",
-                        entry,
-                        ownerLiveness,
-                        ownerEvidence,
-                        sweeper));
+                RecordRetentionDiagnosticIfChanged(registry, entry, ownerLiveness, ownerEvidence, sweeper);
                 continue;
             }
 
-            if (!SpawnProcessIdentityReader.MatchesLiveProcess(entry, out var process))
+            var victimStatus = SpawnProcessIdentityReader.EvaluateTrackedProcess(entry, out var process, out var victimEvidence);
+            if (victimStatus == SpawnTrackedProcessStatus.Unknown)
             {
-                registry.MarkReleased(
-                    entry.ProcessId,
-                    BuildSweepDiagnostic("already-dead-or-recycled", entry, ownerLiveness, ownerEvidence, sweeper));
+                RecordRetentionDiagnosticIfChanged(
+                    registry,
+                    entry,
+                    "retain-unknown-victim",
+                    ownerLiveness,
+                    ownerEvidence,
+                    sweeper,
+                    victimEvidence);
+                continue;
+            }
+
+            if (victimStatus == SpawnTrackedProcessStatus.DeadOrRecycled)
+            {
+                registry.MarkReleasedEntry(
+                    entry.Id,
+                    BuildSweepDiagnostic("already-dead-or-recycled", entry, ownerLiveness, ownerEvidence, sweeper, victimEvidence));
                 continue;
             }
 
@@ -76,42 +83,33 @@ public static class WorkerProcessJobs
                 ownerLiveness = SpawnProcessIdentityReader.EvaluateOwner(entry, out ownerEvidence);
                 if (ownerLiveness != SpawnOwnerLiveness.DeadOrRecycled)
                 {
-                    registry.RecordDiagnostic(
-                        entry.Id,
-                        BuildSweepDiagnostic(
-                            ownerLiveness == SpawnOwnerLiveness.Live ? "retain-live-owner" : "retain-unknown-owner",
-                            entry,
-                            ownerLiveness,
-                            ownerEvidence,
-                            sweeper));
+                    RecordRetentionDiagnosticIfChanged(registry, entry, ownerLiveness, ownerEvidence, sweeper);
                     continue;
                 }
 
-                try
-                {
-                    // The authorization receipt must be durable before the destructive action.
-                    registry.RecordDiagnostic(
+                // Claim the exact registry entry and durably record authorization before the destructive
+                // action. The compare-and-set prevents concurrent CLI startup sweeps from acting on the
+                // same stale snapshot; a later sweep can retry a claim abandoned by a crashed sweeper.
+                if (!registry.TryRecordDiagnostic(
                         entry.Id,
-                        BuildSweepDiagnostic("startup-reap-authorized", entry, ownerLiveness, ownerEvidence, sweeper));
-                }
-                catch
+                        entry.LastDiagnostic,
+                        BuildSweepDiagnostic("startup-reap-authorized", entry, ownerLiveness, ownerEvidence, sweeper, victimEvidence)))
                 {
-                    // An unreceipted kill is not permitted.
                     continue;
                 }
 
-                if (TryKillOrFallback(entry.ProcessId, allowProtectedDescendant: false, markRegistryReleased: false, out _))
+                if (TryKillMatchedProcess(process))
                 {
-                    registry.MarkReleased(
-                        entry.ProcessId,
-                        BuildSweepDiagnostic("startup-reaped", entry, ownerLiveness, ownerEvidence, sweeper));
+                    registry.MarkReleasedEntry(
+                        entry.Id,
+                        BuildSweepDiagnostic("startup-reaped", entry, ownerLiveness, ownerEvidence, sweeper, victimEvidence));
                     reaped++;
                 }
                 else
                 {
                     registry.RecordDiagnostic(
                         entry.Id,
-                        BuildSweepDiagnostic("startup-reap-failed", entry, ownerLiveness, ownerEvidence, sweeper));
+                        BuildSweepDiagnostic("startup-reap-failed", entry, ownerLiveness, ownerEvidence, sweeper, victimEvidence));
                 }
             }
         }
@@ -119,16 +117,64 @@ public static class WorkerProcessJobs
         return reaped;
     }
 
+    private static void RecordRetentionDiagnosticIfChanged(
+        SpawnRegistry registry,
+        SpawnRegistryEntry entry,
+        SpawnOwnerLiveness ownerLiveness,
+        string ownerEvidence,
+        string sweeper) =>
+        RecordRetentionDiagnosticIfChanged(
+            registry,
+            entry,
+            ownerLiveness == SpawnOwnerLiveness.Live ? "retain-live-owner" : "retain-unknown-owner",
+            ownerLiveness,
+            ownerEvidence,
+            sweeper,
+            victimEvidence: null);
+
+    private static void RecordRetentionDiagnosticIfChanged(
+        SpawnRegistry registry,
+        SpawnRegistryEntry entry,
+        string action,
+        SpawnOwnerLiveness ownerLiveness,
+        string ownerEvidence,
+        string sweeper,
+        string? victimEvidence)
+    {
+        var stableFingerprint = BuildSweepDiagnostic(
+            action,
+            entry,
+            ownerLiveness,
+            ownerEvidence,
+            sweeper: string.Empty,
+            victimEvidence: victimEvidence).TrimEnd();
+        if (entry.LastDiagnostic is null ||
+            !entry.LastDiagnostic.StartsWith(stableFingerprint, StringComparison.Ordinal))
+        {
+            registry.RecordDiagnostic(
+                entry.Id,
+                BuildSweepDiagnostic(
+                    action,
+                    entry,
+                    ownerLiveness,
+                    ownerEvidence,
+                    sweeper,
+                    victimEvidence));
+        }
+    }
+
     private static string BuildSweepDiagnostic(
         string action,
         SpawnRegistryEntry entry,
         SpawnOwnerLiveness ownerLiveness,
         string ownerEvidence,
-        string sweeper) =>
+        string sweeper,
+        string? victimEvidence = null) =>
         $"spawn_registry: {action} victim_pid={entry.ProcessId} victim_started_at={entry.ProcessStartedAt:O} " +
         $"victim_image={entry.ImagePath} owner={entry.OwnerId} owner_pid={entry.OwnerProcessId?.ToString() ?? "unknown"} " +
         $"owner_started_at={entry.OwnerProcessStartedAt?.ToString("O") ?? "unknown"} " +
-        $"owner_liveness={ownerLiveness} owner_evidence={SanitizeDiagnostic(ownerEvidence)} {sweeper}";
+        $"owner_liveness={ownerLiveness} owner_evidence={SanitizeDiagnostic(ownerEvidence)} " +
+        $"victim_evidence={SanitizeDiagnostic(victimEvidence ?? "not-evaluated")} {sweeper}";
 
     private static string BuildSweeperEvidence()
     {
@@ -143,6 +189,29 @@ public static class WorkerProcessJobs
 
     private static string SanitizeDiagnostic(string value) =>
         value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+
+    private static bool TryKillMatchedProcess(Process? process)
+    {
+        if (process is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            process.Kill(entireProcessTree: true);
+            return process.WaitForExit(5000) && process.HasExited;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            return false;
+        }
+    }
 
     public static bool TryRegister(Process process, string? ownerId = null)
     {

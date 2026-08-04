@@ -185,7 +185,9 @@ public sealed record TaskProcessSnapshot(
     bool WasCancelledByConductor = false,
     string? ChildExitRecordPath = null,
     int? ChildProcessId = null,
-    int? ChildExitCode = null);
+    int? ChildExitCode = null,
+    DispatchExitArtifactOrigin ExitArtifactOrigin = DispatchExitArtifactOrigin.None,
+    string? ExitArtifactReason = null);
 
 public sealed record TaskProcessResourceAccountingSnapshot(
     long CpuMilliseconds,

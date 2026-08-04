@@ -577,7 +577,9 @@ internal sealed record DispatchArtifactStatusDto(
     string ExitCodePath,
     bool ExitCodeExists,
     string HeartbeatPath,
-    bool HeartbeatExists);
+    bool HeartbeatExists,
+    DispatchExitArtifactOrigin ExitArtifactOrigin,
+    string? ExitArtifactReason);
 
 internal sealed record DispatchWorktreeStateDto(
     string WorkingDirectory,

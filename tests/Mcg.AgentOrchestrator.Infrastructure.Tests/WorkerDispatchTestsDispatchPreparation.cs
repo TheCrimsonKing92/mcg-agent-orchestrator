@@ -561,10 +561,32 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         .Evaluate(goal.Id, task);
 
     Assert.Equal(DispatchStateKind.InterruptedWork, state.Kind);
-    Assert.Equal("verify-manual", state.RecommendedAction);
+    Assert.Equal("refresh-dispatch", state.RecommendedAction);
     Assert.Equal(DispatchExitArtifactOrigin.Synthetic, state.Artifacts.ExitArtifactOrigin);
     Assert.Equal("worker host disappeared", state.Artifacts.ExitArtifactReason);
     Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, state.RecoveryDecision.Action);
+}
+
+    [Xunit.Fact(DisplayName = "GoalOperatorDisposition_recovers_interrupted_work_through_refresh")]
+    public void GoalOperatorDispositionRecoversInterruptedWorkThroughRefresh()
+{
+    var root = CreateTempDirectory();
+    var now = DateTimeOffset.Parse("2026-07-03T06:08:00Z");
+    var clock = new TestClock(now);
+    var (_, goal, task, process) = CreateRecordedDispatch(root, clock);
+    DispatchExitArtifacts.Write(
+        process.ExitCodePath,
+        DispatchExitArtifacts.Synthetic(1, "worker host disappeared", now));
+
+    var disposition = new GoalOperatorDispositionSurface(
+        clock,
+        CreateStateSurface(clock, livePids: [], commandLines: new Dictionary<int, string>()))
+        .Evaluate(goal, pendingHumanInputCount: 0, verificationSatisfied: false);
+
+    Assert.Equal(OperatorDispositionState.Recover, disposition.State);
+    Assert.Equal("refresh-dispatch 1", disposition.NextSafeCommand);
+    var dispatch = Assert.Single(disposition.Dispatches, candidate => candidate.TaskId == task.Id);
+    Assert.Equal(DispatchStateKind.InterruptedWork, dispatch.DispatchState!.Kind);
 }
 
     [Xunit.Fact(DisplayName = "DispatchStateSurface_reports_stale_cleanup_when_process_and_exit_are_absent")]

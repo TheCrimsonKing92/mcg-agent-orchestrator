@@ -107,7 +107,8 @@ internal static class GoalRecoveryPlanner
                 recoveryDecision.Action != DispatchRecoveryAction.MarkStale &&
                 recoveryDecision.Action != DispatchRecoveryAction.RetryStale &&
                 recoveryDecision.Action != DispatchRecoveryAction.BudgetExhausted &&
-                recoveryDecision.Action != DispatchRecoveryAction.ReconcileFromExit;
+                recoveryDecision.Action != DispatchRecoveryAction.ReconcileFromExit &&
+                recoveryDecision.Action != DispatchRecoveryAction.PreserveInterruptedWork;
             findings.Add(new GoalRecoveryTaskFinding(
                 taskNumber,
                 task.Id,

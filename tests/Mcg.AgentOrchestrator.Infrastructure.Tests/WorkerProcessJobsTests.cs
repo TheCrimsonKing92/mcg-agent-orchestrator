@@ -42,8 +42,13 @@ public sealed class WorkerProcessJobsTests : IDisposable
             var retained = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
             Assert.Equal(Environment.ProcessId, retained.OwnerProcessId);
             Assert.NotNull(retained.OwnerProcessStartedAt);
+            Assert.False(string.IsNullOrWhiteSpace(retained.OwnerProcessImagePath));
             Assert.Contains("retain-live-owner", retained.LastDiagnostic, StringComparison.Ordinal);
             Assert.Contains($"sweeper_pid={Environment.ProcessId}", retained.LastDiagnostic, StringComparison.Ordinal);
+
+            var firstDiagnostic = retained.LastDiagnostic;
+            Assert.Equal(0, WorkerProcessJobs.SweepStartupOrphans());
+            Assert.Equal(firstDiagnostic, Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests()).LastDiagnostic);
         }
         finally
         {
@@ -146,6 +151,99 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_startup_sweep_retains_worker_when_owner_image_mismatches")]
+    public void WorkerProcessJobsStartupSweepRetainsWorkerWhenOwnerImageMismatches()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? worker = null;
+        Process? owner = null;
+        try
+        {
+            worker = StartLongRunningShell();
+            owner = StartLongRunningShell();
+            Assert.True(SpawnProcessIdentityReader.TryRead(worker, out var workerIdentity));
+            Assert.True(SpawnProcessIdentityReader.TryRead(owner, out var ownerIdentity));
+            var unverifiedOwnerIdentity = ownerIdentity with { ImagePath = ownerIdentity.ImagePath + ".different" };
+            new SpawnRegistry(dbPath).Register("image-mismatch", workerIdentity, unverifiedOwnerIdentity);
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+
+            var reaped = WorkerProcessJobs.SweepStartupOrphans();
+
+            Assert.Equal(0, reaped);
+            Assert.True(IsRunning(worker.Id));
+            var retained = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Contains("retain-unknown-owner", retained.LastDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("image mismatch", retained.LastDiagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            WorkerProcessJobs.ClearRegistryForTests();
+            if (worker is not null)
+            {
+                try { worker.Kill(entireProcessTree: true); } catch { }
+                worker.Dispose();
+            }
+
+            if (owner is not null)
+            {
+                try { owner.Kill(entireProcessTree: true); } catch { }
+                owner.Dispose();
+            }
+
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_concurrent_startup_sweeps_claim_exact_worker_once")]
+    public void WorkerProcessJobsConcurrentStartupSweepsClaimExactWorkerOnce()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? worker = null;
+        Process? owner = null;
+        try
+        {
+            worker = StartLongRunningShell();
+            owner = StartLongRunningShell();
+            Assert.True(SpawnProcessIdentityReader.TryRead(worker, out var workerIdentity));
+            Assert.True(SpawnProcessIdentityReader.TryRead(owner, out var ownerIdentity));
+            owner.Kill(entireProcessTree: true);
+            Assert.True(owner.WaitForExit(5000));
+            new SpawnRegistry(dbPath).Register("concurrent-sweep", workerIdentity, ownerIdentity);
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+
+            var sweeps = new[]
+            {
+                Task.Run(WorkerProcessJobs.SweepStartupOrphans),
+                Task.Run(WorkerProcessJobs.SweepStartupOrphans)
+            };
+            Task.WaitAll(sweeps);
+
+            Assert.Equal(1, sweeps.Sum(task => task.Result));
+            Assert.True(WaitUntilNotRunning(worker.Id, TimeSpan.FromSeconds(5)));
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            using var connection = StateDbConnectionFactory.Open(dbPath, StateDbConnectionProfile.QueryOnlyRead);
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT last_diagnostic FROM spawn_registry WHERE owner_id = 'concurrent-sweep'";
+            Assert.Contains("startup-reaped", Assert.IsType<string>(command.ExecuteScalar()), StringComparison.Ordinal);
+        }
+        finally
+        {
+            WorkerProcessJobs.ClearRegistryForTests();
+            if (worker is not null)
+            {
+                try { worker.Kill(entireProcessTree: true); } catch { }
+                worker.Dispose();
+            }
+
+            owner?.Dispose();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_register_writes_durable_pid_identity")]
     public void WorkerProcessJobsRegisterWritesDurablePidIdentity()
     {
@@ -165,6 +263,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Assert.False(string.IsNullOrWhiteSpace(entry.ImagePath));
             Assert.Equal(Environment.ProcessId, entry.OwnerProcessId);
             Assert.NotNull(entry.OwnerProcessStartedAt);
+            Assert.False(string.IsNullOrWhiteSpace(entry.OwnerProcessImagePath));
 
             WorkerProcessJobs.Release(wrapper.Id);
             Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(5)));

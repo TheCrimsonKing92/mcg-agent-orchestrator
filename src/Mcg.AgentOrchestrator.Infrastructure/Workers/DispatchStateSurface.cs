@@ -346,7 +346,7 @@ public sealed class DispatchStateSurface
             DispatchStateKind.StaleCleanup => recovery.ActionName,
             DispatchStateKind.WedgedProcess => recovery.ActionName,
             DispatchStateKind.Completed => "none",
-            DispatchStateKind.InterruptedWork => "verify-manual",
+            DispatchStateKind.InterruptedWork => "refresh-dispatch",
             DispatchStateKind.None => "none",
             _ => recovery.ActionName
         };

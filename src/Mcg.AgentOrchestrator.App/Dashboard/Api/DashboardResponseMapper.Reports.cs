@@ -757,7 +757,9 @@ internal static DispatchAuthoritativeStateDto? ToDispatchAuthoritativeStateDto(D
                 state.Artifacts.ExitCodePath,
                 state.Artifacts.ExitCodeExists,
                 state.Artifacts.HeartbeatPath,
-                state.Artifacts.HeartbeatExists),
+                state.Artifacts.HeartbeatExists,
+                state.Artifacts.ExitArtifactOrigin,
+                state.Artifacts.ExitArtifactReason),
             ToDispatchHeartbeatDto(state.Heartbeat),
             new DispatchWorktreeStateDto(
                 state.Worktree.WorkingDirectory,

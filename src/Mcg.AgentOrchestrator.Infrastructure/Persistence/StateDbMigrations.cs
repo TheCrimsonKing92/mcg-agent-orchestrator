@@ -208,6 +208,7 @@ public static class StateDbMigrations
     {
         ExecuteNonQuery(connection, "ALTER TABLE spawn_registry ADD COLUMN owner_process_id INTEGER NULL", statementObserver: null);
         ExecuteNonQuery(connection, "ALTER TABLE spawn_registry ADD COLUMN owner_process_started_at TEXT NULL", statementObserver: null);
+        ExecuteNonQuery(connection, "ALTER TABLE spawn_registry ADD COLUMN owner_process_image_path TEXT NULL", statementObserver: null);
     }
 
     private static void ApplyBacklogIntakeSchema(SqliteConnection connection)

@@ -156,6 +156,10 @@ public sealed class GoalOperatorDispositionSurface
                     BuildTask(task, OperatorDispositionState.Recover, OperatorDispositionConfidence.High,
                         $"task {taskNumber} worker exited and needs reconciliation",
                         $"refresh-dispatch {taskNumber}", blockers, evidence, dispatchState),
+                DispatchStateKind.InterruptedWork =>
+                    BuildTask(task, OperatorDispositionState.Recover, OperatorDispositionConfidence.High,
+                        $"task {taskNumber} worker was interrupted after producing recoverable evidence; reconcile the typed synthetic exit before deciding retry or manual verification",
+                        $"refresh-dispatch {taskNumber}", blockers, evidence, dispatchState),
                 DispatchStateKind.StaleCleanup or DispatchStateKind.WedgedProcess =>
                     BuildTask(task, OperatorDispositionState.Recover, OperatorDispositionConfidence.High,
                         $"task {taskNumber} dispatch state is {dispatchState.Kind}; {dispatchState.RecoveryDecision.Reason}",

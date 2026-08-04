@@ -712,7 +712,7 @@ public sealed class BackgroundDispatchRunner
             return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
         }
 
-        if (hasDirtyWorktreeEvidence)
+        if (worktreeInspectionStatus.HasDirtyEvidence)
         {
             var interruptedDecision = new DispatchRecoveryDecision(
                 DispatchRecoveryAction.PreserveInterruptedWork,
