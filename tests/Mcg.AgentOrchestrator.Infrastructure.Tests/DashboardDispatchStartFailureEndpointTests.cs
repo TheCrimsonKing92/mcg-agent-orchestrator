@@ -229,7 +229,7 @@ public sealed class DashboardDispatchStartFailureEndpointTests
         var agents = new AgentCatalog([agent]);
         var profiles = new WorkerProfileCatalog(
         [
-            new WorkerProfile("local", "Write-Output 'safe local fixture'; Write-Output {promptPath}")
+            new WorkerProfile("local", "Write-Output {subscriptionModelName}; Write-Output 'safe local fixture'; Write-Output {promptPath}")
         ]);
         AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);
         WorkerProfileStore.Save(workspace.WorkerProfilePath, profiles);

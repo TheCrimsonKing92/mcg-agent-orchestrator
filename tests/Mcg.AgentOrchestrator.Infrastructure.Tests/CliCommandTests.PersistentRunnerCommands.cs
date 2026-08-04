@@ -342,6 +342,74 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(expected, CliPersistentStateRunner.IsInboxBackedGoalScopedTaskMutationCommand(args));
     }
 
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_identifies_conductor_concurrent_operator_commands")]
+    [Xunit.InlineData(new[] { "status", "abcdef12" }, true)]
+    [Xunit.InlineData(new[] { "logs", "--goal", "abcdef12", "1", "exit" }, true)]
+    [Xunit.InlineData(new[] { "operator-intent-status", "intent-id" }, true)]
+    [Xunit.InlineData(new[] { "retry", "--goal", "abcdef12", "1", "again" }, true)]
+    [Xunit.InlineData(new[] { "progress", "--goal", "abcdef12", "1", "running", "working" }, true)]
+    [Xunit.InlineData(new[] { "verify-manual", "--goal", "abcdef12", "1", "passed", "checked" }, true)]
+    [Xunit.InlineData(new[] { "refresh-dispatch", "--goal", "abcdef12", "1" }, false)]
+    [Xunit.InlineData(new[] { "start-dispatch", "--goal", "abcdef12", "1" }, false)]
+    public void PersistentRunnerIdentifiesConductorConcurrentOperatorCommands(string[] args, bool expected)
+    {
+        Xunit.Assert.Equal(expected, CliPersistentStateRunner.IsConductorConcurrentOperatorCommand(args));
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_status_does_not_sweep_live_worker_owned_by_exited_conductor")]
+    public async Task CliStatusDoesNotSweepLiveWorkerOwnedByExitedConductor()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateTempDirectory();
+        Process? worker = null;
+        Process? owner = null;
+        try
+        {
+            var workspace = CreateRefinedWorkspace(root);
+            var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(
+                "Observe a live worker without startup cleanup",
+                [new TaskSpec(TaskId.New(), "Keep running during status", AgentRole.Developer)]);
+            await repository.SaveAsync(kernel);
+
+            worker = StartStartupSweepFixtureProcess();
+            owner = StartStartupSweepFixtureProcess();
+            Xunit.Assert.True(SpawnProcessIdentityReader.TryReadForRegistration(worker, out var workerIdentity));
+            Xunit.Assert.True(SpawnProcessIdentityReader.TryReadForRegistration(owner, out var ownerIdentity));
+            new SpawnRegistry(workspace.SqliteStatePath).Register("exited-conductor", workerIdentity, ownerIdentity);
+            owner.Kill(entireProcessTree: true);
+            Xunit.Assert.True(owner.WaitForExit(5000));
+
+            var result = RunAppCommand(root, "status", goal.Id.Value[..8]);
+
+            Xunit.Assert.Equal(0, result.ExitCode);
+            Xunit.Assert.False(worker.HasExited);
+            var retained = Xunit.Assert.Single(new SpawnRegistry(workspace.SqliteStatePath).ListActive());
+            Xunit.Assert.Equal(worker.Id, retained.ProcessId);
+            Xunit.Assert.Null(retained.ReleasedAt);
+        }
+        finally
+        {
+            foreach (var process in new[] { worker, owner })
+            {
+                if (process is null)
+                {
+                    continue;
+                }
+
+                try { process.Kill(entireProcessTree: true); } catch { }
+                process.Dispose();
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Theory(DisplayName = "CliPersistentStateRunner_retry_reports_conductor_liveness_without_state_transaction")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
@@ -3176,6 +3244,31 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         }
 
         return count;
+    }
+
+    private static Process StartStartupSweepFixtureProcess()
+    {
+        var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        }.WithArguments(
+            WorkerShell.BaseArguments().Concat([
+                "Start-Sleep -Seconds 9999"
+            ])))
+            ?? throw new InvalidOperationException("Failed to start startup-sweep fixture process.");
+
+        if (SpawnProcessIdentityReader.TryReadForRegistration(process, out _))
+        {
+            return process;
+        }
+
+        try { process.Kill(entireProcessTree: true); } catch { }
+        process.Dispose();
+        throw new InvalidOperationException("Startup-sweep fixture process did not expose a durable identity.");
     }
 
 }
