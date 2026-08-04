@@ -20,6 +20,113 @@ public sealed record DispatchRecoveryDecision(
     string Reason,
     string? Blocker = null);
 
+internal enum ExitCodeReadKind
+{
+    Missing,
+    Unreadable,
+    Invalid,
+    Valid
+}
+
+internal sealed record ExitCodeReadResult(
+    ExitCodeReadKind Kind,
+    int? ExitCode,
+    string Evidence);
+
+internal static class DispatchExitArtifactReader
+{
+    private const int EvidenceCharacterLimit = 256;
+
+    public static ExitCodeReadResult Read(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "file-missing");
+        }
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            var raw = reader.ReadToEnd();
+            var evidenceText = raw[..Math.Min(raw.Length, EvidenceCharacterLimit)];
+            var normalized = NormalizeEvidence(evidenceText);
+            if (raw.Length > EvidenceCharacterLimit)
+            {
+                normalized += "...";
+            }
+
+            return int.TryParse(raw.Trim(), out var exitCode)
+                ? new ExitCodeReadResult(ExitCodeReadKind.Valid, exitCode, $"content={normalized}")
+                : new ExitCodeReadResult(ExitCodeReadKind.Invalid, null, $"content={normalized}; chars_read={raw.Length}");
+        }
+        catch (FileNotFoundException)
+        {
+            return new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "file-missing");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return new ExitCodeReadResult(ExitCodeReadKind.Missing, null, "directory-missing");
+        }
+        catch (IOException ex)
+        {
+            return Unreadable(ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unreadable(ex);
+        }
+    }
+
+    private static ExitCodeReadResult Unreadable(Exception exception) =>
+        new(
+            ExitCodeReadKind.Unreadable,
+            null,
+            $"{exception.GetType().Name}: {NormalizeEvidence(exception.Message)}");
+
+    private static string NormalizeEvidence(string value)
+    {
+        var normalized = string.Join(
+            " ",
+            value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return string.IsNullOrWhiteSpace(normalized) ? "none" : normalized;
+    }
+}
+
+public enum DispatchWorktreeInspectionAvailability
+{
+    NotRequired,
+    Available,
+    Unsafe,
+    Unavailable
+}
+
+public sealed record DispatchWorktreeInspectionStatus(
+    DispatchWorktreeInspectionAvailability Availability,
+    bool HasDirtyEvidence,
+    string EvidencePath,
+    string? UnavailableReason = null,
+    string? GitReceipt = null)
+{
+    public static DispatchWorktreeInspectionStatus NotRequired { get; } =
+        new(DispatchWorktreeInspectionAvailability.NotRequired, false, "worktree-inspection-not-required");
+
+    public static DispatchWorktreeInspectionStatus Available(bool hasDirtyEvidence, string evidencePath) =>
+        new(DispatchWorktreeInspectionAvailability.Available, hasDirtyEvidence, evidencePath);
+
+    public static DispatchWorktreeInspectionStatus Unavailable(
+        string evidencePath,
+        string reason,
+        string gitReceipt) =>
+        new(DispatchWorktreeInspectionAvailability.Unavailable, false, evidencePath, reason, gitReceipt);
+
+    public static DispatchWorktreeInspectionStatus Unsafe(
+        string evidencePath,
+        string reason,
+        string gitReceipt) =>
+        new(DispatchWorktreeInspectionAvailability.Unsafe, true, evidencePath, reason, gitReceipt);
+}
+
 public sealed class DispatchRecoveryPolicy
 {
     public static readonly TimeSpan DefaultRecentHeartbeatGrace = TimeSpan.FromMinutes(5);
@@ -45,28 +152,65 @@ public sealed class DispatchRecoveryPolicy
         TaskProcessRecord process,
         bool hasLiveProcess,
         int staleRetryBudgetRemaining = 0,
-        bool hasDirtyWorktreeEvidence = false)
+        DispatchWorktreeInspectionStatus? worktreeInspection = null)
     {
         var exitPath = process.ExitCodePath;
         var heartbeat = ProcessLogReader.ReadHeartbeat(process, _clock.UtcNow);
+        worktreeInspection ??= DispatchWorktreeInspectionStatus.NotRequired;
 
-        if (!hasLiveProcess && File.Exists(exitPath))
+        var exitArtifact = DispatchExitArtifactReader.Read(exitPath);
+        if (!hasLiveProcess && exitArtifact.Kind == ExitCodeReadKind.Valid)
         {
             return Decision(
                 DispatchRecoveryAction.ReconcileFromExit,
                 exitPath,
-                "no live process and exit artifact exists");
+                $"no live process and valid exit artifact exists; {exitArtifact.Evidence}");
+        }
+
+        if (!hasLiveProcess && exitArtifact.Kind is ExitCodeReadKind.Invalid or ExitCodeReadKind.Unreadable)
+        {
+            var artifactState = exitArtifact.Kind.ToString().ToLowerInvariant();
+            return Decision(
+                DispatchRecoveryAction.Hold,
+                exitPath,
+                $"exit artifact apparatus unavailable; state={exitArtifact.Kind}; evidence={exitArtifact.Evidence}",
+                $"exit-artifact-{artifactState}");
         }
 
         if (!hasLiveProcess)
         {
+            if (!heartbeat.IsAvailable && heartbeat.UnavailableReason is not "missing")
+            {
+                var unavailableReason = heartbeat.UnavailableReason ?? "unknown";
+                return Decision(
+                    DispatchRecoveryAction.Hold,
+                    heartbeat.Path,
+                    $"heartbeat apparatus unavailable; unavailable_reason={unavailableReason}",
+                    $"heartbeat-{unavailableReason}");
+            }
+
+            if (worktreeInspection.Availability is
+                DispatchWorktreeInspectionAvailability.Unavailable or
+                DispatchWorktreeInspectionAvailability.Unsafe)
+            {
+                var inspectionState = worktreeInspection.Availability == DispatchWorktreeInspectionAvailability.Unsafe
+                    ? "unsafe"
+                    : "unavailable";
+                return Decision(
+                    DispatchRecoveryAction.Hold,
+                    worktreeInspection.EvidencePath,
+                    $"worktree inspection {inspectionState}; unavailable_reason={worktreeInspection.UnavailableReason ?? "unknown"}; " +
+                    $"git_receipt={worktreeInspection.GitReceipt ?? "none"}",
+                    $"worktree-inspection-{inspectionState}");
+            }
+
             var heartbeatEvidence = heartbeat.IsAvailable ? heartbeat.Path : "heartbeat-absent";
             var heartbeatStale = !heartbeat.IsAvailable ||
                 heartbeat.HeartbeatAge is null ||
                 heartbeat.HeartbeatAge >= _recentHeartbeatGrace;
             if (heartbeatStale)
             {
-                if (staleRetryBudgetRemaining > 0 && !hasDirtyWorktreeEvidence)
+                if (staleRetryBudgetRemaining > 0 && !worktreeInspection.HasDirtyEvidence)
                 {
                     return Decision(
                         DispatchRecoveryAction.MarkStale,
@@ -80,7 +224,7 @@ public sealed class DispatchRecoveryPolicy
                 return Decision(
                     staleRetryBudgetRemaining <= 0 ? DispatchRecoveryAction.BudgetExhausted : DispatchRecoveryAction.MarkStale,
                     heartbeatEvidence,
-                    $"no live process, exit-absent, heartbeat {(heartbeat.IsAvailable ? "stale" : "absent")}",
+                    $"no live process, exit-absent, heartbeat {(heartbeat.IsAvailable ? "stale" : $"unavailable reason={heartbeat.UnavailableReason ?? "unknown"}")}",
                     blocker);
             }
 
@@ -128,10 +272,10 @@ public sealed class DispatchRecoveryPolicy
 
         return Decision(
             DispatchRecoveryAction.Hold,
-            heartbeat.IsAvailable ? heartbeat.Path : "heartbeat-absent",
+            heartbeat.Path,
             heartbeat.IsAvailable
                 ? "live process has no terminal artifact and has not exceeded live-idle policy"
-                : "live process has no heartbeat; CPU sampling unavailable, holding pending other detectors");
+                : $"live process heartbeat unavailable reason={heartbeat.UnavailableReason ?? "unknown"}; CPU sampling unavailable, holding pending other detectors");
     }
 
     public static string ToActionName(DispatchRecoveryAction action) =>

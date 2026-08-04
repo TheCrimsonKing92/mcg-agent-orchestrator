@@ -126,11 +126,18 @@ public sealed class DispatchStateSurface
         var artifactsStatus = ReadArtifacts(process, heartbeatStatus);
         var worktreeState = InspectWorktree(process.WorkingDirectory, task.LastDispatch?.DispatchedAt, _inspectWorktree);
         var staleBudget = DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task);
+        var recoveryWorktreeInspection =
+            _inspectWorktree &&
+            !processTree.HasLiveProcess &&
+            !artifactsStatus.ExitCodeExists &&
+            BackgroundDispatchRunner.RequiresFileChangeEvidence(task)
+                ? ToRecoveryWorktreeInspection(worktreeState)
+                : DispatchWorktreeInspectionStatus.NotRequired;
         var recovery = _recoveryPolicy.Evaluate(
             process,
             processTree.HasLiveProcess,
             staleBudget,
-            worktreeState.IsDirty == true);
+            recoveryWorktreeInspection);
         var kind = Classify(process, recovery, processTree, heartbeatStatus, artifactsStatus);
         return new DispatchAuthoritativeState(
             kind,
@@ -266,6 +273,24 @@ public sealed class DispatchStateSurface
             error);
     }
 
+    private static DispatchWorktreeInspectionStatus ToRecoveryWorktreeInspection(DispatchWorktreeState worktree)
+    {
+        if (worktree.IsDirty is { } isDirty && string.IsNullOrWhiteSpace(worktree.Error))
+        {
+            return DispatchWorktreeInspectionStatus.Available(isDirty, worktree.WorkingDirectory);
+        }
+
+        var reason = !worktree.Exists
+            ? "directory-missing"
+            : !worktree.IsGitWorktree
+                ? "git-metadata-missing"
+                : "git-inspection-failed";
+        return DispatchWorktreeInspectionStatus.Unavailable(
+            worktree.WorkingDirectory,
+            reason,
+            worktree.Error ?? "worktree-state-unavailable");
+    }
+
     private DispatchStateKind Classify(
         TaskProcessRecord process,
         DispatchRecoveryDecision recovery,
@@ -278,12 +303,13 @@ public sealed class DispatchStateSurface
             return DispatchStateKind.Completed;
         }
 
-        if (recovery.Action == DispatchRecoveryAction.ReconcileFromExit || (!tree.HasLiveProcess && artifacts.ExitCodeExists))
+        if (recovery.Action == DispatchRecoveryAction.ReconcileFromExit)
         {
             return DispatchStateKind.ExitedAwaitingReconcile;
         }
 
-        if (recovery.Action is DispatchRecoveryAction.ClassifyBlocker or DispatchRecoveryAction.Reap)
+        if (recovery.Action is DispatchRecoveryAction.ClassifyBlocker or DispatchRecoveryAction.Reap ||
+            recovery.Action == DispatchRecoveryAction.Hold && !string.IsNullOrWhiteSpace(recovery.Blocker))
         {
             return DispatchStateKind.WedgedProcess;
         }

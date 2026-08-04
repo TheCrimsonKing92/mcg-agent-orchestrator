@@ -480,8 +480,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(WorkTaskStatus.Running, task.Status);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_fails_dead_worker_when_exit_file_is_unreadable")]
-    public void BackgroundDispatchRunnerReconcileFailsDeadWorkerWhenExitFileIsUnreadable()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_holds_dead_worker_when_exit_file_is_unreadable")]
+    public void BackgroundDispatchRunnerReconcileHoldsDeadWorkerWhenExitFileIsUnreadable()
     {
         var root = CreateTempDirectory();
         var stdout = Path.Combine(root, "out.log");
@@ -518,10 +518,11 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             var outcome = new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
                 .ReconcileLatestProcess(kernel, goal.Id, task.Id);
 
-            Assert.NotNull(outcome.Verification);
-            Assert.Equal(1, outcome.ProcessRecord.ExitCode);
-            Assert.Equal(clock.UtcNow, outcome.ProcessRecord.CompletedAt);
-            Assert.True(outcome.Verification!.StandardError.Contains("exit code could not be read", StringComparison.Ordinal));
+            Assert.Null(outcome.Verification);
+            Assert.Null(outcome.ProcessRecord.ExitCode);
+            Assert.Null(outcome.ProcessRecord.CompletedAt);
+            Assert.Equal(DispatchRecoveryAction.Hold, outcome.RecoveryDecision!.Action);
+            Assert.Contains("state=Unreadable", outcome.RecoveryDecision.Reason, StringComparison.Ordinal);
             Assert.Equal(WorkTaskStatus.Running, task.Status);
         }
     }
@@ -1711,6 +1712,38 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("worktree=clean", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
 }
+
+    [Xunit.Fact]
+    public void BackgroundDispatchRunnerCompletedGitInspectionFailureFailsWithReceipt()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Developer,
+            "Implemented and verified the change.",
+            string.Empty,
+            clock,
+            worktree =>
+            {
+                File.WriteAllText(Path.Combine(worktree, "completed-change.txt"), "completed change");
+                RunGit(worktree, ["add", "-A"], clock.UtcNow.AddMinutes(1));
+                RunGit(worktree, ["commit", "-m", "Complete change"], clock.UtcNow.AddMinutes(1));
+            });
+        RunGit(process.WorkingDirectory, ["update-ref", "-d", $"refs/heads/{GoalWorktrees.BranchName(goal.Id)}"], clock.UtcNow.AddMinutes(2));
+        var branchReceipt = GitCli.Run(process.WorkingDirectory, "branch", "--show-current");
+        var headReceipt = GitCli.Run(process.WorkingDirectory, "rev-parse", "--short", "HEAD");
+        Assert.Equal(0, branchReceipt.ExitCode);
+        Assert.Equal(GoalWorktrees.BranchName(goal.Id), branchReceipt.Output.Trim());
+        Assert.NotEqual(0, headReceipt.ExitCode);
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.LastVerification!.ExitCode);
+        Assert.Contains("unavailable_reason=git-inspection-failed", task.LastVerification.StandardError, StringComparison.Ordinal);
+        Assert.Contains("git_receipt=operation=head", task.LastVerification.StandardError, StringComparison.Ordinal);
+    }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_no_change_rationale_without_source_change_fails")]
     public void BackgroundDispatchRunnerDeveloperNoChangeRationaleWithoutSourceChangeFails()

@@ -185,8 +185,32 @@ internal static class FailureTriagePlanner
 
         if (task.LastVerification is { Succeeded: false } verification)
         {
+            var dispatchOutcome = DispatchFailureClassifier.Classify(task, verification);
             var output = $"{verification.StandardOutput}{Environment.NewLine}{verification.StandardError}";
-            if (output.Contains("CS2012", StringComparison.OrdinalIgnoreCase))
+            if (dispatchOutcome.Kind == DispatchOutcomeKind.DirtyWorktreeRecoverable)
+            {
+                items.Add(Item(
+                    task,
+                    taskNumber,
+                    FailureTriageCause.DirtyWorktree,
+                    FailureTriageAction.RequestHumanInput,
+                    null,
+                    policyAllows: false,
+                    canAutoApply: false,
+                    gate: true,
+                    $"Worker produced file changes but left the worktree dirty; classifier evidence: {dispatchOutcome.EvidenceSummary}",
+                    "goal-recovery"));
+                return;
+            }
+
+            if (dispatchOutcome.Kind is DispatchOutcomeKind.PreflightFailure or DispatchOutcomeKind.SandboxCommitBlocked)
+            {
+                AddMissingPermissionsItem(items, task, taskNumber, dispatchOutcome.EvidenceSummary);
+                return;
+            }
+
+            if (dispatchOutcome.Kind == DispatchOutcomeKind.UnknownFailure &&
+                output.Contains("CS2012", StringComparison.OrdinalIgnoreCase))
             {
                 var allows = policy.Allows(AutonomyAction.BuildTest);
                 items.Add(Item(
@@ -203,25 +227,10 @@ internal static class FailureTriagePlanner
                 return;
             }
 
-            if (DispatchFailureClassifier.TryBuildDirtyDispatchRecovery(task, out _))
-            {
-                items.Add(Item(
-                    task,
-                    taskNumber,
-                    FailureTriageCause.DirtyWorktree,
-                    FailureTriageAction.RequestHumanInput,
-                    null,
-                    policyAllows: false,
-                    canAutoApply: false,
-                    gate: true,
-                    "Worker produced file changes but left the worktree dirty; inspect, commit, or discard before retry.",
-                    "goal-recovery"));
-                return;
-            }
-
-            if (output.Contains("missing WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
-                output.Contains("no relevant source file changes", StringComparison.OrdinalIgnoreCase) ||
-                output.Contains("no requested source change", StringComparison.OrdinalIgnoreCase))
+            if (dispatchOutcome.Kind == DispatchOutcomeKind.UnknownFailure &&
+                (output.Contains("missing WORKER_RESULT", StringComparison.OrdinalIgnoreCase) ||
+                 output.Contains("no relevant source file changes", StringComparison.OrdinalIgnoreCase) ||
+                 output.Contains("no requested source change", StringComparison.OrdinalIgnoreCase)))
             {
                 var allows = policy.Allows(AutonomyAction.Retry);
                 items.Add(Item(
@@ -238,21 +247,13 @@ internal static class FailureTriagePlanner
                 return;
             }
 
-            if (output.Contains("permission", StringComparison.OrdinalIgnoreCase) ||
-                output.Contains("access denied", StringComparison.OrdinalIgnoreCase) ||
-                output.Contains("not writable", StringComparison.OrdinalIgnoreCase))
+            // Last-resort arm for legacy receipts that predate typed provider/preflight classification.
+            // It deliberately accepts only a structured worker blocker or an OS exception/errno on stderr;
+            // arbitrary test names and assertion text containing "permission" must stay UnknownFailure.
+            if (dispatchOutcome.Kind == DispatchOutcomeKind.UnknownFailure &&
+                TryGetLastResortPermissionEvidence(verification, out var permissionEvidence))
             {
-                items.Add(Item(
-                    task,
-                    taskNumber,
-                    FailureTriageCause.MissingWorkerPermissions,
-                    FailureTriageAction.RequestHumanInput,
-                    null,
-                    policyAllows: false,
-                    canAutoApply: false,
-                    gate: true,
-                    "Worker output indicates missing filesystem or tool permission; repair profile or route before retry.",
-                    "worker-profile-check"));
+                AddMissingPermissionsItem(items, task, taskNumber, permissionEvidence);
                 return;
             }
 
@@ -302,6 +303,66 @@ internal static class FailureTriagePlanner
                 $"Prepared subscription prompt is large ({promptCharacterCount} chars); operator confirmation is required before paid start.",
                 $"start-dispatch {taskNumber} --confirm-dispatch-start {SubscriptionPromptCostGuard.CliConfirmationFlag}"));
         }
+    }
+
+    private static void AddMissingPermissionsItem(
+        List<FailureTriageItem> items,
+        TaskSpec task,
+        int taskNumber,
+        string evidence)
+    {
+        items.Add(Item(
+            task,
+            taskNumber,
+            FailureTriageCause.MissingWorkerPermissions,
+            FailureTriageAction.RequestHumanInput,
+            null,
+            policyAllows: false,
+            canAutoApply: false,
+            gate: true,
+            $"Worker permission apparatus is unavailable; evidence: {BoundEvidence(evidence)}",
+            "worker-profile-check"));
+    }
+
+    private static bool TryGetLastResortPermissionEvidence(
+        TaskVerificationRecord verification,
+        out string evidence)
+    {
+        if (WorkerResultBlockers.TryFindBlocker(verification, out var blocker) &&
+            ContainsPermissionText(blocker))
+        {
+            evidence = $"structured blocker={blocker}";
+            return true;
+        }
+
+        foreach (var line in verification.StandardError.Split(
+                     ['\r', '\n'],
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (line.Contains("UnauthorizedAccessException", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("EACCES", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("EPERM", StringComparison.OrdinalIgnoreCase))
+            {
+                evidence = $"legacy stderr={line}";
+                return true;
+            }
+        }
+
+        evidence = string.Empty;
+        return false;
+    }
+
+    private static bool ContainsPermissionText(string text) =>
+        text.Contains("permission", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("access denied", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("not writable", StringComparison.OrdinalIgnoreCase) ||
+        text.Contains("read-only", StringComparison.OrdinalIgnoreCase);
+
+    private static string BoundEvidence(string evidence)
+    {
+        const int maxLength = 256;
+        var normalized = evidence.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return normalized.Length <= maxLength ? normalized : normalized[..maxLength] + "...";
     }
 
     private static void AddFailoverItem(

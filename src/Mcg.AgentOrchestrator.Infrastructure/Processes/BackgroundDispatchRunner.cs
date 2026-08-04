@@ -52,6 +52,8 @@ public sealed record InterruptedDispatchStateRead(
 
 public sealed class BackgroundDispatchRunner
 {
+    private const int ApparatusHoldObservationsBeforeEscalation = 2;
+    private const string ApparatusHoldReceiptPrefix = "DispatchApparatusHoldObserved:";
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
     public const string TestRewriteRealWorkerCommandsVariable = "MCG_ORCHESTRATOR_TEST_REWRITE_REAL_WORKER_COMMANDS";
 
@@ -107,7 +109,7 @@ public sealed class BackgroundDispatchRunner
     private readonly Func<ProcessStartInfo, Process?> _startProcess;
     private readonly Dictionary<ProcessLogCacheKey, ProcessLogSnapshot> _processLogCache = [];
     private readonly object _processLogCacheGate = new();
-    private readonly ConcurrentDictionary<WorktreeInspectionCacheKey, WorktreeInspectionCacheEntry> _worktreeInspectionCache = [];
+    private readonly ConcurrentDictionary<WorktreeInspectionCacheKey, GoalWorktreeInspectionResult> _worktreeInspectionCache = [];
 
     public BackgroundDispatchRunner(
         IClock? clock = null,
@@ -498,7 +500,10 @@ public sealed class BackgroundDispatchRunner
             foreach (var task in goal.Tasks)
             {
                 var process = task.LastProcess;
-                if (process is null ||
+                if (task.Status is WorkTaskStatus.WaitingForHuman or
+                                   WorkTaskStatus.Failed or
+                                   WorkTaskStatus.Cancelled ||
+                    process is null ||
                     process.WasCancelled ||
                     HasProcessOnlyCompletionAlreadyApplied(task, process) ||
                     HasRecordedCompletionForProcess(task, process))
@@ -511,7 +516,10 @@ public sealed class BackgroundDispatchRunner
                     continue;
 
                 ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
-                reconciled++;
+                if (outcome.RecoveryDecision?.Action != DispatchRecoveryAction.Hold)
+                {
+                    reconciled++;
+                }
             }
         }
 
@@ -578,18 +586,35 @@ public sealed class BackgroundDispatchRunner
             : null;
         RecordProviderSessionFromHeartbeat(kernel, goalId, taskId, task, observedHeartbeat);
         var hasLiveProcess = AnyObservedProcessStillRunning(processRecord, observedHeartbeat);
-        var hasDirtyWorktreeEvidence =
-            !hasLiveProcess &&
+        var worktreeInspectionStatus = DispatchWorktreeInspectionStatus.NotRequired;
+        if (!hasLiveProcess &&
             !File.Exists(processRecord.ExitCodePath) &&
-            task.LastDispatch is not null &&
-            RequiresFileChangeEvidence(task) &&
-            TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch.DispatchedAt, out var staleWorktreeEvidence) &&
-            !staleWorktreeEvidence.IsClean;
+            task.LastDispatch is { } lastDispatch &&
+            RequiresFileChangeEvidence(task))
+        {
+            var inspection = InspectGoalWorktree(
+                processRecord.WorkingDirectory,
+                goalId,
+                lastDispatch.DispatchedAt);
+            worktreeInspectionStatus = inspection.IsAvailable
+                ? DispatchWorktreeInspectionStatus.Available(
+                    !inspection.Evidence.IsClean,
+                    processRecord.WorkingDirectory)
+                : inspection.IsUnsafe
+                    ? DispatchWorktreeInspectionStatus.Unsafe(
+                        processRecord.WorkingDirectory,
+                        inspection.UnavailableReason ?? "unknown",
+                        inspection.GitReceipt)
+                : DispatchWorktreeInspectionStatus.Unavailable(
+                    processRecord.WorkingDirectory,
+                    inspection.UnavailableReason ?? "unknown",
+                    inspection.GitReceipt);
+        }
         var recoveryDecision = _recoveryPolicy.Evaluate(
             processRecord,
             hasLiveProcess,
             DispatchRecoveryPolicy.GetStaleRetryBudgetRemaining(task),
-            hasDirtyWorktreeEvidence);
+            worktreeInspectionStatus);
         var exitFileExists = File.Exists(processRecord.ExitCodePath);
         if (TryCompleteFromExitFile(kernel, goalId, taskId, processRecord, recoveryDecision, out var completion))
             return completion;
@@ -610,7 +635,8 @@ public sealed class BackgroundDispatchRunner
             {
                 var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
                 if (RequiresFileChangeEvidence(task) &&
-                    TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var wt) &&
+                    InspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt) is
+                        { IsAvailable: true, Evidence: var wt } &&
                     wt.IsClean && wt.HasRelevantCommitAfterDispatch)
                 {
                     var reapNote =
@@ -629,7 +655,8 @@ public sealed class BackgroundDispatchRunner
             {
                 var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
                 if (RequiresFileChangeEvidence(task) &&
-                    TryInspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt, out var wt) &&
+                    InspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt) is
+                        { IsAvailable: true, Evidence: var wt } &&
                     wt.IsClean && wt.HasRelevantCommitAfterDispatch)
                 {
                     var reapNote =
@@ -680,6 +707,11 @@ public sealed class BackgroundDispatchRunner
             return autoRequeueOutcome;
         }
 
+        if (recoveryDecision.Action == DispatchRecoveryAction.Hold)
+        {
+            return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
+        }
+
         var staleDiagnostic = BuildRecoveryDiagnostic(recoveryDecision);
         return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, staleDiagnostic, recoveryDecision, staleResourceAccounting);
     }
@@ -695,7 +727,8 @@ public sealed class BackgroundDispatchRunner
         var hasHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat);
         var observedHeartbeat = hasHeartbeat ? heartbeat : null;
         RecordProviderSessionFromHeartbeat(kernel, goalId, taskId, kernel.GetTask(goalId, taskId), observedHeartbeat);
-        if (TryReadExitCode(processRecord.ExitCodePath, out var exitCode))
+        var exitRead = ReadExitCode(processRecord.ExitCodePath);
+        if (exitRead.Kind == ExitCodeReadKind.Valid)
         {
             if (AnyOwnedWorkerProcessStillRunning(processRecord, observedHeartbeat))
             {
@@ -705,29 +738,31 @@ public sealed class BackgroundDispatchRunner
         }
         else
         {
-            if (!File.Exists(processRecord.ExitCodePath) ||
+            if (exitRead.Kind == ExitCodeReadKind.Missing ||
                 AnyObservedProcessStillRunning(processRecord, observedHeartbeat))
             {
                 outcome = new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
                 return false;
             }
 
-            if (!TryReadExitCodeWithRetry(processRecord.ExitCodePath, out exitCode))
+            exitRead = ReadExitCodeWithRetry(processRecord.ExitCodePath);
+            if (exitRead.Kind != ExitCodeReadKind.Valid)
             {
-                var diagnostic =
-                    "Dispatch exit file exists and no tracked process is alive, but the exit code could not be read; " +
-                    $"treating dispatch as failed. exit_path={processRecord.ExitCodePath}";
-                outcome = BuildCompletedProcessOutcome(
-                    kernel,
-                    goalId,
-                    taskId,
+                var apparatusDecision = new DispatchRecoveryDecision(
+                    DispatchRecoveryAction.Hold,
+                    DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.Hold),
+                    processRecord.ExitCodePath,
+                    $"exit artifact unavailable; state={exitRead.Kind}; evidence={exitRead.Evidence}",
+                    $"exit-artifact-{exitRead.Kind.ToString().ToLowerInvariant()}");
+                outcome = new DispatchRefreshOutcome(
                     processRecord,
-                    1,
-                    AppendDiagnostic(BuildRecoveryDiagnostic(recoveryDecision), diagnostic),
-                    recoveryDecision);
+                    null,
+                    RecoveryDecision: apparatusDecision);
                 return true;
             }
         }
+
+        var exitCode = exitRead.ExitCode!.Value;
 
         if (AnyOwnedWorkerProcessStillRunning(processRecord, observedHeartbeat))
         {
@@ -746,24 +781,25 @@ public sealed class BackgroundDispatchRunner
         return true;
     }
 
-    private static bool TryReadExitCodeWithRetry(string path, out int exitCode)
+    private static ExitCodeReadResult ReadExitCodeWithRetry(string path)
     {
         const int attempts = 3;
+        var result = ReadExitCode(path);
         for (var attempt = 0; attempt < attempts; attempt++)
         {
-            if (TryReadExitCode(path, out exitCode))
+            if (result.Kind == ExitCodeReadKind.Valid)
             {
-                return true;
+                return result;
             }
 
             if (attempt < attempts - 1)
             {
                 Thread.Sleep(TimeSpan.FromMilliseconds(50));
+                result = ReadExitCode(path);
             }
         }
 
-        exitCode = 1;
-        return false;
+        return result;
     }
 
     public static void ApplyRefreshOutcome(
@@ -810,6 +846,54 @@ public sealed class BackgroundDispatchRunner
                 kernel.RequeueInterruptedDispatch(goalId, taskId, disposition.Message);
             }
         }
+
+        if (outcome.RecoveryDecision is
+            {
+                Action: DispatchRecoveryAction.Hold,
+                Blocker: { Length: > 0 } blocker
+            } apparatusHold)
+        {
+            RecordBoundedApparatusHold(kernel, goalId, taskId, apparatusHold, blocker);
+        }
+    }
+
+    private static void RecordBoundedApparatusHold(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        DispatchRecoveryDecision decision,
+        string blocker)
+    {
+        var priorObservations = kernel.GetTimeline(goalId).Count(evt =>
+            evt.TaskId == taskId &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.StartsWith(ApparatusHoldReceiptPrefix, StringComparison.Ordinal) &&
+            evt.Message.Contains($"blocker='{blocker}'", StringComparison.Ordinal));
+        var observation = priorObservations + 1;
+        var diagnostic = BuildRecoveryDiagnostic(decision);
+        kernel.RecordTaskNote(
+            goalId,
+            taskId,
+            $"{ApparatusHoldReceiptPrefix} observation={observation}/{ApparatusHoldObservationsBeforeEscalation}; {diagnostic}");
+
+        if (observation < ApparatusHoldObservationsBeforeEscalation)
+        {
+            return;
+        }
+
+        var fingerprint = $"dispatch-apparatus-hold:{taskId.Value}:{blocker}";
+        kernel.RequestHumanInputDeduplicated(
+            goalId,
+            taskId,
+            $"Dispatch recovery cannot determine the worker outcome after {observation} observations because blocker '{blocker}' remains. " +
+            $"Inspect and repair or remove the apparatus artifact at '{decision.EvidencePath}', then answer this request to resume. {diagnostic}",
+            HumanWaitKind.RecoveryChoice,
+            isAutoDefaultable: false,
+            isDismissible: false,
+            isAnswerRequired: true,
+            isExternallyBlocked: false,
+            questionFingerprint: fingerprint,
+            blockerFingerprint: fingerprint);
     }
 
     private bool TryBuildStaleDispatchAutoRequeueOutcome(
@@ -1078,13 +1162,14 @@ public sealed class BackgroundDispatchRunner
         var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, decisionStandardOutput, decisionStandardError);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
-        if (RequiresFileChangeEvidence(task) &&
-            TryInspectGoalWorktree(
+        var completedWorktreeInspection = RequiresFileChangeEvidence(task)
+            ? InspectGoalWorktree(
                 processRecord.WorkingDirectory,
                 goalId,
                 task.LastDispatch!.DispatchedAt,
-                out var worktreeEvidence,
-                forceRefresh: true))
+                forceRefresh: true)
+            : null;
+        if (completedWorktreeInspection is { IsAvailable: true, Evidence: var worktreeEvidence })
         {
             hasCommittedChanges = worktreeEvidence.HasRelevantCommitAfterDispatch;
             // Default path: a Developer/Tester that edited the worktree and showed verification
@@ -1224,7 +1309,18 @@ public sealed class BackgroundDispatchRunner
             // verification (TaskSpec.RecordVerification via ModelFitEvidence); it never
             // gates the dispatch.
         }
-
+        else if (completedWorktreeInspection is { IsAvailable: false } unavailableInspection)
+        {
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                $"Completed dispatch worktree inspection {(unavailableInspection.IsUnsafe ? "unsafe" : "unavailable")}; " +
+                $"unavailable_reason={unavailableInspection.UnavailableReason ?? "unknown"}; " +
+                $"git_receipt={unavailableInspection.GitReceipt}.");
+            if (string.Equals(unavailableInspection.UnavailableReason, "git-inspection-failed", StringComparison.Ordinal))
+            {
+                exitCode = 1;
+            }
+        }
         if (task.LastDispatch is { } completedDispatch && !IsLocalDispatch(completedDispatch))
         {
             var reapNote = ReapWorktreeBuildDaemons(processRecord.WorkingDirectory);
@@ -1389,7 +1485,7 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static bool RequiresFileChangeEvidence(TaskSpec task)
+    internal static bool RequiresFileChangeEvidence(TaskSpec task)
     {
         return task.LastDispatch is { } dispatch &&
             !IsLocalDispatch(dispatch) &&
@@ -1826,6 +1922,24 @@ public sealed class BackgroundDispatchRunner
             $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; status_short={worktreeEvidence.StatusShort}.";
     }
 
+    private GoalWorktreeInspectionResult InspectGoalWorktree(
+        string workingDirectory,
+        GoalId goalId,
+        DateTimeOffset dispatchedAt,
+        bool forceRefresh = false)
+    {
+        var key = new WorktreeInspectionCacheKey(workingDirectory, goalId, dispatchedAt);
+        if (!forceRefresh && _worktreeInspectionCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        _beforeGoalWorktreeInspection?.Invoke();
+        var result = InspectGoalWorktreeCore(workingDirectory, goalId, dispatchedAt);
+        _worktreeInspectionCache[key] = result;
+        return result;
+    }
+
     private bool TryInspectGoalWorktree(
         string workingDirectory,
         GoalId goalId,
@@ -1833,79 +1947,94 @@ public sealed class BackgroundDispatchRunner
         out GoalWorktreeDispatchEvidence evidence,
         bool forceRefresh = false)
     {
-        var key = new WorktreeInspectionCacheKey(workingDirectory, goalId, dispatchedAt);
-        if (!forceRefresh && _worktreeInspectionCache.TryGetValue(key, out var cached))
-        {
-            evidence = cached.Evidence;
-            return cached.Available;
-        }
-
-        _beforeGoalWorktreeInspection?.Invoke();
-        var available = TryInspectGoalWorktreeCore(workingDirectory, goalId, dispatchedAt, out evidence);
-        _worktreeInspectionCache[key] = new WorktreeInspectionCacheEntry(available, evidence);
-        return available;
+        var inspection = InspectGoalWorktree(workingDirectory, goalId, dispatchedAt, forceRefresh);
+        evidence = inspection.Evidence;
+        return inspection.IsAvailable;
     }
 
-    private static bool TryInspectGoalWorktreeCore(
+    private static GoalWorktreeInspectionResult InspectGoalWorktreeCore(
         string workingDirectory,
         GoalId goalId,
-        DateTimeOffset dispatchedAt,
-        out GoalWorktreeDispatchEvidence evidence)
+        DateTimeOffset dispatchedAt)
     {
-        evidence = GoalWorktreeDispatchEvidence.Unknown;
-        if (!Directory.Exists(workingDirectory) || !File.Exists(Path.Combine(workingDirectory, ".git")))
+        if (!Directory.Exists(workingDirectory))
         {
-            return false;
+            return GoalWorktreeInspectionResult.Unavailable("directory-missing", "git-not-run");
+        }
+
+        if (!File.Exists(Path.Combine(workingDirectory, ".git")))
+        {
+            return GoalWorktreeInspectionResult.Unavailable("git-metadata-missing", "git-not-run");
         }
 
         var branch = GitCli.Run(workingDirectory, "branch", "--show-current");
         var expectedBranch = GoalWorktrees.BranchName(goalId);
-        if (branch.ExitCode != 0 || !string.Equals(branch.Output.Trim(), expectedBranch, StringComparison.Ordinal))
+        if (branch.ExitCode != 0)
         {
-            return false;
+            return GoalWorktreeInspectionResult.Unavailable(
+                "branch-inspection-failed",
+                BuildGitInspectionReceipt("branch", branch));
+        }
+
+        if (!string.Equals(branch.Output.Trim(), expectedBranch, StringComparison.Ordinal))
+        {
+            return GoalWorktreeInspectionResult.Unsafe(
+                "branch-mismatch",
+                $"expected={expectedBranch}; actual={NormalizeDiagnosticText(branch.Output)}");
         }
 
         var head = GitCli.Run(workingDirectory, "rev-parse", "--short", "HEAD");
         var status = GitCli.Run(workingDirectory, "status", "--short", "--untracked-files=all");
         var dispatch = GitCli.Run(workingDirectory, "log", "--format=%H", $"--since={dispatchedAt:O}");
         var changedPaths = GitCli.Run(workingDirectory, "log", "--name-only", "--format=", $"--since={dispatchedAt:O}");
-        var commitsAfterDispatch = 0;
-        if (dispatch.ExitCode == 0)
+        var failedGitOperation = new[]
         {
-            commitsAfterDispatch = dispatch.Output
-                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-                .Length;
+            (Name: "head", Result: head),
+            (Name: "status", Result: status),
+            (Name: "dispatch-log", Result: dispatch),
+            (Name: "changed-paths", Result: changedPaths)
+        }.FirstOrDefault(item => !item.Result.Succeeded || item.Result.DrainTimedOut);
+        if (failedGitOperation.Name is not null)
+        {
+            return GoalWorktreeInspectionResult.Unavailable(
+                "git-inspection-failed",
+                BuildGitInspectionReceipt(failedGitOperation.Name, failedGitOperation.Result));
         }
 
-        var pathsChangedAfterDispatch = changedPaths.ExitCode == 0
-            ? changedPaths.Output
-                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToArray()
-            : [];
+        var commitsAfterDispatch = dispatch.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Length;
+        var pathsChangedAfterDispatch = changedPaths.Output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         var filteredStatusOutput = GitCli.FilterCommitWorthyStatus(status.Output);
-        evidence = new GoalWorktreeDispatchEvidence(
+        var evidence = new GoalWorktreeDispatchEvidence(
             branch.Output.Trim(),
-            head.ExitCode == 0 ? head.Output.Trim() : "unknown",
-            status.ExitCode == 0 && string.IsNullOrWhiteSpace(filteredStatusOutput),
-            status.ExitCode == 0 && string.IsNullOrWhiteSpace(filteredStatusOutput) ? "clean" : "dirty",
+            head.Output.Trim(),
+            string.IsNullOrWhiteSpace(filteredStatusOutput),
+            string.IsNullOrWhiteSpace(filteredStatusOutput) ? "clean" : "dirty",
             FormatStatusShort(new GitCli.GitResult(status.ExitCode, filteredStatusOutput, string.Empty)),
             commitsAfterDispatch,
             pathsChangedAfterDispatch,
             GitCli.ParseCommitWorthyStatusPaths(filteredStatusOutput));
-        return true;
+        return GoalWorktreeInspectionResult.Available(evidence);
+    }
+
+    private static string BuildGitInspectionReceipt(string operation, GitCli.GitResult result)
+    {
+        var detail = string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error;
+        var normalizedDetail = NormalizeDiagnosticText(detail);
+        return $"operation={operation}; exit_code={result.ExitCode}; drain_timed_out={result.DrainTimedOut.ToString().ToLowerInvariant()}; " +
+            $"detail={normalizedDetail[..Math.Min(normalizedDetail.Length, 256)]}";
     }
 
     private sealed record WorktreeInspectionCacheKey(
         string WorkingDirectory,
         GoalId GoalId,
         DateTimeOffset DispatchedAt);
-
-    private sealed record WorktreeInspectionCacheEntry(
-        bool Available,
-        GoalWorktreeDispatchEvidence Evidence);
 
     private static string FormatChangedPaths(IReadOnlyList<string> changedPaths)
     {
@@ -2050,7 +2179,7 @@ public sealed class BackgroundDispatchRunner
 
                 if (task.Status != WorkTaskStatus.Running ||
                     task.LastProcess is not { IsRunning: true } process ||
-                    TryReadExitCode(process.ExitCodePath, out _) ||
+                    ReadExitCode(process.ExitCodePath).Kind != ExitCodeReadKind.Missing ||
                     AnyTrackedProcessStillRunning(process))
                 {
                     continue;
@@ -2387,37 +2516,8 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static bool TryReadExitCode(string path, out int exitCode)
-    {
-        if (!File.Exists(path))
-        {
-            exitCode = 1;
-            return false;
-        }
-
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            if (int.TryParse(reader.ReadToEnd().Trim(), out exitCode))
-            {
-                return true;
-            }
-        }
-        catch (IOException)
-        {
-            exitCode = 1;
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            exitCode = 1;
-            return false;
-        }
-
-        exitCode = 1;
-        return true;
-    }
+    private static ExitCodeReadResult ReadExitCode(string path)
+        => DispatchExitArtifactReader.Read(path);
 
     private static bool TryReadChildExitRecord(
         string? path,
@@ -3772,6 +3872,23 @@ public sealed class BackgroundDispatchRunner
         string? DirtyStateHash = null)
     {
         public static DispatchHeartbeat Empty { get; } = new(0, null, "unknown", DateTimeOffset.MinValue, DateTimeOffset.MinValue, 0, 0);
+    }
+
+    private sealed record GoalWorktreeInspectionResult(
+        bool IsAvailable,
+        bool IsUnsafe,
+        GoalWorktreeDispatchEvidence Evidence,
+        string? UnavailableReason,
+        string GitReceipt)
+    {
+        public static GoalWorktreeInspectionResult Available(GoalWorktreeDispatchEvidence evidence) =>
+            new(true, false, evidence, null, "git-inspection-succeeded");
+
+        public static GoalWorktreeInspectionResult Unsafe(string reason, string gitReceipt) =>
+            new(false, true, GoalWorktreeDispatchEvidence.Unknown, reason, gitReceipt);
+
+        public static GoalWorktreeInspectionResult Unavailable(string reason, string gitReceipt) =>
+            new(false, false, GoalWorktreeDispatchEvidence.Unknown, reason, gitReceipt);
     }
 
     private sealed record GoalWorktreeDispatchEvidence(

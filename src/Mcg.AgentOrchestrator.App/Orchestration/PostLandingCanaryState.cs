@@ -421,6 +421,12 @@ internal sealed class PostLandingCanaryEventStore : IAcceptanceEngineStateReader
                 $"Canary run event {record.EventId} was incorrectly attributed to goal {record.GoalId}.");
         }
 
+        if (record.Operation == "receipt" &&
+            record.Status is not "Passed" and not "Failed")
+        {
+            throw new PostLandingCanaryUnparseableReceiptException(record.EventId, record.Status);
+        }
+
         if (!TryParseKind(record.Operation, record.Status, out var kind))
         {
             throw new InvalidDataException(
@@ -477,7 +483,8 @@ internal sealed class PostLandingCanaryEventStore : IAcceptanceEngineStateReader
             "deferred" => PostLandingCanaryEventKind.Deferred,
             "receipt" when status?.Equals("Passed", StringComparison.Ordinal) == true =>
                 PostLandingCanaryEventKind.Passed,
-            "receipt" => PostLandingCanaryEventKind.Failed,
+            "receipt" when status?.Equals("Failed", StringComparison.Ordinal) == true =>
+                PostLandingCanaryEventKind.Failed,
             "abandoned" => PostLandingCanaryEventKind.Abandoned,
             "escalation" => PostLandingCanaryEventKind.Escalated,
             "clear" => PostLandingCanaryEventKind.Cleared,
@@ -488,7 +495,15 @@ internal sealed class PostLandingCanaryEventStore : IAcceptanceEngineStateReader
             return operation is "queued" or "started" or "deferred" or "abandoned" or "escalation" or "clear";
         }
 
-        return true;
+        return status is "Passed" or "Failed";
+    }
+}
+
+internal sealed class PostLandingCanaryUnparseableReceiptException : Exception
+{
+    internal PostLandingCanaryUnparseableReceiptException(string eventId, string? status)
+        : base($"Canary receipt {eventId} has unparseable status '{status ?? "<null>"}'.")
+    {
     }
 }
 

@@ -1031,8 +1031,10 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
-        var task = new TaskSpec(TaskId.New(), "Run interrupted worker", AgentRole.Developer);
-        var goal = kernel.CreateGoal("Recover interrupted goal", [task]);
+        var task = new TaskSpec(TaskId.New(), "Run interrupted worker", AgentRole.Researcher);
+        var goal = kernel.CreateGoal(
+            "Recover interrupted goal",
+            [task, new TaskSpec(TaskId.New(), "Implement recovered work", AgentRole.Developer)]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();

@@ -101,7 +101,10 @@ internal static class GoalRecoveryPlanner
         if (task.LastProcess is { CompletedAt: null } process && task.LastVerification is null)
         {
             var recoveryDecision = DispatchRecoveryView.Evaluate(goal, task)!;
-            var alive = recoveryDecision.Action != DispatchRecoveryAction.MarkStale &&
+            var apparatusHold = recoveryDecision.Action == DispatchRecoveryAction.Hold &&
+                !string.IsNullOrWhiteSpace(recoveryDecision.Blocker);
+            var alive = !apparatusHold &&
+                recoveryDecision.Action != DispatchRecoveryAction.MarkStale &&
                 recoveryDecision.Action != DispatchRecoveryAction.RetryStale &&
                 recoveryDecision.Action != DispatchRecoveryAction.BudgetExhausted &&
                 recoveryDecision.Action != DispatchRecoveryAction.ReconcileFromExit;
@@ -110,10 +113,12 @@ internal static class GoalRecoveryPlanner
                 task.Id,
                 task.RequiredRole,
                 task.Status,
-                alive
+                apparatusHold
+                    ? $"recorded process pid={process.ProcessId} is not alive; recovery held for apparatus blocker={recoveryDecision.Blocker} evidence={recoveryDecision.EvidencePath}; refresh records a bounded hold observation and escalates a repeated hold"
+                    : alive
                     ? $"recorded process is still alive pid={process.ProcessId}; recovery action={recoveryDecision.ActionName} evidence={recoveryDecision.EvidencePath}"
                     : $"recorded process pid={process.ProcessId} is not alive; recovery action={recoveryDecision.ActionName} evidence={recoveryDecision.EvidencePath}",
-                alive ? $"refresh-dispatch {taskNumber}" : $"refresh-dispatch {taskNumber}",
+                $"refresh-dispatch {taskNumber}",
                 recoveryDecision));
         }
         else if (task.Status == WorkTaskStatus.Running && task.LastDispatch is not null)

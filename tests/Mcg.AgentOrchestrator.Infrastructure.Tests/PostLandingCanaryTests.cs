@@ -517,6 +517,29 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("WaitForExitAsync(CancellationToken.None)", runnerSource, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Runner internal cancellation is recorded as infrastructure cancellation, not timeout")]
+    public async Task RunnerInternalCancellationIsNotRecordedAsTimeout()
+    {
+        using var fixture = new CanaryTestFixture(timeoutSeconds: 10);
+        using var runnerCancellation = new CancellationTokenSource();
+        runnerCancellation.Cancel();
+        var (coordinator, circuit) = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => Task.FromCanceled<PostLandingCanaryOutcome>(runnerCancellation.Token)),
+            maxAttempts: 1);
+
+        var disposition = await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-runner-cancel", ["engine/cancel"]),
+            CancellationToken.None);
+
+        Assert.Equal(PostLandingCanaryDisposition.Abandoned, disposition);
+        Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+        var abandoned = Assert.Single((await fixture.RawStore.ReadByTypeSinceAsync(RunEventTypes.PostLandingCanary))
+            .Where(item => item.Operation == "abandoned"));
+        Assert.Contains("runner cancelled internally: TaskCanceledException", abandoned.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("hard timeout", abandoned.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("exceeded", abandoned.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Xunit.Fact(DisplayName = "Timeout receipt and FIFO lease wait for runner termination confirmation")]
     public async Task TimeoutKeepsSerializationUntilRunnerTerminationIsConfirmed()
     {
@@ -713,6 +736,39 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var recovered = circuit.Read();
         Assert.Equal(AcceptanceEngineHealth.Unhealthy, recovered.Health);
         Assert.Equal("sha-persisted-unhealthy", recovered.LandingSha);
+    }
+
+    [Xunit.Fact(DisplayName = "Unrecognized canary receipt status surfaces unavailable state without tripping unhealthy")]
+    public async Task UnrecognizedReceiptStatusSurfacesUnavailableState()
+    {
+        using var fixture = new CanaryTestFixture();
+        var payload = JsonSerializer.Serialize(new PostLandingCanaryEventPayload(
+            PostLandingCanaryEventPayload.CanaryTag,
+            "sha-version-skew",
+            ["engine/version-skew"],
+            null,
+            1,
+            "receipt from a newer producer",
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow));
+        await fixture.RawStore.AppendAsync(new RunEventAppend(
+            RunEventTypes.PostLandingCanary,
+            GoalId: null,
+            Operation: "receipt",
+            Status: "PassedWithWarnings",
+            Detail: "unknown status fixture",
+            PayloadJson: payload));
+
+        var snapshot = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => Task.FromResult(PostLandingCanaryOutcome.Passed(1, "unused"))))
+            .Circuit
+            .Read();
+
+        Assert.Equal(AcceptanceEngineHealth.Unavailable, snapshot.Health);
+        Assert.NotEqual(AcceptanceEngineHealth.Unhealthy, snapshot.Health);
+        Assert.Equal("state-unavailable", snapshot.FailureReason);
+        Assert.Contains(nameof(PostLandingCanaryUnparseableReceiptException), snapshot.OperatorNote, StringComparison.Ordinal);
+        Assert.Contains("PassedWithWarnings", snapshot.OperatorNote, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Explicit fail-open records Unavailable, policy, and permitted outcome")]

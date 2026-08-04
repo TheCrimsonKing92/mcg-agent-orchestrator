@@ -733,7 +733,7 @@ public sealed class DashboardRenderingTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
             "Next recovery policy",
-            [new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer)]);
+            [new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Researcher)]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         var task = goal.Tasks.Single();
         var stdout = Path.Combine(root, "out.log");
@@ -944,11 +944,11 @@ public sealed class DashboardRenderingTests
     var goal = kernel.CreateGoal("Monitor goal state");
     var agent = new AgentDefinition(
         AgentId.New(),
-        "Developer",
-        AgentRole.Developer,
+        "Researcher",
+        AgentRole.Researcher,
         new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
     var goalPrefix = goal.Id.Value[..8];
     var dispatchRoot = CreateTempDirectory();
     var stdout = Path.Combine(dispatchRoot, "developer.out.log");
@@ -1024,7 +1024,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal("timeline", batch.Events[0].Event);
     Assert.Equal("Started monitoring work.", batch.Events[0].Message);
     Assert.Equal(task.Id.Value, batch.Events[0].TaskId);
-    Assert.Equal(AgentRole.Developer, batch.Events[0].Role);
+    Assert.Equal(AgentRole.Researcher, batch.Events[0].Role);
     Assert.Equal(WorkTaskStatus.Completed, batch.Snapshot.Tasks.Single(item => item.TaskId == task.Id.Value).Status);
     Xunit.Assert.Single(replay.Events);
     Assert.Equal("Finished monitoring work.", replay.Events.Single().Message);
@@ -1051,7 +1051,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal(goal.Id.Value, taskStatus.GoalId);
     Assert.Equal(task.Id.Value, taskStatus.TaskId);
     Assert.Equal(sourceEvent.TaskNumber, taskStatus.TaskNumber);
-    Assert.Equal(AgentRole.Developer, taskStatus.Role);
+    Assert.Equal(AgentRole.Researcher, taskStatus.Role);
     Assert.Equal(WorkTaskStatus.Completed, taskStatus.Status);
     using var taskStatusStream = new MemoryStream();
     await DashboardMonitoringEvents.WriteServerSentEventAsync(
@@ -2208,6 +2208,43 @@ public sealed class DashboardRenderingTests
     Xunit.Assert.Contains(dto.SourceSummaries, summary => summary.StartsWith("acceptance queue:", StringComparison.Ordinal));
     Xunit.Assert.Contains(dto.SourceSummaries, summary => summary.StartsWith("capacity:", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "Dashboard_action_recommendation_keeps_permission_test_failure_on_code_retry_path")]
+    public void DashboardActionRecommendationKeepsPermissionTestFailureOnCodeRetryPath()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Fix PermissionTests assertion.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Permission diagnostic negative control", [task]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+            "dotnet test --filter PermissionTests",
+            root,
+            1,
+            "PermissionTests failed: assertion quoted 'access denied' and 'not writable'.",
+            "1 test failed",
+            DateTimeOffset.UtcNow));
+
+        var report = DashboardActionRecommendationPlanner.Build(
+            kernel,
+            goal,
+            agents,
+            WorkerProfileCatalog.Default(),
+            root,
+            AutonomyPolicy.Observe);
+        var dto = DashboardResponseMapper.ToDashboardActionRecommendationReportDto(report);
+        var recommendations = dto.Secondary.ToList();
+        if (dto.Primary is not null)
+        {
+            recommendations.Insert(0, dto.Primary);
+        }
+        var triage = recommendations.Single(item => item.Source == DashboardActionRecommendationSource.FailureTriage);
+
+        Xunit.Assert.Equal("retry 1 <note> --autonomy observe", triage.SuggestedCommand);
+        Xunit.Assert.DoesNotContain("worker-profile-check", triage.SuggestedCommand, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Latest verification failed", triage.Reason, StringComparison.Ordinal);
+    }
 
     [Xunit.Fact(DisplayName = "DashboardNextActionControls_surface_prior_subscription_model_fit_before_handoff")]
     public void DashboardNextActionControlsSurfacePriorSubscriptionModelFitBeforeHandoff()

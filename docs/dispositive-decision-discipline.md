@@ -41,6 +41,14 @@ Never resolve it by guessing at the consumer.
   timestamps.
 - **Apparatus and candidate are separate channels, in BOTH directions.** An infrastructure fault must not
   become a verdict about the candidate, and a genuine verdict must not be demoted to an infrastructure fault.
+- **Unknown and unavailable are outcomes, not defaults.** Missing, unreadable, invalid, and valid artifacts
+  remain distinct until the decision is recorded; none may be silently mapped to clean, absent, failed, or
+  any other specific verdict.
+- **Typed evidence outranks display text.** A classifier receipt or typed status is consulted before any
+  last-resort substring heuristic. Heuristics require positive and negative controls so quoted diagnostics,
+  test names, and assertion text cannot manufacture the disposition.
+- **Timeout means the deadline fired.** Caller cancellation and a dependency that cancels itself are separate
+  reasons; record timeout only when the deadline token or timer supplies the discriminating evidence.
 
 ## Why the existing discipline did not catch these
 
