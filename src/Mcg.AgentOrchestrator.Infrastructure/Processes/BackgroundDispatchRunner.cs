@@ -500,7 +500,10 @@ public sealed class BackgroundDispatchRunner
             foreach (var task in goal.Tasks)
             {
                 var process = task.LastProcess;
-                if (task.Status != WorkTaskStatus.Running ||
+                if (task.Status is WorkTaskStatus.WaitingForHuman or
+                                   WorkTaskStatus.Completed or
+                                   WorkTaskStatus.Failed or
+                                   WorkTaskStatus.Cancelled ||
                     process is null ||
                     process.WasCancelled ||
                     HasProcessOnlyCompletionAlreadyApplied(task, process) ||
