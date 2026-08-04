@@ -634,7 +634,8 @@ internal sealed class ConductorBatchLoop
                             ? totalTicks + blockedRecheckCycles
                             : blockedRecheckCycles;
                         if (blockedRecheckBudget.HasValue &&
-                            blockedRecheckBudgetUsed >= blockedRecheckBudget.Value)
+                            blockedRecheckBudgetUsed >= blockedRecheckBudget.Value &&
+                            unscopedDispatchableTicks.Count == 0)
                         {
                             var exhaustedExplicitIterationBudget = maxIterations.HasValue;
                             var exhaustedStopReason = exhaustedExplicitIterationBudget
@@ -800,8 +801,8 @@ internal sealed class ConductorBatchLoop
                     {
                         ClearGoalHold(kernel, goal, changedGoalIds);
                         escalatedGoals.Add(goal.Id.Value);
-                        SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals, selfClearedSetAsideEntries);
                         ReapGoalOnce(kernel, goal, reapedGoals);
+                        SetAside(kernel, driver, goal, BatchSetAsideCondition.DependencyEscalated, setAsideGoals, selfClearedSetAsideEntries);
                         tickEscalated++;
                     }
                     else
@@ -861,8 +862,8 @@ internal sealed class ConductorBatchLoop
 
                     escalatedGoals.Add(goal.Id.Value);
                     ClearGoalHold(kernel, goal, changedGoalIds);
-                    SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals, selfClearedSetAsideEntries);
                     ReapGoalOnce(kernel, goal, reapedGoals);
+                    SetAside(kernel, driver, goal, BatchSetAsideCondition.LifecycleEscalation, setAsideGoals, selfClearedSetAsideEntries);
                     tickEscalated++;
                     FinishGoalWalk("verified-escalation");
                     continue;
@@ -945,8 +946,8 @@ internal sealed class ConductorBatchLoop
                         Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
                         kernel.RecordGoalPolicyDecision(goal.Id, msg);
                         escalatedGoals.Add(goal.Id.Value);
-                        SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
                         ReapGoalOnce(kernel, goal, reapedGoals);
+                        SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
                         tickEscalated++;
                         FinishGoalWalk("advance-fault");
                         continue;
@@ -1010,7 +1011,7 @@ internal sealed class ConductorBatchLoop
 
                 if (result.WasExecuted)        { tickAdvanced++; }
                 else if (result.IsHeld)        { tickHeld++; }
-                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals, selfClearedSetAsideEntries); ReapGoalOnce(kernel, goal, reapedGoals); }
+                else if (result.WasEscalated)  { tickEscalated++; escalatedGoals.Add(goal.Id.Value); ReapGoalOnce(kernel, goal, reapedGoals); SetAside(kernel, driver, goal, GetSetAsideCondition(result), setAsideGoals, selfClearedSetAsideEntries); }
                 else if (result.IsDone)        { tickDone++;      completedGoals.Add(goal.Id.Value); excludedGoals.Add(goal.Id.Value); }
                 goalProjectionCache.Invalidate(goal.Id);
                 FinishGoalWalk(result.Outcome.GetType().Name);
