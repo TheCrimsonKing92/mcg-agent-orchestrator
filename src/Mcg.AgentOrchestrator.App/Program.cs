@@ -127,7 +127,9 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
         return await supervisor.RunAsync(
             startupArgs,
             workspace.ExecutionDirectory,
-            Path.Combine(workspace.OrchestratorDirectory, "continuity"));
+            Path.Combine(workspace.OrchestratorDirectory, "continuity"),
+            activeProject.Name,
+            tenantSelection.TenantName);
     }
     catch (Exception ex)
     {

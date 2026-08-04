@@ -130,6 +130,7 @@ internal sealed class ConductorBatchLoop
         var canaryTasksGate = new object();
         CurrentConductEventLogWriter.Value = _conductEventLogWriter;
         var totalTicks = 0;
+        var blockedRecheckCycles = 0;
         string? stopReason = null;
         ConductorLifecycleSession? lifecycleSession = null;
         driver.LandingMutationBlocker = () =>
@@ -619,8 +620,38 @@ internal sealed class ConductorBatchLoop
                     kernel,
                     onlyGoalId,
                     setAsideGoals);
+                var boundedBlockedRecheckGoals = CountRecheckableNonTerminalGoals(
+                    kernel,
+                    onlyGoalId,
+                    setAsideGoals,
+                    BatchSetAsideCondition.PreLandingRebaseConflict);
                 if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0)
                 {
+                    if (boundedBlockedRecheckGoals > 0)
+                    {
+                        blockedRecheckCycles++;
+                        if (maxIterations.HasValue &&
+                            totalTicks + blockedRecheckCycles >= maxIterations.Value)
+                        {
+                            StopLoop(
+                                "max-iter",
+                                $"max={maxIterations.Value} blockedRechecks={blockedRecheckCycles}");
+                            Console.WriteLine(
+                                $"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks and {blockedRecheckCycles} blocked rechecks.");
+                            DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
+                            TryPersistCheckpoint(
+                                persistTick,
+                                persistGoalTick,
+                                kernel,
+                                totalTicks,
+                                onlyGoalId,
+                                "max-iterations",
+                                null,
+                                busyWriteDelay);
+                            break;
+                        }
+                    }
+
                     var configuredInterval = watchInterval ?? TimeSpan.FromSeconds(DefaultWatchIntervalSeconds);
                     var idleInterval = GetWatchFallbackInterval(kernel, onlyGoalId, configuredInterval);
                     EmitProgress(
@@ -663,6 +694,7 @@ internal sealed class ConductorBatchLoop
                 break;
             }
 
+            blockedRecheckCycles = 0;
             totalTicks++;
             var tickLines = new List<string>();
             foreach (var line in preTickTimingLines)
@@ -3120,11 +3152,13 @@ internal sealed class ConductorBatchLoop
     private static int CountRecheckableNonTerminalGoals(
         AgentOrchestratorKernel kernel,
         string? onlyGoalId,
-        IReadOnlyDictionary<string, BatchSetAsideEntry> setAsideGoals) =>
+        IReadOnlyDictionary<string, BatchSetAsideEntry> setAsideGoals,
+        BatchSetAsideCondition? condition = null) =>
         kernel.Goals.Count(goal =>
             (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
             !IsTerminalGoal(goal) &&
-            setAsideGoals.ContainsKey(goal.Id.Value));
+            setAsideGoals.TryGetValue(goal.Id.Value, out var entry) &&
+            (!condition.HasValue || entry.Condition == condition.Value));
 
     private static bool IsPreWalkExcludedGoal(Goal goal) =>
         goal.Status == GoalStatus.Parked || IsPreWalkExcludedTerminalGoal(goal);

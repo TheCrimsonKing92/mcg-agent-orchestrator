@@ -4105,6 +4105,15 @@ public sealed class ConductorBatchLoopTests
                 startInfo.Environment.Remove(key);
             }
 
+            var bootstrapToken = Guid.NewGuid().ToString("N");
+            var bootstrapActivationPath = Path.Combine(root, "bootstrap.activate");
+            File.WriteAllText(bootstrapActivationPath, bootstrapToken);
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_READY_PATH"] = Path.Combine(root, "bootstrap.ready");
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_ACTIVATE_PATH"] = bootstrapActivationPath;
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_TOKEN"] = bootstrapToken;
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_INCUMBENT_PID"] = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            startInfo.Environment["MCG_ORCHESTRATOR_HANDOFF_WAIT_SECONDS"] = "5";
+
             parent = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start parent conductor process.");
             var stdoutTask = parent.StandardOutput.ReadToEndAsync();
             var stderrTask = parent.StandardError.ReadToEndAsync();
@@ -5810,10 +5819,10 @@ public sealed class ConductorBatchLoopTests
             watchInterval: TimeSpan.FromMilliseconds(1),
             sleepFunc: _ => false);
 
-        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(1, summary.Ticks);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, rebaseChecks);
-        Assert.Equal(2, conflictChecks);
+        Assert.Equal(1, conflictChecks);
         Assert.Equal(0, landAttempts);
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&

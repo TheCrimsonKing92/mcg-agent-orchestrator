@@ -83,6 +83,8 @@ internal sealed class ConductorContinuitySupervisor(
         IReadOnlyList<string> args,
         string workingDirectory,
         string artifactDirectory,
+        string projectName,
+        string tenantName,
         CancellationToken cancellationToken = default)
     {
         var unexpectedStarts = new Queue<DateTimeOffset>();
@@ -95,7 +97,13 @@ internal sealed class ConductorContinuitySupervisor(
             var artifactPath = Path.Combine(artifactDirectory, $"conduct-{Guid.NewGuid():N}.json");
             var childArgs = args
                 .Where(arg => !arg.Equals(ChildFlag, StringComparison.OrdinalIgnoreCase))
-                .Concat([ChildFlag, ExitArtifactFlag, artifactPath])
+                .Concat([
+                    $"--project={projectName}",
+                    $"--tenant={tenantName}",
+                    ChildFlag,
+                    ExitArtifactFlag,
+                    artifactPath
+                ])
                 .ToArray();
             ConductorSupervisorProcessResult result;
             string? launchFailure = null;

@@ -73,13 +73,20 @@ public sealed class ConductorContinuitySupervisorTests
         var exitCode = await supervisor.RunAsync(
             ["conduct", "--loop", "--watch"],
             "C:\\repo",
-            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"));
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "project-a",
+            "tenant-a");
 
         Assert.Equal(0, exitCode);
         Assert.Equal(2, host.Requests.Count);
         Assert.Equal([TimeSpan.FromSeconds(1)], delays);
         Assert.Equal(["unexpected", "completed"], store.Events.Select(evt => evt.Status));
-        Assert.All(host.Requests, request => Assert.Contains(ConductorContinuitySupervisor.ChildFlag, request.Arguments));
+        Assert.All(host.Requests, request =>
+        {
+            Assert.Contains("--project=project-a", request.Arguments);
+            Assert.Contains("--tenant=tenant-a", request.Arguments);
+            Assert.Contains(ConductorContinuitySupervisor.ChildFlag, request.Arguments);
+        });
     }
 
     [Xunit.Fact]
@@ -103,7 +110,9 @@ public sealed class ConductorContinuitySupervisorTests
         var exitCode = await supervisor.RunAsync(
             ["conduct", "--loop"],
             "C:\\repo",
-            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"));
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "default",
+            "default");
 
         Assert.Equal(0, exitCode);
         Assert.Equal(2, host.Requests.Count);
@@ -133,7 +142,9 @@ public sealed class ConductorContinuitySupervisorTests
         var exitCode = await supervisor.RunAsync(
             ["conduct", "--loop"],
             "C:\\repo",
-            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"));
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "default",
+            "default");
 
         Assert.Equal(1, exitCode);
         Assert.Equal(3, host.Requests.Count);
@@ -160,7 +171,9 @@ public sealed class ConductorContinuitySupervisorTests
         var exitCode = await supervisor.RunAsync(
             ["conduct", "--loop", "--max-duration", "60"],
             "C:\\repo",
-            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"));
+            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
+            "default",
+            "default");
 
         Assert.Equal(1, exitCode);
         Assert.Equal(3, host.Requests.Count);
