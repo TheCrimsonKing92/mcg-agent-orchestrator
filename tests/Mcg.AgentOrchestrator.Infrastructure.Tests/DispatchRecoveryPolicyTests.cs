@@ -460,7 +460,7 @@ public sealed class DispatchRecoveryPolicyTests
     private static void WriteWorkerResultArtifact(string root) =>
         File.WriteAllText(
             Path.Combine(root, "WORKER_RESULT.md"),
-            "WORKER_RESULT:\nfiles: none\ncommands: none\ntests: deferred - fixture\nblockers: none\nEND_WORKER_RESULT");
+            "WORKER_RESULT:\nfiles: none\ncommands: none\ntests: deferred - fixture\nblockers: none\nmodel_fit: test fixture - adequate - recovery policy\nskills: none\nconfidence: high\nEND_WORKER_RESULT");
 
     private static TaskProcessRecord CreateProcess()
     {
