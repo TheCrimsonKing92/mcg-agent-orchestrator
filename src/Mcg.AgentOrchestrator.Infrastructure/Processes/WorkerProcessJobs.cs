@@ -39,30 +39,30 @@ public static class WorkerProcessJobs
         var sweeper = BuildSweeperEvidence();
         foreach (var entry in registry.ListActive())
         {
+            var ownerLiveness = SpawnProcessIdentityReader.EvaluateOwner(entry, out var ownerEvidence);
+            if (ownerLiveness != SpawnOwnerLiveness.DeadOrRecycled)
+            {
+                registry.RecordDiagnostic(
+                    entry.Id,
+                    BuildSweepDiagnostic(
+                        ownerLiveness == SpawnOwnerLiveness.Live ? "retain-live-owner" : "retain-unknown-owner",
+                        entry,
+                        ownerLiveness,
+                        ownerEvidence,
+                        sweeper));
+                continue;
+            }
+
             if (!SpawnProcessIdentityReader.MatchesLiveProcess(entry, out var process))
             {
                 registry.MarkReleased(
                     entry.ProcessId,
-                    $"spawn_registry: already-dead-or-recycled victim_pid={entry.ProcessId} owner={entry.OwnerId} {sweeper}");
+                    BuildSweepDiagnostic("already-dead-or-recycled", entry, ownerLiveness, ownerEvidence, sweeper));
                 continue;
             }
 
             using (process)
             {
-                var ownerLiveness = SpawnProcessIdentityReader.EvaluateOwner(entry, out var ownerEvidence);
-                if (ownerLiveness != SpawnOwnerLiveness.DeadOrRecycled)
-                {
-                    registry.RecordDiagnostic(
-                        entry.Id,
-                        BuildSweepDiagnostic(
-                            ownerLiveness == SpawnOwnerLiveness.Live ? "retain-live-owner" : "retain-unknown-owner",
-                            entry,
-                            ownerLiveness,
-                            ownerEvidence,
-                            sweeper));
-                    continue;
-                }
-
                 if (IsProtectedProcessOrAncestor(entry.ProcessId) || ProtectedPidIsDescendantOf(entry.ProcessId))
                 {
                     registry.RecordDiagnostic(
