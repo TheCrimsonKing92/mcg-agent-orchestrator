@@ -417,11 +417,8 @@ static bool SkipsStartupOperatorChannel(IReadOnlyList<string> startupArgs)
         command.Equals("operator-listen", StringComparison.OrdinalIgnoreCase);
 }
 
-// Startup cleanup is DESTRUCTIVE (kills registry-owned worker pids, sweeps orphan worktrees), so it is
-// gated on owning the process lifecycle — not on merely loading kernel state. Dependency-aware backlog
-// commands hydrate state to resolve dependencies but must never sweep: when bc642e02 moved backlog-list
-// out of SkipsKernelState into RequiresKernelBacklogState, this predicate silently turned the sweep on
-// for a read-only query. Keep the two concerns separate.
+// Worktree cleanup remains lifecycle-owning. Worker registry setup and orphan classification are safe for
+// every command because reaping requires positive dead/recycled owner-process evidence.
 static bool RunsStartupCleanup(IReadOnlyList<string> startupArgs) =>
     !CliPersistentStateRunner.SkipsKernelState(startupArgs) &&
     !CliPersistentStateRunner.RequiresKernelBacklogState(startupArgs);
@@ -473,11 +470,6 @@ internal static class ProgramStartupLifecycle
         string stateStorePath,
         string executionDirectory)
     {
-        if (!runsStartupCleanup)
-        {
-            return;
-        }
-
         WorkerProcessJobs.ConfigureRegistry(stateStorePath);
         if (authorityTransferRequested)
         {
@@ -485,6 +477,9 @@ internal static class ProgramStartupLifecycle
         }
 
         WorkerProcessJobs.SweepStartupOrphans();
-        GoalWorktreeOrphanSweepScheduler.SweepNow(executionDirectory);
+        if (runsStartupCleanup)
+        {
+            GoalWorktreeOrphanSweepScheduler.SweepNow(executionDirectory);
+        }
     }
 }

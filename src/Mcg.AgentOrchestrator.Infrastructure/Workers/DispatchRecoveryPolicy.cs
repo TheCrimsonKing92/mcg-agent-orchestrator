@@ -10,7 +10,8 @@ public enum DispatchRecoveryAction
     BudgetExhausted,
     Hold,
     ClassifyBlocker,
-    Reap
+    Reap,
+    PreserveInterruptedWork
 }
 
 public sealed record DispatchRecoveryDecision(
@@ -31,7 +32,9 @@ internal enum ExitCodeReadKind
 internal sealed record ExitCodeReadResult(
     ExitCodeReadKind Kind,
     int? ExitCode,
-    string Evidence);
+    string Evidence,
+    DispatchExitArtifactOrigin Origin = DispatchExitArtifactOrigin.None,
+    string? Reason = null);
 
 internal static class DispatchExitArtifactReader
 {
@@ -46,6 +49,19 @@ internal static class DispatchExitArtifactReader
 
         try
         {
+            if (DispatchExitArtifacts.TryRead(path, out var artifact))
+            {
+                var evidence = artifact.Origin == DispatchExitArtifactOrigin.UnknownLegacy
+                    ? $"content={artifact.ExitCode}"
+                    : $"origin={artifact.Origin} exit_code={artifact.ExitCode} reason={NormalizeEvidence(artifact.Reason)}";
+                return new ExitCodeReadResult(
+                    ExitCodeReadKind.Valid,
+                    artifact.ExitCode,
+                    evidence,
+                    artifact.Origin,
+                    artifact.Reason);
+            }
+
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream);
             var raw = reader.ReadToEnd();
@@ -56,9 +72,10 @@ internal static class DispatchExitArtifactReader
                 normalized += "...";
             }
 
-            return int.TryParse(raw.Trim(), out var exitCode)
-                ? new ExitCodeReadResult(ExitCodeReadKind.Valid, exitCode, $"content={normalized}")
-                : new ExitCodeReadResult(ExitCodeReadKind.Invalid, null, $"content={normalized}; chars_read={raw.Length}");
+            return new ExitCodeReadResult(
+                ExitCodeReadKind.Invalid,
+                null,
+                $"content={normalized}; chars_read={raw.Length}");
         }
         catch (FileNotFoundException)
         {
@@ -159,6 +176,18 @@ public sealed class DispatchRecoveryPolicy
         worktreeInspection ??= DispatchWorktreeInspectionStatus.NotRequired;
 
         var exitArtifact = DispatchExitArtifactReader.Read(exitPath);
+        if (!hasLiveProcess &&
+            exitArtifact.Kind == ExitCodeReadKind.Valid &&
+            exitArtifact.Origin == DispatchExitArtifactOrigin.Synthetic &&
+            process.CompletedAt is null)
+        {
+            return Decision(
+                DispatchRecoveryAction.PreserveInterruptedWork,
+                exitPath,
+                $"no live process and synthetic exit artifact exists; reason={exitArtifact.Reason}",
+                "interrupted worker evidence requires operator verification");
+        }
+
         if (!hasLiveProcess && exitArtifact.Kind == ExitCodeReadKind.Valid)
         {
             return Decision(
@@ -288,6 +317,7 @@ public sealed class DispatchRecoveryPolicy
             DispatchRecoveryAction.Hold => "hold",
             DispatchRecoveryAction.ClassifyBlocker => "classify-blocker",
             DispatchRecoveryAction.Reap => "reap",
+            DispatchRecoveryAction.PreserveInterruptedWork => "preserve-interrupted-work",
             _ => action.ToString()
         };
 

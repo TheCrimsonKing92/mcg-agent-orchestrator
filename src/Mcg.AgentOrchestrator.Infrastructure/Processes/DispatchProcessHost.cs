@@ -1379,7 +1379,7 @@ public static void DropToLow() {
             egressProxy?.Dispose();
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
             // only after every child/diagnostic artifact the completion path reads is durable.
-            TryWriteExitCode(parameters.ExitCodePath, exitCode);
+            TryWriteDispatchExitArtifact(parameters.ExitCodePath, exitCode);
             selectedChild?.Dispose();
         }
 
@@ -1792,6 +1792,20 @@ public static void DropToLow() {
         catch
         {
             // Best-effort; the orchestrator treats a missing exit file as still-running.
+        }
+    }
+
+    private static void TryWriteDispatchExitArtifact(string path, int exitCode)
+    {
+        try
+        {
+            DispatchExitArtifacts.Write(
+                path,
+                DispatchExitArtifacts.Native(exitCode, "dispatch host observed worker termination", DateTimeOffset.UtcNow));
+        }
+        catch
+        {
+            // Best-effort; the orchestrator treats a missing exit artifact as still-running.
         }
     }
 

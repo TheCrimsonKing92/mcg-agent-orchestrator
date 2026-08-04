@@ -19,6 +19,39 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Equal(process.ExitCodePath, decision.EvidencePath);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_preserves_absent_process_with_synthetic_exit_artifact")]
+    public void DispatchRecoveryPolicyPreservesAbsentProcessWithSyntheticExitArtifact()
+    {
+        var process = CreateProcess();
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", Now));
+
+        var decision = CreatePolicy().Evaluate(process, hasLiveProcess: false, hasDirtyWorktreeEvidence: true);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, decision.Action);
+        Xunit.Assert.Equal("preserve-interrupted-work", decision.ActionName);
+        Xunit.Assert.Equal(process.ExitCodePath, decision.EvidencePath);
+        Xunit.Assert.Contains("startup sweep interrupted worker", decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchExitArtifacts_round_trip_native_and_classify_legacy_integer")]
+    public void DispatchExitArtifactsRoundTripNativeAndClassifyLegacyInteger()
+    {
+        var process = CreateProcess();
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Native(17, "worker exited", Now));
+
+        Xunit.Assert.True(DispatchExitArtifacts.TryRead(process.ExitCodePath, out var native));
+        Xunit.Assert.Equal(17, native.ExitCode);
+        Xunit.Assert.Equal(DispatchExitArtifactOrigin.Native, native.Origin);
+
+        File.WriteAllText(process.ExitCodePath, "1");
+        Xunit.Assert.True(DispatchExitArtifacts.TryRead(process.ExitCodePath, out var legacy));
+        Xunit.Assert.Equal(DispatchExitArtifactOrigin.UnknownLegacy, legacy.Origin);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_retries_stale_no_artifact_when_budget_remains")]
     public void DispatchRecoveryPolicyRetriesStaleNoArtifactWhenBudgetRemains()
     {
@@ -194,6 +227,7 @@ public sealed class DispatchRecoveryPolicyTests
 
         Xunit.Assert.Equal(DispatchRecoveryAction.ReconcileFromExit, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Equal(0, outcome.ProcessRecord.ExitCode);
+        Xunit.Assert.Equal(DispatchExitArtifactOrigin.UnknownLegacy, outcome.ProcessRecord.ExitArtifactOrigin);
         Xunit.Assert.NotNull(task.LastVerification);
         Xunit.Assert.Contains("action='reconcile-from-exit'", task.LastVerification!.StandardError, StringComparison.Ordinal);
     }

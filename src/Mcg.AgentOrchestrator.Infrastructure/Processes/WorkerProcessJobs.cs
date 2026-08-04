@@ -36,36 +36,113 @@ public static class WorkerProcessJobs
         }
 
         var reaped = 0;
+        var sweeper = BuildSweeperEvidence();
         foreach (var entry in registry.ListActive())
         {
             if (!SpawnProcessIdentityReader.MatchesLiveProcess(entry, out var process))
             {
-                registry.MarkReleased(entry.ProcessId, $"spawn_registry: already-dead-or-recycled pid={entry.ProcessId} owner={entry.OwnerId}");
+                registry.MarkReleased(
+                    entry.ProcessId,
+                    $"spawn_registry: already-dead-or-recycled victim_pid={entry.ProcessId} owner={entry.OwnerId} {sweeper}");
                 continue;
             }
 
             using (process)
             {
+                var ownerLiveness = SpawnProcessIdentityReader.EvaluateOwner(entry, out var ownerEvidence);
+                if (ownerLiveness != SpawnOwnerLiveness.DeadOrRecycled)
+                {
+                    registry.RecordDiagnostic(
+                        entry.Id,
+                        BuildSweepDiagnostic(
+                            ownerLiveness == SpawnOwnerLiveness.Live ? "retain-live-owner" : "retain-unknown-owner",
+                            entry,
+                            ownerLiveness,
+                            ownerEvidence,
+                            sweeper));
+                    continue;
+                }
+
                 if (IsProtectedProcessOrAncestor(entry.ProcessId) || ProtectedPidIsDescendantOf(entry.ProcessId))
                 {
-                    registry.RecordDiagnostic(entry.Id, $"spawn_registry: refused-protected pid={entry.ProcessId} owner={entry.OwnerId}");
+                    registry.RecordDiagnostic(
+                        entry.Id,
+                        BuildSweepDiagnostic("refused-protected", entry, ownerLiveness, ownerEvidence, sweeper));
+                    continue;
+                }
+
+                // Revalidate at the destructive boundary. If the evidence changes or becomes unreadable,
+                // retain the worker; only positive dead/recycled-owner evidence authorizes a kill.
+                ownerLiveness = SpawnProcessIdentityReader.EvaluateOwner(entry, out ownerEvidence);
+                if (ownerLiveness != SpawnOwnerLiveness.DeadOrRecycled)
+                {
+                    registry.RecordDiagnostic(
+                        entry.Id,
+                        BuildSweepDiagnostic(
+                            ownerLiveness == SpawnOwnerLiveness.Live ? "retain-live-owner" : "retain-unknown-owner",
+                            entry,
+                            ownerLiveness,
+                            ownerEvidence,
+                            sweeper));
+                    continue;
+                }
+
+                try
+                {
+                    // The authorization receipt must be durable before the destructive action.
+                    registry.RecordDiagnostic(
+                        entry.Id,
+                        BuildSweepDiagnostic("startup-reap-authorized", entry, ownerLiveness, ownerEvidence, sweeper));
+                }
+                catch
+                {
+                    // An unreceipted kill is not permitted.
                     continue;
                 }
 
                 if (TryKillOrFallback(entry.ProcessId, allowProtectedDescendant: false, markRegistryReleased: false, out _))
                 {
-                    registry.MarkReleased(entry.ProcessId, $"spawn_registry: startup-reaped pid={entry.ProcessId} owner={entry.OwnerId}");
+                    registry.MarkReleased(
+                        entry.ProcessId,
+                        BuildSweepDiagnostic("startup-reaped", entry, ownerLiveness, ownerEvidence, sweeper));
                     reaped++;
                 }
                 else
                 {
-                    registry.RecordDiagnostic(entry.Id, $"spawn_registry: startup-reap-failed pid={entry.ProcessId} owner={entry.OwnerId}");
+                    registry.RecordDiagnostic(
+                        entry.Id,
+                        BuildSweepDiagnostic("startup-reap-failed", entry, ownerLiveness, ownerEvidence, sweeper));
                 }
             }
         }
 
         return reaped;
     }
+
+    private static string BuildSweepDiagnostic(
+        string action,
+        SpawnRegistryEntry entry,
+        SpawnOwnerLiveness ownerLiveness,
+        string ownerEvidence,
+        string sweeper) =>
+        $"spawn_registry: {action} victim_pid={entry.ProcessId} victim_started_at={entry.ProcessStartedAt:O} " +
+        $"victim_image={entry.ImagePath} owner={entry.OwnerId} owner_pid={entry.OwnerProcessId?.ToString() ?? "unknown"} " +
+        $"owner_started_at={entry.OwnerProcessStartedAt?.ToString("O") ?? "unknown"} " +
+        $"owner_liveness={ownerLiveness} owner_evidence={SanitizeDiagnostic(ownerEvidence)} {sweeper}";
+
+    private static string BuildSweeperEvidence()
+    {
+        var argv = SanitizeDiagnostic(string.Join(' ', Environment.GetCommandLineArgs()));
+        if (argv.Length > 1024)
+        {
+            argv = argv[..1024] + "...";
+        }
+
+        return $"sweeper_pid={Environment.ProcessId} sweeper_argv={argv}";
+    }
+
+    private static string SanitizeDiagnostic(string value) =>
+        value.Replace('\r', ' ').Replace('\n', ' ').Trim();
 
     public static bool TryRegister(Process process, string? ownerId = null)
     {

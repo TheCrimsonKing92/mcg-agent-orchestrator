@@ -546,6 +546,27 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Equal(DispatchRecoveryAction.ReconcileFromExit, state.RecoveryDecision.Action);
 }
 
+    [Xunit.Fact(DisplayName = "DispatchStateSurface_reports_synthetic_exit_as_interrupted_work")]
+    public void DispatchStateSurfaceReportsSyntheticExitAsInterruptedWork()
+{
+    var root = CreateTempDirectory();
+    var now = DateTimeOffset.Parse("2026-07-03T06:07:00Z");
+    var clock = new TestClock(now);
+    var (_, goal, task, process) = CreateRecordedDispatch(root, clock);
+    DispatchExitArtifacts.Write(
+        process.ExitCodePath,
+        DispatchExitArtifacts.Synthetic(1, "worker host disappeared", now));
+
+    var state = CreateStateSurface(clock, livePids: [], commandLines: new Dictionary<int, string>())
+        .Evaluate(goal.Id, task);
+
+    Assert.Equal(DispatchStateKind.InterruptedWork, state.Kind);
+    Assert.Equal("verify-manual", state.RecommendedAction);
+    Assert.Equal(DispatchExitArtifactOrigin.Synthetic, state.Artifacts.ExitArtifactOrigin);
+    Assert.Equal("worker host disappeared", state.Artifacts.ExitArtifactReason);
+    Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, state.RecoveryDecision.Action);
+}
+
     [Xunit.Fact(DisplayName = "DispatchStateSurface_reports_stale_cleanup_when_process_and_exit_are_absent")]
     public void DispatchStateSurfaceReportsStaleCleanupWhenProcessAndExitAreAbsent()
 {

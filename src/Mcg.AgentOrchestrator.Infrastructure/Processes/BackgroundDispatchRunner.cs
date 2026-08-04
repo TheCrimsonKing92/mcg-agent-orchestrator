@@ -712,8 +712,43 @@ public sealed class BackgroundDispatchRunner
             return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
         }
 
+        if (hasDirtyWorktreeEvidence)
+        {
+            var interruptedDecision = new DispatchRecoveryDecision(
+                DispatchRecoveryAction.PreserveInterruptedWork,
+                DispatchRecoveryPolicy.ToActionName(DispatchRecoveryAction.PreserveInterruptedWork),
+                processRecord.ExitCodePath,
+                "process disappeared with dirty worktree evidence",
+                "interrupted worker evidence requires operator verification");
+            const string interruptedReason = "process missing with dirty worktree evidence";
+            TryWriteExitCode(processRecord.ExitCodePath, 1, interruptedReason);
+            return BuildCompletedProcessOutcome(
+                kernel,
+                goalId,
+                taskId,
+                processRecord,
+                1,
+                BuildRecoveryDiagnostic(interruptedDecision),
+                interruptedDecision,
+                staleResourceAccounting) with
+                {
+                    AutoRequeueDisposition = new DispatchAutoRequeueDisposition(
+                    "InterruptedDispatchWorkPreserved",
+                    BuildRecoveryDiagnostic(interruptedDecision),
+                    ShouldRequeue: false)
+                };
+        }
+
         var staleDiagnostic = BuildRecoveryDiagnostic(recoveryDecision);
-        return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, staleDiagnostic, recoveryDecision, staleResourceAccounting);
+        return BuildCompletedProcessOutcome(
+            kernel,
+            goalId,
+            taskId,
+            processRecord,
+            1,
+            staleDiagnostic,
+            recoveryDecision,
+            staleResourceAccounting);
     }
 
     private bool TryCompleteFromExitFile(
@@ -724,6 +759,22 @@ public sealed class BackgroundDispatchRunner
         DispatchRecoveryDecision recoveryDecision,
         out DispatchRefreshOutcome outcome)
     {
+        if (DispatchExitArtifacts.TryRead(processRecord.ExitCodePath, out var existingArtifact) &&
+            existingArtifact.Origin == DispatchExitArtifactOrigin.Synthetic &&
+            processRecord.CompletedAt is null &&
+            recoveryDecision.Action == DispatchRecoveryAction.PreserveInterruptedWork)
+        {
+            outcome = new DispatchRefreshOutcome(
+                processRecord with
+                {
+                    ExitArtifactOrigin = existingArtifact.Origin,
+                    ExitArtifactReason = existingArtifact.Reason
+                },
+                null,
+                RecoveryDecision: recoveryDecision);
+            return false;
+        }
+
         var hasHeartbeat = TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat);
         var observedHeartbeat = hasHeartbeat ? heartbeat : null;
         RecordProviderSessionFromHeartbeat(kernel, goalId, taskId, kernel.GetTask(goalId, taskId), observedHeartbeat);
@@ -1348,8 +1399,14 @@ public sealed class BackgroundDispatchRunner
             standardErrorDiagnostic);
         if (!exitArtifactAlreadyExisted)
         {
-            TryWriteExitCode(processRecord.ExitCodePath, exitCode);
+            TryWriteExitCode(
+                processRecord.ExitCodePath,
+                exitCode,
+                recoveryDecision is null
+                    ? "orchestrator synthesized completion without a host artifact"
+                    : $"orchestrator recovery action={recoveryDecision.ActionName}");
         }
+        _ = DispatchExitArtifacts.TryRead(processRecord.ExitCodePath, out var exitArtifact);
         var hasChildExitRecord = TryReadChildExitRecord(processRecord.ChildExitRecordPath, out var childExitRecord);
         var completed = processRecord with
         {
@@ -1357,7 +1414,9 @@ public sealed class BackgroundDispatchRunner
             ExitCode = exitCode,
             ResourceAccounting = resourceAccounting,
             ChildProcessId = hasChildExitRecord ? childExitRecord.ProcessId : null,
-            ChildExitCode = hasChildExitRecord ? childExitRecord.ExitCode : null
+            ChildExitCode = hasChildExitRecord ? childExitRecord.ExitCode : null,
+            ExitArtifactOrigin = exitArtifact?.Origin ?? DispatchExitArtifactOrigin.None,
+            ExitArtifactReason = exitArtifact?.Reason
         };
 
         // Capture resultCommit after all orchestrator commits — the right boundary for file attribution.
@@ -3448,11 +3507,16 @@ public sealed class BackgroundDispatchRunner
             : duration.ToString("c");
     }
 
-    private static void TryWriteExitCode(string path, int exitCode)
+    private static void TryWriteExitCode(
+        string path,
+        int exitCode,
+        string reason = "orchestrator synthesized dispatch outcome")
     {
         try
         {
-            File.WriteAllText(path, exitCode.ToString());
+            DispatchExitArtifacts.Write(
+                path,
+                DispatchExitArtifacts.Synthetic(exitCode, reason, DateTimeOffset.UtcNow));
         }
         catch (IOException)
         {

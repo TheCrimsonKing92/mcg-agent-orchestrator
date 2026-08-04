@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 
@@ -12,7 +13,9 @@ internal sealed record SpawnRegistryEntry(
     string ImagePath,
     DateTimeOffset RegisteredAt,
     DateTimeOffset? ReleasedAt,
-    string? LastDiagnostic);
+    string? LastDiagnostic,
+    int? OwnerProcessId,
+    DateTimeOffset? OwnerProcessStartedAt);
 
 internal sealed record SpawnProcessIdentity(int ProcessId, DateTimeOffset StartedAt, string ImagePath);
 
@@ -27,14 +30,28 @@ internal sealed class SpawnRegistry
 
     public void Register(string ownerId, SpawnProcessIdentity identity)
     {
+        using var ownerProcess = Process.GetCurrentProcess();
+        Register(
+            ownerId,
+            identity,
+            SpawnProcessIdentityReader.TryRead(ownerProcess, out var ownerIdentity) ? ownerIdentity : null);
+    }
+
+    internal void Register(
+        string ownerId,
+        SpawnProcessIdentity identity,
+        SpawnProcessIdentity? ownerIdentity)
+    {
         WithWriteConnection(conn =>
         {
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
                 INSERT INTO spawn_registry (
-                    owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
+                    owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic,
+                    owner_process_id, owner_process_started_at
                 ) VALUES (
-                    $owner_id, $process_id, $process_started_at, $image_path, $registered_at, NULL, NULL
+                    $owner_id, $process_id, $process_started_at, $image_path, $registered_at, NULL, NULL,
+                    $owner_process_id, $owner_process_started_at
                 )
                 """;
             cmd.Parameters.AddWithValue("$owner_id", ownerId);
@@ -42,6 +59,10 @@ internal sealed class SpawnRegistry
             cmd.Parameters.AddWithValue("$process_started_at", identity.StartedAt.ToString("O"));
             cmd.Parameters.AddWithValue("$image_path", identity.ImagePath);
             cmd.Parameters.AddWithValue("$registered_at", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.Parameters.AddWithValue("$owner_process_id", (object?)ownerIdentity?.ProcessId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(
+                "$owner_process_started_at",
+                (object?)ownerIdentity?.StartedAt.ToString("O", CultureInfo.InvariantCulture) ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         });
     }
@@ -56,7 +77,8 @@ internal sealed class SpawnRegistry
             using var conn = OpenReadConnection();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT id, owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
+                SELECT id, owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic,
+                       owner_process_id, owner_process_started_at
                 FROM spawn_registry
                 WHERE released_at IS NULL
                 ORDER BY registered_at ASC
@@ -138,7 +160,15 @@ internal sealed class SpawnRegistry
             reader.IsDBNull(6)
                 ? null
                 : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-            reader.IsDBNull(7) ? null : reader.GetString(7));
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.IsDBNull(8) ? null : reader.GetInt32(8),
+            reader.IsDBNull(9) || !DateTimeOffset.TryParse(
+                reader.GetString(9),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out var ownerStartedAt)
+                    ? null
+                    : ownerStartedAt);
     }
 
 }
@@ -200,6 +230,55 @@ internal static class SpawnProcessIdentityReader
         }
     }
 
+    public static SpawnOwnerLiveness EvaluateOwner(SpawnRegistryEntry entry, out string evidence)
+    {
+        if (entry.OwnerProcessId is not { } ownerProcessId || entry.OwnerProcessStartedAt is not { } ownerStartedAt)
+        {
+            evidence = "owner identity missing or malformed";
+            return SpawnOwnerLiveness.Unknown;
+        }
+
+        Process? owner = null;
+        try
+        {
+            owner = Process.GetProcessById(ownerProcessId);
+            if (owner.HasExited)
+            {
+                evidence = $"owner pid={ownerProcessId} has exited";
+                return SpawnOwnerLiveness.DeadOrRecycled;
+            }
+
+            if (!TryRead(owner, out var liveOwner))
+            {
+                evidence = $"owner pid={ownerProcessId} identity could not be read";
+                return SpawnOwnerLiveness.Unknown;
+            }
+
+            if (liveOwner.StartedAt != ownerStartedAt)
+            {
+                evidence = $"owner pid={ownerProcessId} start-time mismatch recorded={ownerStartedAt:O} observed={liveOwner.StartedAt:O}";
+                return SpawnOwnerLiveness.DeadOrRecycled;
+            }
+
+            evidence = $"owner pid={ownerProcessId} start-time matches recorded={ownerStartedAt:O}";
+            return SpawnOwnerLiveness.Live;
+        }
+        catch (ArgumentException)
+        {
+            evidence = $"owner pid={ownerProcessId} does not exist";
+            return SpawnOwnerLiveness.DeadOrRecycled;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            evidence = $"owner pid={ownerProcessId} could not be verified ({ex.GetType().Name})";
+            return SpawnOwnerLiveness.Unknown;
+        }
+        finally
+        {
+            owner?.Dispose();
+        }
+    }
+
     private static string ResolveImagePath(Process process)
     {
         try
@@ -211,4 +290,11 @@ internal static class SpawnProcessIdentityReader
             return process.ProcessName;
         }
     }
+}
+
+internal enum SpawnOwnerLiveness
+{
+    Live,
+    DeadOrRecycled,
+    Unknown
 }
