@@ -163,7 +163,7 @@ public sealed class DashboardDispatchStartFailureEndpointTests
     }
 
     [Xunit.Fact]
-    public async Task SubscriptionAdvanceUntilBlocked_RegistrationFailureAfterDispatch_ReturnsConflictAndCommits()
+    public async Task AdvanceUntilBlocked_RegistrationFailsAfterPriorStep_CommitsAndConflicts()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -183,7 +183,7 @@ public sealed class DashboardDispatchStartFailureEndpointTests
                 app,
                 "/api/goals/{goalId}/advance-subscription-until-blocked",
                 $"/api/goals/{fixture.Goal.Id.Value}/advance-subscription-until-blocked",
-                "?confirmSubscriptionAdvance=true",
+                "?confirmSubscriptionAdvance=true&confirmLargePaidSubscriptionStart=true",
                 new RouteValueDictionary
                 {
                     ["goalId"] = fixture.Goal.Id.Value
@@ -195,6 +195,9 @@ public sealed class DashboardDispatchStartFailureEndpointTests
                 var advance = responseJson.RootElement;
                 Assert.True(advance.GetProperty("Executed").GetBoolean(), response.Body);
                 Assert.Equal(1, advance.GetProperty("StepCount").GetInt32());
+                Assert.Equal(
+                    nameof(NextActionAutomationKind.RunAssignedTask),
+                    advance.GetProperty("Steps")[0].GetProperty("AutomationKind").GetString());
                 Assert.True(advance.GetProperty("StateChanged").GetBoolean(), response.Body);
                 Assert.Contains(
                     "worker-process-registration-failed",
