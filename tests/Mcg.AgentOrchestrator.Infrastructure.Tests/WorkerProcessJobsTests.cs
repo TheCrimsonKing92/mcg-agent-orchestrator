@@ -337,7 +337,12 @@ public sealed class WorkerProcessJobsTests : IDisposable
             WorkerProcessJobs.ConfigureRegistry(dbPath);
             wrapper = StartLongRunningShell();
 
-            Assert.False(WorkerProcessJobs.TryRegister(wrapper, "failed-durable-registration"));
+            Assert.False(WorkerProcessJobs.TryRegister(
+                wrapper,
+                "failed-durable-registration",
+                out var registrationFailure));
+            Assert.Contains("worker-process-registration-failed", registrationFailure, StringComparison.Ordinal);
+            Assert.Contains("stage=durable-registry-write", registrationFailure, StringComparison.Ordinal);
             Assert.False(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
             Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
             Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(5)));
@@ -352,6 +357,44 @@ public sealed class WorkerProcessJobsTests : IDisposable
             }
 
             try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_duplicate_pid_registration_fails_closed")]
+    public void WorkerProcessJobsDuplicatePidRegistrationFailsClosed()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        WorkerProcessJobs.ClearRegistryForTests();
+        Process? wrapper = null;
+        int? processId = null;
+        try
+        {
+            wrapper = StartLongRunningShell();
+            processId = wrapper.Id;
+            Assert.True(WorkerProcessJobs.TryRegister(wrapper, "first-registration"));
+
+            Assert.False(WorkerProcessJobs.TryRegister(
+                wrapper,
+                "duplicate-registration",
+                out var registrationFailure));
+
+            Assert.Contains("worker-process-registration-failed", registrationFailure, StringComparison.Ordinal);
+            Assert.Contains("stage=duplicate-or-recycled-pid", registrationFailure, StringComparison.Ordinal);
+            Assert.True(WaitUntilNotRunning(processId.Value, TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            if (processId is { } registeredProcessId)
+            {
+                try { WorkerProcessJobs.Release(registeredProcessId); } catch { }
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            wrapper?.Dispose();
         }
     }
 
@@ -1097,6 +1140,50 @@ public sealed class WorkerProcessJobsTests : IDisposable
     public void WorkerProcessJobsSourceRoutesOwnedGroupCloseThroughAccountingHelper()
     {
         AssertOwnedGroupCloseRoutesThroughAccountingHelper();
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_production_callers_observe_registration_failure")]
+    public void WorkerProcessJobsProductionCallersObserveRegistrationFailure()
+    {
+        AssertProductionCallersObserveRegistrationFailure();
+    }
+
+    private static void AssertProductionCallersObserveRegistrationFailure(
+        [CallerFilePath] string sourceFilePath = "")
+    {
+        var repoRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFilePath)!, "..", ".."));
+        var checkedCallers = new Dictionary<string, string>
+        {
+            [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "BackgroundDispatchRunner.cs")] =
+                "if (!WorkerProcessJobs.TryRegister(",
+            [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Processes", "LocalProcessVerifier.cs")] =
+                "WorkerProcessJobs.RegisterOrThrow(",
+            [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "GoalAcceptanceVerifier.cs")] =
+                "WorkerProcessJobs.RegisterOrThrow(",
+            [Path.Combine("src", "Mcg.AgentOrchestrator.App", "Orchestration", "PostLandingCanaryRunner.cs")] =
+                "WorkerProcessJobs.RegisterOrThrow("
+        };
+
+        foreach (var (relativePath, expectedCall) in checkedCallers)
+        {
+            var source = File.ReadAllText(Path.Combine(repoRoot, relativePath));
+            Assert.Contains(expectedCall, source, StringComparison.Ordinal);
+        }
+
+        var acceptanceSource = File.ReadAllText(Path.Combine(
+            repoRoot,
+            "src",
+            "Mcg.AgentOrchestrator.Infrastructure",
+            "Workspaces",
+            "GoalAcceptanceVerifier.cs"));
+        var registrationIndex = acceptanceSource.IndexOf(
+            "WorkerProcessJobs.RegisterOrThrow(process, $\"acceptance:{workingDirectory}\");",
+            StringComparison.Ordinal);
+        var ownedPidAssignmentIndex = acceptanceSource.IndexOf(
+            "startedProcessId = process.Id;",
+            registrationIndex,
+            StringComparison.Ordinal);
+        Assert.True(registrationIndex >= 0 && ownedPidAssignmentIndex > registrationIndex);
     }
 
     private static void AssertOwnedGroupCloseRoutesThroughAccountingHelper(

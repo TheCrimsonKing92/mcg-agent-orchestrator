@@ -96,6 +96,12 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
         GoalOperationJournal.Failed(context.Workspace.ExecutionDirectory, goal, "run-goal", runGoalResult.StopReason);
         var next = BuildLifecycleRunGoalNextCommand(goalPrefix, runGoalResult);
         Console.WriteLine($"Stage run-goal: stopped. Next: {next}");
+        if (runGoalResult.Failure is { } runGoalFailure)
+        {
+            context.FailAfterCommit(runGoalFailure.Reason);
+            return;
+        }
+
         throw new InvalidOperationException($"{commandName} stopped after run-goal. Next: {next}");
     }
 
@@ -224,6 +230,7 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
     policy.ThrowIfDisallowed(AutonomyAction.DispatchStart, "drain-goals");
 
     var applied = new List<string>();
+    var startFailures = new List<string>();
     foreach (var goal in context.Kernel.Goals.ToArray())
     {
         var supervisor = GoalSupervisor.ApplySafe(context.Kernel, goal, context.Agents, context.Workspace, policy);
@@ -258,7 +265,10 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
             context.Agents,
             context.WorkerProfiles,
             context.Providers);
-        applied.Add($"{goal.Id.Value[..8]} start-subscription-ready dispatches={result.Dispatches.Count} processes={result.Processes.Tasks.Count} readyBlocked={result.BlockedDiagnostics.Count}");
+        var failures = result.Processes.StartFailures ?? [];
+        applied.Add($"{goal.Id.Value[..8]} start-subscription-ready dispatches={result.Dispatches.Count} processes={result.Processes.Tasks.Count} startFailures={failures.Count} readyBlocked={result.BlockedDiagnostics.Count}");
+        startFailures.AddRange(failures.Select(failure =>
+            $"goal={goal.Id.Value[..8]} task={failure.TaskId.Value[..8]} {failure.Reason}"));
     }
 
     var updated = GoalDrainPlanner.Build(
@@ -271,6 +281,11 @@ private static bool HandleGoalDrain(CliExecutionContext context, IReadOnlyList<s
         costConfirmed,
         drainPolicy);
     ConsoleViews.PrintGoalDrainPlan(updated, applied);
+    if (startFailures.Count > 0)
+    {
+        context.FailAfterCommit(string.Join(Environment.NewLine, startFailures));
+    }
+
     return applied.Count > 0;
 }
 

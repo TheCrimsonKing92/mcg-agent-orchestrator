@@ -196,6 +196,7 @@ internal static class CliPersistentStateRunner
         var nextWorkerProfiles = workerProfiles;
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
+        string? postCommitFailure = null;
         var isAcceptanceRetry = args.Count > 0 &&
             args[0].Equals("acceptance-retry", StringComparison.OrdinalIgnoreCase);
         bool changed;
@@ -219,14 +220,16 @@ internal static class CliPersistentStateRunner
                             ref commandGoal,
                             channel,
                             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
-                            registerStateOutboxMessage: outboxMessages.Add);
+                            registerStateOutboxMessage: outboxMessages.Add,
+                            registerPostCommitFailure: failure => postCommitFailure ??= failure);
 
                         nextAgents = commandAgents;
                         nextWorkerProfiles = commandProfiles;
                         nextCurrentGoal = commandGoal;
+                        var mustCommit = shouldSave || postCommitFailure is not null;
                         return Task.FromResult((
-                            shouldSave,
-                            shouldSave,
+                            mustCommit,
+                            mustCommit,
                             (IReadOnlyList<OrchestratorStateOutboxMessage>)outboxMessages));
                     })
                 .GetAwaiter()
@@ -256,12 +259,14 @@ internal static class CliPersistentStateRunner
                             ref commandProfiles,
                             ref commandGoal,
                             channel,
-                            () => stateRepository.LoadAsync().GetAwaiter().GetResult());
+                            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+                            registerPostCommitFailure: failure => postCommitFailure ??= failure);
 
                         nextAgents = commandAgents;
                         nextWorkerProfiles = commandProfiles;
                         nextCurrentGoal = commandGoal;
-                        return Task.FromResult((shouldSave, shouldSave));
+                        var mustCommit = shouldSave || postCommitFailure is not null;
+                        return Task.FromResult((mustCommit, mustCommit));
                     })
                 .GetAwaiter()
                 .GetResult();
@@ -270,6 +275,11 @@ internal static class CliPersistentStateRunner
         agents = nextAgents;
         workerProfiles = nextWorkerProfiles;
         currentGoal = nextCurrentGoal;
+        if (postCommitFailure is not null)
+        {
+            throw new InvalidOperationException(postCommitFailure);
+        }
+
         return changed;
     }
 

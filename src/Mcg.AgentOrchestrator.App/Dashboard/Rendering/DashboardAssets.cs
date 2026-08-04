@@ -40,6 +40,11 @@ function summarizeResponse(text){
     const goal = value.goal || value.Goal;
     const tasks = value.tasks || value.Tasks;
     const task = value.task || value.Task;
+    const processes = value.processes || value.Processes || [];
+    const failedProcesses = processes.filter(process => process.failureReason || process.FailureReason);
+    const result = value.result || value.Result;
+    const failure = value.failure || value.Failure;
+    const failureReason = value.reason || value.Reason || result?.reason || result?.Reason || failure?.reason || failure?.Reason;
     const autoHandoff = value.autoHandoff || value.AutoHandoff;
     const continuation = value.continuation || value.Continuation;
     const name = value.name || value.Name;
@@ -54,6 +59,12 @@ function summarizeResponse(text){
     const siblings = value.siblingProcesses || value.SiblingProcesses || [];
     const warning = value.warning || value.Warning;
     if(warning) return warning;
+    if(failedProcesses.length) {
+      const shown = failedProcesses.slice(0, 3).map(process => `Task ${process.taskNumber || process.TaskNumber || '?'}: ${(process.failureReason || process.FailureReason).slice(0, 180)}`).join('; ');
+      const remaining = failedProcesses.length > 3 ? `; +${failedProcesses.length - 3} more` : '';
+      return `Start failures: ${shown}${remaining}`;
+    }
+    if(failureReason) return `Start failed: ${failureReason.slice(0, 240)}`;
     if(stopReason) return `Stopped: ${stopReason}. Steps: ${stepCount}. Goal: ${goalId.slice(0, 8) || 'n/a'}.${continuation?.IsRunning || continuation?.isRunning ? ' Server continuation is watching.' : ''}`;
     if(action) return `Ran ${action}. Changed: ${count}. Goal: ${goalId.slice(0, 8) || 'n/a'}.`;
     if(processId && command && outputLogPath) return `Started build/test cycle PID ${processId}: ${command}. Logs: ${outputLogPath}${errorLogPath ? `, ${errorLogPath}` : ''}`;
@@ -157,7 +168,7 @@ function setLiveText(selector, text){ const target = document.querySelector(sele
 function applyLiveSnapshot(snapshot){ const panel = document.querySelector('[data-live-monitor]'); if(!panel || !snapshot) return; const monitor = snapshot.monitor || snapshot.Monitor || {}; const tasks = snapshot.tasks || snapshot.Tasks || []; const inbox = snapshot.operatorInbox || snapshot.OperatorInbox; const capacity = snapshot.providerCapacity || snapshot.ProviderCapacity; const disposition = snapshot.operatorDisposition || snapshot.OperatorDisposition; const completed = tasks.filter(task => (task.status || task.Status) === 'Completed').length; const running = tasks.filter(task => (task.status || task.Status) === 'Running').length; const failed = tasks.filter(task => (task.status || task.Status) === 'Failed').length; const capacityText = capacity ? `capacity ${capacity.disposition || capacity.Disposition}: ready ${capacity.readyNowCount ?? capacity.ReadyNowCount ?? 0}, deferred ${capacity.deferredCount ?? capacity.DeferredCount ?? 0}` : 'capacity unknown'; const dispositionText = disposition ? ` disposition ${disposition.state || disposition.State}: ${disposition.nextSafeCommand || disposition.NextSafeCommand || 'next'}` : ''; panel.hidden = false; setLiveText('[data-live-status]', `status ${monitor.statusText || monitor.StatusText || monitor.status || monitor.Status || 'unknown'}${dispositionText}`); setLiveText('[data-live-tasks]', `tasks ${tasks.length}: ${completed} done, ${running} running, ${failed} failed`); setLiveText('[data-live-inbox]', `inbox ${inbox?.openCount ?? inbox?.OpenCount ?? 0}`); setLiveText('[data-live-capacity]', capacityText); }
 function handleSnapshotEvent(event){ markMonitorEvent(); try { applyLiveSnapshot(JSON.parse(event.data)); } catch {} refreshFromStream(); }
 function startMonitoringStream(){ const content = document.getElementById('dashboard-content'); const url = content?.dataset.monitorStream; if(!url || typeof EventSource === 'undefined') return; try { startMonitorStaleTimer(); const source = new EventSource(url); source.addEventListener('timeline', refreshFromStream); source.addEventListener('goal.snapshot', handleSnapshotEvent); source.addEventListener('open', () => { markMonitorEvent(); setStatus('Live monitor connected.'); }); source.addEventListener('error', () => setStatus('Live monitor reconnecting; timed refresh remains active.')); } catch { setStatus('Live monitor unavailable; timed refresh remains active.'); } }
-async function post(url, body){ setStatus('Working...'); const options = { method: 'POST' }; if(body){ options.headers = {'Content-Type':'application/json'}; options.body = JSON.stringify(body); } const response = await fetch(url, options); const text = await response.text(); if(!response.ok){ throw new Error(text || response.statusText); } setStatus(summarizeResponse(text)); setTimeout(() => refreshContent(true), 350); }
+async function post(url, body){ setStatus('Working...'); const options = { method: 'POST' }; if(body){ options.headers = {'Content-Type':'application/json'}; options.body = JSON.stringify(body); } const response = await fetch(url, options); const text = await response.text(); if(!response.ok){ const summary = summarizeResponse(text); throw new Error(summary !== 'Updated.' ? summary : text || response.statusText); } setStatus(summarizeResponse(text)); setTimeout(() => refreshContent(true), 350); }
 window.__dashboardSubmitForm = async function(form, submitter){ return post(form.dataset.action, payload(form, submitter)); };
 document.addEventListener('submit', async event => { const form = event.target.closest('form[data-action]'); if(!form) return; event.preventDefault(); try { await window.__dashboardSubmitForm(form, event.submitter); } catch(error) { setStatus(error.message); } });
 document.addEventListener('change', event => {

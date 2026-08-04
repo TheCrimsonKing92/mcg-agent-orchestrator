@@ -1177,6 +1177,38 @@ public sealed class DashboardRenderingTests
     Assert.Equal(description, plan.Items.Single().Description);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_preserves_process_start_failure_reason")]
+    public void DashboardResponseMapperPreservesProcessStartFailureReason()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Preserve batch start failure",
+            [new TaskSpec(TaskId.New(), "Start worker", AgentRole.Developer)]);
+        var task = goal.Tasks.Single();
+        var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
+        const string failureReason = "worker-process-registration-failed: stage=durable-registry-write";
+        var processResult = new ProcessBatchExecutionResult(
+            plan,
+            [],
+            StartFailures: [new DispatchProcessStartFailure(task.Id, failureReason)]);
+
+        var direct = DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "start-dispatches", processResult);
+        var subscription = DashboardResponseMapper.ToSubscriptionStartActionResultDto(
+            goal,
+            new SubscriptionStartResult(
+                [new WorkerProfileDispatchResult(task, @"C:\repo\.orchestrator\prompts\task.md")],
+                processResult,
+                new ParallelExecutionPlan([], []),
+                []));
+
+        var directFailure = Assert.Single(direct.Processes!);
+        Assert.Null(directFailure.Process);
+        Assert.Equal(failureReason, directFailure.FailureReason);
+        var subscriptionFailure = Assert.Single(subscription.Processes!);
+        Assert.Null(subscriptionFailure.Process);
+        Assert.Equal(failureReason, subscriptionFailure.FailureReason);
+    }
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_auto_refresh_metadata")]
     public void DashboardRendererCanEmitAutoRefreshMetadata()
 {
@@ -1921,6 +1953,10 @@ public sealed class DashboardRenderingTests
     Assert.Contains("agentProviderOptions", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("summarizeResponse", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("if(warning) return warning", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("process.FailureReason", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("result?.Reason", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("failure?.Reason", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("Start failures:", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("Server continuation is watching", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.False(DashboardAssets.OperatorControlsScript.Contains("Auto-resume scheduled", StringComparison.Ordinal));
     Assert.Contains("Stopped:", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);

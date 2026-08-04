@@ -6164,8 +6164,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         try
         {
             using var process = ProcessTreeGuiSuppression.Start(startInfo);
+            WorkerProcessJobs.RegisterOrThrow(process, $"acceptance:{workingDirectory}");
             startedProcessId = process.Id;
-            WorkerProcessJobs.TryRegister(process, $"acceptance:{workingDirectory}");
             if (heartbeatContext is not null)
             {
                 heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

@@ -167,6 +167,135 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Xunit.Assert.Null(task.LastProcess);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_registration_failure_stops_before_process_receipt")]
+    public async Task BackgroundDispatchRunnerRegistrationFailureStopsBeforeProcessReceipt()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        return;
+    }
+
+    var root = CreateTempDirectory();
+    var stateDbPath = Path.Combine(root, "state.db");
+    var corruptRegistryPath = Path.Combine(root, "corrupt-spawn-registry.db");
+    File.WriteAllBytes(corruptRegistryPath, []);
+    Process? spawned = null;
+    var spawnedProcessId = -1;
+    try
+    {
+        WorkerProcessJobs.ConfigureRegistry(corruptRegistryPath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Surface worker registration failure");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("local", "Write-Output ok", root, DateTimeOffset.UtcNow));
+        _ = StateDbMigrations.EnsureUpToDate(stateDbPath);
+        var repository = new SqliteOrchestratorStateRepository(stateDbPath);
+        await repository.SaveAsync(kernel);
+        var runner = new BackgroundDispatchRunner(
+            disableProcessStart: false,
+            startProcess: _ =>
+            {
+                spawned = Process.Start(new ProcessStartInfo
+                {
+                    FileName = WorkerShell.Executable,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }.WithArguments(
+                    WorkerShell.BaseArguments().Concat([
+                        "Start-Sleep -Seconds 9999"
+                    ]))) ?? throw new InvalidOperationException("Failed to start registration-failure fixture.");
+                spawnedProcessId = spawned.Id;
+                return spawned;
+            });
+
+        DispatchProcessStartResult? startResult = null;
+        var checkpointCount = 0;
+        WorkTaskStatus? secondCheckpointStatus = null;
+        bool? secondCheckpointHasProcess = null;
+        await repository.TransactAsync((transactionKernel, _) =>
+        {
+            startResult = runner.TryStartLatestDispatch(
+                transactionKernel,
+                goal.Id,
+                task.Id,
+                Path.Combine(root, "logs"),
+                (checkpointKernel, checkpointGoalId, checkpointTaskId) =>
+                {
+                    checkpointCount++;
+                    if (checkpointCount == 2)
+                    {
+                        var checkpointTask = checkpointKernel.GetTask(checkpointGoalId, checkpointTaskId);
+                        secondCheckpointStatus = checkpointTask.Status;
+                        secondCheckpointHasProcess = checkpointTask.LastProcess is not null;
+                    }
+                });
+            return Task.FromResult((true, true));
+        });
+
+        var restored = await repository.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        var restoredTask = restoredGoal.Tasks.Single(candidate => candidate.Id == task.Id);
+
+        Assert.NotNull(startResult);
+        Assert.Null(startResult.ProcessRecord);
+        Assert.Equal(2, checkpointCount);
+        Assert.Equal(WorkTaskStatus.Failed, secondCheckpointStatus);
+        Assert.False(secondCheckpointHasProcess);
+        Assert.Contains("worker-process-registration-failed", startResult.FailureReason, StringComparison.Ordinal);
+        Assert.Contains("stage=durable-registry-write", startResult.FailureReason, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Failed, restoredTask.Status);
+        Assert.Null(restoredTask.LastProcess);
+        Assert.Contains(restoredGoal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("worker-process-registration-failed", StringComparison.Ordinal));
+        Assert.True(SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    using var candidate = Process.GetProcessById(spawnedProcessId);
+                    return candidate.HasExited;
+                }
+                catch (ArgumentException)
+                {
+                    return true;
+                }
+                catch (InvalidOperationException)
+                {
+                    return true;
+                }
+            },
+            TimeSpan.FromSeconds(5)));
+    }
+    finally
+    {
+        WorkerProcessJobs.ClearRegistryForTests();
+        if (spawnedProcessId > 0)
+        {
+            try
+            {
+                using var candidate = Process.GetProcessById(spawnedProcessId);
+                if (!candidate.HasExited)
+                {
+                    candidate.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+                // The registration failure path should already have terminated the exact fixture.
+            }
+        }
+
+        spawned?.Dispose();
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_paid_worker_preflight_failure_has_zero_external_io")]
     public void BackgroundDispatchRunnerPaidWorkerPreflightFailureHasZeroExternalIo()
 {

@@ -884,6 +884,11 @@ internal sealed class ConductorDriver
             return DispatchStartOutcome.Started();
         }
 
+        if (result.Processes.StartFailures?.FirstOrDefault() is { } startFailure)
+        {
+            return DispatchStartOutcome.SpawnFailed(startFailure.Reason);
+        }
+
         if (result.Processes.RequeueSkippedCount > 0)
         {
             return DispatchStartOutcome.EmptyBatch(
@@ -911,6 +916,11 @@ internal sealed class ConductorDriver
         if (result.Tasks.Count > 0)
         {
             return DispatchStartOutcome.Started();
+        }
+
+        if (result.StartFailures?.FirstOrDefault() is { } startFailure)
+        {
+            return DispatchStartOutcome.SpawnFailed(startFailure.Reason);
         }
 
         if (result.RequeueSkippedCount > 0)
@@ -943,6 +953,18 @@ internal sealed class ConductorDriver
         // handled as a genuine worker result.
         if (state == GoalLifecycleState.Failed)
         {
+            var runningSibling = goal.Tasks.FirstOrDefault(task => task.LastProcess is { IsRunning: true });
+            if (runningSibling is not null)
+            {
+                return MakeResult(
+                    goalId,
+                    goalPrefix,
+                    policy,
+                    new ConductorAdvanceOutcome.Held(
+                        state,
+                        $"Failure handling deferred while task {runningSibling.Id.Value[..8]} still has a live worker process."));
+            }
+
             var inconclusiveTester = goal.Tasks.FirstOrDefault(t =>
                 t.RequiredRole == AgentRole.Tester &&
                 t.Status == WorkTaskStatus.Failed &&

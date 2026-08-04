@@ -374,6 +374,11 @@ internal static partial class DashboardEndpoints
                     task,
                     operation,
                     body);
+                if (actionResult is DispatchProcessStartFailureDto startFailure)
+                {
+                    return Json(startFailure, StatusCodes.Status503ServiceUnavailable);
+                }
+
                 return Json(actionResult ?? DashboardResponseMapper.ToTaskDetailDto(goal, task));
             },
             context.RequestAborted);
@@ -403,7 +408,7 @@ internal static partial class DashboardEndpoints
             {
                 var goal = ResolveGoal(current, goalId);
                 var result = await GoalManagementCommandService.AdvanceGoalAsync(current, agents, workerProfiles, services.Providers, services.Workspace, goal);
-                return (result.Executed, Json(result, result.Executed ? StatusCodes.Status200OK : StatusCodes.Status409Conflict));
+                return (result.Executed || result.StateChanged, Json(result, result.Executed ? StatusCodes.Status200OK : StatusCodes.Status409Conflict));
             });
     }
 
@@ -443,7 +448,7 @@ internal static partial class DashboardEndpoints
                     goal,
                     HasLargePaidSubscriptionStartConfirmation(context),
                     services.Providers);
-                return Task.FromResult((result.Executed, Json(result, result.Executed ? StatusCodes.Status200OK : StatusCodes.Status409Conflict)));
+                return Task.FromResult((result.Executed || result.StateChanged, Json(result, result.Executed ? StatusCodes.Status200OK : StatusCodes.Status409Conflict)));
             });
     }
 
@@ -456,7 +461,9 @@ internal static partial class DashboardEndpoints
             {
                 var goal = ResolveGoal(current, goalId);
                 var result = await GoalManagementCommandService.AdvanceGoalUntilBlockedAsync(current, agents, services.Providers, services.Workspace, goal);
-                return (result.Executed, Json(result, result.Executed ? StatusCodes.Status200OK : StatusCodes.Status409Conflict));
+                return (
+                    result.Executed || result.StateChanged,
+                    Json(result, result.Executed && result.Failure is null ? StatusCodes.Status200OK : StatusCodes.Status409Conflict));
             });
     }
 
@@ -495,14 +502,16 @@ internal static partial class DashboardEndpoints
                     goal,
                     HasLargePaidSubscriptionStartConfirmation(context),
                     services.Providers);
-                return Task.FromResult((advance.Executed, advance));
+                return Task.FromResult((advance.Executed || advance.StateChanged, advance));
             });
         if (DashboardContinuationService.ShouldContinueWatching(result))
         {
             result = result with { Continuation = services.Continuations.StartSubscriptionWatch(services, result.GoalId) };
         }
 
-        return Json(result, result.Executed ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
+        return Json(
+            result,
+            result.Executed && result.Failure is null ? StatusCodes.Status200OK : StatusCodes.Status409Conflict);
     }
 
     private static async Task<IResult> HandleGoalBatchOperationAsync(
@@ -572,7 +581,10 @@ internal static partial class DashboardEndpoints
                     body,
                     services.Workspace,
                     services.Providers);
-                return Task.FromResult(Json(result));
+                var statusCode = result.Processes?.Any(process => process.FailureReason is not null) == true
+                    ? StatusCodes.Status503ServiceUnavailable
+                    : StatusCodes.Status200OK;
+                return Task.FromResult(Json(result, statusCode));
             },
             context.RequestAborted);
     }

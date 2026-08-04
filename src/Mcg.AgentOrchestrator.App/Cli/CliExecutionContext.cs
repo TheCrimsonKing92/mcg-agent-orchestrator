@@ -23,7 +23,8 @@ internal sealed class CliExecutionContext(
     Func<AgentOrchestratorKernel>? reloadResolvedParkedHumanWaitKernel = null,
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null,
     Action<OrchestratorStateOutboxMessage>? registerStateOutboxMessage = null,
-    Func<IReadOnlyCollection<string>, AgentOrchestratorKernel>? reloadKernelForGoals = null)
+    Func<IReadOnlyCollection<string>, AgentOrchestratorKernel>? reloadKernelForGoals = null,
+    Action<string>? registerPostCommitFailure = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -59,6 +60,21 @@ public void CommitWithState(
     }
 
     registerStateOutboxMessage(message);
+}
+
+/// <summary>
+/// Records a command failure that must be surfaced only after the surrounding state transaction
+/// commits. Direct/in-memory callers have no transaction boundary, so they fail immediately.
+/// </summary>
+public void FailAfterCommit(string failure)
+{
+    ArgumentException.ThrowIfNullOrWhiteSpace(failure);
+    if (registerPostCommitFailure is null)
+    {
+        throw new InvalidOperationException(failure);
+    }
+
+    registerPostCommitFailure(failure);
 }
 
 public OrchestratorWorkspace Workspace { get; } = workspace;

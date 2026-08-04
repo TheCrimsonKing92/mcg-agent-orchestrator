@@ -28,13 +28,16 @@ public sealed record DispatchAutoRequeueDisposition(string EventName, string Mes
 public sealed record DispatchProcessStartResult(
     TaskProcessRecord? ProcessRecord,
     WorkerSandboxPrepRecoverableAction? RecoveryAction,
-    bool RequeueSkipped = false)
+    bool RequeueSkipped = false,
+    string? FailureReason = null)
 {
     public static DispatchProcessStartResult Started(TaskProcessRecord processRecord) => new(processRecord, null);
 
     public static DispatchProcessStartResult RequiresRecovery(WorkerSandboxPrepRecoverableAction action) => new(null, action);
 
     public static DispatchProcessStartResult Skipped() => new(null, null, RequeueSkipped: true);
+
+    public static DispatchProcessStartResult Failed(string reason) => new(null, null, FailureReason: reason);
 }
 
 public sealed record InterruptedDispatchStateRead(
@@ -205,6 +208,11 @@ public sealed class BackgroundDispatchRunner
         if (result.RecoveryAction is { } action)
         {
             throw new InvalidOperationException(action.Reason);
+        }
+
+        if (result.FailureReason is { } failureReason)
+        {
+            throw new InvalidOperationException(failureReason);
         }
 
         return result.ProcessRecord
@@ -389,7 +397,13 @@ public sealed class BackgroundDispatchRunner
         ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
         var process = _startProcess(startInfo)
             ?? throw new InvalidOperationException("Failed to start background dispatch process.");
-        WorkerProcessJobs.TryRegister(process, $"{goalId.Value}:{taskId.Value}");
+        if (!WorkerProcessJobs.TryRegister(process, $"{goalId.Value}:{taskId.Value}", out var registrationFailure))
+        {
+            process.Dispose();
+            kernel.ReportTaskProgress(goalId, taskId, WorkTaskStatus.Failed, registrationFailure);
+            checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId);
+            return DispatchProcessStartResult.Failed(registrationFailure);
+        }
 
         var record = new TaskProcessRecord(
             process.Id,

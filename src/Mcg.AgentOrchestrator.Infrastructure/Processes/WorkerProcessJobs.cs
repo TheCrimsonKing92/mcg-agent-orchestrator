@@ -216,11 +216,25 @@ public static class WorkerProcessJobs
 
     public static bool TryRegister(Process process, string? ownerId = null)
     {
-        return TryRegister(
+        return TryRegister(process, ownerId, out _);
+    }
+
+    public static bool TryRegister(Process process, string? ownerId, out string registrationFailure)
+    {
+        return TryRegisterCore(
             process,
             ownerId,
             static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
-            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity);
+            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
+            out registrationFailure);
+    }
+
+    public static void RegisterOrThrow(Process process, string? ownerId = null)
+    {
+        if (!TryRegister(process, ownerId, out var registrationFailure))
+        {
+            throw new InvalidOperationException(registrationFailure);
+        }
     }
 
     internal static bool TryRegister(
@@ -228,7 +242,7 @@ public static class WorkerProcessJobs
         string? ownerId,
         Func<Process, SpawnProcessIdentity?> readIdentity)
     {
-        return TryRegister(process, ownerId, readIdentity, readIdentity);
+        return TryRegisterCore(process, ownerId, readIdentity, readIdentity, out _);
     }
 
     internal static bool TryRegister(
@@ -237,23 +251,48 @@ public static class WorkerProcessJobs
         Func<Process, SpawnProcessIdentity?> readVictimIdentity,
         Func<Process, SpawnProcessIdentity?> readOwnerIdentity)
     {
+        return TryRegisterCore(process, ownerId, readVictimIdentity, readOwnerIdentity, out _);
+    }
+
+    private static bool TryRegisterCore(
+        Process process,
+        string? ownerId,
+        Func<Process, SpawnProcessIdentity?> readVictimIdentity,
+        Func<Process, SpawnProcessIdentity?> readOwnerIdentity,
+        out string registrationFailure)
+    {
         ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(readVictimIdentity);
         ArgumentNullException.ThrowIfNull(readOwnerIdentity);
+        registrationFailure = string.Empty;
 
         if (IsProtectedProcessOrAncestor(process.Id))
         {
+            registrationFailure = BuildRegistrationFailure(
+                process.Id,
+                "protected-process-boundary",
+                "refused-protected-process");
             return false;
         }
 
+        // Registration is single-shot. A PID collision may be a duplicate call, a concurrent
+        // publication that has not reached the durable registry yet, or a recycled PID behind a
+        // stale in-memory entry. None is safe to accept as success without a registration state
+        // machine, so fail closed and terminate the candidate rather than bypassing ownership.
         if (Jobs.ContainsKey(process.Id))
         {
-            return true;
+            registrationFailure = BuildRegistrationFailure(
+                process.Id,
+                "duplicate-or-recycled-pid",
+                "process-tree-termination-requested");
+            TryTerminateUnregisteredProcess(process);
+            return false;
         }
 
         var registry = Registry;
         OwnedProcessGroup? group = null;
         Microsoft.Win32.SafeHandles.SafeFileHandle? duplicate = null;
+        var failureStage = "owned-process-group-attachment";
         try
         {
             group = OwnedProcessGroup.Attach(process);
@@ -261,24 +300,35 @@ public static class WorkerProcessJobs
             SpawnProcessIdentity? ownerIdentity = null;
             if (registry is not null)
             {
+                failureStage = "victim-identity-read";
                 victimIdentity = readVictimIdentity(process);
                 if (victimIdentity is null)
                 {
+                    registrationFailure = BuildRegistrationFailure(
+                        process.Id,
+                        failureStage,
+                        "attached-process-tree-termination-requested");
                     ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
                     group = null;
                     return false;
                 }
 
+                failureStage = "owner-identity-read";
                 using var ownerProcess = Process.GetCurrentProcess();
                 ownerIdentity = readOwnerIdentity(ownerProcess);
                 if (ownerIdentity is null)
                 {
+                    registrationFailure = BuildRegistrationFailure(
+                        process.Id,
+                        failureStage,
+                        "attached-process-tree-termination-requested");
                     ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
                     group = null;
                     return false;
                 }
             }
 
+            failureStage = "job-publication";
             duplicate = group.TryDuplicateAccountingHandle(out var duplicateHandle) ? duplicateHandle : null;
             var snapshot = group.TryReadAccounting(out var registrationAccounting)
                 ? registrationAccounting with { AccountingSource = "snapshot" }
@@ -293,6 +343,10 @@ public static class WorkerProcessJobs
                     return true;
                 }
 
+                registrationFailure = BuildRegistrationFailure(
+                    process.Id,
+                    "durable-registry-write",
+                    "registered-process-tree-termination-requested");
                 if (Jobs.TryRemove(process.Id, out var failedRegistration))
                 {
                     ReadAccountingAndDispose(
@@ -306,14 +360,23 @@ public static class WorkerProcessJobs
                 return false;
             }
 
-            ReadAccountingAndDispose(group, kill: false, captureAccounting: false, out _);
+            registrationFailure = BuildRegistrationFailure(
+                process.Id,
+                "duplicate-or-recycled-pid",
+                "attached-process-tree-termination-requested");
+            ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
             group = null;
             duplicate?.Dispose();
             duplicate = null;
+            return false;
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
         {
-            if (group is null && !Jobs.ContainsKey(process.Id))
+            registrationFailure = BuildRegistrationFailure(
+                process.Id,
+                failureStage,
+                $"process-tree-termination-requested; exception={ex.GetType().Name}");
+            if (group is null)
             {
                 TryTerminateUnregisteredProcess(process);
             }
@@ -330,6 +393,9 @@ public static class WorkerProcessJobs
 
         return false;
     }
+
+    private static string BuildRegistrationFailure(int processId, string stage, string cleanup) =>
+        $"worker-process-registration-failed: pid={processId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; stage={stage}; cleanup={cleanup}";
 
     public static bool TryKillOrFallback(int processId)
     {

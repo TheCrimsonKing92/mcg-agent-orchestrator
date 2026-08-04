@@ -24,17 +24,22 @@ public static BatchActionResultDto ToBatchActionResultDto(
 
 public static BatchActionResultDto ToProcessBatchActionResultDto(Goal goal, string action, ProcessBatchExecutionResult result)
 {
+    var changedTasks = result.Tasks
+        .Concat((result.StartFailures ?? []).Select(failure => goal.Tasks.Single(task => task.Id == failure.TaskId)))
+        .DistinctBy(task => task.Id)
+        .ToList();
     return new BatchActionResultDto(
         goal.Id.Value,
         action,
-        result.Tasks.Count,
-        result.Tasks.Select(task => ToTaskDetailDto(goal, task)).ToList(),
+        changedTasks.Count,
+        changedTasks.Select(task => ToTaskDetailDto(goal, task)).ToList(),
         null,
         ToProcessBatchPlanDto(goal, result.Plan),
-        result.Tasks.Select(task => new ProcessBatchOutcomeDto(
+        changedTasks.Select(task => new ProcessBatchOutcomeDto(
             ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
             task.Id.Value,
-            ToProcessDto(task.LastProcess))).ToList());
+            ToProcessDto(task.LastProcess),
+            GetStartFailureReason(result.StartFailures, task.Id))).ToList());
 }
 
 public static BatchActionResultDto ToSubscriptionStartActionResultDto(Goal goal, SubscriptionStartResult result)
@@ -42,6 +47,7 @@ public static BatchActionResultDto ToSubscriptionStartActionResultDto(Goal goal,
     var changedTasks = result.Dispatches
         .Select(dispatch => dispatch.Task)
         .Concat(result.Processes.Tasks)
+        .Concat((result.Processes.StartFailures ?? []).Select(failure => goal.Tasks.Single(task => task.Id == failure.TaskId)))
         .DistinctBy(task => task.Id)
         .ToList();
 
@@ -52,13 +58,22 @@ public static BatchActionResultDto ToSubscriptionStartActionResultDto(Goal goal,
         changedTasks.Select(task => ToTaskDetailDto(goal, task)).ToList(),
         result.Dispatches.Select(dispatch => ToProfileDispatchDto(goal, dispatch)).ToList(),
         ToProcessBatchPlanDto(goal, result.Processes.Plan),
-        result.Processes.Tasks.Select(task => new ProcessBatchOutcomeDto(
+        result.Processes.Tasks
+            .Concat((result.Processes.StartFailures ?? []).Select(failure => goal.Tasks.Single(task => task.Id == failure.TaskId)))
+            .DistinctBy(task => task.Id)
+            .Select(task => new ProcessBatchOutcomeDto(
             ConsoleViews.GetTaskDisplayNumber(goal, task.Id),
             task.Id.Value,
-            ToProcessDto(task.LastProcess))).ToList(),
+            ToProcessDto(task.LastProcess),
+            GetStartFailureReason(result.Processes.StartFailures, task.Id))).ToList(),
         ToParallelExecutionPlanDto(result.ParallelPlan),
         result.BlockedDiagnostics.Select(ToReadyBlockedDiagnosticDto).ToList());
 }
+
+private static string? GetStartFailureReason(
+    IReadOnlyList<DispatchProcessStartFailure>? failures,
+    TaskId taskId) =>
+    failures?.FirstOrDefault(failure => failure.TaskId == taskId)?.Reason;
 
 private static ReadyBlockedDiagnosticDto ToReadyBlockedDiagnosticDto(ReadyBlockedDiagnostic diagnostic) =>
     new(

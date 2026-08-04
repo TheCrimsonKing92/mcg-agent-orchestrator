@@ -636,6 +636,7 @@ private static ProcessBatchExecutionResult StartDispatches(
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
     var started = new List<TaskSpec>();
     var recoveryActions = new List<WorkerSandboxPrepRecoverableAction>();
+    var startFailures = new List<DispatchProcessStartFailure>();
     var requeueSkippedCount = 0;
     IReadOnlyList<AgentDefinition>? resolvedAgents = null;
     WorkerProfileCatalog? resolvedProfiles = null;
@@ -678,10 +679,16 @@ private static ProcessBatchExecutionResult StartDispatches(
             continue;
         }
 
+        if (startResult.FailureReason is { } failureReason)
+        {
+            startFailures.Add(new DispatchProcessStartFailure(task.Id, failureReason));
+            continue;
+        }
+
         started.Add(task);
     }
 
-    return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount);
+    return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount, startFailures);
 }
 
 public static ProcessBatchExecutionResult RefreshDispatches(
