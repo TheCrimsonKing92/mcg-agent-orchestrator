@@ -10,6 +10,6 @@ Run each mutation independently, retain the named focused failure, restore the s
 - In `DispatchStateSurface.Evaluate`, pass every requested worktree inspection to recovery regardless of role, liveness, or exit receipt. `DispatchStateSurfaceReadOnlyMissingWorktreeMatchesRefreshStaleDisposition` must go RED.
 - In `PostLandingCanaryCoordinator` and `SemanticAcceptanceEvaluator`, classify internal `OperationCanceledException` as timeout again. `RunnerInternalCancellationIsNotRecordedAsTimeout` and `EvaluatorRecordsInternalJudgeCancellationWithoutClaimingTimeout` must go RED.
 - In `FailureTriagePlanner`, classify the concatenated worker streams by permission substrings before the typed dispatch outcome. `FailureTriagePlannerDoesNotTreatQuotedPermissionTestTextAsApparatusFailure` and `DashboardActionRecommendationKeepsPermissionTestFailureOnCodeRetryPath` must go RED.
-- In `PostLandingCanaryState.TryParseKind`, map unrecognized status to `Failed`. `UnrecognizedCanaryReceiptStatusSurfacesUnavailableStateWithoutTrippingUnhealthy` must go RED.
+- In `PostLandingCanaryState.TryParseKind`, map unrecognized status to `Failed`. `PostLandingCanaryTests.UnrecognizedReceiptStatusSurfacesUnavailableState` must go RED.
 
 Status: RED execution deferred to the test-capable acceptance lane; GREEN compile verification is recorded in the goal worker result.

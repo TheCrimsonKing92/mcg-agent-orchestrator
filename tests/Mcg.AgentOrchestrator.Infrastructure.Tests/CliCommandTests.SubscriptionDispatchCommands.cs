@@ -271,7 +271,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         var kernel = new AgentOrchestratorKernel();
-        var task = new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer);
+        var task = new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Researcher);
         var goal = kernel.CreateGoal("Next recovery policy", [task]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);

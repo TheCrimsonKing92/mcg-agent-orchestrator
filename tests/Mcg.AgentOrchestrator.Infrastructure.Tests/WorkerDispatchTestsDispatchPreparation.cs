@@ -551,7 +551,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 {
     var root = CreateTempDirectory();
     var clock = new TestClock(DateTimeOffset.Parse("2026-07-03T06:10:00Z"));
-    var (_, goal, task, _) = CreateRecordedDispatch(root, clock);
+    var (_, goal, task, _) = CreateRecordedDispatch(root, clock, AgentRole.Researcher);
 
     var state = CreateStateSurface(clock, livePids: [], commandLines: new Dictionary<int, string>())
         .Evaluate(goal.Id, task);

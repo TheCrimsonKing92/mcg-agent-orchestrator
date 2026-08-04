@@ -733,7 +733,7 @@ public sealed class DashboardRenderingTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
             "Next recovery policy",
-            [new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Developer)]);
+            [new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Researcher)]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         var task = goal.Tasks.Single();
         var stdout = Path.Combine(root, "out.log");
@@ -944,11 +944,11 @@ public sealed class DashboardRenderingTests
     var goal = kernel.CreateGoal("Monitor goal state");
     var agent = new AgentDefinition(
         AgentId.New(),
-        "Developer",
-        AgentRole.Developer,
+        "Researcher",
+        AgentRole.Researcher,
         new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
-    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
     var goalPrefix = goal.Id.Value[..8];
     var dispatchRoot = CreateTempDirectory();
     var stdout = Path.Combine(dispatchRoot, "developer.out.log");
@@ -1024,7 +1024,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal("timeline", batch.Events[0].Event);
     Assert.Equal("Started monitoring work.", batch.Events[0].Message);
     Assert.Equal(task.Id.Value, batch.Events[0].TaskId);
-    Assert.Equal(AgentRole.Developer, batch.Events[0].Role);
+    Assert.Equal(AgentRole.Researcher, batch.Events[0].Role);
     Assert.Equal(WorkTaskStatus.Completed, batch.Snapshot.Tasks.Single(item => item.TaskId == task.Id.Value).Status);
     Xunit.Assert.Single(replay.Events);
     Assert.Equal("Finished monitoring work.", replay.Events.Single().Message);
@@ -1051,7 +1051,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal(goal.Id.Value, taskStatus.GoalId);
     Assert.Equal(task.Id.Value, taskStatus.TaskId);
     Assert.Equal(sourceEvent.TaskNumber, taskStatus.TaskNumber);
-    Assert.Equal(AgentRole.Developer, taskStatus.Role);
+    Assert.Equal(AgentRole.Researcher, taskStatus.Role);
     Assert.Equal(WorkTaskStatus.Completed, taskStatus.Status);
     using var taskStatusStream = new MemoryStream();
     await DashboardMonitoringEvents.WriteServerSentEventAsync(
