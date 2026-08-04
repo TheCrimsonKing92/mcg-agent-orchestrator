@@ -18,6 +18,29 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Equal(nameof(Thread.Sleep), DotnetBuildEnvironmentManager.DefaultLeaseSleepForTests.Method.Name);
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_nested_hermetic_profile_preserves_shared_LocalLow_grid")]
+    public void DotnetBuildEnvironmentManagerNestedHermeticProfilePreservesSharedLocalLowGrid()
+    {
+        var realLocalAppData = Path.Combine(Path.GetTempPath(), "real-profile", "AppData", "Local");
+        var redirectedKnownFolder = Path.Combine(Path.GetTempPath(), "mcg-hvp", "AppData", "Local");
+
+        var resolved = DotnetBuildEnvironmentManager.ResolveIsolatedRootBase(
+            overridden: null,
+            localAppDataVariable: realLocalAppData,
+            localAppDataKnownFolder: redirectedKnownFolder,
+            tempPath: Path.GetTempPath(),
+            isWindows: true);
+
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(
+                realLocalAppData,
+                "..",
+                "LocalLow",
+                DotnetBuildEnvironmentManager.RootDirectoryName)),
+            resolved);
+        Assert.DoesNotContain(redirectedKnownFolder, resolved, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_reuses_goal_lease_with_metadata_and_cleanup")]
     public void DotnetBuildEnvironmentManagerReusesGoalLeaseWithMetadataAndCleanup()
     {
@@ -471,13 +494,23 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.False(File.Exists(AcceptanceAttemptArtifactCustody.MarkerPath(environment.ArtifactsPath)));
     }
 
-    [Xunit.Fact(DisplayName = "InvokeWorkerBuildCheck_preserves_per_goal_root_outside_firewall_test_slots")]
-    public void InvokeWorkerBuildCheckPreservesPerGoalRootOutsideFirewallTestSlots()
+    [Xunit.Fact(DisplayName = "InvokeWorkerBuildCheck_preserves_per_goal_root_and_shared_build_slot_grid")]
+    public void InvokeWorkerBuildCheckPreservesPerGoalRootAndSharedBuildSlotGrid()
     {
         var source = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-WorkerBuildCheck.ps1"));
+        var isolatedDotnetSource = File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
+        var rootResolverStart = source.IndexOf("function Get-IsolatedRootBase", StringComparison.Ordinal);
+        var rootResolverEnd = source.IndexOf("function Get-HostTempBase", rootResolverStart, StringComparison.Ordinal);
+        var isolatedRootResolverStart = isolatedDotnetSource.IndexOf("function Get-IsolatedRootBase", StringComparison.Ordinal);
+        var isolatedRootResolverEnd = isolatedDotnetSource.IndexOf("function Get-HostTempBase", isolatedRootResolverStart, StringComparison.Ordinal);
 
         Assert.Contains(@"goals\$safeGoalPrefix""", source, StringComparison.Ordinal);
         Assert.Contains(@"build-slots\$buildSlotName.lock""", source, StringComparison.Ordinal);
+        Assert.True(rootResolverStart >= 0 && rootResolverEnd > rootResolverStart);
+        Assert.True(isolatedRootResolverStart >= 0 && isolatedRootResolverEnd > isolatedRootResolverStart);
+        Assert.Equal(
+            isolatedDotnetSource[isolatedRootResolverStart..isolatedRootResolverEnd],
+            source[rootResolverStart..rootResolverEnd]);
         Assert.DoesNotContain(@"slots\operator-build", source, StringComparison.Ordinal);
         Assert.DoesNotContain(@"operators\worker-build", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Get-StableSlotName", source, StringComparison.Ordinal);
@@ -2511,6 +2544,756 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Contains("-p:BuildInParallel=false", configuredArguments);
     }
 
+    [Xunit.Fact]
+    public void FocusedRunner_InvalidMethodToken_RemainsPreLease()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var validation = source.IndexOf("if ($FocusedTest) {", StringComparison.Ordinal);
+        var repositoryRoot = source.IndexOf("$RepositoryRoot = (Get-Location).Path", StringComparison.Ordinal);
+        var strictGrammar = source.IndexOf(
+            @"\AFullyQualifiedName~[A-Za-z_][A-Za-z0-9_]{7,}(?:\|FullyQualifiedName~[A-Za-z_][A-Za-z0-9_]{7,})*\z",
+            StringComparison.Ordinal);
+
+        Assert.True(validation >= 0 && strictGrammar > validation && strictGrammar < repositoryRoot);
+        Assert.DoesNotContain("[A-Za-z0-9_.]*", source[validation..repositoryRoot], StringComparison.Ordinal);
+        Assert.Contains("exit 4", source[validation..repositoryRoot], StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_WorkerGrant_UsesPersistedDeveloperRole()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var mode = FocusedModeSource(source);
+        var authorization = mode.IndexOf("Get-FocusedWorkerAuthorization", StringComparison.Ordinal);
+        var lease = mode.IndexOf("Enter-FocusedBuildSlot", StringComparison.Ordinal);
+
+        Assert.Contains("json_each(goals.snapshot_json, '$.Tasks')", source, StringComparison.Ordinal);
+        Assert.Contains("json_extract(task.value, '$.RequiredRole')", source, StringComparison.Ordinal);
+        Assert.Contains("[string]::Equals($role, 'Developer'", source, StringComparison.Ordinal);
+        Assert.True(authorization >= 0 && lease > authorization);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_ReceiptNamesExecutedIsolatedCommand()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var mode = FocusedModeSource(source);
+        var arguments = mode.IndexOf("$testArguments = @(", StringComparison.Ordinal);
+        var receipt = mode.IndexOf("$receipt.testArguments = @($testArguments)", StringComparison.Ordinal);
+        var invocation = mode.IndexOf("Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath", StringComparison.Ordinal);
+
+        Assert.Contains(@"Join-Path $runRoot ""focused-artifacts\$($slotLease.Id)""", mode, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"Join-Path $runRoot ""artifacts""", mode, StringComparison.Ordinal);
+        Assert.Contains("Get-FocusedMtpFilterArguments -Filter $FocusedTestFilter", mode, StringComparison.Ordinal);
+        Assert.True(arguments >= 0 && receipt > arguments && invocation > receipt);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_FreshnessIncludesUntrackedContent()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var stateStart = source.IndexOf("function Get-FocusedWorktreeState", StringComparison.Ordinal);
+        var stateEnd = source.IndexOf("function ConvertTo-DeclaredMutationPath", stateStart, StringComparison.Ordinal);
+        var freshnessStart = source.IndexOf("function Test-FocusedBuildIsCurrent", StringComparison.Ordinal);
+        var freshnessEnd = source.IndexOf("function Write-FocusedReceipt", freshnessStart, StringComparison.Ordinal);
+        var state = source[stateStart..stateEnd];
+        var freshness = source[freshnessStart..freshnessEnd];
+
+        Assert.Contains("ls-files --others --exclude-standard", state, StringComparison.Ordinal);
+        Assert.Contains("Get-FileHash -LiteralPath $path -Algorithm SHA256", state, StringComparison.Ordinal);
+        Assert.DoesNotContain("Get-Item", freshness, StringComparison.Ordinal);
+        Assert.DoesNotContain("ls-files", freshness, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_LeaseHeartbeatLeavesGateDeadlineMargin()
+    {
+        var source = ReadIsolatedDotnetScript();
+        var mode = FocusedModeSource(source);
+
+        Assert.Contains("activity-$slot.heartbeat.json", source, StringComparison.Ordinal);
+        Assert.Contains("lastObservedAt", source, StringComparison.Ordinal);
+        Assert.Contains("lastProgressAt", source, StringComparison.Ordinal);
+        Assert.Contains("state = \"running\"", source, StringComparison.Ordinal);
+        Assert.Contains("$runDeadline.AddSeconds(-$cleanupMarginSeconds)", mode, StringComparison.Ordinal);
+        Assert.Contains("-HeartbeatPath $slotLease.HeartbeatPath", mode, StringComparison.Ordinal);
+        Assert.Contains("$path.acceptance-priority.lock", source, StringComparison.Ordinal);
+        Assert.Contains("$acceptancePriorityStream.Lock(0, 1)", source, StringComparison.Ordinal);
+        Assert.Contains("& dotnet build-server shutdown", mode, StringComparison.Ordinal);
+        Assert.Contains("$slotLease.Stream.Dispose()", mode, StringComparison.Ordinal);
+        Assert.Contains("Write-FocusedReceipt -Receipt $receipt", mode, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_UnderspecifiedFilter_ExitsInvalidBeforeLeaseOrDotnet()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repoRoot = ResolveRepositoryRoot();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var root = CreateTempDirectory();
+        var shimDirectory = Path.Combine(root, "shim");
+        var workDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(workDirectory);
+        try
+        {
+            var logPath = Path.Combine(root, "dotnet.log");
+            File.WriteAllText(
+                Path.Combine(shimDirectory, "dotnet.cmd"),
+                "@echo off\r\n>> \"%DOTNET_SHIM_LOG%\" echo args=%*\r\nexit /b 0\r\n");
+            var isolatedRoot = Path.Combine(root, "isolated-dotnet");
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                WorkingDirectory = workDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(scriptPath);
+            startInfo.ArgumentList.Add("-FocusedTest");
+            startInfo.ArgumentList.Add("-TestFilter");
+            startInfo.ArgumentList.Add("FullyQualifiedName~T");
+            startInfo.ArgumentList.Add("test");
+            startInfo.ArgumentList.Add("Fake.Tests.csproj");
+            startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.Environment["DOTNET_SHIM_LOG"] = logPath;
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedRoot;
+            startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start PowerShell.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(10000), "Focused invalid-filter invocation did not exit within 10 seconds.");
+
+            Assert.Equal(4, process.ExitCode);
+            using var receipt = JsonDocument.Parse(stdout);
+            Assert.Equal("INVALID", receipt.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal("invalid-focused-request", receipt.RootElement.GetProperty("reason").GetString());
+            Assert.False(File.Exists(logPath));
+            Assert.False(Directory.Exists(isolatedRoot));
+            Assert.True(string.IsNullOrWhiteSpace(stderr), stderr);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_Pass_ExecutesUnderLeaseAndWritesReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repoRoot = ResolveRepositoryRoot();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var root = CreateTempDirectory();
+        var sharedProfileRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Temp",
+            "Low",
+            "f",
+            Guid.NewGuid().ToString("N")[..8]);
+        var localAppData = Path.Combine(sharedProfileRoot, "Local");
+        var nestedIsolatedRoot = Path.GetFullPath(Path.Combine(
+            localAppData,
+            "..",
+            "LocalLow",
+            DotnetBuildEnvironmentManager.RootDirectoryName));
+        var shimDirectory = Path.Combine(root, "shim");
+        var workDirectory = Path.Combine(root, "repo");
+            Directory.CreateDirectory(shimDirectory);
+            Directory.CreateDirectory(workDirectory);
+            Directory.CreateDirectory(Path.Combine(workDirectory, ".mcg-sandbox", "temp"));
+        try
+        {
+            const string projectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
+            var projectFile = $"{projectName}.csproj";
+            RunCommand("git", workDirectory, "init", "--initial-branch=main");
+            RunCommand("git", workDirectory, "config", "user.email", "test@example.invalid");
+            RunCommand("git", workDirectory, "config", "user.name", "Focused Runner Test");
+            File.WriteAllText(Path.Combine(workDirectory, projectFile), "<Project />");
+            RunCommand("git", workDirectory, "add", projectFile);
+            RunCommand("git", workDirectory, "commit", "-m", "base");
+            File.AppendAllText(Path.Combine(workDirectory, ".git", "info", "exclude"), $"{Environment.NewLine}.orchestrator/{Environment.NewLine}.mcg-sandbox/{Environment.NewLine}");
+            var commit = RunCommand("git", workDirectory, "rev-parse", "HEAD").Trim();
+
+            var logPath = Path.Combine(root, "dotnet.log");
+            var receiptPath = Path.Combine(root, "focused.receipt.json");
+            var testOutput = Path.GetDirectoryName(typeof(DotnetBuildEnvironmentManagerTests).Assembly.Location)!;
+            var isolatedRoot = nestedIsolatedRoot;
+            var slot = "aaaaaaaa".Aggregate(
+                0,
+                (hash, character) => (hash + character) % DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);
+            var artifactsPath = Path.Combine(
+                isolatedRoot,
+                "goals",
+                "aaaaaaaa",
+                "focused-artifacts",
+                $"build-{slot}");
+            var artifactOutput = Path.Combine(artifactsPath, "bin", projectName, "debug");
+            foreach (var sourcePath in Directory.GetFiles(testOutput, "*", SearchOption.AllDirectories))
+            {
+                var targetPath = Path.Combine(artifactOutput, Path.GetRelativePath(testOutput, sourcePath));
+                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+                File.Copy(sourcePath, targetPath);
+            }
+            File.WriteAllText(
+                Path.Combine(artifactsPath, ".mcg-artifacts-owner.json"),
+                JsonSerializer.Serialize(new { ownerToken = $"focused-aaaaaaaa-build-{slot}" }));
+            var cleanDigest = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(Array.Empty<byte>())).ToLowerInvariant();
+            var fingerprintInput = string.Join(
+                '\n',
+                commit,
+                cleanDigest,
+                Path.GetFullPath(Path.Combine(workDirectory, projectFile)),
+                "Debug",
+                string.Empty);
+            var fingerprint = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput))).ToLowerInvariant();
+            File.WriteAllText(
+                Path.Combine(artifactsPath, ".mcg-focused-build-state.json"),
+                JsonSerializer.Serialize(new { fingerprint }));
+            File.WriteAllText(
+                Path.Combine(shimDirectory, "dotnet.cmd"),
+                """
+                @echo off
+                >> "%DOTNET_SHIM_LOG%" echo args=%*
+                if "%~1"=="build-server" exit /b 0
+                exit /b 0
+                """);
+
+            const string goalId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            const string taskId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+            var logDirectory = Path.Combine(workDirectory, ".orchestrator", "logs");
+            Directory.CreateDirectory(logDirectory);
+            var startGatePath = Path.Combine(logDirectory, "focused.start-gate");
+            File.WriteAllText(
+                Path.Combine(logDirectory, "focused.dispatch.json"),
+                JsonSerializer.Serialize(new { prepGoalId = goalId, prepTaskId = taskId, workingDirectory = workDirectory }));
+            var statePath = Path.Combine(workDirectory, ".orchestrator", "state.db");
+            using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={statePath};Pooling=False"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "CREATE TABLE goals (id TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL); INSERT INTO goals VALUES ($goal, $snapshot);";
+                command.Parameters.AddWithValue("$goal", goalId);
+                command.Parameters.AddWithValue(
+                    "$snapshot",
+                    JsonSerializer.Serialize(new { Tasks = new[] { new { Id = taskId, RequiredRole = "Developer" } } }));
+                command.ExecuteNonQuery();
+            }
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                WorkingDirectory = workDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-ExecutionPolicy");
+            startInfo.ArgumentList.Add("Bypass");
+            startInfo.ArgumentList.Add("-File");
+            startInfo.ArgumentList.Add(scriptPath);
+            startInfo.ArgumentList.Add("-FocusedTest");
+            startInfo.ArgumentList.Add("-GoalPrefix");
+            startInfo.ArgumentList.Add("aaaaaaaa");
+            startInfo.ArgumentList.Add("-TestFilter");
+            startInfo.ArgumentList.Add("FullyQualifiedName~AcceptanceCriterionFeasibilityTests");
+            startInfo.ArgumentList.Add("-ReceiptPath");
+            startInfo.ArgumentList.Add(receiptPath);
+            startInfo.ArgumentList.Add("-BudgetSeconds");
+            startInfo.ArgumentList.Add("60");
+            startInfo.ArgumentList.Add("-LeaseWaitSeconds");
+            startInfo.ArgumentList.Add("5");
+            startInfo.ArgumentList.Add("test");
+            startInfo.ArgumentList.Add(projectFile);
+            startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+            startInfo.Environment["DOTNET_SHIM_LOG"] = logPath;
+            startInfo.Environment.Remove(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+            startInfo.Environment["LOCALAPPDATA"] = localAppData;
+            startInfo.Environment["TEMP"] = Path.Combine(workDirectory, ".mcg-sandbox", "temp");
+            startInfo.Environment["TMP"] = Path.Combine(workDirectory, ".mcg-sandbox", "temp");
+            startInfo.Environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workDirectory;
+            startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
+            startInfo.Environment[DispatchProcessHost.StartGatePathVariable] = startGatePath;
+
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start PowerShell.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(60000), "Focused PASS invocation did not exit within 60 seconds.");
+            Assert.True(
+                process.ExitCode == 0,
+                $"Focused invocation exited {process.ExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{stdout}{Environment.NewLine}stderr:{Environment.NewLine}{stderr}");
+
+            using var receipt = JsonDocument.Parse(File.ReadAllText(receiptPath));
+            var rootElement = receipt.RootElement;
+            Assert.Equal("PASS", rootElement.GetProperty("outcome").GetString());
+            Assert.Equal(0, rootElement.GetProperty("exitCode").GetInt32());
+            Assert.True(rootElement.GetProperty("total").GetInt32() > 0);
+            Assert.True(rootElement.GetProperty("leaseReleased").GetBoolean());
+            Assert.True(rootElement.GetProperty("worktreeStateAfter").GetProperty("unchanged").GetBoolean());
+            Assert.True(rootElement.GetProperty("buildReused").GetBoolean());
+            Assert.Equal("Developer", rootElement.GetProperty("authorization").GetProperty("role").GetString());
+            Assert.Contains(
+                rootElement.GetProperty("testArguments").EnumerateArray().Select(value => value.GetString()),
+                value => value == "*AcceptanceCriterionFeasibilityTests*");
+            Assert.False(File.Exists(logPath));
+            Assert.True(string.IsNullOrWhiteSpace(RunCommand("git", workDirectory, "status", "--porcelain")));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort when antivirus briefly retains a copied test dependency.
+            }
+            try
+            {
+                Directory.Delete(nestedIsolatedRoot, recursive: true);
+            }
+            catch
+            {
+                // Best effort when antivirus briefly retains a copied test dependency.
+            }
+            try
+            {
+                Directory.Delete(sharedProfileRoot, recursive: true);
+            }
+            catch
+            {
+                // Best effort when antivirus briefly retains a copied test dependency.
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_BudgetExceeded_KillsBuildTreeAndDoesNotRetry()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repoRoot = ResolveRepositoryRoot();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var root = CreateTempDirectory();
+        var workDirectory = Path.Combine(root, "repo");
+        var shimDirectory = Path.Combine(root, "shim");
+        var sharedRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Temp", "Low", "f", Guid.NewGuid().ToString("N")[..8]);
+        var isolatedRoot = Path.Combine(sharedRoot, "isolated");
+        Directory.CreateDirectory(workDirectory);
+        Directory.CreateDirectory(shimDirectory);
+        try
+        {
+            RunCommand("git", workDirectory, "init", "--initial-branch=main");
+            RunCommand("git", workDirectory, "config", "user.email", "test@example.invalid");
+            RunCommand("git", workDirectory, "config", "user.name", "Focused Runner Test");
+            const string projectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
+            var projectFile = $"{projectName}.csproj";
+            File.WriteAllText(Path.Combine(workDirectory, projectFile), "<Project />");
+            RunCommand("git", workDirectory, "add", projectFile);
+            RunCommand("git", workDirectory, "commit", "-m", "base");
+            var logPath = Path.Combine(root, "dotnet.log");
+            var receiptPath = Path.Combine(root, "budget.receipt.json");
+            var startedPath = Path.Combine(root, "started");
+            PrepareFocusedArtifacts(workDirectory, projectFile, projectName, "budget-test", isolatedRoot);
+
+            var startInfo = CreateFocusedStartInfo(
+                scriptPath,
+                workDirectory,
+                shimDirectory,
+                isolatedRoot,
+                receiptPath,
+                logPath,
+                "budget-test",
+                budgetSeconds: 5,
+                leaseWaitSeconds: 1,
+                projectFile,
+                "FullyQualifiedName~FocusedProcessFixtureTests");
+            startInfo.Environment["FOCUSED_STARTED_MARKER"] = startedPath;
+            startInfo.Environment["FOCUSED_RELEASE"] = Path.Combine(root, "never-release");
+            using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start budget fixture.");
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(15000), "Budget fixture did not exit within 15 seconds.");
+            var result = (ExitCode: process.ExitCode, Stdout: stdout, Stderr: stderr);
+
+            Assert.Equal(2, result.ExitCode);
+            using var receipt = JsonDocument.Parse(File.ReadAllText(receiptPath));
+            Assert.Equal("BLOCKED", receipt.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal("budget-exceeded", receipt.RootElement.GetProperty("reason").GetString());
+            Assert.True(receipt.RootElement.GetProperty("leaseReleased").GetBoolean());
+            Assert.True(File.Exists(startedPath));
+            Assert.False(File.Exists(logPath));
+            Assert.True(string.IsNullOrWhiteSpace(RunCommand("git", workDirectory, "status", "--porcelain")));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort when Git object files retain read-only attributes on Windows.
+            }
+            try
+            {
+                Directory.Delete(sharedRoot, recursive: true);
+            }
+            catch
+            {
+                // Best effort when a killed fixture briefly retains an image handle.
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_AllSlotsHeld_ReportsNoSlotWithoutStartingDotnet()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var repoRoot = ResolveRepositoryRoot();
+        var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
+        var root = CreateTempDirectory();
+        var workDirectory = Path.Combine(root, "repo");
+        var shimDirectory = Path.Combine(root, "shim");
+        var sharedRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Temp", "Low", "f", Guid.NewGuid().ToString("N")[..8]);
+        var isolatedRoot = Path.Combine(sharedRoot, "isolated");
+        var heldSlots = new List<FileStream>();
+        Directory.CreateDirectory(workDirectory);
+        Directory.CreateDirectory(shimDirectory);
+        Directory.CreateDirectory(Path.Combine(isolatedRoot, "build-slots"));
+        try
+        {
+            RunCommand("git", workDirectory, "init", "--initial-branch=main");
+            RunCommand("git", workDirectory, "config", "user.email", "test@example.invalid");
+            RunCommand("git", workDirectory, "config", "user.name", "Focused Runner Test");
+            const string projectName = "Mcg.AgentOrchestrator.Infrastructure.Tests";
+            var projectFile = $"{projectName}.csproj";
+            File.WriteAllText(Path.Combine(workDirectory, projectFile), "<Project />");
+            RunCommand("git", workDirectory, "add", projectFile);
+            RunCommand("git", workDirectory, "commit", "-m", "base");
+            for (var slot = 0; slot < DotnetBuildEnvironmentManager.BuildConcurrencySlotCount; slot++)
+            {
+                var stream = new FileStream(
+                    Path.Combine(isolatedRoot, "build-slots", $"build-{slot}.lock"),
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.ReadWrite);
+                stream.Lock(0, 1);
+                heldSlots.Add(stream);
+            }
+
+            var logPath = Path.Combine(root, "dotnet.log");
+            var receiptPath = Path.Combine(root, "no-slot.receipt.json");
+            File.WriteAllText(Path.Combine(shimDirectory, "dotnet.cmd"), "@echo off\r\n>> \"%DOTNET_SHIM_LOG%\" echo started\r\nexit /b 0\r\n");
+            var result = RunFocusedScript(
+                scriptPath,
+                workDirectory,
+                shimDirectory,
+                isolatedRoot,
+                receiptPath,
+                logPath,
+                "no-slot-test",
+                budgetSeconds: 2,
+                leaseWaitSeconds: 1,
+                projectFile);
+
+            Assert.True(result.ExitCode == 3, $"Focused no-slot invocation exited {result.ExitCode}.{Environment.NewLine}{result.Stdout}{Environment.NewLine}{result.Stderr}");
+            using var receipt = JsonDocument.Parse(File.ReadAllText(receiptPath));
+            Assert.Equal("no-slot", receipt.RootElement.GetProperty("reason").GetString());
+            Assert.False(File.Exists(logPath));
+        }
+        finally
+        {
+            foreach (var stream in heldSlots)
+            {
+                stream.Unlock(0, 1);
+                stream.Dispose();
+            }
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort when Git object files retain read-only attributes on Windows.
+            }
+            try
+            {
+                Directory.Delete(sharedRoot, recursive: true);
+            }
+            catch
+            {
+                // Best effort when a fixture briefly retains a file handle.
+            }
+        }
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceLease_ReservesPriorityUntilFocusedSlotIsReleased()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+            new GoalId("cccccccccccccccccccccccccccccccc"),
+            "priority-test");
+        Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
+        using var focusedLease = new FileStream(
+            environment.ExecutionLockPath,
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite);
+        focusedLease.Lock(0, 1);
+
+        var acquisitionTask = Task.Run(() =>
+            DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.FromSeconds(5)));
+        var priorityPath = environment.ExecutionLockPath + ".acceptance-priority.lock";
+        Assert.True(SpinWait.SpinUntil(() => IsByteRangeLocked(priorityPath), TimeSpan.FromSeconds(5)));
+
+        focusedLease.Unlock(0, 1);
+        var acquired = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(acquisitionTask.GetAwaiter().GetResult());
+        acquired.Lease.Dispose();
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_ConcurrentInvocations_NeverExceedSharedGrid()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var source = ReadIsolatedDotnetScript();
+        Assert.Contains("Join-Path $lockDirectory \"build-$slot.lock\"", source, StringComparison.Ordinal);
+
+        var participantCount = DotnetBuildEnvironmentManager.BuildConcurrencySlotCount + 1;
+        using var start = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        using var acquired = new CountdownEvent(participantCount);
+        var results = new System.Collections.Concurrent.ConcurrentBag<DotnetBuildLeaseAcquisition>();
+        var errors = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+        var tasks = Enumerable.Range(0, participantCount).Select(index => Task.Factory.StartNew(() =>
+        {
+            var signaled = false;
+            try
+            {
+                var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+                    new GoalId((index + 1).ToString("x8", System.Globalization.CultureInfo.InvariantCulture) + new string('0', 24)),
+                    $"focused-concurrency-{index}");
+                start.Wait();
+                var result = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(environment, TimeSpan.Zero);
+                results.Add(result);
+                acquired.Signal();
+                signaled = true;
+                if (result is DotnetBuildLeaseAcquisition.Acquired held)
+                {
+                    release.Wait();
+                    held.Lease.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                errors.Add(ex);
+            }
+            finally
+            {
+                if (!signaled)
+                {
+                    acquired.Signal();
+                }
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
+
+        start.Set();
+        Assert.True(acquired.Wait(TimeSpan.FromSeconds(10)));
+        Assert.True(errors.IsEmpty, string.Join(Environment.NewLine, errors.Select(error => error.ToString())));
+        var leases = results.OfType<DotnetBuildLeaseAcquisition.Acquired>().ToArray();
+        Assert.Equal(DotnetBuildEnvironmentManager.BuildConcurrencySlotCount, leases.Length);
+        Assert.Single(results.OfType<DotnetBuildLeaseAcquisition.SlotsBusy>());
+        Assert.Equal(leases.Length, leases.Select(item => item.Lease.Environment.ExecutionLockPath).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.All(leases, item => Assert.True(IsByteRangeLocked(item.Lease.Environment.ExecutionLockPath)));
+
+        release.Set();
+        Assert.True(Task.WaitAll(tasks, TimeSpan.FromSeconds(10)));
+    }
+
+    private static (int ExitCode, string Stdout, string Stderr) RunFocusedScript(
+        string scriptPath,
+        string workDirectory,
+        string shimDirectory,
+        string isolatedRoot,
+        string receiptPath,
+        string logPath,
+        string goalPrefix,
+        int budgetSeconds,
+        int leaseWaitSeconds,
+        string projectFile = "Fake.Tests.csproj",
+        string testFilter = "FullyQualifiedName~FocusedTests")
+    {
+        var startInfo = CreateFocusedStartInfo(
+            scriptPath,
+            workDirectory,
+            shimDirectory,
+            isolatedRoot,
+            receiptPath,
+            logPath,
+            goalPrefix,
+            budgetSeconds,
+            leaseWaitSeconds,
+            projectFile,
+            testFilter);
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start focused runner.");
+        var stdout = process.StandardOutput.ReadToEnd();
+        var stderr = process.StandardError.ReadToEnd();
+        Assert.True(process.WaitForExit(15000), "Focused runner did not exit within 15 seconds.");
+        return (process.ExitCode, stdout, stderr);
+    }
+
+    private static ProcessStartInfo CreateFocusedStartInfo(
+        string scriptPath,
+        string workDirectory,
+        string shimDirectory,
+        string isolatedRoot,
+        string receiptPath,
+        string logPath,
+        string goalPrefix,
+        int budgetSeconds,
+        int leaseWaitSeconds,
+        string projectFile = "Fake.Tests.csproj",
+        string testFilter = "FullyQualifiedName~FocusedTests")
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = WorkerShell.Executable,
+            WorkingDirectory = workDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        foreach (var argument in new[]
+        {
+            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath,
+            "-FocusedTest", "-GoalPrefix", goalPrefix,
+            "-TestFilter", testFilter,
+            "-ReceiptPath", receiptPath,
+            "-BudgetSeconds", budgetSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "-LeaseWaitSeconds", leaseWaitSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "test", projectFile
+        })
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        startInfo.Environment["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
+        startInfo.Environment["DOTNET_SHIM_LOG"] = logPath;
+        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedRoot;
+        startInfo.Environment.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
+        return startInfo;
+    }
+
+    private static void PrepareFocusedArtifacts(
+        string workDirectory,
+        string projectFile,
+        string projectName,
+        string goalPrefix,
+        string isolatedRoot)
+    {
+        var slot = goalPrefix.Aggregate(
+            0,
+            (hash, character) => (hash + char.ToLowerInvariant(character)) % DotnetBuildEnvironmentManager.BuildConcurrencySlotCount);
+        var artifactsPath = Path.Combine(
+            isolatedRoot,
+            "goals",
+            goalPrefix,
+            "focused-artifacts",
+            $"build-{slot}");
+        var artifactOutput = Path.Combine(artifactsPath, "bin", projectName, "debug");
+        var testOutput = Path.GetDirectoryName(typeof(DotnetBuildEnvironmentManagerTests).Assembly.Location)!;
+        foreach (var sourcePath in Directory.GetFiles(testOutput, "*", SearchOption.AllDirectories))
+        {
+            var targetPath = Path.Combine(artifactOutput, Path.GetRelativePath(testOutput, sourcePath));
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            File.Copy(sourcePath, targetPath);
+        }
+        File.WriteAllText(
+            Path.Combine(artifactsPath, ".mcg-artifacts-owner.json"),
+            JsonSerializer.Serialize(new { ownerToken = $"focused-{goalPrefix}-build-{slot}" }));
+        var commit = RunCommand("git", workDirectory, "rev-parse", "HEAD").Trim();
+        var cleanDigest = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(Array.Empty<byte>())).ToLowerInvariant();
+        var fingerprintInput = string.Join(
+            '\n',
+            commit,
+            cleanDigest,
+            Path.GetFullPath(Path.Combine(workDirectory, projectFile)),
+            "Debug",
+            string.Empty);
+        var fingerprint = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput))).ToLowerInvariant();
+        File.WriteAllText(
+            Path.Combine(artifactsPath, ".mcg-focused-build-state.json"),
+            JsonSerializer.Serialize(new { fingerprint }));
+    }
+
+    private static bool IsByteRangeLocked(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+        try
+        {
+            stream.Lock(0, 1);
+            stream.Unlock(0, 1);
+            return false;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+    }
+
+    private static string ReadIsolatedDotnetScript() =>
+        File.ReadAllText(Path.Combine(ResolveRepositoryRoot(), "scripts", "Invoke-IsolatedDotnet.ps1"));
+
+    private static string FocusedModeSource(string source)
+    {
+        var start = source.IndexOf("function Invoke-FocusedTestMode", StringComparison.Ordinal);
+        var end = source.IndexOf("if ($FocusedTest) {", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        return source[start..end];
+    }
+
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_forwards_args_when_operator_sandbox_config_is_inherited")]
     public void InvokeIsolatedDotnetForwardsArgsWhenOperatorSandboxConfigIsInherited()
     {
@@ -3538,5 +4321,23 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 // Best effort; a failed test may leave a stream open for failure inspection.
             }
         }
+    }
+}
+
+public sealed class FocusedProcessFixtureTests
+{
+    [Xunit.Fact]
+    public void WaitsOnTheConfiguredReleaseEvent()
+    {
+        var markerPath = Environment.GetEnvironmentVariable("FOCUSED_STARTED_MARKER");
+        if (string.IsNullOrWhiteSpace(markerPath))
+        {
+            return;
+        }
+
+        var releasePath = Environment.GetEnvironmentVariable("FOCUSED_RELEASE");
+        Assert.False(string.IsNullOrWhiteSpace(releasePath));
+        File.WriteAllText(markerPath, "started");
+        Assert.True(SpinWait.SpinUntil(() => File.Exists(releasePath), TimeSpan.FromMinutes(1)));
     }
 }
