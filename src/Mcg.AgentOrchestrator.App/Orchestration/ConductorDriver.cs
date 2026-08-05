@@ -1094,6 +1094,15 @@ internal sealed class ConductorDriver
             if (TryBuildReviewContractRepairRetry(goal, out var autoRetry) ||
                 TryBuildVerifyingFindingAutoRetry(goal, policy, out autoRetry))
             {
+                if (autoRetry.ShouldHold)
+                {
+                    return MakeResult(
+                        goal.Id.Value,
+                        goalPrefix,
+                        policy,
+                        new ConductorAdvanceOutcome.Held(state, autoRetry.Message));
+                }
+
                 if (autoRetry.ShouldEscalate)
                 {
                     return Escalate(goal, goalPrefix, policy, state, autoRetry.Message);
@@ -1241,11 +1250,6 @@ internal sealed class ConductorDriver
             WorkerResultBlockers.TryFindEvidenceRequest(triggeringTask.LastVerification, out var evidenceRequest))
         {
             var priorEvidenceRequests = CountReviewerEvidenceRequestsInCurrentRound(goal, triggeringTask);
-            _recordReviewerEvidenceRequestReceived(
-                goal.Id,
-                triggeringTask.Id,
-                $"Reviewer evidence request received: source=reviewer-issued; request={evidenceRequest}. Full reviewer output: {outputArtifact}");
-
             if (priorEvidenceRequests >= MaxReviewerEvidenceRequestsPerRound)
             {
                 decision = VerifyingFindingAutoRetryDecision.Escalate(
@@ -1254,7 +1258,24 @@ internal sealed class ConductorDriver
                 return true;
             }
 
-            var evidence = _runFocusedEvidence(goal, evidenceRequest, null, CancellationToken.None);
+            if (!TryReconcileFocusedEvidenceAttempt(
+                    goal,
+                    policy,
+                    evidenceRequest,
+                    _getPreReviewEvidenceContext(goal).CandidateSha,
+                    "reviewer-issued",
+                    out var evidence,
+                    out decision))
+            {
+                return true;
+            }
+
+            // This event is also the per-round cap receipt. Record it only after reconciliation so
+            // polling a running background attempt cannot consume the budget more than once.
+            _recordReviewerEvidenceRequestReceived(
+                goal.Id,
+                triggeringTask.Id,
+                $"Reviewer evidence request received: source=reviewer-issued; request={evidenceRequest}. Full reviewer output: {outputArtifact}");
             var evidenceMessage = FormatFocusedEvidenceResult(evidence);
             _recordReviewerEvidenceRunRecorded(
                 goal.Id,
@@ -1287,6 +1308,7 @@ internal sealed class ConductorDriver
             TryBuildConductorEvidenceSubstitution(
                 goal,
                 triggeringTask,
+                policy,
                 out var substitutionDecision,
                 out conductorEvidenceFallbackReason))
         {
@@ -1502,6 +1524,7 @@ internal sealed class ConductorDriver
     private bool TryBuildConductorEvidenceSubstitution(
         Goal goal,
         TaskSpec reviewerTask,
+        ConductorAutonomyPolicy policy,
         out VerifyingFindingAutoRetryDecision decision,
         out string? developerFallbackReason)
     {
@@ -1591,14 +1614,26 @@ internal sealed class ConductorDriver
             return false;
         }
 
+        if (!TryReconcileFocusedEvidenceAttempt(
+                goal,
+                policy,
+                request,
+                candidateSha,
+                "conductor-derived",
+                out var evidence,
+                out decision))
+        {
+            return true;
+        }
+
+        // This event is also the per-round cap receipt. Record it only after reconciliation so
+        // polling a running background attempt cannot consume the budget more than once.
         _recordReviewerEvidenceRequestReceived(
             goal.Id,
             reviewerTask.Id,
             $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=substituted; source=conductor-derived; " +
             $"candidate_sha={candidateSha}; request='{request}'; " +
             $"attempt={priorSubstitutions + 1}/{MaxConductorEvidenceSubstitutionsPerRound}");
-
-        var evidence = _runFocusedEvidence(goal, request, null, CancellationToken.None);
         var evidenceMessage = FormatFocusedEvidenceResult(evidence);
         _recordReviewerEvidenceRunRecorded(
             goal.Id,
@@ -1625,6 +1660,70 @@ internal sealed class ConductorDriver
             retryMessage,
             null,
             RetryRoundKind.Mechanical);
+        return true;
+    }
+
+    private bool TryReconcileFocusedEvidenceAttempt(
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        string request,
+        string? candidateSha,
+        string source,
+        out FocusedEvidenceRunResult evidence,
+        out VerifyingFindingAutoRetryDecision decision)
+    {
+        evidence = null!;
+        decision = VerifyingFindingAutoRetryDecision.None;
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            slotIndex: 0,
+            fileScopes: [],
+            branchHeadSha: candidateSha?.Trim(),
+            mainHeadSha: null);
+        var attemptDecision = _focusedEvidenceAttemptCoordinator.EvaluateFocusedEvidence(
+            candidate,
+            policy,
+            request,
+            _runFocusedEvidence);
+        if (attemptDecision.Kind is
+            ConductorParallelAcceptanceAttemptDecisionKind.Started or
+            ConductorParallelAcceptanceAttemptDecisionKind.Running)
+        {
+            decision = VerifyingFindingAutoRetryDecision.Hold(
+                $"Background {source} focused evidence is running in attempt {attemptDecision.Attempt.AttemptId}.");
+            return false;
+        }
+
+        if (attemptDecision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun ||
+            attemptDecision.Run?.Exception is
+                DotnetBuildSlotsBusyException or
+                BuildLockBlockedException or
+                OperationCanceledException)
+        {
+            _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+            decision = VerifyingFindingAutoRetryDecision.Hold(
+                $"Background {source} focused evidence did not run ({attemptDecision.Attempt.Outcome}); " +
+                $"retry on next conduct tick. attempt={attemptDecision.Attempt.AttemptId}: " +
+                (attemptDecision.Attempt.Detail ?? "no result artifact was produced"));
+            return false;
+        }
+
+        _focusedEvidenceAttemptCoordinator.MarkReconciled(attemptDecision.Attempt);
+        if (attemptDecision.Run?.Exception is { } backgroundFailure)
+        {
+            decision = VerifyingFindingAutoRetryDecision.Escalate(
+                $"BACKGROUND_FOCUSED_EVIDENCE_FAILED: {source} focused evidence run failed. " +
+                $"attempt={attemptDecision.Attempt.AttemptId}: {backgroundFailure.Message}");
+            return false;
+        }
+
+        evidence = attemptDecision.Run?.FocusedEvidence ?? new FocusedEvidenceRunResult(
+            request,
+            Accepted: false,
+            Passed: false,
+            Summary: $"background {source} focused evidence {attemptDecision.Attempt.Outcome}: " +
+                (attemptDecision.Attempt.Detail ?? "no result artifact was produced"),
+            Checks: []);
         return true;
     }
 
@@ -1787,23 +1886,27 @@ internal sealed class ConductorDriver
         TaskSpec? TargetTask);
 
     private sealed record VerifyingFindingAutoRetryDecision(
+        bool ShouldHold,
         bool ShouldEscalate,
         TaskSpec? TargetTask,
         string Message,
         string? WarningMessage,
         RetryRoundKind? RoundKind)
     {
-        public static VerifyingFindingAutoRetryDecision None { get; } = new(false, null, string.Empty, null, null);
+        public static VerifyingFindingAutoRetryDecision None { get; } = new(false, false, null, string.Empty, null, null);
+
+        public static VerifyingFindingAutoRetryDecision Hold(string message) =>
+            new(true, false, null, message, null, null);
 
         public static VerifyingFindingAutoRetryDecision Retry(
             TaskSpec targetTask,
             string message,
             string? warningMessage,
             RetryRoundKind? roundKind = null) =>
-            new(false, targetTask, message, warningMessage, roundKind);
+            new(false, false, targetTask, message, warningMessage, roundKind);
 
         public static VerifyingFindingAutoRetryDecision Escalate(string message) =>
-            new(true, null, message, null, null);
+            new(false, true, null, message, null, null);
     }
 
     internal ConductorParallelAcceptanceCandidate? TryBuildParallelAcceptanceCandidate(

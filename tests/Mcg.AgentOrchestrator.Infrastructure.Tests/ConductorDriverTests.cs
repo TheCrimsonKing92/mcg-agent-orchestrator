@@ -3281,6 +3281,99 @@ public sealed class ConductorDriverTests
         }
     }
 
+    [Xunit.Theory(Timeout = 30_000)]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void PostReviewEvidence_InFlightRun_ReturnsThenReconcilesAfterRestart(bool reviewerIssued)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var (kernel, goal) = SoftwareGoal();
+            var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+            foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+            {
+                PassVerification(kernel, goal, task);
+            }
+
+            const string explicitRequest = "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests";
+            const string derivedRequest = "Infrastructure.Tests: ConductorDriverTests";
+            const string blocker = "Infrastructure.Tests ConductorDriverTests receipt is missing.";
+            FailReviewerNeedsWork(
+                kernel,
+                goal,
+                reviewer,
+                blocker,
+                evidenceRequest: reviewerIssued ? explicitRequest : null,
+                findings: reviewerIssued ? null : [EvidenceFinding(blocker)]);
+
+            var completionGate = new ConductorParallelAcceptanceAttemptCompletionGateForTests();
+            var attemptRoot = Path.Combine(root, "pre-review-evidence-attempts");
+            var startingCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                attemptCompletionGateForTests: completionGate,
+                acquireStableSlotLease: (_, _) => null);
+            var focusedRuns = 0;
+            var retries = 0;
+            FocusedEvidenceRunResult RunEvidence(Goal _, string request)
+            {
+                focusedRuns++;
+                Assert.Equal(reviewerIssued ? explicitRequest : derivedRequest, request);
+                return PassingPreReviewEvidence(request);
+            }
+
+            ConductorDriver MakePostReviewDriver(ConductorParallelAcceptanceAttemptCoordinator coordinator) =>
+                MakeDriver(
+                    getFacts: _ => GoalLifecycleFacts.None,
+                    getPreReviewEvidenceContext: _ => NoPreReviewContext("post-review-sha"),
+                    runFocusedEvidence: RunEvidence,
+                    retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                    {
+                        retries++;
+                        return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+                    },
+                    recordReviewerEvidenceRequestReceived: (goalId, taskId, message) =>
+                        kernel.RecordReviewerEvidenceRequestReceived(goalId, taskId, message),
+                    recordReviewerEvidenceRunRecorded: (goalId, taskId, message) =>
+                        kernel.RecordReviewerEvidenceRunRecorded(goalId, taskId, message),
+                    focusedEvidenceAttemptCoordinator: coordinator);
+
+            var startingDriver = MakePostReviewDriver(startingCoordinator);
+            var scheduled = startingDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.IsType<ConductorAdvanceOutcome.Held>(scheduled.Outcome);
+            Assert.Equal(0, focusedRuns);
+            Assert.Equal(0, retries);
+            Assert.Equal(1, completionGate.HeldCount);
+
+            completionGate.RequiredHandleForTests(goal.Id.Value).CompleteForTests();
+            Assert.Equal(1, focusedRuns);
+
+            var restartedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => throw new InvalidOperationException("completed attempt must be reconciled"),
+                acquireStableSlotLease: (_, _) => null);
+            var restartedDriver = MakePostReviewDriver(restartedCoordinator);
+
+            var reconciled = restartedDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+            Assert.IsType<ConductorAdvanceOutcome.Executed>(reconciled.Outcome);
+            Assert.Equal(1, focusedRuns);
+            Assert.Equal(1, retries);
+            Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact(Timeout = 30_000)]
     [Xunit.Trait("Category", "CrossTick")]
     public void PreReviewEvidence_ProcessDiesAfterRestart_RelaunchesWithoutReceipt()
