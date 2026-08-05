@@ -1,0 +1,86 @@
+## Premise validity
+
+Valid. Research confirms both refresh paths call unbounded `ConsoleViews.PrintTask` rendering:
+
+- `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Workers.cs`
+- `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs`
+- `src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.TaskDetails.cs`
+
+Durable history remains in `Goal.Timeline` and verification records, so this is a presentation-only change.
+
+## Acceptance criteria mapping
+
+1. Default output: add a refresh-specific bounded renderer producing fewer than 100 lines for deep history while retaining task state, dispatch identity/session, process and exit evidence, typed classification, blockers, latest verification metadata, dispatch state, and next action.
+
+2. Full history: implement `--history`; render all timeline events chronologically. Implement `--history-limit <n>` as an optional bounded history mode showing the newest `n` events chronologically.
+
+3. CLI/tests: document both options in `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs` and `src/Mcg.AgentOrchestrator.App/Program.cs`; test default, full, bounded, invalid-argument, and both in-memory/persistent paths.
+
+4. Rule (l): add new file `docs/negative-controls/485363d4.md`. Temporarily restore unconditional timeline rendering, capture the deep-history test’s RED line-count failure, restore bounded rendering, capture GREEN evidence, and record both commands/results.
+
+5. Preservation: do not alter timeline or verification persistence/snapshot behavior.
+
+6. Verification: run focused unit tests, no-paid-start preflight tests, and worktree/acceptance lifecycle tests.
+
+## Target seams and symbols
+
+- Add shared refresh option parsing at the command boundary, used by both refresh paths.
+- Add a refresh-specific renderer beside `ConsoleViews.PrintTask` in `src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.TaskDetails.cs`; leave general `PrintTask` behavior unchanged.
+- Wire both call sites in `CliCommandHandlers.Workers.cs` and `CliPersistentStateRunner.cs`.
+- Use existing `DispatchStateSurface.Evaluate`, `DispatchFailureClassifier.Classify`, `WorkerResultBlockers`, and `GoalOperatorDispositionSurface` data rather than duplicating classification logic.
+- Add command-specific help in `CliCommandHelp.cs` and synopsis/options coverage in `Program.cs`.
+- Extend focused tests in the existing persistent runner, subscription/preflight, help, and worktree test files.
+
+## Ownership and lifecycle
+
+The CLI owns parsing and validation. The refresh renderer owns presentation and receives immutable options plus the reconciled task state. `Goal.Timeline` and verification records remain the durable owners of history. `--history` changes only rendering scope; it does not mutate, prune, or snapshot data.
+
+## External and edge contracts
+
+- No flag: bounded current-round decision summary.
+- `--history`: all task events, chronological.
+- `--history-limit n`: implies history and emits newest `n` events chronologically.
+- Missing, malformed, zero, negative, duplicate, or non-integer limits must return a focused usage error without reconciliation or state mutation.
+- Verification bodies must remain single-line bounded summaries or metadata/path fields so multiline content cannot defeat the line bound.
+- Live process, exited process, missing exit artifact, synthetic/native exit origin, classifier result, blockers, and absent verification must each render deterministically.
+- Both refresh execution paths must produce equivalent option semantics and decision fields.
+
+## Integration seams
+
+1. Implement parser/options and help.
+2. Implement bounded/history renderer using existing state/classification surfaces.
+3. Wire in-memory and persistent refresh paths.
+4. Add rendering, parser, help, and dual-path command tests.
+5. Add the negative-control receipt.
+6. Run preflight and lifecycle verification without starting a paid worker.
+
+## Verification commands and classes
+
+- `dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --filter 'FullyQualifiedName~RefreshDispatch|FullyQualifiedName~CliHelp'` — **TEST-VERIFIABLE**.
+- Focused deep-history assertions: default output `<100` lines and required fields; `--history` first/middle/last sentinels; `--history-limit` newest-only sentinels — **TEST-VERIFIABLE**.
+- Persistent and in-memory refresh command tests from `CliCommandTests.PersistentRunnerCommands.cs` and related command tests — **TEST-VERIFIABLE**.
+- `dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --filter 'FullyQualifiedName~WorkerDispatchTestsDispatchPreparation|FullyQualifiedName~SubscriptionDispatchCommands'` — **TEST-VERIFIABLE**, confirm no paid worker process starts.
+- `dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --filter 'FullyQualifiedName~GoalWorktree'` — **TEST-VERIFIABLE**, confirm clean acceptance/worktree transitions.
+- Execute and document the temporary unbounded-renderer mutation in `docs/negative-controls/485363d4.md` — **TEST-VERIFIABLE** negative control.
+- Manual inspection of routine CLI readability and decision usefulness — **REAL-WORLD-DEPENDENT**.
+
+## Risks and stop conditions
+
+- Stop if required decision fields are unavailable without changing persistence or classifier ownership.
+- Stop if the two refresh paths cannot share option semantics.
+- Stop if multiline rendering still permits the default deep-history fixture to exceed 99 lines.
+- Stop and report a verification gap if the no-paid-start or clean-worktree checks cannot be run.
+- Do not broaden `PrintTask` globally or discard durable history.
+
+WORKER_RESULT:  
+files: none  
+commands: targeted artifact reads; targeted source/test path checks; no repository modifications  
+tests: not-run - Planner performed read-only planning and path validation only; implementation verification is deferred to Developer/Tester  
+commit: none  
+blockers: none  
+model_fit: OpenAI/gpt-5.6-luna - adequate - cross-layer implementation planning - sufficient for synthesizing validated research into concrete seams and falsifiable verification  
+skills: none  
+confidence: high  
+END_WORKER_RESULT
+
+Model fit: OpenAI/gpt-5.6-luna - adequate - cross-layer implementation planning - the durable research already identified the relevant command, renderer, classifier, help, and test seams.

@@ -695,7 +695,7 @@ public static class DispatchFailureClassifier
                 BuildRecoverableSubscriptionLimitEvidenceSummary(verification)));
         }
 
-        if (IsRecoverableProviderModelRejectionFailure(verification))
+        if (IsRecoverableProviderModelRejectionFailure(verification, task.RequiredRole))
         {
             return BuildOutcome(
                 TaskOutcomeRules.ProviderModelRejection,
@@ -1544,7 +1544,7 @@ public static class DispatchFailureClassifier
         return task.Status == WorkTaskStatus.Failed &&
             IsSubscriptionProviderCliDispatch(task) &&
             task.LastVerification is { Succeeded: false } latest &&
-            IsRecoverableProviderModelRejectionFailure(latest);
+            IsRecoverableProviderModelRejectionFailure(latest, task.RequiredRole);
     }
 
     public static int CountRecoverableProviderConnectivityFailures(TaskSpec task)
@@ -1577,9 +1577,15 @@ public static class DispatchFailureClassifier
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
-    public static bool IsRecoverableProviderModelRejectionFailure(TaskVerificationRecord verification)
+    public static bool IsRecoverableProviderModelRejectionFailure(TaskVerificationRecord verification) =>
+        IsRecoverableProviderModelRejectionFailure(verification, requiredRole: null);
+
+    private static bool IsRecoverableProviderModelRejectionFailure(
+        TaskVerificationRecord verification,
+        AgentRole? requiredRole)
     {
-        if (verification.Succeeded || HasPlannerOutputContractFailure(verification))
+        if (verification.Succeeded ||
+            requiredRole == AgentRole.Planner && HasAuthoritativePlannerOutputContractFailure(verification))
         {
             return false;
         }
@@ -1592,7 +1598,7 @@ public static class DispatchFailureClassifier
     {
         return task.VerificationHistory.Count(verification =>
             !verification.Succeeded &&
-            IsRecoverableProviderModelRejectionFailure(verification));
+            IsRecoverableProviderModelRejectionFailure(verification, task.RequiredRole));
     }
 
     public static bool HasRecoverableSubscriptionLimitHistory(TaskSpec task)
@@ -1988,8 +1994,8 @@ public static class DispatchFailureClassifier
         return false;
     }
 
-    private static bool HasPlannerOutputContractFailure(TaskVerificationRecord verification) =>
-        EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true)
+    private static bool HasAuthoritativePlannerOutputContractFailure(TaskVerificationRecord verification) =>
+        EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true)
             .Any(line => IsPlannerOutputContractFailureLine(line.Trim()));
 
     private static bool IsPlannerOutputContractFailureLine(string line) =>

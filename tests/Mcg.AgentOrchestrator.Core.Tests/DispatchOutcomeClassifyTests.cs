@@ -1055,6 +1055,20 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("Planner output contract failed", outcome.EvidenceSummary, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Classify ignores quoted Planner contract prose when provider rejection is authoritative")]
+    public void ClassifyProviderModelRejectionWithQuotedPlannerContractProse()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Planner),
+            Verification(
+                1,
+                "The diagnostic text may say 'Planner output contract failed' after a completed provider start.",
+                "Error: unknown model 'claude-xxx-4-99'. Model not supported."));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
+
     [Xunit.Fact(DisplayName = "Classify reads log path for verification evidence outside retained excerpt")]
     public void ClassifyReadsLogPathForVerificationEvidenceOutsideRetainedExcerpt()
     {

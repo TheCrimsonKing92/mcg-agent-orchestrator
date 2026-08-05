@@ -363,6 +363,9 @@ internal static partial class PlannerOutputContract
         var nextHeading = MarkdownHeading().Match(plan, targetHeading.Index + targetHeading.Length);
         var sectionEnd = nextHeading.Success ? nextHeading.Index : plan.Length;
         var targetSection = plan[targetHeading.Index..sectionEnd];
+        var precedingCitations = CollectExplicitCitations(
+            plan[..targetHeading.Index],
+            workingDirectory);
         foreach (Match match in BacktickedCitation().Matches(targetSection))
         {
             var citation = match.Groups["citation"].Value.Trim();
@@ -372,19 +375,28 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
-            var lineStart = targetSection.LastIndexOf('\n', Math.Max(0, match.Index - 1));
-            lineStart = lineStart < 0 ? 0 : lineStart + 1;
-            var lineEnd = targetSection.IndexOf('\n', match.Index + match.Length);
-            lineEnd = lineEnd < 0 ? targetSection.Length : lineEnd;
-            var prefix = targetSection[lineStart..match.Index];
-            var suffix = targetSection[(match.Index + match.Length)..lineEnd];
-
             var hasExplicitDirectory = citedPath.Contains('/') || citedPath.Contains('\\');
             var candidate = Path.IsPathFullyQualified(citedPath)
                 ? citedPath
                 : hasExplicitDirectory || contextualDirectory is null
                     ? Path.Combine(workingDirectory, citedPath.Replace('/', Path.DirectorySeparatorChar))
                     : Path.Combine(contextualDirectory, citedPath);
+
+            var inheritedNewFileMarker = false;
+            if (!hasExplicitDirectory &&
+                !File.Exists(candidate) &&
+                !Directory.Exists(candidate) &&
+                precedingCitations.TryGetValue(Path.GetFileName(citedPath), out var precedingMatches))
+            {
+                var distinctMatches = precedingMatches
+                    .DistinctBy(item => item.Path, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (distinctMatches.Length == 1)
+                {
+                    candidate = distinctMatches[0].Path;
+                    inheritedNewFileMarker = distinctMatches[0].IsNewFile;
+                }
+            }
 
             if (hasExplicitDirectory)
             {
@@ -395,7 +407,13 @@ internal static partial class PlannerOutputContract
                         : Path.GetDirectoryName(candidate);
             }
 
-            if (NewFileCitationPrefix().IsMatch(prefix) || NewFileCitationSuffix().IsMatch(suffix))
+            inheritedNewFileMarker = inheritedNewFileMarker ||
+                precedingCitations.TryGetValue(Path.GetFileName(candidate), out var priorMatches) &&
+                priorMatches.Any(item =>
+                    item.IsNewFile &&
+                    string.Equals(item.Path, candidate, StringComparison.OrdinalIgnoreCase));
+
+            if (inheritedNewFileMarker || IsMarkedAsNewFile(targetSection, match))
             {
                 continue;
             }
@@ -481,6 +499,52 @@ internal static partial class PlannerOutputContract
         }
 
         return true;
+    }
+
+    private static Dictionary<string, List<(string Path, bool IsNewFile)>> CollectExplicitCitations(
+        string text,
+        string workingDirectory)
+    {
+        var citations = new Dictionary<string, List<(string Path, bool IsNewFile)>>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in BacktickedCitation().Matches(text))
+        {
+            var citedPath = NormalizeCitedPath(match.Groups["citation"].Value.Trim());
+            if (citedPath is null ||
+                (!citedPath.Contains('/') && !citedPath.Contains('\\')))
+            {
+                continue;
+            }
+
+            var candidate = Path.IsPathFullyQualified(citedPath)
+                ? citedPath
+                : Path.Combine(workingDirectory, citedPath.Replace('/', Path.DirectorySeparatorChar));
+            var fileName = Path.GetFileName(candidate);
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                continue;
+            }
+
+            if (!citations.TryGetValue(fileName, out var matches))
+            {
+                matches = [];
+                citations.Add(fileName, matches);
+            }
+
+            matches.Add((candidate, IsMarkedAsNewFile(text, match)));
+        }
+
+        return citations;
+    }
+
+    private static bool IsMarkedAsNewFile(string text, Match match)
+    {
+        var lineStart = text.LastIndexOf('\n', Math.Max(0, match.Index - 1));
+        lineStart = lineStart < 0 ? 0 : lineStart + 1;
+        var lineEnd = text.IndexOf('\n', match.Index + match.Length);
+        lineEnd = lineEnd < 0 ? text.Length : lineEnd;
+        var prefix = text[lineStart..match.Index];
+        var suffix = text[(match.Index + match.Length)..lineEnd];
+        return NewFileCitationPrefix().IsMatch(prefix) || NewFileCitationSuffix().IsMatch(suffix);
     }
 
     private static string RequiredSectionEvidenceRequirement(string label) =>
