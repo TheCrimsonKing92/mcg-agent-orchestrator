@@ -376,7 +376,11 @@ internal sealed class OwnedProcessGroup : IDisposable
                     ref startupInfo,
                     out var processInformation))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to start suspended process in owned job object.");
+                var nativeErrorCode = Marshal.GetLastWin32Error();
+                throw new OwnedProcessLaunchException(
+                    nativeErrorCode,
+                    "Failed to start suspended process in owned job object.",
+                    CaptureLaunchFailureEvidence(job));
             }
 
             using var nativeProcess = new SafeFileHandle(processInformation.hProcess, ownsHandle: true);
@@ -439,6 +443,38 @@ internal sealed class OwnedProcessGroup : IDisposable
             return string.Join("; ", parts);
         }
 
+        private static string CaptureLaunchFailureEvidence(SafeFileHandle ownedJob)
+        {
+            var parts = new List<string>
+            {
+                CaptureProbe("owner_in_job", () =>
+                {
+                    using var owner = Process.GetCurrentProcess();
+                    return CaptureMembership("owner_in_job", owner.Handle, IntPtr.Zero);
+                }),
+                CaptureProbe(
+                    "owner_job_limit_flags",
+                    () => CaptureJobFlags("owner_job_limit_flags", IntPtr.Zero, JobObjectExtendedLimitInformation)),
+                CaptureProbe(
+                    "owner_job_ui_restrictions",
+                    () => CaptureJobFlags("owner_job_ui_restrictions", IntPtr.Zero, JobObjectBasicUiRestrictions)),
+                CaptureProbe(
+                    "owned_job_limit_flags",
+                    () => CaptureOwnedJobFlags(
+                        ownedJob,
+                        "owned_job_limit_flags",
+                        JobObjectExtendedLimitInformation)),
+                CaptureProbe(
+                    "owned_job_ui_restrictions",
+                    () => CaptureOwnedJobFlags(
+                        ownedJob,
+                        "owned_job_ui_restrictions",
+                        JobObjectBasicUiRestrictions))
+            };
+
+            return string.Join("; ", parts);
+        }
+
         private static string CaptureProbe(string name, Func<string> probe)
         {
             try
@@ -493,20 +529,20 @@ internal sealed class OwnedProcessGroup : IDisposable
                 : $"{name}=unknown(native_error_code={uiError})";
         }
 
-        private static string CaptureOwnedJobFlags(SafeFileHandle job)
+        private static string CaptureOwnedJobFlags(SafeFileHandle job) =>
+            CaptureOwnedJobFlags(job, "owned_job_limit_flags", JobObjectExtendedLimitInformation);
+
+        private static string CaptureOwnedJobFlags(SafeFileHandle job, string name, int infoClass)
         {
             var addedRef = false;
             try
             {
                 job.DangerousAddRef(ref addedRef);
-                return CaptureJobFlags(
-                    "owned_job_limit_flags",
-                    job.DangerousGetHandle(),
-                    JobObjectExtendedLimitInformation);
+                return CaptureJobFlags(name, job.DangerousGetHandle(), infoClass);
             }
             catch (ObjectDisposedException)
             {
-                return "owned_job_limit_flags=unknown(ObjectDisposedException)";
+                return $"{name}=unknown(ObjectDisposedException)";
             }
             finally
             {
@@ -1289,6 +1325,19 @@ internal sealed class OwnedProcessGroup : IDisposable
 internal sealed class OwnedProcessAttachmentException : Win32Exception
 {
     public OwnedProcessAttachmentException(int nativeErrorCode, string operationMessage, string jobEvidence)
+        : base(nativeErrorCode, operationMessage)
+    {
+        OperationMessage = operationMessage;
+        JobEvidence = jobEvidence;
+    }
+
+    public string OperationMessage { get; }
+    public string JobEvidence { get; }
+}
+
+internal sealed class OwnedProcessLaunchException : Win32Exception
+{
+    public OwnedProcessLaunchException(int nativeErrorCode, string operationMessage, string jobEvidence)
         : base(nativeErrorCode, operationMessage)
     {
         OperationMessage = operationMessage;

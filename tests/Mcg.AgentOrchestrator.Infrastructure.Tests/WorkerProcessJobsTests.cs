@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -910,6 +911,124 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Assert.Contains("owned_job_limit_flags=", evidence, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_atomic_launch_failure_preserves_native_and_job_receipt")]
+    public void WorkerProcessJobsAtomicLaunchFailurePreservesNativeAndJobReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            WorkerProcessJobs.StartRegisteredOrThrow(
+                new ProcessStartInfo
+                {
+                    FileName = $"missing-{Guid.NewGuid():N}.exe",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                },
+                "atomic-launch-failure"));
+
+        Assert.Contains("stage=owned-process-group-launch", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("exception=OwnedProcessLaunchException", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("native_error_code=", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("native_message=", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("operation_message=Failed to start suspended process", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("owner_in_job=", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("owner_job_limit_flags=", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("owner_job_ui_restrictions=", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("owned_job_limit_flags=", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("owned_job_ui_restrictions=", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_non_windows_registration_failure_disposes_started_process")]
+    public void WorkerProcessJobsNonWindowsRegistrationFailureDisposesStartedProcess()
+    {
+        var candidate = StartLongRunningShell();
+        var processId = candidate.Id;
+        try
+        {
+            var exception = Assert.Throws<InvalidOperationException>(() =>
+                WorkerProcessJobs.StartAndRegisterNonWindows(
+                    new ProcessStartInfo(),
+                    "non-windows-disposal",
+                    _ => candidate,
+                    (_, _) => throw new InvalidOperationException("synthetic registration failure")));
+
+            Assert.Equal("synthetic registration failure", exception.Message);
+            var disposed = Assert.Throws<InvalidOperationException>(() => _ = candidate.Handle);
+            Assert.Contains("No process is associated", disposed.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                using var cleanup = Process.GetProcessById(processId);
+                cleanup.Kill(entireProcessTree: true);
+                cleanup.WaitForExit(5000);
+            }
+            catch (ArgumentException)
+            {
+            }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_resume_rollback_preserves_resume_failure_and_releases_durable_registration")]
+    public void WorkerProcessJobsResumeRollbackPreservesResumeFailureAndReleasesDurableRegistration()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        WorkerProcessJobs.ConfigureRegistry(dbPath);
+        try
+        {
+            using var launch = OwnedProcessGroup.StartSuspended(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = "/d /c ping.exe -n 9999 127.0.0.1 > nul",
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            var processId = launch.Process.Id;
+            var releaseAttempts = 0;
+            var syntheticStartedAt = DateTimeOffset.UtcNow;
+
+            Assert.False(WorkerProcessJobs.TryRegisterSuspendedForTests(
+                launch.Process,
+                "resume-rollback",
+                launch.Group,
+                _ => new SpawnProcessIdentity(processId, syntheticStartedAt, "synthetic-candidate.exe"),
+                owner => new SpawnProcessIdentity(owner.Id, syntheticStartedAt, "synthetic-owner.exe"),
+                () => throw new Win32Exception(31, "Synthetic resume failure."),
+                (_, _, _) =>
+                {
+                    releaseAttempts++;
+                    throw new IOException("Synthetic first release failure.");
+                },
+                out var failure));
+
+            Assert.Equal(1, releaseAttempts);
+            Assert.Contains("stage=process-resume", failure, StringComparison.Ordinal);
+            Assert.Contains("exception=Win32Exception", failure, StringComparison.Ordinal);
+            Assert.Contains("native_error_code=31", failure, StringComparison.Ordinal);
+            Assert.Contains("operation_message=Synthetic resume failure.", failure, StringComparison.Ordinal);
+            Assert.DoesNotContain("Synthetic first release failure", failure, StringComparison.Ordinal);
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(processId));
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.True(WaitUntilNotRunning(processId, TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_atomic_owned_start_closes_fast_exit_registration_window")]
     public void WorkerProcessJobsAtomicOwnedStartClosesFastExitRegistrationWindow()
     {
@@ -1502,13 +1621,35 @@ public sealed class WorkerProcessJobsTests : IDisposable
             "Workspaces",
             "GoalAcceptanceVerifier.cs"));
         var registrationIndex = acceptanceSource.IndexOf(
-            "WorkerProcessJobs.StartRegisteredOrThrow(",
+            "using var process = StartAcceptanceProcess(",
             StringComparison.Ordinal);
         var ownedPidAssignmentIndex = acceptanceSource.IndexOf(
             "startedProcessId = process.Id;",
             registrationIndex,
             StringComparison.Ordinal);
         Assert.True(registrationIndex >= 0 && ownedPidAssignmentIndex > registrationIndex);
+        var helperIndex = acceptanceSource.IndexOf(
+            "private static Process StartAcceptanceProcess(",
+            StringComparison.Ordinal);
+        var atomicStartIndex = acceptanceSource.IndexOf(
+            "return WorkerProcessJobs.StartRegisteredOrThrow(",
+            helperIndex,
+            StringComparison.Ordinal);
+        var legacyStartIndex = acceptanceSource.IndexOf(
+            "var legacyProcess = ProcessTreeGuiSuppression.Start(",
+            helperIndex,
+            StringComparison.Ordinal);
+        var negativeControlIndex = acceptanceSource.IndexOf(
+            "LegacyOwnedStartNegativeControlVariable",
+            helperIndex,
+            StringComparison.Ordinal);
+        Assert.True(helperIndex >= 0 && atomicStartIndex > helperIndex);
+        Assert.True(negativeControlIndex > helperIndex && legacyStartIndex > negativeControlIndex);
+        Assert.Equal(
+            legacyStartIndex + "var legacyProcess = ".Length,
+            acceptanceSource.LastIndexOf(
+                "ProcessTreeGuiSuppression.Start(",
+                StringComparison.Ordinal));
     }
 
     private static void AssertOwnedGroupCloseRoutesThroughAccountingHelper(

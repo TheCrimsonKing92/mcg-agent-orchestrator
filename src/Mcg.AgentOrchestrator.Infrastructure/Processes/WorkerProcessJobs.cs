@@ -277,9 +277,11 @@ public static class WorkerProcessJobs
         ArgumentNullException.ThrowIfNull(startInfo);
         if (!OperatingSystem.IsWindows())
         {
-            var process = ProcessTreeGuiSuppression.Start(startInfo);
-            RegisterOrThrow(process, ownerId);
-            return process;
+            return StartAndRegisterNonWindows(
+                startInfo,
+                ownerId,
+                ProcessTreeGuiSuppression.Start,
+                RegisterOrThrow);
         }
 
         OwnedProcessGroup.SuspendedProcessStart launch;
@@ -309,6 +311,25 @@ public static class WorkerProcessJobs
             }
 
             return launch.TransferOwnership();
+        }
+    }
+
+    internal static Process StartAndRegisterNonWindows(
+        ProcessStartInfo startInfo,
+        string? ownerId,
+        Func<ProcessStartInfo, Process> startProcess,
+        Action<Process, string?> registerProcess)
+    {
+        var process = startProcess(startInfo);
+        try
+        {
+            registerProcess(process, ownerId);
+            return process;
+        }
+        catch
+        {
+            process.Dispose();
+            throw;
         }
     }
 
@@ -345,6 +366,27 @@ public static class WorkerProcessJobs
             attachProcess: attachProcess);
     }
 
+    internal static bool TryRegisterSuspendedForTests(
+        Process process,
+        string? ownerId,
+        OwnedProcessGroup group,
+        Func<Process, SpawnProcessIdentity?> readVictimIdentity,
+        Func<Process, SpawnProcessIdentity?> readOwnerIdentity,
+        Action resumeProcess,
+        Action<SpawnRegistry, int, string> markReleased,
+        out string registrationFailure)
+    {
+        return TryRegisterCore(
+            process,
+            ownerId,
+            readVictimIdentity,
+            readOwnerIdentity,
+            out registrationFailure,
+            group,
+            resumeProcess,
+            markResumeFailureReleased: markReleased);
+    }
+
     private static bool TryRegisterCore(
         Process process,
         string? ownerId,
@@ -353,7 +395,8 @@ public static class WorkerProcessJobs
         out string registrationFailure,
         OwnedProcessGroup? preAttachedGroup = null,
         Action? resumeProcess = null,
-        Func<Process, OwnedProcessGroup>? attachProcess = null)
+        Func<Process, OwnedProcessGroup>? attachProcess = null,
+        Action<SpawnRegistry, int, string>? markResumeFailureReleased = null)
     {
         ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(readVictimIdentity);
@@ -441,8 +484,13 @@ public static class WorkerProcessJobs
                         {
                             resumeProcess();
                         }
-                        catch
+                        catch (Exception resumeException)
                         {
+                            MarkResumeFailureReleased(
+                                registry,
+                                process.Id,
+                                resumeException,
+                                markResumeFailureReleased);
                             if (Jobs.TryRemove(process.Id, out var failedResume))
                             {
                                 ReadAccountingAndDispose(
@@ -453,7 +501,6 @@ public static class WorkerProcessJobs
                                     out _);
                             }
 
-                            registry?.MarkReleased(process.Id, "spawn_registry: process resume failed");
                             throw;
                         }
                     }
@@ -512,6 +559,43 @@ public static class WorkerProcessJobs
         return false;
     }
 
+    private static void MarkResumeFailureReleased(
+        SpawnRegistry? registry,
+        int processId,
+        Exception resumeException,
+        Action<SpawnRegistry, int, string>? markReleased)
+    {
+        if (registry is null)
+        {
+            return;
+        }
+
+        const string Diagnostic = "spawn_registry: process resume failed";
+        try
+        {
+            var release = markReleased ?? MarkRegistryReleased;
+            release(registry, processId, Diagnostic);
+            return;
+        }
+        catch (Exception firstReleaseException)
+        {
+            try
+            {
+                registry.MarkReleased(processId, Diagnostic + "; retry=1");
+                return;
+            }
+            catch (Exception retryReleaseException)
+            {
+                resumeException.Data["resume_rollback_release_failure"] =
+                    $"first={firstReleaseException.GetType().Name}:{SanitizeDiagnostic(firstReleaseException.Message)}," +
+                    $"retry={retryReleaseException.GetType().Name}:{SanitizeDiagnostic(retryReleaseException.Message)}";
+            }
+        }
+    }
+
+    private static void MarkRegistryReleased(SpawnRegistry registry, int processId, string diagnostic) =>
+        registry.MarkReleased(processId, diagnostic);
+
     private static string BuildRegistrationFailure(int processId, string stage, string cleanup) =>
         $"worker-process-registration-failed: pid={processId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; stage={stage}; cleanup={cleanup}";
 
@@ -526,18 +610,31 @@ public static class WorkerProcessJobs
             var nativeErrorCode = win32.NativeErrorCode;
             parts.Add($"native_error_code={nativeErrorCode.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
             parts.Add($"native_message={SanitizeDiagnostic(new Win32Exception(nativeErrorCode).Message)}");
-            parts.Add($"operation_message={SanitizeDiagnostic(
-                exception is OwnedProcessAttachmentException attachment
-                    ? attachment.OperationMessage
-                    : exception.Message)}");
-            if (exception is OwnedProcessAttachmentException ownedAttachment)
+            parts.Add($"operation_message={SanitizeDiagnostic(exception switch
             {
-                parts.Add(ownedAttachment.JobEvidence);
+                OwnedProcessAttachmentException attachment => attachment.OperationMessage,
+                OwnedProcessLaunchException launch => launch.OperationMessage,
+                _ => exception.Message
+            })}");
+            var jobEvidence = exception switch
+            {
+                OwnedProcessAttachmentException attachment => attachment.JobEvidence,
+                OwnedProcessLaunchException launch => launch.JobEvidence,
+                _ => null
+            };
+            if (!string.IsNullOrWhiteSpace(jobEvidence))
+            {
+                parts.Add(jobEvidence);
             }
         }
         else
         {
             parts.Add($"message={SanitizeDiagnostic(exception.Message)}");
+        }
+
+        if (exception.Data["resume_rollback_release_failure"] is string rollbackFailure)
+        {
+            parts.Add($"resume_rollback_release_failure={SanitizeDiagnostic(rollbackFailure)}");
         }
 
         return string.Join("; ", parts);
