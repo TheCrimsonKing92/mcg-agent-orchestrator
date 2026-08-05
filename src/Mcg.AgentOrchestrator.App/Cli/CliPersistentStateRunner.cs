@@ -1562,12 +1562,18 @@ internal static class CliPersistentStateRunner
         ref Goal? currentGoal)
     {
         var command = args[0].ToLowerInvariant();
+        CliCommandHelp.ThrowIfInvalidFlags(args);
+        var refreshUsage = CliCommandHelp.RefreshDispatchSyntax;
+        var refreshOptions = command.Equals("refresh-dispatch", StringComparison.OrdinalIgnoreCase)
+            ? CliArgumentParser.ParseRefreshDispatchOptions(args, refreshUsage)
+            : null;
+        var commandArgs = refreshOptions?.TargetParts ?? args;
         if (command.Equals("reconcile", StringComparison.OrdinalIgnoreCase))
         {
             return ExecuteGlobalProcessReconcile(args, stateRepository, workspace, ref currentGoal);
         }
 
-        var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, ResolveProcessRefreshGoalPrefix(args));
+        var goalId = ResolveSingleGoalCommandGoalId(stateRepository, currentGoal?.Id.Value, ResolveProcessRefreshGoalPrefix(commandArgs));
         var kernel = LoadSingleGoalKernel(stateRepository, goalId);
         currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
 
@@ -1577,10 +1583,10 @@ internal static class CliPersistentStateRunner
         switch (command)
         {
             case "refresh-dispatch":
-                var refreshTarget = ResolveDispatchCommandTask(args, kernel, currentGoal, "refresh-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+                var refreshTarget = ResolveDispatchCommandTask(commandArgs, kernel, currentGoal, refreshUsage);
                 currentGoal = refreshTarget.Goal;
                 runner.RefreshLatestProcess(kernel, refreshTarget.Goal.Id, refreshTarget.Task.Id);
-                ConsoleViews.PrintTask(refreshTarget.Goal, refreshTarget.Task);
+                ConsoleViews.PrintRefreshDispatchResult(refreshTarget.Goal, refreshTarget.Task, refreshOptions!);
                 break;
 
             case "refresh-dispatches":

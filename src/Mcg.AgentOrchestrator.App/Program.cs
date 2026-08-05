@@ -358,7 +358,7 @@ Console.WriteLine("  start-subscription-ready --confirm-batch-start [--autonomy 
 Console.WriteLine("  execute-dispatch <task-number> --confirm-dispatch-start [--autonomy <policy>]");
 Console.WriteLine("  start-dispatch <task-number> --confirm-dispatch-start [--autonomy <policy>]");
 Console.WriteLine("  start-dispatches --confirm-batch-start [--autonomy <policy>]");
-Console.WriteLine("  refresh-dispatch <task-number>, refresh-dispatches");
+Console.WriteLine("  refresh-dispatch <task-number> [--history] [--history-limit <n>], refresh-dispatches");
 Console.WriteLine("  logs <task-number> [stdout|stderr|exit|all], cancel-dispatch <task-number>");
 Console.WriteLine("  verify <task-number> <command>, verify-manual <task-number> <passed|failed> <note>, verifications <task-number>");
 Console.WriteLine("  progress <task-number> <status> <message>, ask <task-number> <question>, ask-goal <question>, answer <request-id> <answer> [--gate-deliverable <id>...]");
