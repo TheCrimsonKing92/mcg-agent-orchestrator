@@ -650,6 +650,48 @@ public sealed class RunGoalServiceTests
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskRedelegated && evt.Message.Contains("qwen-planner", StringComparison.Ordinal)));
     }
 
+    [Xunit.Fact]
+    public async Task RunGoalServicePlannerContractFailureDoesNotRedelegate()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Task with Planner contract failure", AgentRole.Planner);
+        var goal = CreateRefinedGoal(kernel, "Goal should preserve Planner failure", [task]);
+        var primary = SubscriptionPlanner("codex-planner", "Codex Planner", "codex-cli");
+        var alternate = SubscriptionPlanner("qwen-planner", "Qwen Planner", "qwen-code-cli");
+        kernel.ActivateGoal(goal.Id, [primary, alternate]);
+        var completedAt = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex-cli exec",
+            workspace.ExecutionDirectory,
+            completedAt,
+            WorkerProviderKind: WorkerProviderCatalog.Default().ResolveProfile("codex-cli").Identity.Kind));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+            "codex-cli exec",
+            workspace.ExecutionDirectory,
+            1,
+            "ERROR: requested model gpt-5.6-sol is not supported.",
+            "  Planner output contract failed: missing required evidence. Retry Planner for contract repair.",
+            completedAt));
+
+        var result = await RunGoalService.RunAsync(
+            kernel,
+            [primary, alternate],
+            Profiles(new WorkerProfile("qwen-code-cli", "Write-Output should-not-run")),
+            workspace,
+            goal,
+            allowLargePaidSubscriptionStart: false,
+            sleep: NoSleep);
+
+        Assert.False(result.Executed);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(primary.Id, task.AssignedAgentId);
+        Assert.DoesNotContain(goal.Timeline, evt => evt.Kind == ProgressKind.TaskRedelegated);
+        Assert.Contains("Planner output contract failed", result.StopEvidence?.OutputTail ?? string.Empty, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_stops_when_no_alternate_exists")]
     public async Task RunGoalServiceAutoFailoverStopsWhenNoAlternateExists()
     {

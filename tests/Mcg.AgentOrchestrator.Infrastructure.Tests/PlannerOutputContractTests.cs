@@ -76,6 +76,19 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void PlannerContract_ExactLive485363d4ContextualSiblings_Pass()
+    {
+        var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805010032.out.txt");
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            InfrastructureTestSupport.FindRepositoryRoot());
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_ExactLive658501ceParenthesizedNewFileMarker_Passes()
     {
         var plan = ReadExactLiveFixture("658501ce-f6708f44-20260805012800.out.txt");
@@ -122,6 +135,33 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.Contains("target citation 'HallucinatedSibling.cs' does not exist", result.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void PlannerContract_UnmarkedNonexistentPath_Fails()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var targetBody = "- Extend `src/MissingUnmarked.cs` with focused contract coverage.";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("target citation 'src/MissingUnmarked.cs' does not exist", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_NewFileSuffixMarksOnlyAdjacentPath()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var targetBody =
+            "- Extend `src/MissingUnmarked.cs` and `src/MissingMarked.cs` — new file with focused contract coverage.";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("target citation 'src/MissingUnmarked.cs' does not exist", result.Diagnostic, StringComparison.Ordinal);
+    }
+
     private static string ReplaceSectionBody(string plan, string heading, string replacement)
     {
         var normalized = plan.ReplaceLineEndings("\n");
@@ -132,9 +172,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
 
     private static string ReadExactLiveFixture(string fileName) =>
         File.ReadAllText(Path.Combine(
-            InfrastructureTestSupport.FindRepositoryRoot(),
-            "tests",
-            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            AppContext.BaseDirectory,
             "Fixtures",
             "PlannerOutputContract",
             fileName));

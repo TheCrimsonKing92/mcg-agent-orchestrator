@@ -73,6 +73,78 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
         }
     }
 
+    [Xunit.Fact]
+    public void PlannerContractFailureDoesNotTriggerModelFailover()
+    {
+        var repo = CreateSeededDispatchRepository();
+        try
+        {
+            var (kernel, goal, task, agents) = CreateActiveGoal("Planner contract triage", AgentRole.Planner);
+            var completedAt = DateTimeOffset.UtcNow;
+            RecordSubscriptionDispatch(kernel, goal, task, repo, completedAt);
+            kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+                "codex-cli exec",
+                repo,
+                1,
+                "ERROR: requested model gpt-5.6-sol is not supported.",
+                "  Planner output contract failed: missing required evidence. Retry Planner for contract repair.",
+                completedAt));
+
+            var item = FailureTriagePlanner.Build(
+                    kernel,
+                    goal,
+                    agents,
+                    repo,
+                    AutonomyPolicy.Observe)
+                .Items
+                .Single(item => item.TaskId == task.Id);
+
+            Assert.Equal(FailureTriageCause.FailedVerification, item.Cause);
+            Assert.Equal(FailureTriageAction.RetryWithNote, item.Action);
+            Assert.NotEqual(FailureTriageCause.ProviderModelRejected, item.Cause);
+        }
+        finally
+        {
+            try { Directory.Delete(repo, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void IndependentInvalidModelLineTriggersModelFailover()
+    {
+        var repo = CreateSeededDispatchRepository();
+        try
+        {
+            var (kernel, goal, task, agents) = CreateActiveGoal("Provider rejection triage", AgentRole.Planner);
+            var completedAt = DateTimeOffset.UtcNow;
+            RecordSubscriptionDispatch(kernel, goal, task, repo, completedAt);
+            kernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
+                "codex-cli exec",
+                repo,
+                1,
+                string.Empty,
+                "Diagnostic prose quotes 'Planner output contract failed: missing evidence'.\n" +
+                "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.",
+                completedAt));
+
+            var item = FailureTriagePlanner.Build(
+                    kernel,
+                    goal,
+                    agents,
+                    repo,
+                    AutonomyPolicy.Observe)
+                .Items
+                .Single(item => item.TaskId == task.Id);
+
+            Assert.Equal(FailureTriageCause.ProviderModelRejected, item.Cause);
+            Assert.Equal(FailureTriageAction.ReRoute, item.Action);
+        }
+        finally
+        {
+            try { Directory.Delete(repo, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalHealthEvaluator_uses_typed_task_status_instead_of_recovery_display_text")]
     public void GoalHealthEvaluatorUsesTypedTaskStatus()
     {
@@ -144,13 +216,28 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
     }
 
     private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task, IReadOnlyList<AgentDefinition> Agents)
-        CreateActiveGoal(string objective)
+        CreateActiveGoal(string objective, AgentRole role = AgentRole.Developer)
     {
         var kernel = new AgentOrchestratorKernel();
-        var task = new TaskSpec(TaskId.New(), "Implement the requested change", AgentRole.Developer);
+        var task = new TaskSpec(TaskId.New(), "Implement the requested change", role);
         var goal = kernel.CreateGoal(objective, [task]);
         var agents = AgentCatalog.Default().Agents;
         kernel.ActivateGoal(goal.Id, agents);
         return (kernel, goal, task, agents);
+    }
+
+    private static void RecordSubscriptionDispatch(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec task,
+        string repository,
+        DateTimeOffset dispatchedAt)
+    {
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex-cli exec",
+            repository,
+            dispatchedAt,
+            WorkerProviderKind: WorkerProviderCatalog.Default().ResolveProfile("codex-cli").Identity.Kind));
     }
 }
