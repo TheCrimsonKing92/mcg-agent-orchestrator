@@ -1584,13 +1584,17 @@ public static class DispatchFailureClassifier
         TaskVerificationRecord verification,
         AgentRole? requiredRole)
     {
-        if (verification.Succeeded ||
-            requiredRole == AgentRole.Planner && HasAuthoritativePlannerOutputContractFailure(verification))
+        if (verification.Succeeded)
         {
             return false;
         }
 
-        return TryGetProviderModelRejectionLine(verification, out _) &&
+        var hasAuthoritativePlannerContractFailure =
+            requiredRole == AgentRole.Planner && HasAuthoritativePlannerOutputContractFailure(verification);
+        return TryGetProviderModelRejectionLine(
+                verification,
+                includeStandardOutput: !hasAuthoritativePlannerContractFailure,
+                out _) &&
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
@@ -1977,9 +1981,20 @@ public static class DispatchFailureClassifier
         return false;
     }
 
-    private static bool TryGetProviderModelRejectionLine(TaskVerificationRecord verification, out string line)
+    private static bool TryGetProviderModelRejectionLine(
+        TaskVerificationRecord verification,
+        out string line) =>
+        TryGetProviderModelRejectionLine(verification, includeStandardOutput: true, out line);
+
+    private static bool TryGetProviderModelRejectionLine(
+        TaskVerificationRecord verification,
+        bool includeStandardOutput,
+        out string line)
     {
-        foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
+        foreach (var rawLine in EnumerateEvidenceLines(
+            verification,
+            includeStandardOutput,
+            includeStandardError: true))
         {
             var candidate = rawLine.Trim();
             if (!IsPlannerOutputContractFailureLine(candidate) &&

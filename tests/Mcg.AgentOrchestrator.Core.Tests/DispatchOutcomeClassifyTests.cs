@@ -1121,6 +1121,21 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableProviderModelRejectionFailure(verification));
     }
 
+    [Xunit.Fact(DisplayName = "Classify honors independent provider rejection beside authoritative Planner contract diagnostic")]
+    public void ClassifyProviderModelRejectionBesideAuthoritativePlannerContractFailure()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Planner),
+            Verification(
+                1,
+                "Connecting to API...",
+                "Planner output contract failed: missing required evidence. Retry Planner for contract repair.\n" +
+                "Error: unknown model 'claude-xxx-4-99'. Model not supported."));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
+
     [Xunit.Fact]
     public void ProviderModelRejectionHistoryIgnoresAuthoritativePlannerContractFailure()
     {

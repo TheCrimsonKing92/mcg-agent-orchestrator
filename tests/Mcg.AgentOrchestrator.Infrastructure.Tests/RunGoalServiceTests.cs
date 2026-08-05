@@ -627,6 +627,7 @@ public sealed class RunGoalServiceTests
             "codex-cli",
             "codex-cli exec",
             DateTimeOffset.UtcNow,
+            "Planner output contract failed: missing required evidence. Retry Planner for contract repair.\n" +
             "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.");
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 

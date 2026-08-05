@@ -123,7 +123,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                 repo,
                 1,
                 string.Empty,
-                "Diagnostic prose quotes 'Planner output contract failed: missing evidence'.\n" +
+                "Planner output contract failed: missing required evidence. Retry Planner for contract repair.\n" +
                 "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.",
                 completedAt));
 
