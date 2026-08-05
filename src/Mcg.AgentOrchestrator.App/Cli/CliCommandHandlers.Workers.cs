@@ -236,6 +236,7 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             ConsoleViews.PrintCrossGoalSubscriptionStartPlan(crossGoalPlan);
             var startedAny = false;
+            var crossGoalStartFailures = new List<string>();
             foreach (var candidate in crossGoalPlan.FirstBatchCandidates)
             {
                 var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, null, candidate.GoalId);
@@ -257,6 +258,14 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     context.Providers);
                 ConsoleViews.PrintSubscriptionStartResult(goal, result);
                 startedAny |= result.Dispatches.Count > 0 || result.Processes.Tasks.Count > 0;
+                crossGoalStartFailures.AddRange(
+                    (result.Processes.StartFailures ?? [])
+                    .Select(failure => $"goal={goal.Id.Value[..8]} task={failure.TaskId.Value[..8]} {failure.Reason}"));
+            }
+
+            if (crossGoalStartFailures.Count > 0)
+            {
+                context.FailAfterCommit(string.Join(Environment.NewLine, crossGoalStartFailures));
             }
 
             return startedAny;
@@ -313,6 +322,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             var subscriptionStart = GoalManagementCommandService.StartSubscriptionReadyTasks(context.Kernel, context.Workspace, context.CurrentGoal, context.Agents, context.WorkerProfiles, context.Providers);
             EmitReadyBlockedDiagnostics(subscriptionStart.BlockedDiagnostics);
             ConsoleViews.PrintSubscriptionStartResult(context.CurrentGoal, subscriptionStart);
+            if (subscriptionStart.Processes.StartFailures?.FirstOrDefault() is { } subscriptionStartFailure)
+            {
+                context.FailAfterCommit(subscriptionStartFailure.Reason);
+            }
+
             return subscriptionStart.Dispatches.Count > 0 || subscriptionStart.Processes.Tasks.Count > 0;
 
         case "execute-dispatch":
@@ -387,7 +401,12 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 context.Providers,
                 refreshBeforeStart: false);
             ConsoleViews.PrintProcessBatchResult(context.CurrentGoal, started);
-            return started.Tasks.Count > 0;
+            if (started.StartFailures?.FirstOrDefault() is { } batchStartFailure)
+            {
+                context.FailAfterCommit(batchStartFailure.Reason);
+            }
+
+            return started.Tasks.Count > 0 || started.StartFailures?.Count > 0;
 
         case "refresh-dispatch":
             var refreshPolicy = ResolveCliAutonomyPolicy(parts);
@@ -448,7 +467,25 @@ private static void LaunchLatestDispatch(CliExecutionContext context, Goal goal,
     SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(
         SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(context.Kernel, goal, task),
         HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
-    new BackgroundDispatchRunner().StartLatestDispatch(context.Kernel, goal.Id, task.Id, context.Workspace.LogDirectory);
+    var startResult = new BackgroundDispatchRunner().TryStartLatestDispatch(
+        context.Kernel,
+        goal.Id,
+        task.Id,
+        context.Workspace.LogDirectory);
+    if (startResult.RecoveryAction is { } recoveryAction)
+    {
+        throw new InvalidOperationException(recoveryAction.Reason);
+    }
+
+    if (startResult.RequeueSkipped)
+    {
+        throw new InvalidOperationException("Dispatch start was skipped after interrupted-dispatch state changed.");
+    }
+
+    if (startResult.FailureReason is { } failureReason)
+    {
+        context.FailAfterCommit(failureReason);
+    }
 }
 
 private static void EmitReadyBlockedDiagnostics(IReadOnlyList<ReadyBlockedDiagnostic> diagnostics)

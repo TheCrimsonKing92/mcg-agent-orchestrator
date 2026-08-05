@@ -10,7 +10,8 @@ public enum DispatchStateKind
     StaleCleanup,
     WedgedProcess,
     Running,
-    Completed
+    Completed,
+    InterruptedWork
 }
 
 public sealed record DispatchProcessTreeNode(int ProcessId, bool IsAlive, string? CommandLine);
@@ -37,7 +38,9 @@ public sealed record DispatchArtifactStatus(
     string ExitCodePath,
     bool ExitCodeExists,
     string HeartbeatPath,
-    bool HeartbeatExists);
+    bool HeartbeatExists,
+    DispatchExitArtifactOrigin ExitArtifactOrigin = DispatchExitArtifactOrigin.None,
+    string? ExitArtifactReason = null);
 
 public sealed record DispatchWorktreeState(
     string WorkingDirectory,
@@ -210,6 +213,7 @@ public sealed class DispatchStateSurface
     private static DispatchArtifactStatus ReadArtifacts(TaskProcessRecord process, DispatchHeartbeatStatus heartbeat)
     {
         var heartbeatPath = heartbeat.Path;
+        var hasExitArtifact = DispatchExitArtifacts.TryRead(process.ExitCodePath, out var exitArtifact);
         return new DispatchArtifactStatus(
             process.StandardOutputPath,
             File.Exists(process.StandardOutputPath),
@@ -220,7 +224,9 @@ public sealed class DispatchStateSurface
             process.ExitCodePath,
             File.Exists(process.ExitCodePath),
             heartbeatPath,
-            File.Exists(heartbeatPath));
+            File.Exists(heartbeatPath),
+            hasExitArtifact ? exitArtifact.Origin : DispatchExitArtifactOrigin.None,
+            hasExitArtifact ? exitArtifact.Reason : null);
     }
 
     private static DispatchWorktreeState InspectWorktree(string workingDirectory, DateTimeOffset? dispatchedAt, bool inspectGit)
@@ -303,6 +309,11 @@ public sealed class DispatchStateSurface
             return DispatchStateKind.Completed;
         }
 
+        if (recovery.Action == DispatchRecoveryAction.PreserveInterruptedWork)
+        {
+            return DispatchStateKind.InterruptedWork;
+        }
+
         if (recovery.Action == DispatchRecoveryAction.ReconcileFromExit)
         {
             return DispatchStateKind.ExitedAwaitingReconcile;
@@ -335,6 +346,7 @@ public sealed class DispatchStateSurface
             DispatchStateKind.StaleCleanup => recovery.ActionName,
             DispatchStateKind.WedgedProcess => recovery.ActionName,
             DispatchStateKind.Completed => "none",
+            DispatchStateKind.InterruptedWork => "refresh-dispatch",
             DispatchStateKind.None => "none",
             _ => recovery.ActionName
         };
@@ -354,7 +366,7 @@ public sealed class DispatchStateSurface
         return
             $"goal={goalId.Value[..Math.Min(8, goalId.Value.Length)]} task={task.Id.Value[..Math.Min(8, task.Id.Value.Length)]} " +
             $"state={kind} action={Recommend(kind, recovery)} live={tree.HasLiveProcess} child_pid={child} " +
-            $"exit_artifact={artifacts.ExitCodeExists} heartbeat={(heartbeat.IsAvailable ? heartbeat.State : heartbeat.UnavailableReason ?? "unavailable")} " +
+            $"exit_artifact={artifacts.ExitCodeExists} exit_origin={artifacts.ExitArtifactOrigin} heartbeat={(heartbeat.IsAvailable ? heartbeat.State : heartbeat.UnavailableReason ?? "unavailable")} " +
             $"dirty_worktree={dirty} reason={recovery.Reason}";
     }
 

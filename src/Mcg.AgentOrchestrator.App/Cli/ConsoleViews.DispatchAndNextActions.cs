@@ -11,7 +11,8 @@ internal static partial class ConsoleViews
 public static void PrintProcessBatchResult(Goal goal, ProcessBatchExecutionResult result)
 {
     Console.WriteLine();
-    Console.WriteLine($"{result.Plan.Action}: ready={result.Plan.ReadyCount} skipped={result.Plan.SkippedCount} changed={result.Tasks.Count}");
+    var changedCount = result.Tasks.Count + (result.StartFailures?.Count ?? 0);
+    Console.WriteLine($"{result.Plan.Action}: ready={result.Plan.ReadyCount} skipped={result.Plan.SkippedCount} changed={changedCount}");
 
     foreach (var task in result.Tasks)
     {
@@ -20,6 +21,15 @@ public static void PrintProcessBatchResult(Goal goal, ProcessBatchExecutionResul
             ? $"running pid={process.ProcessId}"
             : $"exit={process?.ExitCode?.ToString() ?? "n/a"}";
         Console.WriteLine($"  Task {GetTaskDisplayNumber(goal, task.Id)} {status}");
+    }
+
+    if (result.StartFailures is { Count: > 0 })
+    {
+        Console.WriteLine("Start failures:");
+        foreach (var failure in result.StartFailures)
+        {
+            Console.WriteLine($"  Task {GetTaskDisplayNumber(goal, failure.TaskId)}: {OutputTextPreview.CreateTimeline(failure.Reason).Text}");
+        }
     }
 
     var skipped = result.Plan.Items

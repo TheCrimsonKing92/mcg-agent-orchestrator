@@ -53,7 +53,22 @@ public static async Task<object?> ApplyTaskActionAsync(
 
         case "start":
             RefreshPreparedDispatchBeforeStart(kernel, workspace, goal, task, agents, WorkerProfileStore.Load(workspace.WorkerProfilePath), providers);
-            new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, task.Id, workspace.LogDirectory);
+            var startResult = new BackgroundDispatchRunner().TryStartLatestDispatch(kernel, goal.Id, task.Id, workspace.LogDirectory);
+            if (startResult.RecoveryAction is { } recoveryAction)
+            {
+                throw new InvalidOperationException(recoveryAction.Reason);
+            }
+
+            if (startResult.RequeueSkipped)
+            {
+                throw new InvalidOperationException("Dispatch start was skipped after interrupted-dispatch state changed.");
+            }
+
+            if (startResult.FailureReason is { } failureReason)
+            {
+                return new DispatchProcessStartFailureDto(goal.Id.Value, task.Id.Value, failureReason);
+            }
+
             return null;
 
         case "refresh":

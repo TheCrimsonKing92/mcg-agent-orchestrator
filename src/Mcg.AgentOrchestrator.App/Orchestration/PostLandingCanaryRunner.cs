@@ -358,7 +358,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         using var process = ProcessTreeGuiSuppression.Start(startInfo);
         process.StandardInput.Close();
-        WorkerProcessJobs.TryRegister(process, $"post-landing-canary:{workingDirectory}");
+        WorkerProcessJobs.RegisterOrThrow(process, $"post-landing-canary:{workingDirectory}");
         try
         {
             // Do not cancel pipe drains before the killed process tree closes its handles.

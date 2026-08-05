@@ -12,7 +12,25 @@ Get-ChildItem -Path $logs -Filter "$GoalPrefix-*.dispatch.json" -ErrorAction Sil
         $found = $true
         $base = $_.BaseName -replace '\.dispatch$', ''
         $exitPath = Join-Path $logs "$base.exit.txt"
-        $exit = if (Test-Path $exitPath) { (Get-Content $exitPath -Raw).Trim() } else { 'running' }
+        $exit = 'running'
+        if (Test-Path $exitPath) {
+            $rawExit = (Get-Content $exitPath -Raw).Trim()
+            $exit = $rawExit
+            if ($rawExit.StartsWith('{')) {
+                try {
+                    $artifact = $rawExit | ConvertFrom-Json
+                    $origin = switch ([int]$artifact.origin) {
+                        1 { 'native' }
+                        2 { 'synthetic' }
+                        default { "unknown-$($artifact.origin)" }
+                    }
+                    $exit = "$($artifact.exitCode):$origin"
+                }
+                catch {
+                    $exit = 'invalid-artifact'
+                }
+            }
+        }
         $hbPath = Join-Path $logs "$base.heartbeat.json"
         $state = ''
         if (Test-Path $hbPath) {

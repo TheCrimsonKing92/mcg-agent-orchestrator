@@ -36,30 +36,81 @@ public static class WorkerProcessJobs
         }
 
         var reaped = 0;
+        var sweeper = BuildSweeperEvidence();
         foreach (var entry in registry.ListActive())
         {
-            if (!SpawnProcessIdentityReader.MatchesLiveProcess(entry, out var process))
+            var ownerLiveness = SpawnProcessIdentityReader.EvaluateOwner(entry, out var ownerEvidence);
+            if (ownerLiveness != SpawnOwnerLiveness.DeadOrRecycled)
             {
-                registry.MarkReleased(entry.ProcessId, $"spawn_registry: already-dead-or-recycled pid={entry.ProcessId} owner={entry.OwnerId}");
+                RecordRetentionDiagnosticIfChanged(registry, entry, ownerLiveness, ownerEvidence, sweeper);
+                continue;
+            }
+
+            var victimStatus = SpawnProcessIdentityReader.EvaluateTrackedProcess(entry, out var process, out var victimEvidence);
+            if (victimStatus == SpawnTrackedProcessStatus.Unknown)
+            {
+                RecordRetentionDiagnosticIfChanged(
+                    registry,
+                    entry,
+                    "retain-unknown-victim",
+                    ownerLiveness,
+                    ownerEvidence,
+                    sweeper,
+                    victimEvidence);
+                continue;
+            }
+
+            if (victimStatus == SpawnTrackedProcessStatus.DeadOrRecycled)
+            {
+                _ = registry.TryMarkReleasedEntry(
+                    entry.Id,
+                    entry.LastDiagnostic,
+                    BuildSweepDiagnostic("already-dead-or-recycled", entry, ownerLiveness, ownerEvidence, sweeper, victimEvidence));
                 continue;
             }
 
             using (process)
             {
-                if (IsProtectedProcessOrAncestor(entry.ProcessId) || ProtectedPidIsDescendantOf(entry.ProcessId))
+                if (IsProtectedProcessOrAncestor(entry.ProcessId) || IsProtectedDescendant(entry.ProcessId))
                 {
-                    registry.RecordDiagnostic(entry.Id, $"spawn_registry: refused-protected pid={entry.ProcessId} owner={entry.OwnerId}");
+                    registry.RecordDiagnostic(
+                        entry.Id,
+                        BuildSweepDiagnostic("refused-protected", entry, ownerLiveness, ownerEvidence, sweeper));
                     continue;
                 }
 
-                if (TryKillOrFallback(entry.ProcessId, allowProtectedDescendant: false, markRegistryReleased: false, out _))
+                // Revalidate at the destructive boundary. If the evidence changes or becomes unreadable,
+                // retain the worker; only positive dead/recycled-owner evidence authorizes a kill.
+                ownerLiveness = SpawnProcessIdentityReader.EvaluateOwner(entry, out ownerEvidence);
+                if (ownerLiveness != SpawnOwnerLiveness.DeadOrRecycled)
                 {
-                    registry.MarkReleased(entry.ProcessId, $"spawn_registry: startup-reaped pid={entry.ProcessId} owner={entry.OwnerId}");
+                    RecordRetentionDiagnosticIfChanged(registry, entry, ownerLiveness, ownerEvidence, sweeper);
+                    continue;
+                }
+
+                // Claim the exact registry entry and durably record authorization before the destructive
+                // action. The compare-and-set prevents concurrent CLI startup sweeps from acting on the
+                // same stale snapshot; a later sweep can retry a claim abandoned by a crashed sweeper.
+                if (!registry.TryRecordDiagnostic(
+                        entry.Id,
+                        entry.LastDiagnostic,
+                        BuildSweepDiagnostic("startup-reap-authorized", entry, ownerLiveness, ownerEvidence, sweeper, victimEvidence)))
+                {
+                    continue;
+                }
+
+                if (TryKillMatchedProcess(process))
+                {
+                    registry.MarkReleasedEntry(
+                        entry.Id,
+                        BuildSweepDiagnostic("startup-reaped", entry, ownerLiveness, ownerEvidence, sweeper, victimEvidence));
                     reaped++;
                 }
                 else
                 {
-                    registry.RecordDiagnostic(entry.Id, $"spawn_registry: startup-reap-failed pid={entry.ProcessId} owner={entry.OwnerId}");
+                    registry.RecordDiagnostic(
+                        entry.Id,
+                        BuildSweepDiagnostic("startup-reap-failed", entry, ownerLiveness, ownerEvidence, sweeper, victimEvidence));
                 }
             }
         }
@@ -67,38 +118,284 @@ public static class WorkerProcessJobs
         return reaped;
     }
 
-    public static bool TryRegister(Process process, string? ownerId = null)
+    private static void RecordRetentionDiagnosticIfChanged(
+        SpawnRegistry registry,
+        SpawnRegistryEntry entry,
+        SpawnOwnerLiveness ownerLiveness,
+        string ownerEvidence,
+        string sweeper) =>
+        RecordRetentionDiagnosticIfChanged(
+            registry,
+            entry,
+            ownerLiveness == SpawnOwnerLiveness.Live ? "retain-live-owner" : "retain-unknown-owner",
+            ownerLiveness,
+            ownerEvidence,
+            sweeper,
+            victimEvidence: null);
+
+    private static void RecordRetentionDiagnosticIfChanged(
+        SpawnRegistry registry,
+        SpawnRegistryEntry entry,
+        string action,
+        SpawnOwnerLiveness ownerLiveness,
+        string ownerEvidence,
+        string sweeper,
+        string? victimEvidence)
     {
-        if (IsProtectedProcessOrAncestor(process.Id))
+        var stableFingerprint = BuildSweepDiagnostic(
+            action,
+            entry,
+            ownerLiveness,
+            ownerEvidence,
+            sweeper: string.Empty,
+            victimEvidence: victimEvidence).TrimEnd();
+        if (entry.LastDiagnostic is null ||
+            !entry.LastDiagnostic.StartsWith(stableFingerprint, StringComparison.Ordinal))
+        {
+            registry.RecordDiagnostic(
+                entry.Id,
+                BuildSweepDiagnostic(
+                    action,
+                    entry,
+                    ownerLiveness,
+                    ownerEvidence,
+                    sweeper,
+                    victimEvidence));
+        }
+    }
+
+    private static string BuildSweepDiagnostic(
+        string action,
+        SpawnRegistryEntry entry,
+        SpawnOwnerLiveness ownerLiveness,
+        string ownerEvidence,
+        string sweeper,
+        string? victimEvidence = null) =>
+        $"spawn_registry: {action} victim_pid={entry.ProcessId} victim_started_at={entry.ProcessStartedAt:O} " +
+        $"victim_image={entry.ImagePath} owner={entry.OwnerId} owner_pid={entry.OwnerProcessId?.ToString() ?? "unknown"} " +
+        $"owner_started_at={entry.OwnerProcessStartedAt?.ToString("O") ?? "unknown"} " +
+        $"owner_liveness={ownerLiveness} owner_evidence={SanitizeDiagnostic(ownerEvidence)} " +
+        $"victim_evidence={SanitizeDiagnostic(victimEvidence ?? "not-evaluated")} {sweeper}";
+
+    private static string BuildSweeperEvidence()
+    {
+        var argv = SanitizeDiagnostic(string.Join(' ', Environment.GetCommandLineArgs()));
+        if (argv.Length > 1024)
+        {
+            argv = argv[..1024] + "...";
+        }
+
+        return $"sweeper_pid={Environment.ProcessId} sweeper_argv={argv}";
+    }
+
+    private static string SanitizeDiagnostic(string value) =>
+        value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+
+    private static bool TryKillMatchedProcess(Process? process)
+    {
+        if (process is null)
         {
             return false;
         }
 
         try
         {
-            var group = OwnedProcessGroup.Attach(process);
-            var duplicate = group.TryDuplicateAccountingHandle(out var duplicateHandle) ? duplicateHandle : null;
+            if (process.HasExited)
+            {
+                return false;
+            }
+
+            process.Kill(entireProcessTree: true);
+            return process.WaitForExit(5000) && process.HasExited;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    public static bool TryRegister(Process process, string? ownerId = null)
+    {
+        return TryRegister(process, ownerId, out _);
+    }
+
+    public static bool TryRegister(Process process, string? ownerId, out string registrationFailure)
+    {
+        return TryRegisterCore(
+            process,
+            ownerId,
+            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
+            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
+            out registrationFailure);
+    }
+
+    public static void RegisterOrThrow(Process process, string? ownerId = null)
+    {
+        if (!TryRegister(process, ownerId, out var registrationFailure))
+        {
+            throw new InvalidOperationException(registrationFailure);
+        }
+    }
+
+    internal static bool TryRegister(
+        Process process,
+        string? ownerId,
+        Func<Process, SpawnProcessIdentity?> readIdentity)
+    {
+        return TryRegisterCore(process, ownerId, readIdentity, readIdentity, out _);
+    }
+
+    internal static bool TryRegister(
+        Process process,
+        string? ownerId,
+        Func<Process, SpawnProcessIdentity?> readVictimIdentity,
+        Func<Process, SpawnProcessIdentity?> readOwnerIdentity)
+    {
+        return TryRegisterCore(process, ownerId, readVictimIdentity, readOwnerIdentity, out _);
+    }
+
+    private static bool TryRegisterCore(
+        Process process,
+        string? ownerId,
+        Func<Process, SpawnProcessIdentity?> readVictimIdentity,
+        Func<Process, SpawnProcessIdentity?> readOwnerIdentity,
+        out string registrationFailure)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(readVictimIdentity);
+        ArgumentNullException.ThrowIfNull(readOwnerIdentity);
+        registrationFailure = string.Empty;
+
+        if (IsProtectedProcessOrAncestor(process.Id))
+        {
+            registrationFailure = BuildRegistrationFailure(
+                process.Id,
+                "protected-process-boundary",
+                "refused-protected-process");
+            return false;
+        }
+
+        // Registration is single-shot. A PID collision may be a duplicate call, a concurrent
+        // publication that has not reached the durable registry yet, or a recycled PID behind a
+        // stale in-memory entry. None is safe to accept as success without a registration state
+        // machine, so fail closed and terminate the candidate rather than bypassing ownership.
+        if (Jobs.ContainsKey(process.Id))
+        {
+            registrationFailure = BuildRegistrationFailure(
+                process.Id,
+                "duplicate-or-recycled-pid",
+                "process-tree-termination-requested");
+            TryTerminateUnregisteredProcess(process);
+            return false;
+        }
+
+        var registry = Registry;
+        OwnedProcessGroup? group = null;
+        Microsoft.Win32.SafeHandles.SafeFileHandle? duplicate = null;
+        var failureStage = "owned-process-group-attachment";
+        try
+        {
+            group = OwnedProcessGroup.Attach(process);
+            SpawnProcessIdentity? victimIdentity = null;
+            SpawnProcessIdentity? ownerIdentity = null;
+            if (registry is not null)
+            {
+                failureStage = "victim-identity-read";
+                victimIdentity = readVictimIdentity(process);
+                if (victimIdentity is null)
+                {
+                    registrationFailure = BuildRegistrationFailure(
+                        process.Id,
+                        failureStage,
+                        "attached-process-tree-termination-requested");
+                    ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
+                    group = null;
+                    return false;
+                }
+
+                failureStage = "owner-identity-read";
+                using var ownerProcess = Process.GetCurrentProcess();
+                ownerIdentity = readOwnerIdentity(ownerProcess);
+                if (ownerIdentity is null)
+                {
+                    registrationFailure = BuildRegistrationFailure(
+                        process.Id,
+                        failureStage,
+                        "attached-process-tree-termination-requested");
+                    ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
+                    group = null;
+                    return false;
+                }
+            }
+
+            failureStage = "job-publication";
+            duplicate = group.TryDuplicateAccountingHandle(out var duplicateHandle) ? duplicateHandle : null;
             var snapshot = group.TryReadAccounting(out var registrationAccounting)
                 ? registrationAccounting with { AccountingSource = "snapshot" }
                 : null;
-            if (Jobs.TryAdd(process.Id, new RegisteredJob(group, duplicate, snapshot)))
+            var registeredJob = new RegisteredJob(group, duplicate, snapshot);
+            if (Jobs.TryAdd(process.Id, registeredJob))
             {
-                RegisterDurable(process, ownerId);
-                return true;
+                group = null;
+                duplicate = null;
+                if (registry is null || RegisterDurable(registry, victimIdentity!, ownerIdentity!, ownerId))
+                {
+                    return true;
+                }
+
+                registrationFailure = BuildRegistrationFailure(
+                    process.Id,
+                    "durable-registry-write",
+                    "registered-process-tree-termination-requested");
+                if (Jobs.TryRemove(process.Id, out var failedRegistration))
+                {
+                    ReadAccountingAndDispose(
+                        failedRegistration,
+                        kill: true,
+                        captureAccounting: false,
+                        preferDuplicate: false,
+                        out _);
+                }
+
+                return false;
             }
 
-            ReadAccountingAndDispose(group, kill: false, captureAccounting: false, out _);
+            registrationFailure = BuildRegistrationFailure(
+                process.Id,
+                "duplicate-or-recycled-pid",
+                "attached-process-tree-termination-requested");
+            ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
+            group = null;
             duplicate?.Dispose();
+            duplicate = null;
+            return false;
         }
-        catch (Win32Exception)
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
         {
+            registrationFailure = BuildRegistrationFailure(
+                process.Id,
+                failureStage,
+                $"process-tree-termination-requested; exception={ex.GetType().Name}");
+            if (group is null)
+            {
+                TryTerminateUnregisteredProcess(process);
+            }
         }
-        catch (InvalidOperationException)
+        finally
         {
+            if (group is not null)
+            {
+                ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
+            }
+
+            duplicate?.Dispose();
         }
 
         return false;
     }
+
+    private static string BuildRegistrationFailure(int processId, string stage, string cleanup) =>
+        $"worker-process-registration-failed: pid={processId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; stage={stage}; cleanup={cleanup}";
 
     public static bool TryKillOrFallback(int processId)
     {
@@ -383,23 +680,39 @@ public static class WorkerProcessJobs
             .ToArray();
     }
 
-    private static void RegisterDurable(Process process, string? ownerId)
+    private static bool RegisterDurable(
+        SpawnRegistry registry,
+        SpawnProcessIdentity identity,
+        SpawnProcessIdentity ownerIdentity,
+        string? ownerId)
     {
-        var registry = Registry;
-        if (registry is null || !SpawnProcessIdentityReader.TryRead(process, out var identity))
-        {
-            return;
-        }
-
         try
         {
             registry.Register(
-                string.IsNullOrWhiteSpace(ownerId) ? $"pid:{process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : ownerId,
-                identity);
+                string.IsNullOrWhiteSpace(ownerId) ? $"pid:{identity.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : ownerId,
+                identity,
+                ownerIdentity);
+            return true;
         }
         catch
         {
-            // Registry durability is a lifecycle backstop; failed diagnostics must not prevent spawn.
+            return false;
+        }
+    }
+
+    private static void TryTerminateUnregisteredProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                _ = process.WaitForExit(5000);
+            }
+        }
+        catch
+        {
+            // Best-effort fallback after job attachment itself failed. The caller still receives false.
         }
     }
 
@@ -486,7 +799,7 @@ public static class WorkerProcessJobs
 
     private static bool IsProtectedProcessOrAncestor(int processId)
     {
-        return IsProtectedProcess(processId) || IsProtectedDescendant(processId);
+        return IsProtectedProcess(processId) || ProtectedPidIsDescendantOf(processId);
     }
 
     private static bool CanKillProcess(int processId, bool allowProtectedDescendant)

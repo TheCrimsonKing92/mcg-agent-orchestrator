@@ -767,6 +767,38 @@ public sealed class DashboardRenderingTests
         Assert.True(dispatchState.StaleThresholds.LiveIdleTimeoutSeconds > 0);
     }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_preserves_typed_exit_artifact_provenance")]
+    public void DashboardResponseMapperPreservesTypedExitArtifactProvenance()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Typed exit provenance",
+            [new TaskSpec(TaskId.New(), "Refresh interrupted worker", AgentRole.Researcher)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        var now = DateTimeOffset.Parse("2026-07-03T12:04:00Z");
+        var stdout = Path.Combine(root, "out.log");
+        var stderr = Path.Combine(root, "err.log");
+        var exit = Path.Combine(root, "exit.txt");
+        File.WriteAllText(stdout, "partial work");
+        File.WriteAllText(stderr, string.Empty);
+        DispatchExitArtifacts.Write(exit, DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", now));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt.md", root, now));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(999999, "codex exec prompt.md", root, stdout, stderr, exit, now, null, null));
+
+        var dto = DashboardResponseMapper.ToNextActionsDto(goal, kernel.BuildNextActions(goal.Id), WorkerProfileCatalog.Default());
+        var dispatchState = Assert.IsType<DispatchAuthoritativeStateDto>(dto.Items.Single().DispatchState);
+
+        Assert.Equal(DispatchStateKind.InterruptedWork, dispatchState.Kind);
+        Assert.Equal(DispatchExitArtifactOrigin.Synthetic, dispatchState.Artifacts.ExitArtifactOrigin);
+        Assert.Equal("startup sweep interrupted worker", dispatchState.Artifacts.ExitArtifactReason);
+        Assert.Equal("refresh-dispatch 1", dto.OperatorDisposition.NextSafeCommand);
+    }
+
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_uses_conductor_disposition_snapshot_for_next_actions")]
     public void DashboardResponseMapperUsesConductorDispositionSnapshotForNextActions()
     {
@@ -1144,6 +1176,38 @@ public sealed class DashboardRenderingTests
     Assert.True(item.Description.Length < description.Length);
     Assert.Equal(description, plan.Items.Single().Description);
 }
+
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_preserves_process_start_failure_reason")]
+    public void DashboardResponseMapperPreservesProcessStartFailureReason()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Preserve batch start failure",
+            [new TaskSpec(TaskId.New(), "Start worker", AgentRole.Developer)]);
+        var task = goal.Tasks.Single();
+        var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
+        const string failureReason = "worker-process-registration-failed: stage=durable-registry-write";
+        var processResult = new ProcessBatchExecutionResult(
+            plan,
+            [],
+            StartFailures: [new DispatchProcessStartFailure(task.Id, failureReason)]);
+
+        var direct = DashboardResponseMapper.ToProcessBatchActionResultDto(goal, "start-dispatches", processResult);
+        var subscription = DashboardResponseMapper.ToSubscriptionStartActionResultDto(
+            goal,
+            new SubscriptionStartResult(
+                [new WorkerProfileDispatchResult(task, @"C:\repo\.orchestrator\prompts\task.md")],
+                processResult,
+                new ParallelExecutionPlan([], []),
+                []));
+
+        var directFailure = Assert.Single(direct.Processes!);
+        Assert.Null(directFailure.Process);
+        Assert.Equal(failureReason, directFailure.FailureReason);
+        var subscriptionFailure = Assert.Single(subscription.Processes!);
+        Assert.Null(subscriptionFailure.Process);
+        Assert.Equal(failureReason, subscriptionFailure.FailureReason);
+    }
 
     [Xunit.Fact(DisplayName = "DashboardRenderer_can_emit_auto_refresh_metadata")]
     public void DashboardRendererCanEmitAutoRefreshMetadata()
@@ -1889,6 +1953,10 @@ public sealed class DashboardRenderingTests
     Assert.Contains("agentProviderOptions", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("summarizeResponse", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("if(warning) return warning", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("process.FailureReason", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("result?.Reason", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("failure?.Reason", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("Start failures:", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("Server continuation is watching", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.False(DashboardAssets.OperatorControlsScript.Contains("Auto-resume scheduled", StringComparison.Ordinal));
     Assert.Contains("Stopped:", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);

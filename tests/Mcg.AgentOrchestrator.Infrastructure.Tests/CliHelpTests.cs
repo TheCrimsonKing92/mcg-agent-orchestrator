@@ -495,6 +495,48 @@ public sealed class CliHelpTests
         return path;
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_show_preserves_worker_owned_by_live_external_conductor")]
+    public void CliAttentionShowPreservesWorkerOwnedByLiveExternalConductor()
+    {
+        var root = CreateTempDirectory();
+        Process? worker = null;
+        try
+        {
+            InitializeGitRepository(root);
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+            worker = Process.Start(new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 9999"])))
+                ?? throw new InvalidOperationException("Failed to start sentinel worker.");
+            Xunit.Assert.True(SpawnProcessIdentityReader.TryRead(worker, out var workerIdentity));
+            new SpawnRegistry(workspace.SqliteStatePath).Register("external-conductor-dispatch", workerIdentity);
+
+            var result = RunAppCli(root, ["attention", "show"]);
+
+            Xunit.Assert.Equal(0, result.ExitCode);
+            Xunit.Assert.False(worker.HasExited);
+            var retained = Xunit.Assert.Single(new SpawnRegistry(workspace.SqliteStatePath).ListActive());
+            Xunit.Assert.Contains("retain-live-owner", retained.LastDiagnostic, StringComparison.Ordinal);
+            Xunit.Assert.Contains("sweeper_pid=", retained.LastDiagnostic, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (worker is not null)
+            {
+                try { worker.Kill(entireProcessTree: true); } catch { }
+                worker.Dispose();
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     private static async Task AssertCliSkipsOrphanWorktreeCleanupAsync(
         string[] args,
         Action<(int ExitCode, string StandardOutput, string StandardError)> assertResult,

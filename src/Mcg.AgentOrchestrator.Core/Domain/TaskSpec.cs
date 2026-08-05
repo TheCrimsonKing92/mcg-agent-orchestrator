@@ -195,7 +195,9 @@ public sealed class TaskSpec
                     LastProcess.WasCancelledByConductor,
                     LastProcess.ChildExitRecordPath,
                     LastProcess.ChildProcessId,
-                    LastProcess.ChildExitCode),
+                    LastProcess.ChildExitCode,
+                    LastProcess.ExitArtifactOrigin,
+                    LastProcess.ExitArtifactReason),
             VerificationPlan,
             SubscriptionRetryAfter,
             SubscriptionLimitReviewNote,
@@ -346,7 +348,9 @@ public sealed class TaskSpec
                 snapshot.LastProcess.WasCancelledByConductor,
                 snapshot.LastProcess.ChildExitRecordPath,
                 snapshot.LastProcess.ChildProcessId,
-                snapshot.LastProcess.ChildExitCode));
+                snapshot.LastProcess.ChildExitCode,
+                snapshot.LastProcess.ExitArtifactOrigin,
+                snapshot.LastProcess.ExitArtifactReason));
         }
 
         task.SetSubscriptionRetryAfter(snapshot.SubscriptionRetryAfter);

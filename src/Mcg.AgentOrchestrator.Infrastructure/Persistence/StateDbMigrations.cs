@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class StateDbMigrations
 {
     private sealed record Migration(int Number, string Name, Action<SqliteConnection> Apply);
-    private const int CurrentMigrationNumber = 5;
+    private const int CurrentMigrationNumber = 6;
 
     /// <summary>
     /// Reports whether the published state store already has every numbered migration.
@@ -89,7 +89,8 @@ public static class StateDbMigrations
                 new(2, "worktree-cleanup-state", ApplyCleanupStateSchema),
                 new(3, "spawn-registry", ApplySpawnRegistrySchema),
                 new(4, "backlog-intake-records", ApplyBacklogIntakeSchema),
-                new(CurrentMigrationNumber, "model-fit-outcome-backfill", repository.ApplyModelFitHistoryBackfillMigration)
+                new(5, "model-fit-outcome-backfill", repository.ApplyModelFitHistoryBackfillMigration),
+                new(CurrentMigrationNumber, "spawn-registry-owner-identity", ApplySpawnRegistryOwnerIdentitySchema)
             };
             ValidateMigrationSequence(migrations);
 
@@ -201,6 +202,13 @@ public static class StateDbMigrations
             connection,
             "CREATE INDEX IF NOT EXISTS ix_spawn_registry_active ON spawn_registry(released_at, process_id)",
             statementObserver: null);
+    }
+
+    private static void ApplySpawnRegistryOwnerIdentitySchema(SqliteConnection connection)
+    {
+        ExecuteNonQuery(connection, "ALTER TABLE spawn_registry ADD COLUMN owner_process_id INTEGER NULL", statementObserver: null);
+        ExecuteNonQuery(connection, "ALTER TABLE spawn_registry ADD COLUMN owner_process_started_at TEXT NULL", statementObserver: null);
+        ExecuteNonQuery(connection, "ALTER TABLE spawn_registry ADD COLUMN owner_process_image_path TEXT NULL", statementObserver: null);
     }
 
     private static void ApplyBacklogIntakeSchema(SqliteConnection connection)

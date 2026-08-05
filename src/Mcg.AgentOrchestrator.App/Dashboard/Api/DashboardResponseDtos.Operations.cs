@@ -40,7 +40,13 @@ internal sealed record ProcessBatchPlanItemDto(
     ProcessBatchItemStatus Status,
     string Reason);
 
-internal sealed record ProcessBatchOutcomeDto(int TaskNumber, string TaskId, ProcessDto? Process);
+internal sealed record ProcessBatchOutcomeDto(
+    int TaskNumber,
+    string TaskId,
+    ProcessDto? Process,
+    string? FailureReason = null);
+
+internal sealed record DispatchProcessStartFailureDto(string GoalId, string TaskId, string Reason);
 
 internal sealed record ParallelExecutionPlanDto(
     IReadOnlyList<ParallelExecutionBatchDto> Batches,
@@ -60,7 +66,8 @@ internal sealed record AdvanceResultDto(
     NextActionDto? Action,
     NextActionAutomationKind AutomationKind,
     string Message,
-    object? Result);
+    object? Result,
+    bool StateChanged = false);
 
 internal sealed record AdvanceLoopResultDto(
     string GoalId,
@@ -70,7 +77,9 @@ internal sealed record AdvanceLoopResultDto(
     NextActionDto? BlockingAction,
     IReadOnlyList<AdvanceResultDto> Steps,
     DashboardContinuationStatusDto? Continuation = null,
-    DateTimeOffset? ContinueAfter = null);
+    DateTimeOffset? ContinueAfter = null,
+    bool StateChanged = false,
+    DispatchProcessStartFailureDto? Failure = null);
 
 public sealed record DashboardContinuationStatusDto(
     string GoalId,

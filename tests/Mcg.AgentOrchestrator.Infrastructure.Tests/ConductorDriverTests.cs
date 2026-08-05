@@ -5252,6 +5252,166 @@ public sealed class ConductorDriverTests
         Assert.True(ReferenceEquals(action, outcome.SandboxPrepRecoveryAction));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_recorded_start_registration_failure_is_spawn_failure")]
+    public void ConductorDriverRecordedStartRegistrationFailureIsSpawnFailure()
+    {
+        var (_, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        var plan = new ProcessBatchPlan(
+            goal.Id,
+            goal.Objective,
+            goal.Status,
+            ProcessBatchActionKind.StartDispatches,
+            ReadyCount: 1,
+            SkippedCount: 0,
+            Items: []);
+        const string failureReason = "worker-process-registration-failed: stage=durable-registry-write";
+        var result = new ProcessBatchExecutionResult(
+            plan,
+            [],
+            StartFailures: [new DispatchProcessStartFailure(task.Id, failureReason)]);
+
+        var outcome = ConductorDriver.ClassifyRecordedDispatchStartForConductor(result);
+
+        Assert.Equal(DispatchStartOutcomeCategory.SpawnFailed, outcome.Category);
+        Assert.Equal(failureReason, outcome.Reason);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_subscription_start_registration_failure_is_spawn_failure")]
+    public void ConductorDriverSubscriptionStartRegistrationFailureIsSpawnFailure()
+    {
+        var (_, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        var plan = new ProcessBatchPlan(
+            goal.Id,
+            goal.Objective,
+            goal.Status,
+            ProcessBatchActionKind.StartDispatches,
+            ReadyCount: 1,
+            SkippedCount: 0,
+            Items: []);
+        const string failureReason = "worker-process-registration-failed: stage=durable-registry-write";
+        var processResult = new ProcessBatchExecutionResult(
+            plan,
+            [],
+            StartFailures: [new DispatchProcessStartFailure(task.Id, failureReason)]);
+        var result = new SubscriptionStartResult(
+            [new WorkerProfileDispatchResult(task, @"C:\repo\.orchestrator\prompts\task.md")],
+            processResult,
+            new ParallelExecutionPlan([], []),
+            []);
+
+        var outcome = ConductorDriver.ClassifySubscriptionStartForConductor(result);
+
+        Assert.Equal(DispatchStartOutcomeCategory.SpawnFailed, outcome.Category);
+        Assert.Equal(failureReason, outcome.Reason);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_recorded_start_mixed_started_and_registration_failure_keeps_live_progress")]
+    public void ConductorDriverRecordedStartMixedStartedAndRegistrationFailureKeepsLiveProgress()
+    {
+        var (_, goal) = SoftwareGoal();
+        var startedTask = goal.Tasks[0];
+        var failedTask = goal.Tasks[1];
+        var plan = new ProcessBatchPlan(
+            goal.Id,
+            goal.Objective,
+            goal.Status,
+            ProcessBatchActionKind.StartDispatches,
+            ReadyCount: 2,
+            SkippedCount: 0,
+            Items: []);
+        var result = new ProcessBatchExecutionResult(
+            plan,
+            [startedTask],
+            StartFailures: [new DispatchProcessStartFailure(failedTask.Id, "worker-process-registration-failed")]);
+
+        var outcome = ConductorDriver.ClassifyRecordedDispatchStartForConductor(result);
+
+        Assert.Equal(DispatchStartOutcomeCategory.Started, outcome.Category);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_subscription_start_mixed_started_and_registration_failure_keeps_live_progress")]
+    public void ConductorDriverSubscriptionStartMixedStartedAndRegistrationFailureKeepsLiveProgress()
+    {
+        var (_, goal) = SoftwareGoal();
+        var startedTask = goal.Tasks[0];
+        var failedTask = goal.Tasks[1];
+        var plan = new ProcessBatchPlan(
+            goal.Id,
+            goal.Objective,
+            goal.Status,
+            ProcessBatchActionKind.StartDispatches,
+            ReadyCount: 2,
+            SkippedCount: 0,
+            Items: []);
+        var processResult = new ProcessBatchExecutionResult(
+            plan,
+            [startedTask],
+            StartFailures: [new DispatchProcessStartFailure(failedTask.Id, "worker-process-registration-failed")]);
+        var result = new SubscriptionStartResult(
+            [new WorkerProfileDispatchResult(startedTask, @"C:\repo\.orchestrator\prompts\task.md")],
+            processResult,
+            new ParallelExecutionPlan([], []),
+            []);
+
+        var outcome = ConductorDriver.ClassifySubscriptionStartForConductor(result);
+
+        Assert.Equal(DispatchStartOutcomeCategory.Started, outcome.Category);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_failed_task_with_live_sibling_defers_failure_handling")]
+    public void ConductorDriverFailedTaskWithLiveSiblingDefersFailureHandling()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Defer partial batch failure",
+            [
+                new TaskSpec(TaskId.New(), "Failed start", AgentRole.Developer),
+                new TaskSpec(TaskId.New(), "Live sibling", AgentRole.Tester)
+            ]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var failedTask = goal.Tasks[0];
+        var runningTask = goal.Tasks[1];
+        kernel.ReportTaskProgress(goal.Id, failedTask.Id, WorkTaskStatus.Failed, "registration failed");
+        DispatchTask(kernel, goal, runningTask);
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            runningTask.Id,
+            new TaskProcessRecord(
+                12345,
+                "test.exe",
+                @"C:\tmp",
+                @"C:\tmp\stdout",
+                @"C:\tmp\stderr",
+                @"C:\tmp\exit",
+                StartedAt: DateTimeOffset.UtcNow,
+                CompletedAt: null,
+                ExitCode: null));
+        var retryCount = 0;
+        var shutdownCount = 0;
+        var escalationCount = 0;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (_, _, _) =>
+            {
+                retryCount++;
+                return failedTask;
+            },
+            buildServerShutdown: () => shutdownCount++,
+            writeEscalation: (_, _, _) => escalationCount++);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Failed, held.State);
+        Assert.Contains(runningTask.Id.Value[..8], held.Reason, StringComparison.Ordinal);
+        Assert.Contains("deferred", held.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, retryCount);
+        Assert.Equal(0, shutdownCount);
+        Assert.Equal(0, escalationCount);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_spawn_fail_twice_escalates_after_exactly_one_retry")]
     public void ConductorDriverWorkspaceReadySpawnFailTwiceEscalatesAfterExactlyOneRetry()
     {

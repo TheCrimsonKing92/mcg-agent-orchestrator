@@ -488,7 +488,8 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
     {
         if (task.Status != WorkTaskStatus.Assigned ||
             task.LastProcess is not { IsRunning: true } process ||
-            !TryReadExitCode(process.ExitCodePath, out var exitCode) ||
+            !DispatchExitArtifacts.TryRead(process.ExitCodePath, out var exitArtifact) ||
+            exitArtifact.Origin == DispatchExitArtifactOrigin.Synthetic ||
             HasLiveTrackedProcess(process))
         {
             continue;
@@ -497,13 +498,15 @@ private static void ReconcileExitedAssignedProcessRecords(AgentOrchestratorKerne
         var completed = process with
         {
             CompletedAt = DateTimeOffset.UtcNow,
-            ExitCode = exitCode
+            ExitCode = exitArtifact.ExitCode,
+            ExitArtifactOrigin = exitArtifact.Origin,
+            ExitArtifactReason = exitArtifact.Reason
         };
         kernel.RecordTaskProcessRefreshed(goal.Id, task.Id, completed, verification: null);
         kernel.RecordTaskNote(
             goal.Id,
             task.Id,
-            $"Auto-cleared stale LastProcess.IsRunning before dispatch; pid {process.ProcessId} had exit artifact {process.ExitCodePath} with exit {exitCode}.");
+            $"Auto-cleared stale LastProcess.IsRunning before dispatch; pid {process.ProcessId} had exit artifact {process.ExitCodePath} with exit {exitArtifact.ExitCode}.");
     }
 }
 
@@ -545,24 +548,6 @@ private static bool IsProcessRunning(int processId)
     catch (System.ComponentModel.Win32Exception)
     {
         return true;
-    }
-}
-
-private static bool TryReadExitCode(string path, out int exitCode)
-{
-    exitCode = 0;
-    try
-    {
-        return File.Exists(path) &&
-            int.TryParse(File.ReadAllText(path).Trim(), out exitCode);
-    }
-    catch (IOException)
-    {
-        return false;
-    }
-    catch (UnauthorizedAccessException)
-    {
-        return false;
     }
 }
 
@@ -651,6 +636,7 @@ private static ProcessBatchExecutionResult StartDispatches(
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
     var started = new List<TaskSpec>();
     var recoveryActions = new List<WorkerSandboxPrepRecoverableAction>();
+    var startFailures = new List<DispatchProcessStartFailure>();
     var requeueSkippedCount = 0;
     IReadOnlyList<AgentDefinition>? resolvedAgents = null;
     WorkerProfileCatalog? resolvedProfiles = null;
@@ -693,10 +679,16 @@ private static ProcessBatchExecutionResult StartDispatches(
             continue;
         }
 
+        if (startResult.FailureReason is { } failureReason)
+        {
+            startFailures.Add(new DispatchProcessStartFailure(task.Id, failureReason));
+            continue;
+        }
+
         started.Add(task);
     }
 
-    return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount);
+    return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount, startFailures);
 }
 
 public static ProcessBatchExecutionResult RefreshDispatches(

@@ -19,6 +19,92 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Equal(process.ExitCodePath, decision.EvidencePath);
     }
 
+    [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_preserves_absent_process_with_synthetic_exit_artifact")]
+    public void DispatchRecoveryPolicyPreservesAbsentProcessWithSyntheticExitArtifact()
+    {
+        var process = CreateProcess();
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", Now));
+
+        var decision = CreatePolicy().Evaluate(
+            process,
+            hasLiveProcess: false,
+            worktreeInspection: DispatchWorktreeInspectionStatus.Available(
+                hasDirtyEvidence: true,
+                process.WorkingDirectory));
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, decision.Action);
+        Xunit.Assert.Equal("preserve-interrupted-work", decision.ActionName);
+        Xunit.Assert.Equal(process.ExitCodePath, decision.EvidencePath);
+        Xunit.Assert.Contains("startup sweep interrupted worker", decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconciles_synthetic_artifact_as_terminal_interrupted_failure")]
+    public void BackgroundDispatchRunnerReconcilesSyntheticArtifactAsTerminalInterruptedFailure()
+    {
+        var process = CreateProcess();
+        File.WriteAllText(process.StandardOutputPath, "partial worker output");
+        File.WriteAllText(process.StandardErrorPath, string.Empty);
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", Now));
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Reconcile interrupted worker");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Researcher);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", process.Command, process.WorkingDirectory, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var outcome = new BackgroundDispatchRunner(new TestClock(Now), isStillRunning: _ => false)
+            .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+        BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+
+        Xunit.Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, outcome.RecoveryDecision!.Action);
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Xunit.Assert.Equal(1, task.LastProcess!.ExitCode);
+        Xunit.Assert.NotNull(task.LastProcess.CompletedAt);
+        Xunit.Assert.Equal(DispatchExitArtifactOrigin.Synthetic, task.LastProcess.ExitArtifactOrigin);
+        Xunit.Assert.Equal("startup sweep interrupted worker", task.LastProcess.ExitArtifactReason);
+        Xunit.Assert.NotNull(task.LastVerification);
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchExitArtifacts_round_trip_native_and_classify_legacy_integer")]
+    public void DispatchExitArtifactsRoundTripNativeAndClassifyLegacyInteger()
+    {
+        var process = CreateProcess();
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Native(17, "worker exited", Now));
+
+        Xunit.Assert.True(DispatchExitArtifacts.TryRead(process.ExitCodePath, out var native));
+        Xunit.Assert.Equal(17, native.ExitCode);
+        Xunit.Assert.Equal(DispatchExitArtifactOrigin.Native, native.Origin);
+
+        File.WriteAllText(process.ExitCodePath, "1");
+        Xunit.Assert.True(DispatchExitArtifacts.TryRead(process.ExitCodePath, out var legacy));
+        Xunit.Assert.Equal(DispatchExitArtifactOrigin.UnknownLegacy, legacy.Origin);
+    }
+
+    [Xunit.Theory(DisplayName = "DispatchExitArtifacts_rejects_malformed_typed_artifacts_without_throwing")]
+    [Xunit.InlineData("{\"exitCode\":1,\"origin\":99,\"reason\":\"unknown origin\",\"recordedAt\":\"2026-06-28T12:00:00Z\",\"version\":1}")]
+    [Xunit.InlineData("{\"exitCode\":1,\"origin\":2,\"reason\":null,\"recordedAt\":\"2026-06-28T12:00:00Z\",\"version\":1}")]
+    [Xunit.InlineData("{\"exitCode\":1,\"origin\":2,\"reason\":\"missing timestamp\",\"recordedAt\":\"0001-01-01T00:00:00Z\",\"version\":1}")]
+    public void DispatchExitArtifactsRejectsMalformedTypedArtifactsWithoutThrowing(string payload)
+    {
+        var process = CreateProcess();
+        File.WriteAllText(process.ExitCodePath, payload);
+
+        Xunit.Assert.False(DispatchExitArtifacts.TryRead(process.ExitCodePath, out _));
+        var read = DispatchExitArtifactReader.Read(process.ExitCodePath);
+        Xunit.Assert.Equal(ExitCodeReadKind.Invalid, read.Kind);
+        var decision = CreatePolicy().Evaluate(process, hasLiveProcess: false);
+        Xunit.Assert.Equal(DispatchRecoveryAction.Hold, decision.Action);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchRecoveryPolicy_retries_stale_no_artifact_when_budget_remains")]
     public void DispatchRecoveryPolicyRetriesStaleNoArtifactWhenBudgetRemains()
     {
@@ -194,6 +280,7 @@ public sealed class DispatchRecoveryPolicyTests
 
         Xunit.Assert.Equal(DispatchRecoveryAction.ReconcileFromExit, outcome.RecoveryDecision!.Action);
         Xunit.Assert.Equal(0, outcome.ProcessRecord.ExitCode);
+        Xunit.Assert.Equal(DispatchExitArtifactOrigin.UnknownLegacy, outcome.ProcessRecord.ExitArtifactOrigin);
         Xunit.Assert.NotNull(task.LastVerification);
         Xunit.Assert.Contains("action='reconcile-from-exit'", task.LastVerification!.StandardError, StringComparison.Ordinal);
     }
@@ -453,6 +540,28 @@ public sealed class DispatchRecoveryPolicyTests
         Xunit.Assert.Contains("apparatus blocker=heartbeat-invalid", finding.Finding, StringComparison.Ordinal);
         Xunit.Assert.Equal("refresh-dispatch 1", finding.SuggestedCommand);
         Xunit.Assert.Equal(DispatchRecoveryAction.Hold, finding.RecoveryDecision!.Action);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRecoveryPlanner_surfaces_interrupted_work_as_not_alive_and_refreshable")]
+    public void GoalRecoveryPlannerSurfacesInterruptedWorkAsNotAliveAndRefreshable()
+    {
+        var process = CreateProcess();
+        DispatchExitArtifacts.Write(
+            process.ExitCodePath,
+            DispatchExitArtifacts.Synthetic(1, "startup sweep interrupted worker", Now));
+        var kernel = new AgentOrchestratorKernel(new TestClock(Now));
+        var goal = kernel.CreateGoal("Plan interrupted work recovery", [new TaskSpec(TaskId.New(), "Inspect", AgentRole.Researcher)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", process.Command, process.WorkingDirectory, process.StartedAt));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+
+        var report = GoalRecoveryPlanner.Build(kernel, goal, process.WorkingDirectory, includeCleanupBackoff: false);
+
+        var finding = Xunit.Assert.Single(report.TaskFindings);
+        Xunit.Assert.Contains("is not alive", finding.Finding, StringComparison.Ordinal);
+        Xunit.Assert.Equal("refresh-dispatch 1", finding.SuggestedCommand);
+        Xunit.Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, finding.RecoveryDecision!.Action);
     }
 
     private static DispatchRecoveryPolicy CreatePolicy() => new(new TestClock(Now));

@@ -167,6 +167,135 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Xunit.Assert.Null(task.LastProcess);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_registration_failure_stops_before_process_receipt")]
+    public async Task BackgroundDispatchRunnerRegistrationFailureStopsBeforeProcessReceipt()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        return;
+    }
+
+    var root = CreateTempDirectory();
+    var stateDbPath = Path.Combine(root, "state.db");
+    var corruptRegistryPath = Path.Combine(root, "corrupt-spawn-registry.db");
+    File.WriteAllBytes(corruptRegistryPath, []);
+    Process? spawned = null;
+    var spawnedProcessId = -1;
+    try
+    {
+        WorkerProcessJobs.ConfigureRegistry(corruptRegistryPath);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Surface worker registration failure");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("local", "Write-Output ok", root, DateTimeOffset.UtcNow));
+        _ = StateDbMigrations.EnsureUpToDate(stateDbPath);
+        var repository = new SqliteOrchestratorStateRepository(stateDbPath);
+        await repository.SaveAsync(kernel);
+        var runner = new BackgroundDispatchRunner(
+            disableProcessStart: false,
+            startProcess: _ =>
+            {
+                spawned = Process.Start(new ProcessStartInfo
+                {
+                    FileName = WorkerShell.Executable,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }.WithArguments(
+                    WorkerShell.BaseArguments().Concat([
+                        "Start-Sleep -Seconds 9999"
+                    ]))) ?? throw new InvalidOperationException("Failed to start registration-failure fixture.");
+                spawnedProcessId = spawned.Id;
+                return spawned;
+            });
+
+        DispatchProcessStartResult? startResult = null;
+        var checkpointCount = 0;
+        WorkTaskStatus? secondCheckpointStatus = null;
+        bool? secondCheckpointHasProcess = null;
+        await repository.TransactAsync((transactionKernel, _) =>
+        {
+            startResult = runner.TryStartLatestDispatch(
+                transactionKernel,
+                goal.Id,
+                task.Id,
+                Path.Combine(root, "logs"),
+                (checkpointKernel, checkpointGoalId, checkpointTaskId) =>
+                {
+                    checkpointCount++;
+                    if (checkpointCount == 2)
+                    {
+                        var checkpointTask = checkpointKernel.GetTask(checkpointGoalId, checkpointTaskId);
+                        secondCheckpointStatus = checkpointTask.Status;
+                        secondCheckpointHasProcess = checkpointTask.LastProcess is not null;
+                    }
+                });
+            return Task.FromResult((true, true));
+        });
+
+        var restored = await repository.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        var restoredTask = restoredGoal.Tasks.Single(candidate => candidate.Id == task.Id);
+
+        Assert.NotNull(startResult);
+        Assert.Null(startResult.ProcessRecord);
+        Assert.Equal(2, checkpointCount);
+        Assert.Equal(WorkTaskStatus.Failed, secondCheckpointStatus);
+        Assert.False(secondCheckpointHasProcess);
+        Assert.Contains("worker-process-registration-failed", startResult.FailureReason, StringComparison.Ordinal);
+        Assert.Contains("stage=durable-registry-write", startResult.FailureReason, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Failed, restoredTask.Status);
+        Assert.Null(restoredTask.LastProcess);
+        Assert.Contains(restoredGoal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("worker-process-registration-failed", StringComparison.Ordinal));
+        Assert.True(SpinWait.SpinUntil(
+            () =>
+            {
+                try
+                {
+                    using var candidate = Process.GetProcessById(spawnedProcessId);
+                    return candidate.HasExited;
+                }
+                catch (ArgumentException)
+                {
+                    return true;
+                }
+                catch (InvalidOperationException)
+                {
+                    return true;
+                }
+            },
+            TimeSpan.FromSeconds(5)));
+    }
+    finally
+    {
+        WorkerProcessJobs.ClearRegistryForTests();
+        if (spawnedProcessId > 0)
+        {
+            try
+            {
+                using var candidate = Process.GetProcessById(spawnedProcessId);
+                if (!candidate.HasExited)
+                {
+                    candidate.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+                // The registration failure path should already have terminated the exact fixture.
+            }
+        }
+
+        spawned?.Dispose();
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_paid_worker_preflight_failure_has_zero_external_io")]
     public void BackgroundDispatchRunnerPaidWorkerPreflightFailureHasZeroExternalIo()
 {
@@ -425,7 +554,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(0, completed.ExitCode);
-    Assert.Equal("0", File.ReadAllText(exit));
+    AssertExitCode(exit, 0);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
@@ -1445,8 +1574,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         action.TaskId == task.Id && action.Kind == NextActionKind.RunAssignedTask);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_escalates_stale_dispatch_corpse_with_dirty_worktree")]
-    public void BackgroundDispatchRunnerReconcileEscalatesStaleDispatchCorpseWithDirtyWorktree()
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_preserves_interrupted_dispatch_with_dirty_worktree")]
+    public void BackgroundDispatchRunnerReconcilePreservesInterruptedDispatchWithDirtyWorktree()
 {
     var root = CreateSeededDispatchRepository();
     var now = DateTimeOffset.Parse("2026-07-16T01:13:00Z");
@@ -1466,12 +1595,47 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.NotNull(task.LastProcess);
     Assert.Equal(1, task.LastProcess!.ExitCode);
+    Assert.NotNull(task.LastProcess.CompletedAt);
+    Assert.Equal(DispatchExitArtifactOrigin.Synthetic, task.LastProcess.ExitArtifactOrigin);
+    Assert.Equal("process missing with dirty worktree evidence", task.LastProcess.ExitArtifactReason);
     Assert.NotNull(task.LastVerification);
-    Assert.Contains("Dispatch recovery policy action='mark-stale'", task.LastVerification!.StandardError, StringComparison.Ordinal);
-    Assert.Contains("stale-dispatch retry blocked by dirty worktree evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.True(File.Exists(Path.Combine(worktree, "dirty.txt")));
+    Assert.True(DispatchExitArtifacts.TryRead(process.ExitCodePath, out var artifact));
+    Assert.Equal(DispatchExitArtifactOrigin.Synthetic, artifact.Origin);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("InterruptedDispatchWorkPreserved", StringComparison.Ordinal));
     Assert.DoesNotContain(goal.Timeline, evt =>
         evt.TaskId == task.Id &&
         evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal));
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_fails_output_only_dispatch_corpse")]
+    public void BackgroundDispatchRunnerReconcileFailsOutputOnlyDispatchCorpse()
+{
+    var root = CreateSeededDispatchRepository();
+    var now = DateTimeOffset.Parse("2026-07-16T01:13:00Z");
+    var clock = new TestClock(now);
+    var kernel = new AgentOrchestratorKernel(clock);
+    var goal = kernel.CreateGoal("Fail output-only stale dispatch");
+    kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
+    var process = RecordStaleDeveloperDispatch(kernel, goal, task, worktree, root, now.AddMinutes(-40), "output-only");
+    File.WriteAllText(process.StandardOutputPath, "partial provider output");
+    WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 23, 0, childPid: null, ownedCpuMs: 953);
+
+    new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.Equal(1, task.LastProcess!.ExitCode);
+    Assert.NotNull(task.LastProcess.CompletedAt);
+    Assert.Equal(DispatchExitArtifactOrigin.Synthetic, task.LastProcess.ExitArtifactOrigin);
+    Assert.DoesNotContain("dirty worktree", task.LastProcess.ExitArtifactReason ?? string.Empty, StringComparison.Ordinal);
+    Assert.DoesNotContain(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Message.Contains("InterruptedDispatchWorkPreserved", StringComparison.Ordinal));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconcile_escalates_third_safe_stale_dispatch_corpse")]
@@ -1594,7 +1758,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(File.Exists(exit));
-    Assert.Equal("0", File.ReadAllText(exit));
+    AssertExitCode(exit, 0);
     Assert.Contains("Wrapper process reaped", task.LastVerification!.StandardError, StringComparison.Ordinal);
     Assert.Contains("commits_after_dispatch=1", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
@@ -1643,7 +1807,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.True(File.Exists(exit));
-    Assert.Equal("0", File.ReadAllText(exit));
+    AssertExitCode(exit, 0);
     Assert.Contains("Wrapper process reaped", task.LastVerification!.StandardError, StringComparison.Ordinal);
     Assert.Contains("commits_after_dispatch=1", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
@@ -1687,7 +1851,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.True(File.Exists(exit));
-    Assert.Equal("1", File.ReadAllText(exit));
+    AssertExitCode(exit, 1);
     Assert.Contains("wrapper appears hung after codex final output", task.LastVerification!.StandardError, StringComparison.Ordinal);
 }
 
@@ -1710,7 +1874,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("branch=goal/", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("worktree=clean", task.LastVerification.StandardError, StringComparison.Ordinal);
-    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+    AssertExitCode(process.ExitCodePath, 0);
 }
 
     [Xunit.Fact]
@@ -1763,7 +1927,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("changed_paths=none", task.LastVerification.StandardError, StringComparison.Ordinal);
-    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+    AssertExitCode(process.ExitCodePath, 0);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_generated_noise_only_dispatch_fails")]
@@ -1793,7 +1957,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("commits_after_dispatch=1", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("changed_paths=.qwen/settings.json", task.LastVerification.StandardError, StringComparison.Ordinal);
-    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+    AssertExitCode(process.ExitCodePath, 0);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_verification_only_clean_dispatch_passes")]
@@ -1818,7 +1982,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.False(task.LastVerification.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.False(task.LastVerification.StandardError.Contains("Dispatch failed with exit code 0", StringComparison.Ordinal));
-    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+    AssertExitCode(process.ExitCodePath, 0);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_with_test_commit_and_green_trx_completes")]
@@ -1851,7 +2015,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.True(task.LastVerification.HasCommittedChanges);
     Assert.False(task.LastVerification.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.False(task.LastVerification.StandardError.Contains("Dispatch failed with exit code 0", StringComparison.Ordinal));
-    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+    AssertExitCode(process.ExitCodePath, 0);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_clean_dispatch_with_worker_result_without_passing_evidence_fails")]
@@ -1898,7 +2062,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
-    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+    AssertExitCode(process.ExitCodePath, 0);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_expected_file_change_with_green_tests_completes")]
@@ -1921,7 +2085,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(0, task.LastVerification!.ExitCode);
     Assert.False(task.LastVerification.StandardError.Contains("did not produce required relevant file-change evidence", StringComparison.Ordinal));
     Assert.False(task.LastVerification.StandardError.Contains("Dispatch failed with exit code 0", StringComparison.Ordinal));
-    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+    AssertExitCode(process.ExitCodePath, 0);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_dirty_worktree_without_commit_fails")]
@@ -2153,7 +2317,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.True(task.LastVerification.WorkerResultPresent);
     Assert.Equal(0, task.EmptyOutputRetryCount);
     Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
-    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+    AssertExitCode(process.ExitCodePath, 0);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_exit_zero_empty_streamed_output_with_committed_change_completes")]
@@ -2181,7 +2345,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.True(task.LastVerification.HasCommittedChanges);
     Assert.Equal(0, task.EmptyOutputRetryCount);
     Assert.False(DispatchFailureClassifier.IsTransientEmptyOutputDispatchFlake(task.LastVerification));
-    Assert.Equal("0", File.ReadAllText(process.ExitCodePath));
+    AssertExitCode(process.ExitCodePath, 0);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_nonzero_exit_with_artifacts_does_not_complete")]
@@ -3159,6 +3323,12 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains(latestPrefix, allResult.StandardOutput);
     Assert.Contains("older stdout tail", allResult.StandardOutput);
     Assert.Contains("latest stdout tail", allResult.StandardOutput);
+}
+
+private static void AssertExitCode(string path, int expected)
+{
+    Assert.True(DispatchExitArtifacts.TryRead(path, out var artifact));
+    Assert.Equal(expected, artifact.ExitCode);
 }
 
 private static void WriteIsolationLeaseArtifacts(string worktree)

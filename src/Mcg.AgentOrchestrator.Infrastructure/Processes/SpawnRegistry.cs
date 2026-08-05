@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 
@@ -12,9 +13,20 @@ internal sealed record SpawnRegistryEntry(
     string ImagePath,
     DateTimeOffset RegisteredAt,
     DateTimeOffset? ReleasedAt,
-    string? LastDiagnostic);
+    string? LastDiagnostic,
+    int? OwnerProcessId,
+    DateTimeOffset? OwnerProcessStartedAt,
+    string? OwnerProcessImagePath);
 
 internal sealed record SpawnProcessIdentity(int ProcessId, DateTimeOffset StartedAt, string ImagePath);
+
+internal sealed record SpawnProcessIdentityReadResult(
+    SpawnProcessIdentity? Identity,
+    int Attempts,
+    string Evidence)
+{
+    public bool Succeeded => Identity is not null;
+}
 
 internal sealed class SpawnRegistry
 {
@@ -27,14 +39,32 @@ internal sealed class SpawnRegistry
 
     public void Register(string ownerId, SpawnProcessIdentity identity)
     {
+        using var ownerProcess = Process.GetCurrentProcess();
+        var ownerRead = SpawnProcessIdentityReader.ReadForRegistration(ownerProcess);
+        if (!ownerRead.Succeeded)
+        {
+            throw new InvalidOperationException(
+                $"Cannot durably register process {identity.ProcessId}: owner identity unavailable ({ownerRead.Evidence}).");
+        }
+
+        Register(ownerId, identity, ownerRead.Identity!);
+    }
+
+    internal void Register(
+        string ownerId,
+        SpawnProcessIdentity identity,
+        SpawnProcessIdentity? ownerIdentity)
+    {
         WithWriteConnection(conn =>
         {
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
                 INSERT INTO spawn_registry (
-                    owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
+                    owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic,
+                    owner_process_id, owner_process_started_at, owner_process_image_path
                 ) VALUES (
-                    $owner_id, $process_id, $process_started_at, $image_path, $registered_at, NULL, NULL
+                    $owner_id, $process_id, $process_started_at, $image_path, $registered_at, NULL, NULL,
+                    $owner_process_id, $owner_process_started_at, $owner_process_image_path
                 )
                 """;
             cmd.Parameters.AddWithValue("$owner_id", ownerId);
@@ -42,6 +72,13 @@ internal sealed class SpawnRegistry
             cmd.Parameters.AddWithValue("$process_started_at", identity.StartedAt.ToString("O"));
             cmd.Parameters.AddWithValue("$image_path", identity.ImagePath);
             cmd.Parameters.AddWithValue("$registered_at", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.Parameters.AddWithValue("$owner_process_id", (object?)ownerIdentity?.ProcessId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(
+                "$owner_process_started_at",
+                (object?)ownerIdentity?.StartedAt.ToString("O", CultureInfo.InvariantCulture) ?? DBNull.Value);
+            cmd.Parameters.AddWithValue(
+                "$owner_process_image_path",
+                (object?)ownerIdentity?.ImagePath ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         });
     }
@@ -56,7 +93,8 @@ internal sealed class SpawnRegistry
             using var conn = OpenReadConnection();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
-                SELECT id, owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic
+                SELECT id, owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic,
+                       owner_process_id, owner_process_started_at, owner_process_image_path
                 FROM spawn_registry
                 WHERE released_at IS NULL
                 ORDER BY registered_at ASC
@@ -95,6 +133,48 @@ internal sealed class SpawnRegistry
         });
     }
 
+    public void MarkReleasedEntry(long id, string diagnostic)
+    {
+        WithWriteConnection(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE spawn_registry
+                SET released_at = COALESCE(released_at, $released_at),
+                    last_diagnostic = $diagnostic
+                WHERE id = $id
+                  AND released_at IS NULL
+                """;
+            cmd.Parameters.AddWithValue("$released_at", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.ExecuteNonQuery();
+        });
+    }
+
+    public bool TryMarkReleasedEntry(long id, string? expectedDiagnostic, string diagnostic)
+    {
+        var updated = false;
+        WithWriteConnection(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE spawn_registry
+                SET released_at = $released_at,
+                    last_diagnostic = $diagnostic
+                WHERE id = $id
+                  AND released_at IS NULL
+                  AND (($expected_diagnostic IS NULL AND last_diagnostic IS NULL) OR last_diagnostic = $expected_diagnostic)
+                """;
+            cmd.Parameters.AddWithValue("$released_at", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
+            cmd.Parameters.AddWithValue("$expected_diagnostic", (object?)expectedDiagnostic ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$id", id);
+            updated = cmd.ExecuteNonQuery() == 1;
+        });
+        return updated;
+    }
+
     public void RecordDiagnostic(long id, string diagnostic)
     {
         WithWriteConnection(conn =>
@@ -104,11 +184,33 @@ internal sealed class SpawnRegistry
                 UPDATE spawn_registry
                 SET last_diagnostic = $diagnostic
                 WHERE id = $id
+                  AND released_at IS NULL
                 """;
             cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
             cmd.Parameters.AddWithValue("$id", id);
             cmd.ExecuteNonQuery();
         });
+    }
+
+    public bool TryRecordDiagnostic(long id, string? expectedDiagnostic, string diagnostic)
+    {
+        var updated = false;
+        WithWriteConnection(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE spawn_registry
+                SET last_diagnostic = $diagnostic
+                WHERE id = $id
+                  AND released_at IS NULL
+                  AND (($expected_diagnostic IS NULL AND last_diagnostic IS NULL) OR last_diagnostic = $expected_diagnostic)
+                """;
+            cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
+            cmd.Parameters.AddWithValue("$expected_diagnostic", (object?)expectedDiagnostic ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$id", id);
+            updated = cmd.ExecuteNonQuery() == 1;
+        });
+        return updated;
     }
 
     private SqliteConnection OpenConnection() =>
@@ -138,22 +240,41 @@ internal sealed class SpawnRegistry
             reader.IsDBNull(6)
                 ? null
                 : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-            reader.IsDBNull(7) ? null : reader.GetString(7));
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.IsDBNull(8) ? null : reader.GetInt32(8),
+            reader.IsDBNull(9) || !DateTimeOffset.TryParse(
+                reader.GetString(9),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out var ownerStartedAt)
+                    ? null
+                    : ownerStartedAt,
+            reader.IsDBNull(10) ? null : reader.GetString(10));
     }
 
 }
 
 internal static class SpawnProcessIdentityReader
 {
+    private const int RegistrationReadAttempts = 10;
+    private const int RegistrationReadDelayMilliseconds = 25;
+
     public static bool TryRead(Process process, out SpawnProcessIdentity identity)
     {
         try
         {
+            var imagePath = ResolveImagePath(process);
+            if (string.IsNullOrWhiteSpace(imagePath))
+            {
+                identity = default!;
+                return false;
+            }
+
             identity = new SpawnProcessIdentity(
                 process.Id,
                 new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero),
-                ResolveImagePath(process));
-            return !string.IsNullOrWhiteSpace(identity.ImagePath);
+                imagePath);
+            return true;
         }
         catch
         {
@@ -162,7 +283,91 @@ internal static class SpawnProcessIdentityReader
         }
     }
 
-    public static bool MatchesLiveProcess(SpawnRegistryEntry entry, out Process? process)
+    public static bool TryReadForRegistration(Process process, out SpawnProcessIdentity identity)
+    {
+        var result = ReadForRegistration(process);
+        identity = result.Identity!;
+        return result.Succeeded;
+    }
+
+    internal static SpawnProcessIdentityReadResult ReadForRegistration(Process process)
+    {
+        return ReadForRegistration(
+            process,
+            static candidate => TryRead(candidate, out var identity) ? identity : null,
+            static delayMilliseconds => Thread.Sleep(delayMilliseconds),
+            RegistrationReadAttempts,
+            RegistrationReadDelayMilliseconds);
+    }
+
+    internal static SpawnProcessIdentityReadResult ReadForRegistration(
+        Process process,
+        Func<Process, SpawnProcessIdentity?> readIdentity,
+        Action<int> delay,
+        int maxAttempts,
+        int delayMilliseconds)
+    {
+        ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(readIdentity);
+        ArgumentNullException.ThrowIfNull(delay);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxAttempts, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(delayMilliseconds);
+
+        var reason = "identity-unavailable";
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            try
+            {
+                var identity = readIdentity(process);
+                if (identity is not null)
+                {
+                    return new SpawnProcessIdentityReadResult(
+                        identity,
+                        attempt,
+                        $"status=read attempts={attempt.ToString(CultureInfo.InvariantCulture)}");
+                }
+
+                reason = "identity-unavailable";
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+            {
+                reason = $"reader-{ex.GetType().Name}";
+            }
+
+            try
+            {
+                if (process.HasExited)
+                {
+                    return new SpawnProcessIdentityReadResult(
+                        null,
+                        attempt,
+                        $"status=unavailable attempts={attempt.ToString(CultureInfo.InvariantCulture)} reason=process-exited");
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+            {
+                return new SpawnProcessIdentityReadResult(
+                    null,
+                    attempt,
+                    $"status=unavailable attempts={attempt.ToString(CultureInfo.InvariantCulture)} reason=state-{ex.GetType().Name}");
+            }
+
+            if (attempt < maxAttempts)
+            {
+                delay(delayMilliseconds);
+            }
+        }
+
+        return new SpawnProcessIdentityReadResult(
+            null,
+            maxAttempts,
+            $"status=unavailable attempts={maxAttempts.ToString(CultureInfo.InvariantCulture)} reason={reason}");
+    }
+
+    public static SpawnTrackedProcessStatus EvaluateTrackedProcess(
+        SpawnRegistryEntry entry,
+        out Process? process,
+        out string evidence)
     {
         process = null;
         try
@@ -170,45 +375,165 @@ internal static class SpawnProcessIdentityReader
             process = Process.GetProcessById(entry.ProcessId);
             if (process.HasExited)
             {
+                evidence = $"victim pid={entry.ProcessId} has exited";
                 process.Dispose();
                 process = null;
-                return false;
+                return SpawnTrackedProcessStatus.DeadOrRecycled;
             }
 
             if (!TryRead(process, out var live))
             {
+                evidence = $"victim pid={entry.ProcessId} identity could not be read";
                 process.Dispose();
                 process = null;
-                return false;
+                return SpawnTrackedProcessStatus.Unknown;
             }
 
-            var matches = live.StartedAt == entry.ProcessStartedAt &&
-                string.Equals(Path.GetFullPath(live.ImagePath), Path.GetFullPath(entry.ImagePath), StringComparison.OrdinalIgnoreCase);
-            if (!matches)
+            if (live.StartedAt != entry.ProcessStartedAt)
             {
+                evidence = $"victim pid={entry.ProcessId} start-time mismatch recorded={entry.ProcessStartedAt:O} observed={live.StartedAt:O}";
                 process.Dispose();
                 process = null;
+                return SpawnTrackedProcessStatus.DeadOrRecycled;
             }
 
-            return matches;
+            if (!TryNormalizePath(live.ImagePath, out var observedImagePath) ||
+                !TryNormalizePath(entry.ImagePath, out var recordedImagePath))
+            {
+                evidence = $"victim pid={entry.ProcessId} image identity could not be normalized";
+                process.Dispose();
+                process = null;
+                return SpawnTrackedProcessStatus.Unknown;
+            }
+
+            if (!string.Equals(observedImagePath, recordedImagePath, StringComparison.OrdinalIgnoreCase))
+            {
+                evidence = $"victim pid={entry.ProcessId} image mismatch recorded={entry.ImagePath} observed={live.ImagePath}";
+                process.Dispose();
+                process = null;
+                return SpawnTrackedProcessStatus.Unknown;
+            }
+
+            evidence = $"victim pid={entry.ProcessId} identity matches started_at={entry.ProcessStartedAt:O} image={live.ImagePath}";
+            return SpawnTrackedProcessStatus.LiveMatch;
         }
-        catch
+        catch (ArgumentException)
         {
+            evidence = $"victim pid={entry.ProcessId} does not exist";
             process?.Dispose();
             process = null;
-            return false;
+            return SpawnTrackedProcessStatus.DeadOrRecycled;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            evidence = $"victim pid={entry.ProcessId} could not be verified ({ex.GetType().Name})";
+            process?.Dispose();
+            process = null;
+            return SpawnTrackedProcessStatus.Unknown;
         }
     }
 
-    private static string ResolveImagePath(Process process)
+    public static SpawnOwnerLiveness EvaluateOwner(SpawnRegistryEntry entry, out string evidence)
+    {
+        if (entry.OwnerProcessId is not { } ownerProcessId ||
+            entry.OwnerProcessStartedAt is not { } ownerStartedAt ||
+            string.IsNullOrWhiteSpace(entry.OwnerProcessImagePath))
+        {
+            evidence = "owner identity missing or malformed";
+            return SpawnOwnerLiveness.Unknown;
+        }
+
+        Process? owner = null;
+        try
+        {
+            owner = Process.GetProcessById(ownerProcessId);
+            if (owner.HasExited)
+            {
+                evidence = $"owner pid={ownerProcessId} has exited";
+                return SpawnOwnerLiveness.DeadOrRecycled;
+            }
+
+            if (!TryRead(owner, out var liveOwner))
+            {
+                evidence = $"owner pid={ownerProcessId} identity could not be read";
+                return SpawnOwnerLiveness.Unknown;
+            }
+
+            if (liveOwner.StartedAt != ownerStartedAt)
+            {
+                evidence = $"owner pid={ownerProcessId} start-time mismatch recorded={ownerStartedAt:O} observed={liveOwner.StartedAt:O}";
+                return SpawnOwnerLiveness.DeadOrRecycled;
+            }
+
+            if (!TryNormalizePath(liveOwner.ImagePath, out var observedImagePath) ||
+                !TryNormalizePath(entry.OwnerProcessImagePath, out var recordedImagePath))
+            {
+                evidence = $"owner pid={ownerProcessId} image identity could not be normalized";
+                return SpawnOwnerLiveness.Unknown;
+            }
+
+            if (!string.Equals(observedImagePath, recordedImagePath, StringComparison.OrdinalIgnoreCase))
+            {
+                evidence = $"owner pid={ownerProcessId} image mismatch recorded={entry.OwnerProcessImagePath} observed={liveOwner.ImagePath}";
+                return SpawnOwnerLiveness.Unknown;
+            }
+
+            evidence = $"owner pid={ownerProcessId} identity matches started_at={ownerStartedAt:O} image={liveOwner.ImagePath}";
+            return SpawnOwnerLiveness.Live;
+        }
+        catch (ArgumentException)
+        {
+            evidence = $"owner pid={ownerProcessId} does not exist";
+            return SpawnOwnerLiveness.DeadOrRecycled;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+        {
+            evidence = $"owner pid={ownerProcessId} could not be verified ({ex.GetType().Name})";
+            return SpawnOwnerLiveness.Unknown;
+        }
+        finally
+        {
+            owner?.Dispose();
+        }
+    }
+
+    private static string? ResolveImagePath(Process process)
     {
         try
         {
-            return process.MainModule?.FileName ?? process.ProcessName;
+            return process.MainModule?.FileName;
         }
         catch
         {
-            return process.ProcessName;
+            return null;
         }
     }
+
+    private static bool TryNormalizePath(string path, out string normalized)
+    {
+        try
+        {
+            normalized = Path.GetFullPath(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            normalized = string.Empty;
+            return false;
+        }
+    }
+}
+
+internal enum SpawnOwnerLiveness
+{
+    Live,
+    DeadOrRecycled,
+    Unknown
+}
+
+internal enum SpawnTrackedProcessStatus
+{
+    LiveMatch,
+    DeadOrRecycled,
+    Unknown
 }

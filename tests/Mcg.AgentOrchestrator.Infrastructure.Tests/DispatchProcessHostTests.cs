@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 [Xunit.Collection("ProcessSpawning")]
@@ -176,7 +177,7 @@ public sealed class DispatchProcessHostTests
             var result = DispatchProcessHost.Run(parametersPath);
 
             Assert.Equal(0, result);
-            Assert.Equal("0", File.ReadAllText(exitPath).Trim());
+            AssertNativeExitArtifact(exitPath, 0);
             Assert.Equal("1", File.ReadAllText(envPath).Trim());
             var stdout = File.ReadAllText(stdoutPath);
             Assert.True(stdout.Contains("worker-env-captured", StringComparison.Ordinal), stdout);
@@ -246,7 +247,7 @@ public sealed class DispatchProcessHostTests
             var result = DispatchProcessHost.Run(parametersPath);
 
             Assert.Equal(0, result);
-            Assert.Equal("0", File.ReadAllText(exitPath).Trim());
+            AssertNativeExitArtifact(exitPath, 0);
             var stdout = File.ReadAllText(stdoutPath);
             Assert.True(stdout.Contains("stdin-eof-observed", StringComparison.Ordinal), stdout);
             Assert.True(File.Exists(capturePath), File.ReadAllText(stderrPath));
@@ -339,7 +340,7 @@ public sealed class DispatchProcessHostTests
             var rootExitCode = runTask.GetAwaiter().GetResult();
 
             Assert.Equal(1, rootExitCode);
-            Assert.Equal("1", File.ReadAllText(exitPath).Trim());
+            AssertNativeExitArtifact(exitPath, 1);
             Assert.Equal(0, new FileInfo(stdoutPath).Length);
             Assert.Equal(0, new FileInfo(stderrPath).Length);
             using var childExit = JsonDocument.Parse(File.ReadAllText(childExitPath));
@@ -1290,7 +1291,7 @@ public sealed class DispatchProcessHostTests
             try { hostProcess.WaitForExit(5000); } catch { }
 
             Assert.True(File.Exists(exitCodePath));
-            Assert.Equal("0", ReadExitCodeWithRetry(exitCodePath));
+            AssertNativeExitArtifact(exitCodePath, 0);
         }
         finally
         {
@@ -1959,7 +1960,7 @@ public sealed class DispatchProcessHostTests
         stopwatch.Stop();
 
         Assert.Equal(0, exitCode);
-        Assert.Equal("0", File.ReadAllText(exitPath).Trim());
+        AssertNativeExitArtifact(exitPath, 0);
         Assert.Equal("0", File.ReadAllText(prepExitPath).Trim());
         Assert.True(File.Exists(markerPath), File.ReadAllText(stderrPath));
         using (var workerHeartbeat = JsonDocument.Parse(File.ReadAllText(heartbeatPath)))
@@ -2566,24 +2567,21 @@ public sealed class DispatchProcessHostTests
         }
     }
 
-    private static string ReadExitCodeWithRetry(string path, int attempts = 5, int delayMs = 100)
+    private static void AssertNativeExitArtifact(string path, int expectedExitCode, int attempts = 5, int delayMs = 100)
     {
-        Exception? last = null;
         for (int i = 0; i < attempts; i++)
         {
-            try
+            if (DispatchExitArtifacts.TryRead(path, out var artifact))
             {
-                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                using var sr = new StreamReader(fs);
-                return sr.ReadToEnd();
+                Assert.Equal(expectedExitCode, artifact.ExitCode);
+                Assert.Equal(DispatchExitArtifactOrigin.Native, artifact.Origin);
+                return;
             }
-            catch (IOException ex)
-            {
-                last = ex;
-                if (i < attempts - 1) Thread.Sleep(delayMs);
-            }
+
+            if (i < attempts - 1) Thread.Sleep(delayMs);
         }
-        throw last!;
+
+        Assert.Fail($"Could not read typed exit artifact '{path}'.");
     }
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

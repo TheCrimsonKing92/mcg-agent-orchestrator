@@ -43,6 +43,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "AdvanceLoopTests",
                 "ConductLoopLockTests",
                 "ConductorLoopHandoffTests",
+                "DashboardDispatchStartFailureEndpointTests",
                 "FirewallSetupCommandTests",
                 "GoalBacklogLinkTests",
                 "GoalLifecycleEventWriterTests",

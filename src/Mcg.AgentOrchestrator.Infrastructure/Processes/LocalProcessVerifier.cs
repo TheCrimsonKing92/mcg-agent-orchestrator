@@ -299,7 +299,7 @@ public sealed class LocalProcessVerifier
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start process: {fileName}");
-        WorkerProcessJobs.TryRegister(process, $"local-verification:{workingDirectory}");
+        WorkerProcessJobs.RegisterOrThrow(process, $"local-verification:{workingDirectory}");
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(commandTimeout);

@@ -18,7 +18,9 @@ internal static class RunGoalService
         NextActionDto? BlockingAction,
         IReadOnlyList<RunGoalTaskSummary> CompletedTasks,
         RunGoalStopEvidence? StopEvidence,
-        DateTimeOffset? ContinueAfter = null);
+        DateTimeOffset? ContinueAfter = null,
+        bool StateChanged = false,
+        DispatchProcessStartFailureDto? Failure = null);
 
     internal sealed record RunGoalTaskSummary(
         int TaskNumber,
@@ -59,6 +61,7 @@ internal static class RunGoalService
         var failoverAttemptsByTask = new Dictionary<TaskId, int>();
         var handledEvidenceCountsByTask = new Dictionary<TaskId, int>();
         var executed = false;
+        var stateChanged = false;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -68,6 +71,20 @@ internal static class RunGoalService
                 kernel, agents, profiles, workspace, goal, allowLargePaidSubscriptionStart, providers);
 
             if (result.StepCount > 0) executed = true;
+            stateChanged |= result.StateChanged;
+
+            if (result.Failure is { } startFailure)
+            {
+                AddNewTerminalTaskSummaries(goal, completedTasks, completedTaskIds, priorStatuses);
+                return new RunGoalResult(
+                    executed,
+                    result.StopReason,
+                    result.BlockingAction,
+                    completedTasks,
+                    BuildStopEvidence(goal, result, clockImpl),
+                    StateChanged: stateChanged,
+                    Failure: startFailure);
+            }
 
             if (TryApplyAutomaticFailover(
                 kernel,
@@ -93,7 +110,8 @@ internal static class RunGoalService
                     failoverStopReason,
                     result.BlockingAction,
                     completedTasks,
-                    BuildStopEvidence(goal, result with { StopReason = failoverStopReason }, clockImpl));
+                    BuildStopEvidence(goal, result with { StopReason = failoverStopReason }, clockImpl),
+                    StateChanged: stateChanged);
             }
 
             if (result.ContinueAfter.HasValue)
@@ -104,7 +122,8 @@ internal static class RunGoalService
                     result.BlockingAction,
                     completedTasks,
                     BuildStopEvidence(goal, result, clockImpl),
-                    result.ContinueAfter);
+                    result.ContinueAfter,
+                    StateChanged: stateChanged);
             }
 
             if (result.StopReason.Contains("Background work is still running", StringComparison.OrdinalIgnoreCase))
@@ -118,7 +137,8 @@ internal static class RunGoalService
                 result.StopReason,
                 result.BlockingAction,
                 completedTasks,
-                BuildStopEvidence(goal, result, clockImpl));
+                BuildStopEvidence(goal, result, clockImpl),
+                StateChanged: stateChanged);
         }
 
         return new RunGoalResult(

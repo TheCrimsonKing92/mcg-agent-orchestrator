@@ -160,7 +160,7 @@ internal sealed class DashboardContinuationService : IDisposable
                                 services.Workspace,
                                 goal,
                                 providers: services.Providers);
-                            return Task.FromResult((advance.Executed, advance));
+                            return Task.FromResult((advance.Executed || advance.StateChanged, advance));
                         }
 
                         var supervisorStopReason = GetSupervisorStopReason(current, goal, supervisor);

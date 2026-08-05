@@ -9,6 +9,12 @@ internal static partial class GoalManagementCommandService
 {
 private const int MaxAutomaticHandoffSteps = 20;
 
+private sealed class DurableDispatchStartFailureException(DispatchProcessStartFailureDto failure)
+    : InvalidOperationException(failure.Reason)
+{
+    public DispatchProcessStartFailureDto Failure { get; } = failure;
+}
+
 public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     AgentOrchestratorKernel kernel,
     IReadOnlyList<AgentDefinition> agents,
@@ -35,6 +41,17 @@ public static async Task<AdvanceResultDto> AdvanceGoalAsync(
     try
     {
         result = await ExecuteAutomationAsync(kernel, agents, providers, workspace, goal, automation, allowApiExecution: false, allowProcessStart: false);
+    }
+    catch (DurableDispatchStartFailureException ex)
+    {
+        return new AdvanceResultDto(
+            goal.Id.Value,
+            false,
+            action,
+            automation.Kind,
+            TimelineMessage(ex.Message),
+            ex.Failure,
+            StateChanged: true);
     }
     catch (InvalidOperationException ex)
     {
@@ -203,6 +220,17 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     {
         result = ExecuteSubscriptionAutomation(kernel, agents, profiles, workspace, goal, automation, allowLargePaidSubscriptionStart, providers);
     }
+    catch (DurableDispatchStartFailureException ex)
+    {
+        return new AdvanceResultDto(
+            goal.Id.Value,
+            false,
+            action,
+            automation.Kind,
+            TimelineMessage(ex.Message),
+            ex.Failure,
+            StateChanged: true);
+    }
     catch (InvalidOperationException ex)
     {
         return new AdvanceResultDto(goal.Id.Value, false, action, automation.Kind, TimelineMessage(ex.Message), null);
@@ -251,6 +279,8 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
     NextActionDto? blockingAction = null;
     DateTimeOffset? continueAfter = null;
     var stopReason = "No next actions are available.";
+    var stateChanged = false;
+    DispatchProcessStartFailureDto? failure = null;
 
     for (var index = 0; index < MaxAutomaticHandoffSteps; index++)
     {
@@ -275,6 +305,14 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
         try
         {
             result = await execute(automation);
+        }
+        catch (DurableDispatchStartFailureException ex)
+        {
+            blockingAction = action;
+            stopReason = ex.Message;
+            stateChanged = true;
+            failure = ex.Failure;
+            break;
         }
         catch (InvalidOperationException ex)
         {
@@ -323,7 +361,16 @@ private static async Task<AdvanceLoopResultDto> AdvanceUntilBlockedAsync(
         stopReason = $"Stopped after {MaxAutomaticHandoffSteps} automated step(s); run continuation again if more safe actions remain.";
     }
 
-    return new AdvanceLoopResultDto(goal.Id.Value, steps.Count > 0, steps.Count, TimelineMessage(stopReason), blockingAction, steps, ContinueAfter: continueAfter);
+    return new AdvanceLoopResultDto(
+        goal.Id.Value,
+        steps.Count > 0,
+        steps.Count,
+        TimelineMessage(stopReason),
+        blockingAction,
+        steps,
+        ContinueAfter: continueAfter,
+        StateChanged: stateChanged,
+        Failure: failure);
 }
 
 private static string TimelineMessage(string message) =>
@@ -528,7 +575,23 @@ public static TaskDetailDto AdvanceStartRecordedDispatch(
         RefreshPreparedDispatchBeforeStart(kernel, workspace, goal, goal.Tasks.Single(task => task.Id == taskId));
     }
 
-    new BackgroundDispatchRunner().StartLatestDispatch(kernel, goal.Id, taskId, workspace.LogDirectory);
+    var startResult = new BackgroundDispatchRunner().TryStartLatestDispatch(kernel, goal.Id, taskId, workspace.LogDirectory);
+    if (startResult.RecoveryAction is { } recoveryAction)
+    {
+        throw new InvalidOperationException(recoveryAction.Reason);
+    }
+
+    if (startResult.RequeueSkipped)
+    {
+        throw new InvalidOperationException("Dispatch start was skipped after interrupted-dispatch state changed.");
+    }
+
+    if (startResult.FailureReason is { } failureReason)
+    {
+        throw new DurableDispatchStartFailureException(
+            new DispatchProcessStartFailureDto(goal.Id.Value, taskId.Value, failureReason));
+    }
+
     return DashboardResponseMapper.ToTaskDetailDto(goal, goal.Tasks.Single(task => task.Id == taskId));
 }
 }

@@ -175,7 +175,9 @@ public sealed record TaskProcessRecord(
     bool WasCancelledByConductor = false,
     string? ChildExitRecordPath = null,
     int? ChildProcessId = null,
-    int? ChildExitCode = null)
+    int? ChildExitCode = null,
+    DispatchExitArtifactOrigin ExitArtifactOrigin = DispatchExitArtifactOrigin.None,
+    string? ExitArtifactReason = null)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 
@@ -183,6 +185,14 @@ public sealed record TaskProcessRecord(
         OwnedProcessIds is { Count: > 0 }
             ? OwnedProcessIds
             : [ProcessId];
+}
+
+public enum DispatchExitArtifactOrigin
+{
+    None,
+    Native,
+    Synthetic,
+    UnknownLegacy
 }
 
 public sealed record TaskProcessResourceAccounting(

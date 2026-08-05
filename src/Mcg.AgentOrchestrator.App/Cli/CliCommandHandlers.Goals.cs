@@ -947,7 +947,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag),
                 context.Providers);
             ConsoleViews.PrintAdvanceResult(subscriptionAdvance);
-            return subscriptionAdvance.Executed;
+            if (subscriptionAdvance.Result is DispatchProcessStartFailureDto subscriptionAdvanceFailure)
+            {
+                context.FailAfterCommit(subscriptionAdvanceFailure.Reason);
+            }
+
+            return subscriptionAdvance.Executed || subscriptionAdvance.StateChanged;
 
         case "run-goal":
             var runGoalPolicy = ResolveCliAutonomyPolicy(parts);
@@ -964,7 +969,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             RecordPolicyAllowed(context, context.CurrentGoal, runGoalPolicy, AutonomyAction.DispatchStart, "run-goal");
             var runGoalResult = RunGoal(context, context.CurrentGoal, HasCliConfirmation(parts, SubscriptionPromptCostGuard.CliConfirmationFlag));
             ConsoleViews.PrintRunGoalResult(context.CurrentGoal, runGoalResult);
-            return runGoalResult.Executed;
+            if (runGoalResult.Failure is { } runGoalFailure)
+            {
+                context.FailAfterCommit(runGoalFailure.Reason);
+            }
+
+            return runGoalResult.Executed || runGoalResult.StateChanged;
 
         case "delegate":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
