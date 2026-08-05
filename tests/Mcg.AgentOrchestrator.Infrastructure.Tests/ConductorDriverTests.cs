@@ -3327,7 +3327,7 @@ public sealed class ConductorDriverTests
             ConductorDriver MakePostReviewDriver(ConductorParallelAcceptanceAttemptCoordinator coordinator) =>
                 MakeDriver(
                     getFacts: _ => GoalLifecycleFacts.None,
-                    getPreReviewEvidenceContext: _ => NoPreReviewContext("post-review-sha"),
+                    getPreReviewEvidenceContext: _ => NoPreReviewContext("def5678"),
                     runFocusedEvidence: RunEvidence,
                     retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
                     {
