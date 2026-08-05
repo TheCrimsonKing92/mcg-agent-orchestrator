@@ -3,9 +3,9 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
 {
     [Xunit.Fact]
-    public void PlannerContract_ExactLive485363d4OrderedIntegrationList_PassesWithoutSequenceKeywords()
+    public void PlannerContract_ExactLive485363d4OrderedList_PassesWithoutSequenceKeywords()
     {
-        var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805010032.out.txt");
+        var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805022806.out.txt");
 
         var result = PlannerOutputContract.Resolve(
             plan,
@@ -47,6 +47,22 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void PlannerContract_MalformedNumberedIntegrationList_Fails()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Integration seams",
+            "1. Persist the validated receipt so later roles consume complete Planner evidence.\n3. Build downstream context using that durable receipt and verify its exact content.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("must describe an integration sequence", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_ExactLive485363d4EmDashNewFileMarkers_Pass()
     {
         var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805011642.out.txt");
@@ -73,11 +89,27 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ContextualHallucinatedSibling_Fails()
+    public void PlannerContract_ContextualSameLineExistingSibling_Passes()
+    {
+        var targetBody =
+            "- Extend `tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\CliCommandTests.PersistentRunnerCommands.cs` and `CliHelpTests.cs` with focused contract coverage.";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            InfrastructureTestSupport.FindRepositoryRoot());
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ContextualDirectoryResetsOnNewlineAndHallucinatedSibling_Fails()
     {
         var targetBody =
             """
-            - Extend `tests\Mcg.AgentOrchestrator.Infrastructure.Tests\CliCommandTests.PersistentRunnerCommands.cs`, `HallucinatedSibling.cs`, and `CliHelpTests.cs` with focused contract coverage.
+            - Extend `tests\Mcg.AgentOrchestrator.Infrastructure.Tests\CliCommandTests.PersistentRunnerCommands.cs` with focused contract coverage.
+            - Extend `HallucinatedSibling.cs` with a later-bullet negative control.
             """;
         var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
 

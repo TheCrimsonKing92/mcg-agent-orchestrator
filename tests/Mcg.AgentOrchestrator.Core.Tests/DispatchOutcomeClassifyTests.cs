@@ -30,6 +30,28 @@ public sealed class DispatchOutcomeClassifyTests
         return task;
     }
 
+    private static TaskSpec SubscriptionTaskWithFailedVerification(
+        AgentRole role,
+        TaskVerificationRecord verification)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Classify subscription verification test goal");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(t => t.RequiredRole == role);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord(
+                "codex-cli",
+                verification.Command,
+                verification.WorkingDirectory,
+                clock.UtcNow,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
+        return task;
+    }
+
     private static TaskSpec RetryTask(AgentRole role = AgentRole.Developer)
     {
         var clock = new FakeClock();
@@ -1063,10 +1085,54 @@ public sealed class DispatchOutcomeClassifyTests
             Verification(
                 1,
                 "Connecting to API...",
-                "Error: unknown model 'claude-xxx-4-99'. Model not supported; diagnostic text may quote 'Planner output contract failed'."));
+                "Diagnostic text may quote 'Planner output contract failed: missing required evidence'.\n" +
+                "Error: unknown model 'claude-xxx-4-99'. Model not supported."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
+
+    [Xunit.Fact]
+    public void ProviderModelRejectionDetectionUsesIndependentProviderLine()
+    {
+        var verification = Verification(
+            1,
+            "Connecting to API...",
+            "Diagnostic text may quote 'Planner output contract failed: missing required evidence'.\n" +
+            "Error: unknown model 'claude-xxx-4-99'. Model not supported.");
+
+        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableProviderModelRejectionFailure(verification));
+    }
+
+    [Xunit.Fact]
+    public void ProviderModelRejectionHistoryIgnoresAuthoritativePlannerContractFailure()
+    {
+        var task = SubscriptionTaskWithFailedVerification(
+            AgentRole.Planner,
+            Verification(
+                1,
+                "ERROR: requested model gpt-5.6-sol is not supported.",
+                "Planner output contract failed: missing required evidence. Retry Planner for contract repair."));
+
+        Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Xunit.Assert.NotNull(task.LastVerification);
+        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableProviderModelRejectionFailure(task.LastVerification));
+        Xunit.Assert.False(DispatchFailureClassifier.HasRecoverableProviderModelRejectionFailure(task));
+    }
+
+    [Xunit.Fact]
+    public void ProviderModelRejectionCountIgnoresAuthoritativePlannerContractFailure()
+    {
+        var task = SubscriptionTaskWithFailedVerification(
+            AgentRole.Planner,
+            Verification(
+                1,
+                "ERROR: requested model gpt-5.6-sol is not supported.",
+                "Planner output contract failed: missing required evidence. Retry Planner for contract repair."));
+
+        Xunit.Assert.Single(task.VerificationHistory);
+        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableProviderModelRejectionFailure(task.VerificationHistory[0]));
+        Xunit.Assert.Equal(0, DispatchFailureClassifier.CountRecoverableProviderModelRejectionFailures(task));
     }
 
     [Xunit.Fact(DisplayName = "Classify reads log path for verification evidence outside retained excerpt")]
