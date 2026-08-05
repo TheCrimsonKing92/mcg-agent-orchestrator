@@ -33,18 +33,27 @@ $manifestPath = Join-Path $repoRoot 'config\acceptance-manifest.json'
 Import-Module (Join-Path $PSScriptRoot 'MtpTestRunner.psm1') -Force
 $exitCodes = Get-MtpTestExitCodes
 
+function Complete-MtpInvocation {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    Write-MtpTerminalSummary -Result $Result
+    exit ([int]$Result.ExitCode)
+}
+
 try {
     $manifest = Read-MtpTestManifest -Path $manifestPath
     $partitions = @(Get-MtpLocalPartitions -Manifest $manifest)
 }
 catch {
-    Write-Host "MANIFEST FAILURE - $($_.Exception.Message)"
-    exit ([int]$exitCodes.Manifest)
+    $diagnostic = "MANIFEST FAILURE - $($_.Exception.Message)"
+    Write-Host $diagnostic
+    Complete-MtpInvocation (New-MtpTerminalResult -Outcome failed -ExitCode $exitCodes.Manifest -ResultsDirectory $null -Diagnostics @($diagnostic))
 }
 
 if (-not [string]::IsNullOrWhiteSpace($Partition) -and -not [string]::IsNullOrWhiteSpace($Filter)) {
-    Write-Host 'FILTER FAILURE - specify either -Partition or -Filter, not both.'
-    exit ([int]$exitCodes.InvalidPartition)
+    $diagnostic = 'FILTER FAILURE - specify either -Partition or -Filter, not both.'
+    Write-Host $diagnostic
+    Complete-MtpInvocation (New-MtpTerminalResult -Outcome failed -ExitCode $exitCodes.InvalidPartition -ResultsDirectory $null -Diagnostics @($diagnostic))
 }
 
 $filters = @($Filter)
@@ -55,8 +64,9 @@ if (-not [string]::IsNullOrWhiteSpace($Partition)) {
     })
     if ($selected.Count -ne 1) {
         $valid = @($partitions | ForEach-Object Name) -join ', '
-        Write-Host "UNKNOWN PARTITION '$Partition'. Valid manifest partitions: $valid"
-        exit ([int]$exitCodes.InvalidPartition)
+        $diagnostic = "UNKNOWN PARTITION '$Partition'. Valid manifest partitions: $valid"
+        Write-Host $diagnostic
+        Complete-MtpInvocation (New-MtpTerminalResult -Outcome failed -ExitCode $exitCodes.InvalidPartition -ResultsDirectory $null -Diagnostics @($diagnostic))
     }
     $filters = $selected[0].Filters
     $runLabel = $selected[0].Name
@@ -77,5 +87,4 @@ $run = Invoke-MtpTestRun `
     -RunnerPath $RunnerPath `
     -DotnetPath $DotnetPath `
     -TestHostTimeoutSeconds $TestHostTimeoutSeconds
-Write-MtpTerminalSummary -Result $run
-exit ([int]$run.ExitCode)
+Complete-MtpInvocation $run

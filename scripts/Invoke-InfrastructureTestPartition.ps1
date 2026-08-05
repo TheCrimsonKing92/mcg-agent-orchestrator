@@ -51,13 +51,21 @@ $target = 'tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrato
 Import-Module (Join-Path $PSScriptRoot 'MtpTestRunner.psm1') -Force
 $exitCodes = Get-MtpTestExitCodes
 
+function Complete-MtpInvocation {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    Write-MtpTerminalSummary -Result $Result
+    exit ([int]$Result.ExitCode)
+}
+
 try {
     $manifest = Read-MtpTestManifest -Path $manifestPath
     $partitions = @(Get-MtpLocalPartitions -Manifest $manifest)
 }
 catch {
-    Write-Host "MANIFEST FAILURE - $($_.Exception.Message)"
-    exit ([int]$exitCodes.Manifest)
+    $diagnostic = "MANIFEST FAILURE - $($_.Exception.Message)"
+    Write-Host $diagnostic
+    Complete-MtpInvocation (New-MtpTerminalResult -Outcome failed -ExitCode $exitCodes.Manifest -ResultsDirectory $null -Diagnostics @($diagnostic))
 }
 
 if ($List) {
@@ -71,7 +79,7 @@ if ($List) {
             Write-Host ("  Additional compatibility coverage: {0}" -f $filter)
         }
     }
-    exit 0
+    Complete-MtpInvocation (New-MtpTerminalResult -Outcome completed -ExitCode 0 -ResultsDirectory $null)
 }
 
 $selected = @($partitions | Where-Object {
@@ -79,8 +87,9 @@ $selected = @($partitions | Where-Object {
 })
 if ($selected.Count -ne 1) {
     $valid = @($partitions | ForEach-Object Name) -join ', '
-    Write-Host "UNKNOWN PARTITION '$Partition'. Valid manifest partitions: $valid"
-    exit ([int]$exitCodes.InvalidPartition)
+    $diagnostic = "UNKNOWN PARTITION '$Partition'. Valid manifest partitions: $valid"
+    Write-Host $diagnostic
+    Complete-MtpInvocation (New-MtpTerminalResult -Outcome failed -ExitCode $exitCodes.InvalidPartition -ResultsDirectory $null -Diagnostics @($diagnostic))
 }
 
 Write-Host "Infrastructure partition: $($selected[0].Name)"
@@ -101,5 +110,4 @@ $run = Invoke-MtpTestRun `
 if ($run.ExitCode -eq 0) {
     Write-Host 'PARTITION GREEN'
 }
-Write-MtpTerminalSummary -Result $run
-exit ([int]$run.ExitCode)
+Complete-MtpInvocation $run

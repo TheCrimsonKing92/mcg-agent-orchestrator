@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
@@ -40,6 +41,9 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.Contains("UNKNOWN PARTITION 'Typo'", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.Contains("GoalWorktree", result.Stdout, StringComparison.Ordinal);
         Xunit.Assert.False(File.Exists(buildMarker));
+        var terminal = TerminalSummary(result);
+        Xunit.Assert.Equal("failed", terminal.GetProperty("outcome").GetString());
+        Xunit.Assert.Equal(21, terminal.GetProperty("exitCode").GetInt32());
     }
 
     [Xunit.Fact(DisplayName = "MTP_partition_runner_streams_output_and_passes_manifest_filter_arguments")]
@@ -155,6 +159,84 @@ public sealed class MtpTestRunnerScriptTests
         Assert.True(File.Exists(runnerLog), runnerLog);
         Assert.Contains("hang descendant ready", File.ReadAllText(runnerLog!), StringComparison.Ordinal);
         using var lockProbe = new FileStream(sandbox.LockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    }
+
+    [Xunit.Fact]
+    public void MtpTimeoutRetainsOwnershipAfterRootExitsDuringGrace()
+    {
+        using var sandbox = ScriptSandbox.Create("root-exits-descendant-locks");
+
+        var result = sandbox.RunPartitionAfterStdoutGate(
+            "GoalWorktree",
+            "TEST HOST TIMEOUT - owned PID",
+            sandbox.ReleasePath,
+            testHostTimeoutSeconds: 1);
+
+        Assert.True(result.ExitCode == 29, result.Stdout + result.Stderr);
+        Assert.True(File.Exists(sandbox.ReadyPath), result.Stdout + result.Stderr);
+        Assert.True(File.Exists(sandbox.ReleasePath), result.Stdout + result.Stderr);
+        Assert.Contains("root released after wrapper timeout", result.Stdout, StringComparison.Ordinal);
+        var terminal = TerminalSummary(result);
+        Assert.Equal("timed-out", terminal.GetProperty("outcome").GetString());
+        Assert.True(terminal.GetProperty("exitConfirmed").GetBoolean());
+        using var lockProbe = new FileStream(sandbox.LockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+    }
+
+    [Xunit.Fact]
+    public void MtpTimedOutUnconfirmedResultCarriesCleanupDiagnostic()
+    {
+        var module = Path.Combine(RepositoryRoot(), "scripts", "MtpTestRunner.psm1");
+        var command = $"Import-Module '{module.Replace("'", "''")}' -Force; " +
+            "$result = New-MtpTerminalResult -Outcome timed-out -ExitCode 29 -ExitConfirmed $false; " +
+            "Write-MtpTerminalSummary -Result $result";
+
+        var result = RunPowerShellCommand(RepositoryRoot(), command);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        var terminal = TerminalSummary(result);
+        var diagnostic = Assert.Single(terminal.GetProperty("diagnostics").EnumerateArray()).GetString();
+        Assert.Contains("CLEANUP FAILURE", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void MtpPublicWrappersPrintTerminalSummaryForUnknownPartition()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+
+        var partitionResult = sandbox.RunPartition("Typo");
+        var summaryResult = sandbox.RunSummary(partition: "Typo");
+
+        Assert.Equal(21, partitionResult.ExitCode);
+        Assert.Equal(21, summaryResult.ExitCode);
+        Assert.Equal("failed", TerminalSummary(partitionResult).GetProperty("outcome").GetString());
+        Assert.Equal("failed", TerminalSummary(summaryResult).GetProperty("outcome").GetString());
+    }
+
+    [Xunit.Fact]
+    public void MtpSummaryPrintsTerminalSummaryForFilterPartitionConflict()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+
+        var result = sandbox.RunSummary(partition: "GoalWorktree", filter: "DisplayName~conflict");
+
+        Assert.Equal(21, result.ExitCode);
+        Assert.Contains("FILTER FAILURE", result.Stdout, StringComparison.Ordinal);
+        Assert.Equal("failed", TerminalSummary(result).GetProperty("outcome").GetString());
+    }
+
+    [Xunit.Fact]
+    public void MtpPublicWrappersPrintTerminalSummaryForManifestFailure()
+    {
+        using var sandbox = ScriptSandbox.Create("success");
+        sandbox.DeleteManifest();
+
+        var partitionResult = sandbox.RunPartition("GoalWorktree");
+        var summaryResult = sandbox.RunSummary(partition: "GoalWorktree");
+
+        Assert.Equal(20, partitionResult.ExitCode);
+        Assert.Equal(20, summaryResult.ExitCode);
+        Assert.Equal("failed", TerminalSummary(partitionResult).GetProperty("outcome").GetString());
+        Assert.Equal("failed", TerminalSummary(summaryResult).GetProperty("outcome").GetString());
     }
 
     [Xunit.Fact]
@@ -344,6 +426,59 @@ public sealed class MtpTestRunnerScriptTests
         return new ProcessResult(process.ExitCode, stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
     }
 
+    private static ProcessResult RunAfterStdoutGate(
+        ProcessStartInfo startInfo,
+        string stdoutGate,
+        string releasePath)
+    {
+        using var process = new Process { StartInfo = startInfo };
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
+        var outputGate = new object();
+        process.OutputDataReceived += (_, args) =>
+        {
+            if (args.Data is null)
+            {
+                return;
+            }
+            lock (outputGate)
+            {
+                stdout.AppendLine(args.Data);
+            }
+            if (args.Data.Contains(stdoutGate, StringComparison.Ordinal) && !File.Exists(releasePath))
+            {
+                File.WriteAllText(releasePath, "release");
+            }
+        };
+        process.ErrorDataReceived += (_, args) =>
+        {
+            if (args.Data is not null)
+            {
+                lock (outputGate)
+                {
+                    stderr.AppendLine(args.Data);
+                }
+            }
+        };
+        if (!process.Start())
+        {
+            throw new InvalidOperationException($"Failed to start {startInfo.FileName}.");
+        }
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        if (!process.WaitForExit(30_000))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(10_000);
+            throw new TimeoutException($"{startInfo.FileName} did not exit within 30 seconds.");
+        }
+        process.WaitForExit();
+        lock (outputGate)
+        {
+            return new ProcessResult(process.ExitCode, stdout.ToString(), stderr.ToString());
+        }
+    }
+
     private static JsonElement TerminalSummary(ProcessResult result)
     {
         var lines = result.Stdout.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
@@ -367,7 +502,8 @@ public sealed class MtpTestRunnerScriptTests
             string runnerPath,
             string argumentLog,
             string lockPath,
-            string readyPath)
+            string readyPath,
+            string releasePath)
         {
             Root = root;
             ResultsRoot = resultsRoot;
@@ -375,6 +511,7 @@ public sealed class MtpTestRunnerScriptTests
             ArgumentLog = argumentLog;
             LockPath = lockPath;
             ReadyPath = readyPath;
+            ReleasePath = releasePath;
         }
 
         public string Root { get; }
@@ -383,6 +520,7 @@ public sealed class MtpTestRunnerScriptTests
         public string ArgumentLog { get; }
         public string LockPath { get; }
         public string ReadyPath { get; }
+        public string ReleasePath { get; }
 
         public static ScriptSandbox Create(string behavior, string rootNamePrefix = "sandbox")
         {
@@ -440,6 +578,7 @@ public sealed class MtpTestRunnerScriptTests
                 "late-output" => TrxBody(total: 1, passed: 1, failed: 0),
                 "no-trx" => string.Empty,
                 "hang" => string.Empty,
+                "root-exits-descendant-locks" => string.Empty,
                 _ => throw new ArgumentOutOfRangeException(nameof(behavior))
             };
             var exitCode = behavior switch
@@ -451,8 +590,10 @@ public sealed class MtpTestRunnerScriptTests
             var escapedTrx = resultBody.Replace("'", "''");
             var lockPath = Path.Combine(root, "hang.lock");
             var readyPath = Path.Combine(root, "hang.ready");
+            var releasePath = Path.Combine(root, "root.release");
             var escapedLockPath = lockPath.Replace("'", "''");
             var escapedReadyPath = readyPath.Replace("'", "''");
+            var escapedReleasePath = releasePath.Replace("'", "''");
             File.WriteAllText(fakeRunnerScript, $$"""
                 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
                 $Arguments | Set-Content -LiteralPath '{{escapedArgumentLog}}'
@@ -470,6 +611,30 @@ public sealed class MtpTestRunnerScriptTests
                     finally {
                         $lock.Dispose()
                     }
+                }
+                if ('{{behavior}}' -eq 'root-exits-descendant-locks') {
+                    $childCommand = @'
+                $lock = [System.IO.File]::Open('{{escapedLockPath}}', 'OpenOrCreate', 'ReadWrite', 'None')
+                try {
+                    Set-Content -LiteralPath '{{escapedReadyPath}}' -Value 'ready'
+                    $never = [System.Threading.ManualResetEvent]::new($false)
+                    [void]$never.WaitOne()
+                }
+                finally {
+                    $lock.Dispose()
+                }
+                '@
+                    $childEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($childCommand))
+                    Start-Process powershell.exe -ArgumentList @('-NoProfile', '-EncodedCommand', $childEncoded) -NoNewWindow | Out-Null
+                    while (-not (Test-Path -LiteralPath '{{escapedReadyPath}}')) {
+                        [System.Threading.Thread]::Sleep(25)
+                    }
+                    Write-Output 'hang descendant ready'
+                    while (-not (Test-Path -LiteralPath '{{escapedReleasePath}}')) {
+                        [System.Threading.Thread]::Sleep(25)
+                    }
+                    Write-Output 'root released after wrapper timeout'
+                    exit 0
                 }
                 if ('{{behavior}}' -eq 'late-output') {
                     $lateCommand = "Start-Sleep -Seconds 6; Write-Output 'late descendant output'"
@@ -490,7 +655,7 @@ public sealed class MtpTestRunnerScriptTests
                 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0FakeRunner.ps1" %*
                 exit /b %ERRORLEVEL%
                 """);
-            return new ScriptSandbox(root, resultsRoot, runnerPath, argumentLog, lockPath, readyPath);
+            return new ScriptSandbox(root, resultsRoot, runnerPath, argumentLog, lockPath, readyPath, releasePath);
         }
 
         public string CreateBuildStub(int exitCode, string markerPath, bool diagnosticToStderr = false)
@@ -502,6 +667,24 @@ public sealed class MtpTestRunnerScriptTests
         }
 
         public ProcessResult RunPartition(
+            string partition,
+            bool noBuild = true,
+            string? dotnetPath = null,
+            bool runnerOverride = true,
+            string? resultsRoot = null,
+            int testHostTimeoutSeconds = 780)
+        {
+            var startInfo = PartitionStartInfo(
+                partition,
+                noBuild,
+                dotnetPath,
+                runnerOverride,
+                resultsRoot,
+                testHostTimeoutSeconds);
+            return Run(startInfo);
+        }
+
+        private ProcessStartInfo PartitionStartInfo(
             string partition,
             bool noBuild = true,
             string? dotnetPath = null,
@@ -532,16 +715,37 @@ public sealed class MtpTestRunnerScriptTests
                 startInfo.ArgumentList.Add("-DotnetPath");
                 startInfo.ArgumentList.Add(dotnetPath);
             }
-            return Run(startInfo);
+            return startInfo;
+        }
+
+        public ProcessResult RunPartitionAfterStdoutGate(
+            string partition,
+            string stdoutGate,
+            string releasePath,
+            int testHostTimeoutSeconds)
+        {
+            var startInfo = PartitionStartInfo(partition, testHostTimeoutSeconds: testHostTimeoutSeconds);
+            return RunAfterStdoutGate(startInfo, stdoutGate, releasePath);
         }
 
         public ProcessResult RunSummaryPartition(string partition)
+            => RunSummary(partition: partition);
+
+        public ProcessResult RunSummary(string? partition = null, string? filter = null)
         {
             var startInfo = PowerShellStartInfo(Root);
             startInfo.ArgumentList.Add("-File");
             startInfo.ArgumentList.Add(Path.Combine(Root, "scripts", "Invoke-TestSummary.ps1"));
-            startInfo.ArgumentList.Add("-Partition");
-            startInfo.ArgumentList.Add(partition);
+            if (partition is not null)
+            {
+                startInfo.ArgumentList.Add("-Partition");
+                startInfo.ArgumentList.Add(partition);
+            }
+            if (filter is not null)
+            {
+                startInfo.ArgumentList.Add("-Filter");
+                startInfo.ArgumentList.Add(filter);
+            }
             startInfo.ArgumentList.Add("-NoBuild");
             startInfo.ArgumentList.Add("-ResultsRoot");
             startInfo.ArgumentList.Add(ResultsRoot);
@@ -549,6 +753,8 @@ public sealed class MtpTestRunnerScriptTests
             startInfo.ArgumentList.Add(RunnerPath);
             return Run(startInfo);
         }
+
+        public void DeleteManifest() => File.Delete(Path.Combine(Root, "config", "acceptance-manifest.json"));
 
         public ProcessResult RunModuleAndReportEnvironment()
         {

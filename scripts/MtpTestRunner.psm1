@@ -15,14 +15,16 @@ $script:ExitCodes = [pscustomobject]@{
 
 $script:MtpGracefulExitSeconds = 15
 $script:MtpExitConfirmationSeconds = 10
-$script:MtpOutputDrainSeconds = 5
+$script:MtpOutputDrainSeconds = 10
 
 if ($null -eq ('McgMtpProcessOutputCapture' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 public sealed class McgMtpProcessOutputCapture : IDisposable
@@ -90,6 +92,180 @@ public sealed class McgMtpProcessOutputCapture : IDisposable
         }
         streamsClosed.Dispose();
     }
+}
+
+public sealed class McgMtpOwnedJob : IDisposable
+{
+    private const uint JobObjectLimitKillOnJobClose = 0x00002000;
+    private IntPtr handle;
+
+    public McgMtpOwnedJob()
+    {
+        handle = CreateJobObject(IntPtr.Zero, null);
+        if (handle == IntPtr.Zero)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObject failed.");
+        }
+
+        var limits = new JobObjectExtendedLimitInformation();
+        limits.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
+        int length = Marshal.SizeOf(typeof(JobObjectExtendedLimitInformation));
+        IntPtr buffer = Marshal.AllocHGlobal(length);
+        try
+        {
+            Marshal.StructureToPtr(limits, buffer, false);
+            if (!SetInformationJobObject(handle, 9, buffer, (uint)length))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "SetInformationJobObject failed.");
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    public void Assign(Process process)
+    {
+        if (!AssignProcessToJobObject(handle, process.Handle))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(),
+                "AssignProcessToJobObject failed for PID " + process.Id + ".");
+        }
+    }
+
+    public bool TerminateAndWait(int milliseconds)
+    {
+        if (handle == IntPtr.Zero)
+        {
+            return true;
+        }
+        if (!TerminateJobObject(handle, 28))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "TerminateJobObject failed.");
+        }
+        return WaitForEmpty(milliseconds);
+    }
+
+    public bool WaitForEmpty(int milliseconds)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        do
+        {
+            if (ActiveProcessCount() == 0)
+            {
+                return true;
+            }
+            Thread.Sleep(25);
+        }
+        while (stopwatch.ElapsedMilliseconds < milliseconds);
+
+        return ActiveProcessCount() == 0;
+    }
+
+    public bool IsEmpty
+    {
+        get { return handle == IntPtr.Zero || ActiveProcessCount() == 0; }
+    }
+
+    private uint ActiveProcessCount()
+    {
+        var accounting = new JobObjectBasicAccountingInformation();
+        int length = Marshal.SizeOf(typeof(JobObjectBasicAccountingInformation));
+        IntPtr buffer = Marshal.AllocHGlobal(length);
+        try
+        {
+            if (!QueryInformationJobObject(handle, 1, buffer, (uint)length, IntPtr.Zero))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "QueryInformationJobObject failed.");
+            }
+            accounting = (JobObjectBasicAccountingInformation)Marshal.PtrToStructure(
+                buffer, typeof(JobObjectBasicAccountingInformation));
+            return accounting.ActiveProcesses;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (handle != IntPtr.Zero)
+        {
+            CloseHandle(handle);
+            handle = IntPtr.Zero;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicAccountingInformation
+    {
+        public long TotalUserTime;
+        public long TotalKernelTime;
+        public long ThisPeriodTotalUserTime;
+        public long ThisPeriodTotalKernelTime;
+        public uint TotalPageFaultCount;
+        public uint TotalProcesses;
+        public uint ActiveProcesses;
+        public uint TotalTerminatedProcesses;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectBasicLimitInformation
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoCounters
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JobObjectExtendedLimitInformation
+    {
+        public JobObjectBasicLimitInformation BasicLimitInformation;
+        public IoCounters IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateJobObject(IntPtr securityAttributes, string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(
+        IntPtr job, int informationClass, IntPtr information, uint informationLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool QueryInformationJobObject(
+        IntPtr job, int informationClass, IntPtr information, uint informationLength, IntPtr returnLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
 }
 '@
 }
@@ -600,17 +776,24 @@ function New-MtpProcessStartInfo {
     $extension = [System.IO.Path]::GetExtension($Executable)
     if ($extension.Equals('.cmd', [System.StringComparison]::OrdinalIgnoreCase) -or
         $extension.Equals('.bat', [System.StringComparison]::OrdinalIgnoreCase)) {
-        $argumentLine = (@($Arguments | Select-Object -Skip 1 | ForEach-Object {
-            ConvertTo-MtpCommandLineArgument $_ -QuoteCmdMetaCharacters
-        }) -join ' ')
+        $cmdValues = @($Executable) + @($Arguments | Select-Object -Skip 1)
+        $cmdTokens = [System.Collections.Generic.List[string]]::new()
+        for ($index = 0; $index -lt $cmdValues.Count; $index++) {
+            $value = [string]$cmdValues[$index]
+            if ($value.Contains('%')) {
+                $environmentName = "MCG_MTP_CMD_VALUE_$index"
+                $startInfo.EnvironmentVariables[$environmentName] = $value
+                $cmdTokens.Add('"%' + $environmentName + '%"')
+            }
+            else {
+                $cmdTokens.Add((ConvertTo-MtpCommandLineArgument $value -QuoteCmdMetaCharacters))
+            }
+        }
         $commandInterpreter = $env:ComSpec
         if ([string]::IsNullOrWhiteSpace($commandInterpreter)) {
             $commandInterpreter = Join-Path $env:SystemRoot 'System32\cmd.exe'
         }
-        $commandLine = (ConvertTo-MtpCommandLineArgument $Executable -QuoteCmdMetaCharacters)
-        if (-not [string]::IsNullOrWhiteSpace($argumentLine)) {
-            $commandLine += ' ' + $argumentLine
-        }
+        $commandLine = $cmdTokens -join ' '
         $startInfo.FileName = $commandInterpreter
         $startInfo.Arguments = '/d /s /c "' + $commandLine + '"'
     }
@@ -627,11 +810,23 @@ function New-MtpProcessStartInfo {
 function Stop-MtpOwnedProcessTree {
     param(
         [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
-        [Parameter(Mandatory = $true)][datetime]$StartTimeUtc
+        [Parameter(Mandatory = $true)][datetime]$StartTimeUtc,
+        [AllowNull()]$OwnedJob
     )
 
     try {
+        if ($null -ne $OwnedJob) {
+            if (-not $OwnedJob.TerminateAndWait($script:MtpExitConfirmationSeconds * 1000)) {
+                Write-Host "CLEANUP FAILURE - owned process job rooted at PID $($Process.Id) did not become empty."
+                return $false
+            }
+            return $true
+        }
         if ($Process.HasExited) {
+            if (Test-MtpWindows) {
+                Write-Host "CLEANUP FAILURE - owned PID $($Process.Id) exited before exact descendant ownership was established."
+                return $false
+            }
             return $true
         }
         $candidate = [System.Diagnostics.Process]::GetProcessById($Process.Id)
@@ -705,6 +900,7 @@ function Invoke-MtpAppHost {
 
     $process = $null
     $capture = $null
+    $ownedJob = $null
     $processId = $null
     $startTimeUtc = $null
     $runnerExit = $script:ExitCodes.Runner
@@ -714,8 +910,14 @@ function Invoke-MtpAppHost {
     $streamsDrained = $false
     $processStarted = $false
     $runnerFailed = $false
+    $cleanupDiagnostic = $null
+    $captured = @()
+    $jobAssigned = $false
     try {
         $capture = [McgMtpProcessOutputCapture]::new($OutputLog)
+        if (Test-MtpWindows) {
+            $ownedJob = [McgMtpOwnedJob]::new()
+        }
         $process = [System.Diagnostics.Process]::new()
         $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments
         $capture.Attach($process)
@@ -725,23 +927,17 @@ function Invoke-MtpAppHost {
         $processStarted = $true
         $processId = $process.Id
         $startTimeUtc = $process.StartTime.ToUniversalTime()
+        if ($null -ne $ownedJob) {
+            $ownedJob.Assign($process)
+            $jobAssigned = $true
+        }
         $process.BeginOutputReadLine()
         $process.BeginErrorReadLine()
 
         if (-not $process.WaitForExit($TestHostTimeoutSeconds * 1000)) {
             $timedOut = $true
             Write-Host "TEST HOST TIMEOUT - owned PID $processId exceeded ${TestHostTimeoutSeconds}s; allowing ${script:MtpGracefulExitSeconds}s for MTP cancellation."
-            if (-not $process.WaitForExit($script:MtpGracefulExitSeconds * 1000)) {
-                Write-Host "TEST HOST TIMEOUT - terminating exact owned process tree rooted at PID $processId."
-                [void](Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $startTimeUtc)
-            }
-        }
-
-        $processExitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
-        $streamsDrained = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
-        $exitConfirmed = $processExitConfirmed -and $streamsDrained
-        if ($process.HasExited) {
-            $runnerExit = $process.ExitCode
+            [void]$process.WaitForExit($script:MtpGracefulExitSeconds * 1000)
         }
     }
     catch {
@@ -754,8 +950,13 @@ function Invoke-MtpAppHost {
     }
     finally {
         if ($null -ne $process -and $processStarted) {
-            if (-not $process.HasExited -and $null -ne $startTimeUtc) {
-                [void](Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $startTimeUtc)
+            $mustTerminate = $timedOut -or $runnerFailed -or -not $process.HasExited
+            if ($mustTerminate -and $null -ne $startTimeUtc) {
+                Write-Host "PROCESS CLEANUP - terminating the exact owned process lifetime rooted at PID $processId."
+                $cleanupJob = if ($jobAssigned) { $ownedJob } else { $null }
+                if (-not (Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $startTimeUtc -OwnedJob $cleanupJob)) {
+                    $cleanupDiagnostic = "CLEANUP FAILURE - exact owned process lifetime rooted at PID $processId could not be terminated."
+                }
             }
             $processExitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
         }
@@ -763,7 +964,28 @@ function Invoke-MtpAppHost {
             if ($processStarted) {
                 $streamsDrained = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
             }
-            $exitConfirmed = $processStarted -and $processExitConfirmed -and $streamsDrained
+
+            $jobExitConfirmed = $true
+            if ($processStarted -and $jobAssigned) {
+                try {
+                    if (-not $ownedJob.IsEmpty) {
+                        if (-not (Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $startTimeUtc -OwnedJob $ownedJob)) {
+                            $cleanupDiagnostic = "CLEANUP FAILURE - exact owned process job rooted at PID $processId retained active descendants."
+                        }
+                        $processExitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
+                        if (-not $streamsDrained) {
+                            $streamsDrained = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
+                        }
+                    }
+                    $jobExitConfirmed = $ownedJob.IsEmpty
+                }
+                catch {
+                    $jobExitConfirmed = $false
+                    $cleanupDiagnostic = "CLEANUP FAILURE - owned process job rooted at PID $processId could not confirm descendant exit: $($_.Exception.Message)"
+                }
+            }
+
+            $exitConfirmed = $processStarted -and $processExitConfirmed -and $jobExitConfirmed -and $streamsDrained
             $captured = @($capture.Snapshot())
             if ($null -ne $process) {
                 $capture.Detach($process)
@@ -772,6 +994,18 @@ function Invoke-MtpAppHost {
         }
         else {
             $captured = @()
+        }
+        if ($processStarted -and $null -ne $process -and $process.HasExited) {
+            $runnerExit = $process.ExitCode
+        }
+        if ($processStarted -and -not $exitConfirmed -and [string]::IsNullOrWhiteSpace($cleanupDiagnostic)) {
+            $cleanupDiagnostic = "CLEANUP FAILURE - owned PID $processId exit, descendant exit, or redirected-stream drain was not confirmed."
+        }
+        if (-not [string]::IsNullOrWhiteSpace($cleanupDiagnostic)) {
+            Write-Host $cleanupDiagnostic
+        }
+        if ($null -ne $ownedJob) {
+            $ownedJob.Dispose()
         }
         if ($null -ne $process) {
             $process.Dispose()
@@ -785,6 +1019,7 @@ function Invoke-MtpAppHost {
         OwnedProcessId = $processId
         ExitConfirmed = $exitConfirmed
         RunnerFailed = $runnerFailed
+        CleanupDiagnostic = $cleanupDiagnostic
     }
 }
 
@@ -821,8 +1056,14 @@ function New-MtpTerminalResult {
         [string[]]$ExpectedTrxPaths = @(),
         $OwnedProcessId = $null,
         $ExitConfirmed = $null,
-        [bool]$ArtifactsRetained = $false
+        [bool]$ArtifactsRetained = $false,
+        [string[]]$Diagnostics = @()
     )
+
+    $terminalDiagnostics = @($Diagnostics | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($Outcome -eq 'timed-out' -and $ExitConfirmed -is [bool] -and -not [bool]$ExitConfirmed -and $terminalDiagnostics.Count -eq 0) {
+        $terminalDiagnostics = @('CLEANUP FAILURE - timed-out test host exit or redirected-stream drain was not confirmed.')
+    }
 
     return [pscustomobject][ordered]@{
         schemaVersion = 1
@@ -836,6 +1077,7 @@ function New-MtpTerminalResult {
         ownedProcessId = $OwnedProcessId
         exitConfirmed = $ExitConfirmed
         artifactsRetained = $ArtifactsRetained
+        diagnostics = $terminalDiagnostics
     }
 }
 
@@ -944,7 +1186,7 @@ function Invoke-MtpTestRun {
                 if ($run.TimedOut) {
                     Write-Host "TEST HOST TIMED OUT - apphost exceeded ${TestHostTimeoutSeconds}s. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return New-MtpTerminalResult -Outcome timed-out -ExitCode $script:ExitCodes.Timeout -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed ([bool]$run.ExitConfirmed) -ArtifactsRetained $true
+                    return New-MtpTerminalResult -Outcome timed-out -ExitCode $script:ExitCodes.Timeout -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed ([bool]$run.ExitConfirmed) -ArtifactsRetained $true -Diagnostics @($run.CleanupDiagnostic)
                 }
                 if ($run.RunnerFailed) {
                     Write-Host "RUNNER/TOOLING FAILURE - apphost could not be started or monitored. Captured stderr/stdout: $outputLog"
@@ -1027,6 +1269,7 @@ Export-ModuleMember -Function @(
     'Get-MtpTargetProjects',
     'New-MtpRunnerArguments',
     'Read-MtpTrxResult',
+    'New-MtpTerminalResult',
     'Write-MtpTerminalSummary',
     'Invoke-MtpTestRun'
 )
