@@ -235,58 +235,7 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
 private static IReadOnlyList<string> SplitAddTaskCommand(string command, string remainder)
 {
-    const string goalPrefixFlag = "--goal ";
-    if (!remainder.StartsWith(goalPrefixFlag, StringComparison.OrdinalIgnoreCase))
-    {
-        return SplitAddTaskBeforeRoleFlag(
-            SplitTargetTextCommandWithFileFlags(command, remainder, "--text-file"));
-    }
-
-    var afterFlag = remainder[goalPrefixFlag.Length..].TrimStart();
-    var prefixEnd = afterFlag.IndexOf(' ');
-    if (prefixEnd < 0)
-    {
-        return [command, "--goal", afterFlag];
-    }
-
-    var goalPrefix = afterFlag[..prefixEnd];
-    var roleAndText = SplitTargetTextCommandWithFileFlags(
-        command,
-        afterFlag[(prefixEnd + 1)..].TrimStart(),
-        "--text-file");
-    var parts = new List<string> { command, "--goal", goalPrefix };
-    parts.AddRange(roleAndText.Skip(1));
-    return SplitAddTaskBeforeRoleFlag(parts);
-}
-
-private static IReadOnlyList<string> SplitAddTaskBeforeRoleFlag(IReadOnlyList<string> source)
-{
-    var parts = source.ToList();
-    var descriptionIndex = parts.Count > 1 && parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase)
-        ? 4
-        : 2;
-    if (parts.Count == descriptionIndex + 1)
-    {
-        var beforeRoleIndex = IndexOfStandaloneFlag(parts[descriptionIndex], "--before-role");
-        if (beforeRoleIndex >= 0)
-        {
-            var description = parts[descriptionIndex][..beforeRoleIndex].Trim();
-            var beforeRole = parts[descriptionIndex][(beforeRoleIndex + "--before-role".Length)..].Trim();
-            parts.RemoveAt(descriptionIndex);
-            if (description.Length > 0)
-            {
-                parts.Add(description);
-            }
-
-            parts.Add("--before-role");
-            if (beforeRole.Length > 0)
-            {
-                parts.Add(beforeRole);
-            }
-        }
-    }
-
-    return parts;
+    return NormalizeArgs([command, .. TokenizeQuotedArguments(remainder)]);
 }
 
 private static IReadOnlyList<string> SplitAttentionAnswerWithFileFlag(string command, string remainder)

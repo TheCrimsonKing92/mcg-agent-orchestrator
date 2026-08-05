@@ -211,7 +211,11 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
             args,
             targetIndex + 1,
             arg => arg.Equals("--before-role", StringComparison.OrdinalIgnoreCase));
-        if (beforeRoleIndex < 0)
+        var textFileIndex = Array.FindIndex(
+            args,
+            targetIndex + 1,
+            arg => arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase));
+        if (beforeRoleIndex < 0 || (textFileIndex >= 0 && textFileIndex < beforeRoleIndex))
         {
             return NormalizeTargetTextCommandWithFileFlags(args, targetIndex, "--text-file");
         }
