@@ -2506,6 +2506,247 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAttempt_RegistrationFailure_FailsAndReleasesLease")]
+    public void ParallelAttemptRegistrationFailureFailsAndReleasesLease()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var (_, goal) = SimpleGoal("Update docs/RegistrationFailure.md");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-registration-failure");
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["docs/RegistrationFailure.md"],
+            "branch",
+            "main");
+        DotnetBuildEnvironment? leasedEnvironment = null;
+        const string registrationFailure =
+            "worker-process-registration-failed; pid=36824; stage=owned-process-group-attachment; " +
+            "cleanup=process-tree-termination-requested; exception=OwnedProcessAttachmentException; " +
+            "native_error_code=5; native_message=Access is denied.; candidate_in_job=true";
+
+        try
+        {
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var decision = coordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (_, _, stableSlotLease, _) =>
+                    {
+                        leasedEnvironment = stableSlotLease?.Environment;
+                        throw new InvalidOperationException(registrationFailure);
+                    });
+
+                Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, decision.Attempt.Outcome);
+                Assert.NotNull(decision.Run?.Exception);
+                Assert.Contains(registrationFailure, decision.Run!.Exception!.Message, StringComparison.Ordinal);
+                Assert.Contains(registrationFailure, decision.Attempt.Detail, StringComparison.Ordinal);
+                Assert.Contains(registrationFailure, File.ReadAllText(decision.Attempt.StderrPath), StringComparison.Ordinal);
+            });
+
+            Assert.NotNull(leasedEnvironment);
+            Assert.Contains("ACCEPTANCE_LEASE_RELEASE", output, StringComparison.Ordinal);
+            Assert.Equal(1, CountOccurrences(output, "ACCEPTANCE_LEASE_RELEASE"));
+            using var reacquired = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                leasedEnvironment!,
+                TimeSpan.Zero);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAttempt_ExternalOldProductionSeam_FastExitRed")]
+    public void ParallelAttemptExternalOldProductionSeamFastExitRed()
+    {
+        RunExternalOwnedStartScenario(useLegacyStartThenAttach: true);
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAttempt_OwnedStart_ReachesNormalResult")]
+    public void ParallelAttemptOwnedStartReachesNormalResult()
+    {
+        RunExternalOwnedStartScenario(useLegacyStartThenAttach: false);
+    }
+
+    private static void RunExternalOwnedStartScenario(bool useLegacyStartThenAttach)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var _ = IsolatedDotnetRootScope();
+        var root = CreateSeededGitRepository();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-owned-start");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update docs/OwnedStart.md");
+        var externalProcesses = new ConcurrentBag<Process>();
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "config"));
+            File.WriteAllText(
+                Path.Combine(root, "config", "acceptance-manifest.json"),
+                AcceptanceManifestTestDefaults.WithEngine(
+                    """
+                    {
+                      "version": 1,
+                      "checks": [
+                        {
+                          "name": "background owned start marker",
+                          "type": "command",
+                          "command": "powershell",
+                          "arguments": [
+                            "-NoProfile",
+                            "-Command",
+                            "Set-Content -LiteralPath 'background-owned-start.marker' -Value started"
+                          ],
+                          "timeoutMinutes": 1
+                        }
+                      ],
+                      "forbiddenChangedPathGlobs": []
+                    }
+                    """));
+            RunGit(root, "add", "config/acceptance-manifest.json");
+            RunGit(root, "commit", "-m", "Seed acceptance manifest");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var stateRepository = OpenStateRepository(workspace.SqliteStatePath);
+            var worktree = GoalWorktrees.Ensure(root, goal.Id);
+            Directory.CreateDirectory(Path.Combine(worktree, "docs"));
+            File.WriteAllText(Path.Combine(worktree, "docs", "OwnedStart.md"), "owned start lifecycle");
+            RunGit(worktree, "add", "-A");
+            RunGit(worktree, "commit", "-m", "Add owned start lifecycle fixture");
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                executionDirectory: root,
+                launchOwnedProcess: launch => LaunchExternalAcceptanceProcess(
+                    launch,
+                    useLegacyStartThenAttach,
+                    externalProcesses));
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["docs/OwnedStart.md"]);
+            ConductorParallelAcceptanceRunResult UnexpectedInlineRun(
+                ConductorParallelAcceptanceCandidate candidateIgnored,
+                ConductorAutonomyPolicy policyIgnored,
+                DotnetBuildEnvironmentLease? leaseIgnored,
+                CancellationToken cancellationTokenIgnored) =>
+                throw new InvalidOperationException("External acceptance unexpectedly ran inline.");
+
+            var decision = coordinator.Evaluate(
+                candidate,
+                ConductorAutonomyPolicy.Conservative,
+                UnexpectedInlineRun);
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, decision.Kind);
+            var initialAttempt = decision.Attempt;
+            var externalProcess = Assert.Single(externalProcesses);
+            Assert.True(
+                externalProcess.WaitForExit(60000),
+                $"External acceptance PID {externalProcess.Id} did not exit. stdout={TryReadAllTextShared(initialAttempt.StdoutPath)} stderr={TryReadAllTextShared(initialAttempt.StderrPath)}");
+            externalProcess.WaitForExit();
+            var completedAttempt = JsonSerializer.Deserialize<ConductorParallelAcceptanceAttempt>(
+                File.ReadAllText(initialAttempt.MetadataPath),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.NotNull(completedAttempt);
+
+            Assert.Equal(
+                useLegacyStartThenAttach
+                    ? ConductorParallelAcceptanceAttemptOutcome.Failed
+                    : ConductorParallelAcceptanceAttemptOutcome.Passed,
+                completedAttempt!.Outcome);
+            var markerPath = Path.Combine(worktree, "background-owned-start.marker");
+            if (useLegacyStartThenAttach)
+            {
+                Assert.False(File.Exists(markerPath));
+                Assert.Contains("stage=owned-process-group-attachment", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("native_error_code=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("native_message=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("candidate_has_exited=true", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("candidate_exit_code=0", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owner_in_job=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("candidate_in_job=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("candidate_in_owned_job=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owner_job_limit_flags=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owner_job_ui_restrictions=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owned_job_limit_flags=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owned_job_ui_restrictions=", completedAttempt.Detail, StringComparison.Ordinal);
+
+                var candidateProcessId = ParseRegistrationFailureProcessId(completedAttempt.Detail);
+                Assert.False(
+                    IsProcessRunning(candidateProcessId),
+                    $"Failed legacy candidate remained alive after exact-PID cleanup: {DescribeProcess(candidateProcessId)}");
+            }
+            else
+            {
+                Assert.Equal("started", File.ReadAllText(markerPath).Trim());
+                Assert.True(File.Exists(completedAttempt.ResultPath));
+            }
+
+            var stdout = TryReadAllTextShared(completedAttempt.StdoutPath);
+            Assert.Equal(1, CountOccurrences(stdout, "ACCEPTANCE_LEASE_RELEASE"));
+            Assert.Empty(new SpawnRegistry(workspace.SqliteStatePath).ListActive());
+        }
+        finally
+        {
+            foreach (var process in externalProcesses)
+            {
+                try
+                {
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+
+                    process.WaitForExit(5000);
+                }
+                catch
+                {
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(root);
+        }
+    }
+
+    private static ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalAcceptanceProcess(
+        ConductorParallelAcceptanceOwnedProcessLaunch launch,
+        bool useLegacyStartThenAttach,
+        ConcurrentBag<Process> externalProcesses)
+    {
+        var appAssembly = Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
+        Assert.True(File.Exists(appAssembly), $"App assembly was not available at {appAssembly}");
+        var startInfo = ConductorParallelAcceptanceAttemptCoordinator.BuildOwnedProcessStartInfo(
+            launch.Attempt,
+            "dotnet",
+            [appAssembly]);
+        if (useLegacyStartThenAttach)
+        {
+            startInfo.Environment[GoalAcceptanceVerifier.LegacyOwnedStartNegativeControlVariable] =
+                "wait-for-fast-exit";
+        }
+
+        var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start external acceptance negative-control child.");
+        process.OutputDataReceived += static (_, _) => { };
+        process.ErrorDataReceived += static (_, _) => { };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        process.StandardInput.Close();
+        externalProcesses.Add(process);
+        return new ConductorParallelAcceptanceOwnedProcessLaunchResult(process.Id);
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_attempt_holds_stable_slot_lease_until_terminal")]
     public void ParallelAcceptanceAttemptHoldsStableSlotLeaseUntilTerminal()
     {
@@ -4179,6 +4420,23 @@ public sealed class ConductorBatchLoopTests
         }
 
         throw new InvalidOperationException("Parent conductor output did not include a LOOP_HANDOFF pid.");
+    }
+
+    private static int ParseRegistrationFailureProcessId(string detail)
+    {
+        const string token = "pid=";
+        var start = detail.IndexOf(token, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            throw new InvalidOperationException("Registration failure detail did not include a candidate pid.");
+        }
+
+        start += token.Length;
+        var end = detail.IndexOf(';', start);
+        var value = end < 0 ? detail[start..] : detail[start..end];
+        return int.TryParse(value, out var processId)
+            ? processId
+            : throw new InvalidOperationException($"Registration failure candidate pid was invalid: {value}");
     }
 
     private static bool TryReadTokenValue(string line, string token, out string value)

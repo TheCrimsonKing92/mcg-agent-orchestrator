@@ -2461,6 +2461,50 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_RunProcess_OwnedStart_ExecutesMarker")]
+    public async Task RunProcessOwnedStartExecutesMarker()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                {
+                  "name": "owned start marker",
+                  "type": "command",
+                  "command": "powershell",
+                  "arguments": [
+                    "-NoProfile",
+                    "-Command",
+                    "Set-Content -LiteralPath 'owned-start.marker' -Value started"
+                  ],
+                  "timeoutMinutes": 1
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier();
+            var result = await verifier.RunAsync(
+                root,
+                new GoalId("13571357135713571357135713571357"),
+                stableSlotIndex: 0);
+
+            Assert.True(result.Passed, result.OutputTail);
+            Assert.Equal("started", File.ReadAllText(Path.Combine(root, "owned-start.marker")).Trim());
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_slot_gate_timeout_records_job_resource_receipt")]
     public async Task GoalAcceptanceVerifierSlotGateTimeoutRecordsJobResourceReceipt()
     {

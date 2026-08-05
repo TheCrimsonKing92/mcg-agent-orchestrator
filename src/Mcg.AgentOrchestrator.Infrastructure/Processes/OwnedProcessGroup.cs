@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -43,6 +44,43 @@ internal sealed class OwnedProcessGroup : IDisposable
         }
     }
 
+    public static SuspendedProcessStart StartSuspended(ProcessStartInfo startInfo)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Suspended owned-process launch is Windows-only.");
+        }
+
+        if (startInfo.UseShellExecute ||
+            startInfo.RedirectStandardInput ||
+            startInfo.RedirectStandardOutput ||
+            startInfo.RedirectStandardError)
+        {
+            throw new InvalidOperationException(
+                "Suspended owned-process launch requires UseShellExecute=false and no redirected standard streams.");
+        }
+
+        var group = Create();
+        try
+        {
+            var processStart = WindowsJob.StartSuspendedInJob(group._jobHandle!, startInfo);
+            group._processIds.Add(processStart.Process.Id);
+            return new SuspendedProcessStart(group, processStart.Process, processStart.InitialThread);
+        }
+        catch
+        {
+            group.Kill();
+            throw;
+        }
+    }
+
+    internal static string CaptureAssignmentFailureEvidenceForTests(Process candidate)
+    {
+        using var group = Create();
+        return WindowsJob.CaptureAssignmentFailureEvidence(group._jobHandle!, candidate);
+    }
+
     public void Add(Process process)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -52,7 +90,12 @@ internal sealed class OwnedProcessGroup : IDisposable
         {
             if (_jobHandle is not null && !WindowsJob.AssignProcessToJobObject(_jobHandle, process.Handle))
             {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to assign process to owned job object.");
+                var nativeErrorCode = Marshal.GetLastWin32Error();
+                var evidence = WindowsJob.CaptureAssignmentFailureEvidence(_jobHandle, process);
+                throw new OwnedProcessAttachmentException(
+                    nativeErrorCode,
+                    "Failed to assign process to owned job object.",
+                    evidence);
             }
 
             return;
@@ -235,15 +278,387 @@ internal sealed class OwnedProcessGroup : IDisposable
         _jobHandle = null;
     }
 
+    internal sealed class SuspendedProcessStart : IDisposable
+    {
+        private SafeFileHandle? _initialThread;
+        private bool _transferred;
+
+        internal SuspendedProcessStart(
+            OwnedProcessGroup group,
+            Process process,
+            SafeFileHandle initialThread)
+        {
+            Group = group;
+            Process = process;
+            _initialThread = initialThread;
+        }
+
+        internal OwnedProcessGroup Group { get; }
+        internal Process Process { get; }
+
+        internal void Resume()
+        {
+            if (_initialThread is null || _initialThread.IsClosed || _initialThread.IsInvalid)
+            {
+                throw new InvalidOperationException("Owned process initial thread is unavailable for resume.");
+            }
+
+            if (WindowsJob.ResumeThread(_initialThread) == uint.MaxValue)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to resume owned process initial thread.");
+            }
+        }
+
+        internal Process TransferOwnership()
+        {
+            _transferred = true;
+            return Process;
+        }
+
+        public void Dispose()
+        {
+            _initialThread?.Dispose();
+            _initialThread = null;
+            if (_transferred)
+            {
+                return;
+            }
+
+            Group.Kill();
+            Process.Dispose();
+        }
+    }
+
     private static class WindowsJob
     {
         private const int JobObjectBasicAccountingInformation = 1;
         private const int JobObjectBasicProcessIdList = 3;
         private const int JobObjectExtendedLimitInformation = 9;
+        private const int JobObjectBasicUiRestrictions = 4;
         private const uint JobObjectLimitKillOnJobClose = 0x00002000;
         private const uint JobObjectLimitBreakawayOk = 0x00000800;
         private const uint DuplicateSameAccess = 0x00000002;
         private const int ErrorMoreData = 234;
+        private const uint CreateSuspended = 0x00000004;
+        private const uint CreateUnicodeEnvironment = 0x00000400;
+        private const uint ExtendedStartupInfoPresent = 0x00080000;
+        private const int ProcThreadAttributeJobList = 0x0002000D;
+
+        public static WindowsSuspendedProcess StartSuspendedInJob(
+            SafeFileHandle job,
+            ProcessStartInfo startInfo)
+        {
+            var startupInfo = new STARTUPINFOEX
+            {
+                StartupInfo = new STARTUPINFO
+                {
+                    cb = Marshal.SizeOf<STARTUPINFOEX>()
+                }
+            };
+            using var attributes = WindowsJobAttributeList.Create(job);
+            startupInfo.lpAttributeList = attributes.AttributeList;
+            var commandLine = new StringBuilder(BuildCommandLine(startInfo));
+            var environment = BuildEnvironmentBlock(startInfo.Environment);
+            var workingDirectory = string.IsNullOrWhiteSpace(startInfo.WorkingDirectory)
+                ? Environment.CurrentDirectory
+                : startInfo.WorkingDirectory;
+
+            using var suppression = ProcessTreeGuiSuppression.AcquireSuppressedChildSpawn();
+            if (!CreateProcessW(
+                    null,
+                    commandLine,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    false,
+                    CreateSuspended | CreateUnicodeEnvironment | ExtendedStartupInfoPresent,
+                    environment,
+                    workingDirectory,
+                    ref startupInfo,
+                    out var processInformation))
+            {
+                var nativeErrorCode = Marshal.GetLastWin32Error();
+                throw new OwnedProcessLaunchException(
+                    nativeErrorCode,
+                    "Failed to start suspended process in owned job object.",
+                    CaptureLaunchFailureEvidence(job));
+            }
+
+            using var nativeProcess = new SafeFileHandle(processInformation.hProcess, ownsHandle: true);
+            var initialThread = new SafeFileHandle(processInformation.hThread, ownsHandle: true);
+            try
+            {
+                var process = Process.GetProcessById(unchecked((int)processInformation.dwProcessId));
+                return new WindowsSuspendedProcess(process, initialThread);
+            }
+            catch
+            {
+                initialThread.Dispose();
+                throw;
+            }
+        }
+
+        public static string CaptureAssignmentFailureEvidence(SafeFileHandle ownedJob, Process candidate)
+        {
+            var parts = new List<string>
+            {
+                CaptureProbe(
+                    "candidate_has_exited=unknown; candidate_exit_code",
+                    () => CaptureCandidateExit(candidate)),
+                CaptureProbe("owner_in_job", () =>
+                {
+                using var owner = Process.GetCurrentProcess();
+                    return CaptureMembership("owner_in_job", owner.Handle, IntPtr.Zero);
+                }),
+                CaptureProbe(
+                    "candidate_in_job",
+                    () => CaptureMembership("candidate_in_job", candidate.Handle, IntPtr.Zero)),
+                CaptureProbe("candidate_in_owned_job", () =>
+                {
+                var addedRef = false;
+                try
+                {
+                    ownedJob.DangerousAddRef(ref addedRef);
+                        return CaptureMembership(
+                        "candidate_in_owned_job",
+                        candidate.Handle,
+                            ownedJob.DangerousGetHandle());
+                }
+                finally
+                {
+                    if (addedRef)
+                    {
+                        ownedJob.DangerousRelease();
+                    }
+                }
+                }),
+                CaptureProbe(
+                    "owner_job_limit_flags",
+                    () => CaptureJobFlags("owner_job_limit_flags", IntPtr.Zero, JobObjectExtendedLimitInformation)),
+                CaptureProbe(
+                    "owner_job_ui_restrictions",
+                    () => CaptureJobFlags("owner_job_ui_restrictions", IntPtr.Zero, JobObjectBasicUiRestrictions)),
+                CaptureProbe("owned_job_limit_flags", () => CaptureOwnedJobFlags(ownedJob)),
+                CaptureProbe(
+                    "owned_job_ui_restrictions",
+                    () => CaptureOwnedJobFlags(
+                        ownedJob,
+                        "owned_job_ui_restrictions",
+                        JobObjectBasicUiRestrictions))
+            };
+
+            return string.Join("; ", parts);
+        }
+
+        private static string CaptureLaunchFailureEvidence(SafeFileHandle ownedJob)
+        {
+            var parts = new List<string>
+            {
+                CaptureProbe("owner_in_job", () =>
+                {
+                    using var owner = Process.GetCurrentProcess();
+                    return CaptureMembership("owner_in_job", owner.Handle, IntPtr.Zero);
+                }),
+                CaptureProbe(
+                    "owner_job_limit_flags",
+                    () => CaptureJobFlags("owner_job_limit_flags", IntPtr.Zero, JobObjectExtendedLimitInformation)),
+                CaptureProbe(
+                    "owner_job_ui_restrictions",
+                    () => CaptureJobFlags("owner_job_ui_restrictions", IntPtr.Zero, JobObjectBasicUiRestrictions)),
+                CaptureProbe(
+                    "owned_job_limit_flags",
+                    () => CaptureOwnedJobFlags(
+                        ownedJob,
+                        "owned_job_limit_flags",
+                        JobObjectExtendedLimitInformation)),
+                CaptureProbe(
+                    "owned_job_ui_restrictions",
+                    () => CaptureOwnedJobFlags(
+                        ownedJob,
+                        "owned_job_ui_restrictions",
+                        JobObjectBasicUiRestrictions))
+            };
+
+            return string.Join("; ", parts);
+        }
+
+        private static string CaptureProbe(string name, Func<string> probe)
+        {
+            try
+            {
+                return probe();
+            }
+            catch (Exception ex)
+            {
+                return $"{name}=unknown(probe_exception={ex.GetType().Name}:{Sanitize(ex.Message)})";
+            }
+        }
+
+        private static string CaptureCandidateExit(Process candidate)
+        {
+            try
+            {
+                if (!candidate.HasExited)
+                {
+                    return "candidate_has_exited=false; candidate_exit_code=not-applicable";
+                }
+
+                return $"candidate_has_exited=true; candidate_exit_code={candidate.ExitCode}";
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+            {
+                return $"candidate_has_exited=unknown; candidate_exit_code=unknown({ex.GetType().Name})";
+            }
+        }
+
+        private static string CaptureMembership(string name, IntPtr process, IntPtr job)
+        {
+            if (IsProcessInJob(process, job, out var result))
+            {
+                return $"{name}={result.ToString().ToLowerInvariant()}";
+            }
+
+            var error = Marshal.GetLastWin32Error();
+            return $"{name}=unknown(native_error_code={error})";
+        }
+
+        private static string CaptureJobFlags(string name, IntPtr job, int infoClass)
+        {
+            if (infoClass == JobObjectExtendedLimitInformation)
+            {
+                return TryQuery(job, infoClass, out JOBOBJECT_EXTENDED_LIMIT_INFORMATION extended, out var error)
+                    ? $"{name}=0x{extended.BasicLimitInformation.LimitFlags:x8}"
+                    : $"{name}=unknown(native_error_code={error})";
+            }
+
+            return TryQuery(job, infoClass, out JOBOBJECT_BASIC_UI_RESTRICTIONS ui, out var uiError)
+                ? $"{name}=0x{ui.UIRestrictionsClass:x8}"
+                : $"{name}=unknown(native_error_code={uiError})";
+        }
+
+        private static string CaptureOwnedJobFlags(SafeFileHandle job) =>
+            CaptureOwnedJobFlags(job, "owned_job_limit_flags", JobObjectExtendedLimitInformation);
+
+        private static string CaptureOwnedJobFlags(SafeFileHandle job, string name, int infoClass)
+        {
+            var addedRef = false;
+            try
+            {
+                job.DangerousAddRef(ref addedRef);
+                return CaptureJobFlags(name, job.DangerousGetHandle(), infoClass);
+            }
+            catch (ObjectDisposedException)
+            {
+                return $"{name}=unknown(ObjectDisposedException)";
+            }
+            finally
+            {
+                if (addedRef)
+                {
+                    job.DangerousRelease();
+                }
+            }
+        }
+
+        private static bool TryQuery<T>(IntPtr job, int infoClass, out T value, out int error)
+            where T : struct
+        {
+            value = default;
+            error = 0;
+            var length = Marshal.SizeOf<T>();
+            var buffer = Marshal.AllocHGlobal(length);
+            try
+            {
+                if (!QueryInformationJobObject(job, infoClass, buffer, (uint)length, IntPtr.Zero))
+                {
+                    error = Marshal.GetLastWin32Error();
+                    return false;
+                }
+
+                value = Marshal.PtrToStructure<T>(buffer);
+                return true;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        private static string BuildCommandLine(ProcessStartInfo startInfo)
+        {
+            var commandLine = new StringBuilder(QuoteCommandArgument(startInfo.FileName));
+            if (startInfo.ArgumentList.Count > 0)
+            {
+                foreach (var argument in startInfo.ArgumentList)
+                {
+                    commandLine.Append(' ');
+                    commandLine.Append(QuoteCommandArgument(argument));
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(startInfo.Arguments))
+            {
+                commandLine.Append(' ');
+                commandLine.Append(startInfo.Arguments);
+            }
+
+            return commandLine.ToString();
+        }
+
+        private static string QuoteCommandArgument(string value)
+        {
+            var quoted = new StringBuilder();
+            quoted.Append('"');
+            var backslashes = 0;
+            foreach (var character in value)
+            {
+                if (character == '\\')
+                {
+                    backslashes++;
+                    continue;
+                }
+
+                if (character == '"')
+                {
+                    quoted.Append('\\', (backslashes * 2) + 1);
+                    quoted.Append('"');
+                    backslashes = 0;
+                    continue;
+                }
+
+                if (backslashes > 0)
+                {
+                    quoted.Append('\\', backslashes);
+                    backslashes = 0;
+                }
+
+                quoted.Append(character);
+            }
+
+            if (backslashes > 0)
+            {
+                quoted.Append('\\', backslashes * 2);
+            }
+
+            quoted.Append('"');
+            return quoted.ToString();
+        }
+
+        private static string BuildEnvironmentBlock(IDictionary<string, string?> environment)
+        {
+            var builder = new StringBuilder();
+            foreach (var pair in environment.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                builder.Append(pair.Key);
+                builder.Append('=');
+                builder.Append(pair.Value);
+                builder.Append('\0');
+            }
+
+            builder.Append('\0');
+            return builder.ToString();
+        }
+
+        private static string Sanitize(string value) =>
+            value.Replace('\r', ' ').Replace('\n', ' ').Trim();
 
         public static SafeFileHandle CreateKillOnCloseJob()
         {
@@ -299,6 +714,48 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool AssignProcessToJobObject(SafeFileHandle job, IntPtr process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern uint ResumeThread(SafeFileHandle thread);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool IsProcessInJob(
+            IntPtr processHandle,
+            IntPtr jobHandle,
+            [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool CreateProcessW(
+            string? lpApplicationName,
+            StringBuilder lpCommandLine,
+            IntPtr lpProcessAttributes,
+            IntPtr lpThreadAttributes,
+            bool bInheritHandles,
+            uint dwCreationFlags,
+            string lpEnvironment,
+            string lpCurrentDirectory,
+            ref STARTUPINFOEX lpStartupInfo,
+            out PROCESS_INFORMATION lpProcessInformation);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool InitializeProcThreadAttributeList(
+            IntPtr lpAttributeList,
+            int dwAttributeCount,
+            int dwFlags,
+            ref IntPtr lpSize);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool UpdateProcThreadAttribute(
+            IntPtr lpAttributeList,
+            uint dwFlags,
+            IntPtr attribute,
+            IntPtr lpValue,
+            IntPtr cbSize,
+            IntPtr lpPreviousValue,
+            IntPtr lpReturnSize);
+
+        [DllImport("kernel32.dll")]
+        private static extern void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool DuplicateHandle(
@@ -573,6 +1030,145 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         private static long ToInt64(ulong value) => value > long.MaxValue ? long.MaxValue : (long)value;
 
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct STARTUPINFO
+        {
+            public int cb;
+            public string? lpReserved;
+            public string? lpDesktop;
+            public string? lpTitle;
+            public int dwX;
+            public int dwY;
+            public int dwXSize;
+            public int dwYSize;
+            public int dwXCountChars;
+            public int dwYCountChars;
+            public int dwFillAttribute;
+            public int dwFlags;
+            public short wShowWindow;
+            public short cbReserved2;
+            public IntPtr lpReserved2;
+            public IntPtr hStdInput;
+            public IntPtr hStdOutput;
+            public IntPtr hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct STARTUPINFOEX
+        {
+            public STARTUPINFO StartupInfo;
+            public IntPtr lpAttributeList;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROCESS_INFORMATION
+        {
+            public IntPtr hProcess;
+            public IntPtr hThread;
+            public uint dwProcessId;
+            public uint dwThreadId;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct JOBOBJECT_BASIC_UI_RESTRICTIONS
+        {
+            public uint UIRestrictionsClass;
+        }
+
+        public sealed record WindowsSuspendedProcess(Process Process, SafeFileHandle InitialThread);
+
+        private sealed class WindowsJobAttributeList : IDisposable
+        {
+            private readonly IntPtr _jobHandleValue;
+            private readonly bool _initialized;
+
+            private WindowsJobAttributeList(IntPtr attributeList, IntPtr jobHandleValue, bool initialized)
+            {
+                AttributeList = attributeList;
+                _jobHandleValue = jobHandleValue;
+                _initialized = initialized;
+            }
+
+            public IntPtr AttributeList { get; }
+
+            public static WindowsJobAttributeList Create(SafeFileHandle job)
+            {
+                var size = IntPtr.Zero;
+                _ = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+                if (size == IntPtr.Zero)
+                {
+                    throw new OwnedProcessLaunchException(
+                        Marshal.GetLastWin32Error(),
+                        "Failed to size owned-process attribute list.",
+                        CaptureLaunchFailureEvidence(job));
+                }
+
+                var attributeList = Marshal.AllocHGlobal(size);
+                var jobHandleValue = Marshal.AllocHGlobal(IntPtr.Size);
+                var initialized = false;
+                var addedRef = false;
+                try
+                {
+                    if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref size))
+                    {
+                        throw new OwnedProcessLaunchException(
+                            Marshal.GetLastWin32Error(),
+                            "Failed to initialize owned-process attribute list.",
+                            CaptureLaunchFailureEvidence(job));
+                    }
+
+                    initialized = true;
+                    job.DangerousAddRef(ref addedRef);
+                    Marshal.WriteIntPtr(jobHandleValue, job.DangerousGetHandle());
+                    if (!UpdateProcThreadAttribute(
+                            attributeList,
+                            0,
+                            new IntPtr(ProcThreadAttributeJobList),
+                            jobHandleValue,
+                            new IntPtr(IntPtr.Size),
+                            IntPtr.Zero,
+                            IntPtr.Zero))
+                    {
+                        throw new OwnedProcessLaunchException(
+                            Marshal.GetLastWin32Error(),
+                            "Failed to assign owned job during process creation.",
+                            CaptureLaunchFailureEvidence(job));
+                    }
+
+                    return new WindowsJobAttributeList(attributeList, jobHandleValue, initialized);
+                }
+                catch
+                {
+                    if (initialized)
+                    {
+                        DeleteProcThreadAttributeList(attributeList);
+                    }
+
+                    Marshal.FreeHGlobal(jobHandleValue);
+                    Marshal.FreeHGlobal(attributeList);
+                    throw;
+                }
+                finally
+                {
+                    if (addedRef)
+                    {
+                        job.DangerousRelease();
+                    }
+                }
+            }
+
+            public void Dispose()
+            {
+                if (_initialized)
+                {
+                    DeleteProcThreadAttributeList(AttributeList);
+                }
+
+                Marshal.FreeHGlobal(_jobHandleValue);
+                Marshal.FreeHGlobal(AttributeList);
+            }
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
         {
@@ -733,4 +1329,30 @@ internal sealed class OwnedProcessGroup : IDisposable
         [DllImport("libc", SetLastError = true)]
         private static extern int getpgid(int pid);
     }
+}
+
+internal sealed class OwnedProcessAttachmentException : Win32Exception
+{
+    public OwnedProcessAttachmentException(int nativeErrorCode, string operationMessage, string jobEvidence)
+        : base(nativeErrorCode, operationMessage)
+    {
+        OperationMessage = operationMessage;
+        JobEvidence = jobEvidence;
+    }
+
+    public string OperationMessage { get; }
+    public string JobEvidence { get; }
+}
+
+internal sealed class OwnedProcessLaunchException : Win32Exception
+{
+    public OwnedProcessLaunchException(int nativeErrorCode, string operationMessage, string jobEvidence)
+        : base(nativeErrorCode, operationMessage)
+    {
+        OperationMessage = operationMessage;
+        JobEvidence = jobEvidence;
+    }
+
+    public string OperationMessage { get; }
+    public string JobEvidence { get; }
 }

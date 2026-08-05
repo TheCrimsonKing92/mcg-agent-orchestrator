@@ -5962,6 +5962,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     // operator having configured git at all.
     private const string HermeticGitIdentityName = "MCG Acceptance Gate";
     private const string HermeticGitIdentityEmail = "acceptance-gate@localhost";
+    internal const string LegacyOwnedStartNegativeControlVariable =
+        "MCG_TEST_ONLY_ACCEPTANCE_LEGACY_START_THEN_ATTACH";
 
     internal static void ConfigureHermeticVerificationEnvironment(
         IDictionary<string, string?> environment,
@@ -6163,8 +6165,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? startedProcessId = null;
         try
         {
-            using var process = ProcessTreeGuiSuppression.Start(startInfo);
-            WorkerProcessJobs.RegisterOrThrow(process, $"acceptance:{workingDirectory}");
+            using var process = StartAcceptanceProcess(startInfo, workingDirectory);
             startedProcessId = process.Id;
             if (heartbeatContext is not null)
             {
@@ -6269,6 +6270,42 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 TryDeleteFile(stderrPath);
             }
         }
+    }
+
+    private static Process StartAcceptanceProcess(ProcessStartInfo startInfo, string workingDirectory)
+    {
+        if (OperatingSystem.IsWindows() &&
+            string.Equals(
+                Environment.GetEnvironmentVariable(LegacyOwnedStartNegativeControlVariable),
+                "wait-for-fast-exit",
+                StringComparison.Ordinal))
+        {
+            // Cross-process rule-(l) control only: replay the former production sequence through the
+            // __acceptance-gate-attempt child, and deterministically expose its start-then-attach window.
+            // The external test sets this variable only on that one child process.
+            var legacyProcess = ProcessTreeGuiSuppression.Start(startInfo);
+            try
+            {
+                if (!legacyProcess.WaitForExit(TimeSpan.FromSeconds(30)))
+                {
+                    throw new TimeoutException("Legacy owned-start negative-control child did not exit.");
+                }
+
+                WorkerProcessJobs.RegisterOrThrow(
+                    legacyProcess,
+                    $"acceptance:{workingDirectory}");
+                return legacyProcess;
+            }
+            catch
+            {
+                legacyProcess.Dispose();
+                throw;
+            }
+        }
+
+        return WorkerProcessJobs.StartRegisteredOrThrow(
+            startInfo,
+            $"acceptance:{workingDirectory}");
     }
 
     private static async Task WriteGateHeartbeatLoopAsync(GateHeartbeatRuntime heartbeat, CancellationToken cancellationToken)
