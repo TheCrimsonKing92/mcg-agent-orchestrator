@@ -110,11 +110,11 @@ public sealed class GoalOperatorDispositionSurface
             "no dispatch recovery action is currently required", "next", blockers, evidence, dispatches);
     }
 
-    private DispatchOperatorDisposition EvaluateTask(
+    public DispatchOperatorDisposition EvaluateTask(
         Goal goal,
         TaskSpec task,
-        ProcessCommandLineSnapshot? commandLineSnapshot,
-        bool skipInactiveDispatchEvaluation)
+        ProcessCommandLineSnapshot? commandLineSnapshot = null,
+        bool skipInactiveDispatchEvaluation = false)
     {
         var taskNumber = GetTaskNumber(goal, task);
         var evidence = new List<OperatorEvidencePointer>();

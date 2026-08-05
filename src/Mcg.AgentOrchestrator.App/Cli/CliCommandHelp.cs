@@ -24,6 +24,8 @@ internal static class CliCommandHelp
     public const string UnparkGoalUsage = "Usage: unpark-goal <goal-id-prefix> <reason> [--confirm-goal-unpark] | unpark-goal <goal-id-prefix> --text-file <path> [--confirm-goal-unpark]";
     public const string StopUsage = "Usage: stop <goal-id-prefix> <reason> --as cancel|park|abandon|supersede | stop <goal-id-prefix> --text-file <path> --as cancel|park|abandon|supersede";
     public const string SubscriptionDispatchUsage = "Usage: subscription-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--confirm-limit-review <note>|--confirm-limit-review --text-file <path>] [--subscription-model <model>] [--subscription <profile>] [--subscription-reasoning <effort>] [--allow-git-reference]";
+    public const string RefreshDispatchSyntax = "refresh-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number> [--history] [--history-limit <n>]";
+    public const string RefreshDispatchUsage = "Usage: " + RefreshDispatchSyntax;
     public const string InquiryUsage = "Usage: inquiry <goal-prefix> <task-number> --text-file <question>";
     public const string AgentUsage = "Usage: agent <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]";
     public const string AgentAddUsage = "Usage: agent-add <role> <provider> <model> [name] [--complex-model <model>] [--subscription-model <model>] [--subscription-reasoning <effort>]";
@@ -180,6 +182,11 @@ internal static class CliCommandHelp
         SubscriptionDispatchUsage,
         "Prepare a subscription-backed task dispatch.",
         ["--goal", "--confirm-limit-review", "--text-file", "--subscription-model", "--subscription", "--subscription-reasoning", "--allow-git-reference", "--confirm-dispatch-start", "--confirm-large-paid-subscription-start", "--autonomy", "--autonomy-policy", "--confirm-readiness-risk", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry RefreshDispatch = new(
+        RefreshDispatchUsage,
+        "Reconcile one dispatch and print a compact decision surface; request durable task history explicitly.",
+        ["--goal", "--history", "--history-limit", "--autonomy", "--autonomy-policy", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Inquiry = new(
         InquiryUsage,
@@ -544,6 +551,12 @@ internal static class CliCommandHelp
             return true;
         }
 
+        if (args[0].Equals("refresh-dispatch", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = RefreshDispatch;
+            return true;
+        }
+
         if (args[0].Equals("inquiry", StringComparison.OrdinalIgnoreCase))
         {
             entry = Inquiry;
@@ -811,6 +824,14 @@ internal static class CliCommandHelp
             else if (flag.Equals("--limit", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine($"  {flag} <n>");
+            }
+            else if (flag.Equals("--history-limit", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag} <n>    Include only the newest n task-history events, in chronological order.");
+            }
+            else if (flag.Equals("--history", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"  {flag}        Include the complete durable task history.");
             }
             else if (flag.Equals("--status", StringComparison.OrdinalIgnoreCase))
             {

@@ -32,6 +32,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "agent-add", "--help" }, "agent-add <role>", "--subscription-reasoning")]
     [Xunit.InlineData(new[] { "goals", "subscribe", "--help" }, "goals subscribe", "--from-cursor")]
     [Xunit.InlineData(new[] { "conduct", "--help" }, "conduct", "--loop")]
+    [Xunit.InlineData(new[] { "refresh-dispatch", "--help" }, "refresh-dispatch <task-number>", "--history-limit <n>")]
     [Xunit.InlineData(new[] { "workspace", "create", "-h" }, "workspace create", "--help")]
     [Xunit.InlineData(new[] { "status", "--help" }, "status", "-h")]
     public void CliHelpPrintsUsageWithoutExecutingCommand(string[] args, string synopsisToken, string optionToken)
@@ -63,6 +64,21 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains("Options:", output);
         Xunit.Assert.Contains(optionToken, output);
         Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
+    [Xunit.Fact]
+    public void RefreshDispatchHelpDescribesCompactDefaultAndBothHistoryModes()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+
+        var output = ExecuteHelpAndCapture(["refresh-dispatch", "--help"], kernel, workspace);
+
+        Xunit.Assert.Contains("compact decision surface", output);
+        Xunit.Assert.Contains("--history        Include the complete durable task history.", output);
+        Xunit.Assert.Contains("--history-limit <n>    Include only the newest n task-history events", output);
         Xunit.Assert.Empty(kernel.Goals);
     }
 

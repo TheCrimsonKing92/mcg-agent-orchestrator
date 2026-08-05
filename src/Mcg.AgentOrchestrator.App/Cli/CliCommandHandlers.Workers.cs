@@ -409,11 +409,13 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             return started.Tasks.Count > 0 || started.StartFailures?.Count > 0;
 
         case "refresh-dispatch":
+            var refreshUsage = CliCommandHelp.RefreshDispatchSyntax;
+            var refreshOptions = CliArgumentParser.ParseRefreshDispatchOptions(parts, refreshUsage);
             var refreshPolicy = ResolveCliAutonomyPolicy(parts);
-            var refreshTask = ResolveDispatchCommandTask(parts, context, "refresh-dispatch <task-number>|<goal-prefix> <task-number>|--goal <goal-prefix> <task-number>");
+            var refreshTask = ResolveDispatchCommandTask(refreshOptions.TargetParts, context, refreshUsage);
             EnsurePolicyAllows(context, context.CurrentGoal!, refreshPolicy, AutonomyAction.Refresh, "refresh-dispatch");
             new BackgroundDispatchRunner().RefreshLatestProcess(context.Kernel, context.CurrentGoal!.Id, refreshTask.Id);
-            ConsoleViews.PrintTask(context.CurrentGoal!, refreshTask);
+            ConsoleViews.PrintRefreshDispatchResult(context.CurrentGoal!, refreshTask, refreshOptions);
             return true;
 
         case "refresh-dispatches":

@@ -1631,7 +1631,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var repository = new InMemoryTransactionalStateRepository(kernel);
 
         var changed = false;
-        CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
+        var output = CaptureConsole(() => changed = CliPersistentStateRunner.ExecuteCommand(
             ["refresh-dispatch", goal.Id.Value[..8], "1"],
             repository,
             workspace,
@@ -1646,12 +1646,84 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(1, repository.TransactionCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
         Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
+        Xunit.Assert.Contains("Dispatch state:", output);
+        Xunit.Assert.Contains("Next action:", output);
+        Xunit.Assert.DoesNotContain("Task timeline:", output);
 
         var restoredSnapshot = await repository.LoadGoalAsync(goal.Id);
         var restoredTask = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([restoredSnapshot!], [])).GetTask(goal.Id, task.Id);
         Xunit.Assert.Equal(WorkTaskStatus.Completed, restoredTask.Status);
         Xunit.Assert.Equal(0, restoredTask.LastProcess!.ExitCode);
         Xunit.Assert.NotNull(restoredTask.LastVerification);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_refresh_dispatch_history_limit_matches_compact_command_contract")]
+    public void PersistentRunnerRefreshDispatchHistoryLimitMatchesCompactCommandContract()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Explicit bounded refresh history", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        for (var index = 0; index < 12; index++)
+        {
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"PERSISTENT_HISTORY_{index:00}");
+        }
+        RecordRunningProcess(kernel, goal, task, root);
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["refresh-dispatch", goal.Id.Value[..8], "1", "--history-limit", "2"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var timeline = output[(output.IndexOf("Task timeline:", StringComparison.Ordinal) + "Task timeline:".Length)..];
+
+        Xunit.Assert.Equal(2, CountNonEmptyLines(timeline));
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+        Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_invalid_refresh_history_limit_does_not_load_or_mutate_goal_state")]
+    public void PersistentRunnerInvalidRefreshHistoryLimitDoesNotLoadOrMutateGoalState()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Reject invalid refresh history", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var exception = Xunit.Assert.Throws<ArgumentException>(() => CliPersistentStateRunner.ExecuteCommand(
+            ["refresh-dispatch", goal.Id.Value[..8], "1", "--history-limit", "1", "--history-limit", "2"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains(CliCommandHelp.RefreshDispatchUsage, exception.Message);
+        Xunit.Assert.Equal(0, repository.LoadGoalsCount);
+        Xunit.Assert.Equal(0, repository.TransactionCount);
+        Xunit.Assert.True(task.LastProcess!.IsRunning);
+        Xunit.Assert.Null(task.LastVerification);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_refresh_dispatch_atomically_persists_premise_invalid_human_wait")]

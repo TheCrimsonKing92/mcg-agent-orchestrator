@@ -113,6 +113,62 @@ public static void PrintTask(Goal goal, TaskSpec task)
     PrintTaskTimeline(goal, task);
 }
 
+public static void PrintRefreshDispatchResult(
+    Goal goal,
+    TaskSpec task,
+    CliArgumentParser.RefreshDispatchOptions options)
+{
+    var disposition = new GoalOperatorDispositionSurface().EvaluateTask(goal, task);
+    var state = disposition.DispatchState;
+    var dispatch = task.LastDispatch;
+    var process = task.LastProcess;
+    var verification = task.LastVerification;
+
+    Console.WriteLine($"Task: id={task.Id.Value[..8]} status={task.Status} role={task.RequiredRole} assigned={OneLine(task.AssignedAgentId?.Value, "unassigned")}");
+    Console.WriteLine(dispatch is null
+        ? "Dispatch: none"
+        : $"Dispatch: worker={OneLine(dispatch.WorkerName)} provider={OneLine(dispatch.ProviderName, "unknown")} model={OneLine(dispatch.ModelName, "unknown")} lane={OneLine(dispatch.DispatchLane, "unknown")} session={OneLine(dispatch.ProviderSessionId, "none")} dispatched={dispatch.DispatchedAt:u}");
+
+    Console.WriteLine(process is null
+        ? "Process: none"
+        : $"Process: wrapper_pid={process.ProcessId} wrapper_alive={state?.ProcessTree.Processes.FirstOrDefault(item => item.ProcessId == process.ProcessId)?.IsAlive.ToString().ToLowerInvariant() ?? "unknown"} child_pid={state?.ProcessTree.ChildProcessId?.ToString() ?? process.ChildProcessId?.ToString() ?? "none"} child_alive={state?.ProcessTree.HasLiveChild.ToString().ToLowerInvariant() ?? "unknown"} running={process.IsRunning.ToString().ToLowerInvariant()} completed={process.CompletedAt?.ToString("u") ?? "none"}");
+
+    Console.WriteLine(state is null
+        ? "Dispatch state: none"
+        : $"Dispatch state: kind={state.Kind} recommended={OneLine(state.RecommendedAction)} summary={OneLine(state.Summary)}");
+    Console.WriteLine(state is null
+        ? "Heartbeat: none"
+        : $"Heartbeat: {OneLine(ProcessHeartbeatText.FormatInline(state.Heartbeat))}");
+    Console.WriteLine(process is null
+        ? "Exit evidence: none"
+        : $"Exit evidence: exit={process.ExitCode?.ToString() ?? "unknown"} origin={state?.Artifacts.ExitArtifactOrigin.ToString() ?? process.ExitArtifactOrigin.ToString()} reason={OneLine(state?.Artifacts.ExitArtifactReason ?? process.ExitArtifactReason, "none")} artifact={(state?.Artifacts.ExitCodeExists == true ? "present" : "missing")} path={OneLine(process.ExitCodePath, "none")}");
+
+    if (verification is null)
+    {
+        Console.WriteLine("Exit classification: none");
+        Console.WriteLine("Structured blockers: status=unknown value=none");
+        Console.WriteLine("Latest verification: none");
+    }
+    else
+    {
+        var outcome = DispatchFailureClassifier.Classify(task, verification);
+        var hasBlockerStatus = WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockerStatus);
+        var hasBlocker = WorkerResultBlockers.TryFindBlocker(verification, out var blocker);
+        Console.WriteLine($"Exit classification: kind={outcome.Kind} class={outcome.OutcomeClass} recovery={outcome.RecoveryRecommendation} evidence={OneLine(outcome.EvidenceSummary, "none")}");
+        Console.WriteLine($"Structured blockers: status={(hasBlockerStatus ? blockerStatus.ToString().ToLowerInvariant() : "unknown")} value={OneLine(hasBlocker ? blocker : null, "none")}");
+        Console.WriteLine($"Latest verification: exit={verification.ExitCode} completed={verification.CompletedAt:u} worker_result={verification.WorkerResultPresent.ToString().ToLowerInvariant()} command={OneLine(verification.Command)} stdout_path={OneLine(verification.StandardOutputPath, "none")} stderr_path={OneLine(verification.StandardErrorPath, "none")}");
+    }
+
+    Console.WriteLine($"Disposition: state={disposition.State} confidence={disposition.Confidence} reason={OneLine(disposition.Reason)}");
+    Console.WriteLine($"Next action: {OneLine(disposition.NextSafeCommand)}");
+
+    if (options.IncludeHistory)
+    {
+        Console.WriteLine("Task timeline:");
+        PrintTaskTimeline(goal, task, options.HistoryLimit);
+    }
+}
+
 public static void PrintTimeline(Goal goal)
 {
     Console.WriteLine("Timeline:");
@@ -123,9 +179,13 @@ public static void PrintTimeline(Goal goal)
     }
 }
 
-public static void PrintTaskTimeline(Goal goal, TaskSpec task)
+public static void PrintTaskTimeline(Goal goal, TaskSpec task, int? limit = null)
 {
     var events = goal.Timeline.Where(evt => evt.TaskId == task.Id).OrderBy(evt => evt.OccurredAt).ToList();
+    if (limit is { } count && events.Count > count)
+    {
+        events = events.TakeLast(count).ToList();
+    }
     if (events.Count == 0)
     {
         Console.WriteLine("  no task timeline events");
@@ -136,6 +196,18 @@ public static void PrintTaskTimeline(Goal goal, TaskSpec task)
     {
             Console.WriteLine($"  {item.OccurredAt:u} {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
     }
+}
+
+private static string OneLine(string? value, string fallback = "unknown")
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return fallback;
+    }
+
+    const int maxLength = 400;
+    var singleLine = string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    return singleLine.Length <= maxLength ? singleLine : singleLine[..(maxLength - 14)] + "... [truncated]";
 }
 
 public static void PrintPendingHumanInput(AgentOrchestratorKernel kernel)
