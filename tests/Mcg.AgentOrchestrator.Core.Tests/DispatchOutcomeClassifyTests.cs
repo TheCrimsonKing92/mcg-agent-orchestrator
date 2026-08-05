@@ -1092,6 +1092,23 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
     }
 
+    [Xunit.Fact(DisplayName = "Classify ignores non-authoritative Planner contract prose in stdout")]
+    public void ClassifyProviderModelRejectionWithQuotedPlannerContractProseInStandardOutput()
+    {
+        var verification = Verification(
+            1,
+            "Diagnostic text may quote 'Planner output contract failed: missing required evidence'.",
+            "Error: unknown model 'claude-xxx-4-99'. Model not supported.");
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Planner),
+            verification);
+
+        Xunit.Assert.True(DispatchFailureClassifier.IsRecoverableProviderModelRejectionFailure(verification));
+        Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    }
+
     [Xunit.Fact]
     public void ProviderModelRejectionDetectionUsesIndependentProviderLine()
     {
