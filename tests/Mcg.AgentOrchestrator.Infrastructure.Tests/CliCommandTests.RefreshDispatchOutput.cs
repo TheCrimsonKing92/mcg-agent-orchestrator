@@ -51,11 +51,15 @@ public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
     {
         var fixture = CreateDeepHistoryFixture();
 
-        var output = ExecuteCliAndCapture(["refresh-dispatch", "1", "--history-limit", "3"], fixture.Kernel, fixture.Workspace);
+        var output = ExecuteCliAndCapture(["refresh-dispatch", "1", "--history-limit", "4"], fixture.Kernel, fixture.Workspace);
         var timeline = output[(output.IndexOf("Task timeline:", StringComparison.Ordinal) + "Task timeline:".Length)..];
+        var newest = timeline.IndexOf("HISTORY_SENTINEL_259", StringComparison.Ordinal);
+        var verification = timeline.IndexOf("Dispatch execution passed", StringComparison.Ordinal);
+        var completion = timeline.IndexOf("Dispatch completed successfully", StringComparison.Ordinal);
 
-        Xunit.Assert.Equal(3, CountNonEmptyLines(timeline));
+        Xunit.Assert.Equal(4, CountNonEmptyLines(timeline));
         Xunit.Assert.DoesNotContain("HISTORY_SENTINEL_000", timeline);
+        Xunit.Assert.True(newest >= 0 && newest < verification && verification < completion, timeline);
     }
 
     [Xunit.Fact(DisplayName = "refresh-dispatch_invalid_history_limits_fail_before_reconciliation")]
@@ -92,11 +96,6 @@ public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
         var task = new TaskSpec(TaskId.New(), "Reconcile the completed worker", AgentRole.Tester);
         var goal = kernel.CreateGoal("Deep refresh history", [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
-
-        for (var index = 0; index < 260; index++)
-        {
-            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"HISTORY_SENTINEL_{index:000}");
-        }
 
         var stdout = Path.Combine(root, "refresh.out.log");
         var stderr = Path.Combine(root, "refresh.err.log");
@@ -136,6 +135,11 @@ public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
             null,
             OwnedProcessIds: [999999, 888888],
             ChildProcessId: 888888));
+
+        for (var index = 0; index < 260; index++)
+        {
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"HISTORY_SENTINEL_{index:000}");
+        }
 
         return new DeepHistoryFixture(kernel, goal, task, workspace);
     }

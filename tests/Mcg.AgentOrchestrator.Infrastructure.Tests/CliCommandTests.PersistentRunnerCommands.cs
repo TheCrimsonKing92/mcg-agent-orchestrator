@@ -1670,17 +1670,17 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
         kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
         for (var index = 0; index < 12; index++)
         {
             kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"PERSISTENT_HISTORY_{index:00}");
         }
-        RecordRunningProcess(kernel, goal, task, root);
         File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
         File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
         var repository = new InMemoryTransactionalStateRepository(kernel);
 
         var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-            ["refresh-dispatch", goal.Id.Value[..8], "1", "--history-limit", "2"],
+            ["refresh-dispatch", goal.Id.Value[..8], "1", "--history-limit", "4"],
             repository,
             workspace,
             ref agents,
@@ -1688,8 +1688,56 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             ref profiles,
             ref currentGoal));
         var timeline = output[(output.IndexOf("Task timeline:", StringComparison.Ordinal) + "Task timeline:".Length)..];
+        var newest = timeline.IndexOf("PERSISTENT_HISTORY_11", StringComparison.Ordinal);
+        var verification = timeline.IndexOf("Dispatch execution passed", StringComparison.Ordinal);
+        var completion = timeline.IndexOf("Dispatch completed successfully", StringComparison.Ordinal);
 
-        Xunit.Assert.Equal(2, CountNonEmptyLines(timeline));
+        Xunit.Assert.Equal(4, CountNonEmptyLines(timeline));
+        Xunit.Assert.True(newest >= 0 && newest < verification && verification < completion, timeline);
+        Xunit.Assert.Equal(1, repository.TransactionCount);
+        Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_refresh_dispatch_history_prints_complete_history_oldest_first")]
+    public void PersistentRunnerRefreshDispatchHistoryPrintsCompleteHistoryOldestFirst()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Explicit full refresh history", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        RecordRunningProcess(kernel, goal, task, root);
+        for (var index = 0; index < 12; index++)
+        {
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"PERSISTENT_HISTORY_{index:00}");
+        }
+        File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["refresh-dispatch", goal.Id.Value[..8], "1", "--history"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var first = output.IndexOf("PERSISTENT_HISTORY_00", StringComparison.Ordinal);
+        var middle = output.IndexOf("PERSISTENT_HISTORY_06", StringComparison.Ordinal);
+        var newest = output.IndexOf("PERSISTENT_HISTORY_11", StringComparison.Ordinal);
+        var verification = output.IndexOf("Dispatch execution passed", StringComparison.Ordinal);
+        var completion = output.IndexOf("Dispatch completed successfully", StringComparison.Ordinal);
+
+        Xunit.Assert.Contains("Task timeline:", output);
+        Xunit.Assert.True(
+            first >= 0 && first < middle && middle < newest && newest < verification && verification < completion,
+            output);
         Xunit.Assert.Equal(1, repository.TransactionCount);
         Xunit.Assert.Equal(1, repository.SaveGoalSnapshotsCount);
     }
