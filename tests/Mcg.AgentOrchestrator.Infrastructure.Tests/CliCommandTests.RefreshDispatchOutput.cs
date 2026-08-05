@@ -4,7 +4,6 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "refresh-dispatch_default_is_bounded_and_decision_oriented_for_deep_history")]
