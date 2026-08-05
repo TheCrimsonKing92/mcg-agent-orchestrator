@@ -37,7 +37,11 @@ param(
     [string]$RunnerPath,
 
     [Parameter(ParameterSetName = 'Run')]
-    [string]$DotnetPath = 'dotnet'
+    [string]$DotnetPath = 'dotnet',
+
+    [Parameter(ParameterSetName = 'Run')]
+    [ValidateRange(1, 86400)]
+    [int]$TestHostTimeoutSeconds = 780
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,8 +96,10 @@ $run = Invoke-MtpTestRun `
     -NoBuild:$NoBuild `
     -ResultsRoot $ResultsRoot `
     -RunnerPath $RunnerPath `
-    -DotnetPath $DotnetPath
+    -DotnetPath $DotnetPath `
+    -TestHostTimeoutSeconds $TestHostTimeoutSeconds
 if ($run.ExitCode -eq 0) {
     Write-Host 'PARTITION GREEN'
 }
+Write-MtpTerminalSummary -Result $run
 exit ([int]$run.ExitCode)

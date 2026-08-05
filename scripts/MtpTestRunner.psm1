@@ -10,6 +10,88 @@ $script:ExitCodes = [pscustomobject]@{
     Runner = 26
     ZeroTests = 27
     Cleanup = 28
+    Timeout = 29
+}
+
+$script:MtpGracefulExitSeconds = 15
+$script:MtpExitConfirmationSeconds = 10
+$script:MtpOutputDrainSeconds = 5
+
+if ($null -eq ('McgMtpProcessOutputCapture' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+
+public sealed class McgMtpProcessOutputCapture : IDisposable
+{
+    private readonly object gate = new object();
+    private readonly StreamWriter writer;
+    private readonly List<string> lines = new List<string>();
+    private readonly ManualResetEvent streamsClosed = new ManualResetEvent(false);
+    private int openStreams = 2;
+
+    public McgMtpProcessOutputCapture(string path)
+    {
+        writer = new StreamWriter(path, false) { AutoFlush = true };
+    }
+
+    public void Attach(Process process)
+    {
+        process.OutputDataReceived += Receive;
+        process.ErrorDataReceived += Receive;
+    }
+
+    public void Detach(Process process)
+    {
+        process.OutputDataReceived -= Receive;
+        process.ErrorDataReceived -= Receive;
+    }
+
+    private void Receive(object sender, DataReceivedEventArgs eventArgs)
+    {
+        if (eventArgs.Data == null)
+        {
+            if (Interlocked.Decrement(ref openStreams) == 0)
+            {
+                streamsClosed.Set();
+            }
+            return;
+        }
+
+        lock (gate)
+        {
+            lines.Add(eventArgs.Data);
+            writer.WriteLine(eventArgs.Data);
+            Console.Out.WriteLine(eventArgs.Data);
+        }
+    }
+
+    public bool WaitForCompletion(int milliseconds)
+    {
+        return streamsClosed.WaitOne(milliseconds);
+    }
+
+    public string[] Snapshot()
+    {
+        lock (gate)
+        {
+            return lines.ToArray();
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            writer.Dispose();
+        }
+        streamsClosed.Dispose();
+    }
+}
+'@
 }
 
 function Test-MtpWindows {
@@ -420,6 +502,7 @@ function New-MtpRunnerArguments {
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string]$ResultsDirectory,
         [Parameter(Mandatory = $true)][string]$TrxFileName,
+        [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780,
         [string]$Filter
     )
 
@@ -437,45 +520,245 @@ function New-MtpRunnerArguments {
     if (-not [string]::IsNullOrWhiteSpace($Filter)) {
         $arguments.AddRange([string[]](ConvertTo-MtpFilterArguments -Filter $Filter))
     }
+    $timeoutIndex = $arguments.IndexOf('--timeout')
+    if ($timeoutIndex -lt 0) {
+        $arguments.Add('--timeout')
+        $arguments.Add("${TestHostTimeoutSeconds}s")
+    }
+    elseif (($timeoutIndex + 1) -ge $arguments.Count) {
+        throw "Manifest MTP invocation for '$($Invocation.project)' has --timeout without a value."
+    }
+    else {
+        $arguments[$timeoutIndex + 1] = "${TestHostTimeoutSeconds}s"
+    }
     return $arguments.ToArray()
+}
+
+function ConvertTo-MtpCommandLineArgument {
+    param([AllowNull()][string]$Value)
+
+    if ($null -eq $Value) {
+        return '""'
+    }
+    if ($Value.Length -gt 0 -and $Value.IndexOfAny([char[]]@(' ', "`t", "`n", "`r", '"')) -lt 0) {
+        return $Value
+    }
+
+    $quoted = [System.Text.StringBuilder]::new()
+    [void]$quoted.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashes++
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$quoted.Append('\', ($backslashes * 2) + 1)
+            [void]$quoted.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$quoted.Append('\', $backslashes)
+            $backslashes = 0
+        }
+        [void]$quoted.Append($character)
+    }
+    if ($backslashes -gt 0) {
+        [void]$quoted.Append('\', $backslashes * 2)
+    }
+    [void]$quoted.Append('"')
+    return $quoted.ToString()
+}
+
+function New-MtpProcessStartInfo {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $argumentLine = (@($Arguments | Select-Object -Skip 1 | ForEach-Object { ConvertTo-MtpCommandLineArgument $_ }) -join ' ')
+    $extension = [System.IO.Path]::GetExtension($Executable)
+    if ($extension.Equals('.cmd', [System.StringComparison]::OrdinalIgnoreCase) -or
+        $extension.Equals('.bat', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $commandInterpreter = $env:ComSpec
+        if ([string]::IsNullOrWhiteSpace($commandInterpreter)) {
+            $commandInterpreter = Join-Path $env:SystemRoot 'System32\cmd.exe'
+        }
+        $commandLine = (ConvertTo-MtpCommandLineArgument $Executable)
+        if (-not [string]::IsNullOrWhiteSpace($argumentLine)) {
+            $commandLine += ' ' + $argumentLine
+        }
+        $startInfo.FileName = $commandInterpreter
+        $startInfo.Arguments = '/d /s /c "' + $commandLine + '"'
+    }
+    else {
+        $startInfo.FileName = $Executable
+        $startInfo.Arguments = $argumentLine
+    }
+    return $startInfo
+}
+
+function Stop-MtpOwnedProcessTree {
+    param(
+        [Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory = $true)][datetime]$StartTimeUtc
+    )
+
+    try {
+        if ($Process.HasExited) {
+            return $true
+        }
+        $candidate = [System.Diagnostics.Process]::GetProcessById($Process.Id)
+        try {
+            if ($candidate.StartTime.ToUniversalTime() -ne $StartTimeUtc) {
+                Write-Host "CLEANUP FAILURE - owned PID $($Process.Id) no longer has the recorded start identity; refusing to terminate it."
+                return $false
+            }
+        }
+        finally {
+            $candidate.Dispose()
+        }
+
+        if (Test-MtpWindows) {
+            $taskkillPath = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+            $taskkillInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $taskkillInfo.FileName = $taskkillPath
+            $taskkillInfo.Arguments = "/PID $($Process.Id) /T /F"
+            $taskkillInfo.UseShellExecute = $false
+            $taskkillInfo.CreateNoWindow = $true
+            $taskkillInfo.RedirectStandardOutput = $true
+            $taskkillInfo.RedirectStandardError = $true
+            $taskkill = [System.Diagnostics.Process]::new()
+            $taskkill.StartInfo = $taskkillInfo
+            try {
+                if (-not $taskkill.Start()) {
+                    Write-Host "CLEANUP FAILURE - taskkill did not start for owned PID $($Process.Id)."
+                    return $false
+                }
+                if (-not $taskkill.WaitForExit($script:MtpExitConfirmationSeconds * 1000)) {
+                    $taskkill.Kill()
+                    [void]$taskkill.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
+                    Write-Host "CLEANUP FAILURE - taskkill did not finish for owned PID $($Process.Id)."
+                    return $false
+                }
+                $taskkillError = $taskkill.StandardError.ReadToEnd().Trim()
+                if ($taskkill.ExitCode -ne 0 -and -not $Process.HasExited) {
+                    Write-Host "CLEANUP FAILURE - taskkill exited $($taskkill.ExitCode) for owned PID $($Process.Id): $taskkillError"
+                    return $false
+                }
+            }
+            finally {
+                $taskkill.Dispose()
+            }
+        }
+        else {
+            $Process.Kill()
+        }
+
+        return $Process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
+    }
+    catch [System.ArgumentException] {
+        return $true
+    }
+    catch [System.InvalidOperationException] {
+        return $true
+    }
+    catch {
+        Write-Host "CLEANUP FAILURE - exact owned PID $($Process.Id) could not be terminated: $($_.Exception.Message)"
+        return $false
+    }
 }
 
 function Invoke-MtpAppHost {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$OutputLog
+        [Parameter(Mandatory = $true)][string]$OutputLog,
+        [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
     )
 
-    $captured = [System.Collections.Generic.List[string]]::new()
-    $previousErrorActionPreference = $ErrorActionPreference
+    $process = $null
+    $capture = $null
+    $processId = $null
+    $startTimeUtc = $null
+    $runnerExit = $script:ExitCodes.Runner
+    $timedOut = $false
+    $exitConfirmed = $false
+    $processStarted = $false
+    $runnerFailed = $false
     try {
-        # Windows PowerShell promotes native stderr redirected through 2>&1 to an ErrorRecord.
-        # Keep streaming that diagnostic, but do not let the module's Stop preference turn a
-        # normal stderr line into a synthetic wrapper exit code.
-        $ErrorActionPreference = 'Continue'
-        & $Executable @($Arguments | Select-Object -Skip 1) 2>&1 | ForEach-Object {
-            $line = $_.ToString()
-            $captured.Add($line)
-            Add-Content -LiteralPath $OutputLog -Value $line
-            Write-Host $line
+        $capture = [McgMtpProcessOutputCapture]::new($OutputLog)
+        $process = [System.Diagnostics.Process]::new()
+        $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments
+        $capture.Attach($process)
+        if (-not $process.Start()) {
+            throw "Process.Start returned false for '$Executable'."
         }
-        $runnerExit = $LASTEXITCODE
+        $processStarted = $true
+        $processId = $process.Id
+        $startTimeUtc = $process.StartTime.ToUniversalTime()
+        $process.BeginOutputReadLine()
+        $process.BeginErrorReadLine()
+
+        if (-not $process.WaitForExit($TestHostTimeoutSeconds * 1000)) {
+            $timedOut = $true
+            Write-Host "TEST HOST TIMEOUT - owned PID $processId exceeded ${TestHostTimeoutSeconds}s; allowing ${script:MtpGracefulExitSeconds}s for MTP cancellation."
+            if (-not $process.WaitForExit($script:MtpGracefulExitSeconds * 1000)) {
+                Write-Host "TEST HOST TIMEOUT - terminating exact owned process tree rooted at PID $processId."
+                [void](Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $startTimeUtc)
+            }
+        }
+
+        $exitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
+        $streamsDrained = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
+        $exitConfirmed = $exitConfirmed -and $streamsDrained
+        if ($process.HasExited) {
+            $runnerExit = $process.ExitCode
+        }
     }
     catch {
+        $runnerFailed = $true
         $line = $_.Exception.Message
-        $captured.Add($line)
-        Add-Content -LiteralPath $OutputLog -Value $line
         Write-Host $line
-        $runnerExit = $script:ExitCodes.Runner
+        if ($null -eq $capture) {
+            Set-Content -LiteralPath $OutputLog -Value $line
+        }
     }
     finally {
-        $ErrorActionPreference = $previousErrorActionPreference
+        if ($null -ne $process -and $processStarted) {
+            if (-not $process.HasExited -and $null -ne $startTimeUtc) {
+                [void](Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $startTimeUtc)
+                $exitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
+            }
+        }
+        if ($null -ne $capture) {
+            $captured = @($capture.Snapshot())
+            if ($null -ne $process) {
+                $capture.Detach($process)
+            }
+            $capture.Dispose()
+        }
+        else {
+            $captured = @()
+        }
+        if ($null -ne $process) {
+            $process.Dispose()
+        }
     }
 
     return [pscustomobject]@{
         ExitCode = $runnerExit
         Output = @($captured)
+        TimedOut = $timedOut
+        OwnedProcessId = $processId
+        ExitConfirmed = $exitConfirmed
+        RunnerFailed = $runnerFailed
     }
 }
 
@@ -501,6 +784,41 @@ function Read-MtpTrxResult {
     }
 }
 
+function New-MtpTerminalResult {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('timed-out', 'failed', 'completed-with-missing-trx', 'completed')][string]$Outcome,
+        [Parameter(Mandatory = $true)][int]$ExitCode,
+        $RunnerExitCode = $null,
+        [AllowNull()][string]$ResultsDirectory,
+        [string[]]$RunnerLogPaths = @(),
+        [string[]]$TrxPaths = @(),
+        [string[]]$ExpectedTrxPaths = @(),
+        $OwnedProcessId = $null,
+        $ExitConfirmed = $null,
+        [bool]$ArtifactsRetained = $false
+    )
+
+    return [pscustomobject][ordered]@{
+        schemaVersion = 1
+        outcome = $Outcome
+        exitCode = $ExitCode
+        runnerExitCode = $RunnerExitCode
+        resultsDirectory = $ResultsDirectory
+        runnerLogPaths = @($RunnerLogPaths)
+        trxPaths = @($TrxPaths)
+        expectedTrxPaths = @($ExpectedTrxPaths)
+        ownedProcessId = $OwnedProcessId
+        exitConfirmed = $ExitConfirmed
+        artifactsRetained = $ArtifactsRetained
+    }
+}
+
+function Write-MtpTerminalSummary {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    Write-Host ('MTP_TERMINAL_SUMMARY ' + ($Result | ConvertTo-Json -Compress -Depth 4))
+}
+
 function Invoke-MtpTestRun {
     param(
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
@@ -513,7 +831,8 @@ function Invoke-MtpTestRun {
         [switch]$NoBuild,
         [string]$ResultsRoot,
         [string]$RunnerPath,
-        [string]$DotnetPath = 'dotnet'
+        [string]$DotnetPath = 'dotnet',
+        [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
     )
 
     try {
@@ -521,16 +840,22 @@ function Invoke-MtpTestRun {
     }
     catch {
         Write-Host "TARGET FAILURE - $($_.Exception.Message)"
-        return [pscustomobject]@{ ExitCode = $script:ExitCodes.InvalidTarget; ResultsDirectory = $null }
+        return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.InvalidTarget -ResultsDirectory $null
     }
     try {
         $runDirectory = Initialize-MtpResultsDirectory -ResultsRoot $ResultsRoot -RunLabel $RunLabel
     }
     catch {
         Write-Host "RESULTS DIRECTORY FAILURE - $($_.Exception.Message)"
-        return [pscustomobject]@{ ExitCode = $script:ExitCodes.ResultsDirectory; ResultsDirectory = $null }
+        return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.ResultsDirectory -ResultsDirectory $null
     }
 
+    $runnerLogPaths = [System.Collections.Generic.List[string]]::new()
+    $trxPaths = [System.Collections.Generic.List[string]]::new()
+    $expectedTrxPaths = [System.Collections.Generic.List[string]]::new()
+    $lastOwnedProcessId = $null
+    $lastRunnerExitCode = $null
+    $allExitsConfirmed = $true
     $environmentSnapshot = Get-MtpEnvironmentSnapshot
     try {
         Set-MtpHermeticEnvironment -RepositoryRoot $RepositoryRoot -WritableRoot $runDirectory
@@ -538,7 +863,7 @@ function Invoke-MtpTestRun {
         if (-not $NoBuild) {
             if (-not (Invoke-MtpBuild -RepositoryRoot $RepositoryRoot -Projects $projects -Configuration $Configuration -DotnetPath $DotnetPath)) {
                 Write-Host "Retained diagnostic directory: $runDirectory"
-                return [pscustomobject]@{ ExitCode = $script:ExitCodes.Build; ResultsDirectory = $runDirectory }
+                return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Build -ResultsDirectory $runDirectory -ArtifactsRetained $true
             }
         }
 
@@ -548,18 +873,18 @@ function Invoke-MtpTestRun {
         }
         $invocationIndex = 0
         foreach ($project in $projects) {
-        $expectedAppHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
-        $executable = if ([string]::IsNullOrWhiteSpace($RunnerPath)) { $expectedAppHost } else { [System.IO.Path]::GetFullPath($RunnerPath) }
-        if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-            $projectPath = Join-Path $RepositoryRoot ([string]$project.project)
-            $outputDirectory = Split-Path -Parent $expectedAppHost
-            Write-Host "MISSING APPHOST - expected '$executable'. Build it with: $DotnetPath build `"$projectPath`" --configuration $Configuration --output `"$outputDirectory`""
-            Write-Host "Retained diagnostic directory: $runDirectory"
-            return [pscustomobject]@{ ExitCode = $script:ExitCodes.MissingAppHost; ResultsDirectory = $runDirectory }
-        }
+            $expectedAppHost = Resolve-MtpAppHostPath -RepositoryRoot $RepositoryRoot -Invocation $project -Configuration $Configuration
+            $executable = if ([string]::IsNullOrWhiteSpace($RunnerPath)) { $expectedAppHost } else { [System.IO.Path]::GetFullPath($RunnerPath) }
+            if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+                $projectPath = Join-Path $RepositoryRoot ([string]$project.project)
+                $outputDirectory = Split-Path -Parent $expectedAppHost
+                Write-Host "MISSING APPHOST - expected '$executable'. Build it with: $DotnetPath build `"$projectPath`" --configuration $Configuration --output `"$outputDirectory`""
+                Write-Host "Retained diagnostic directory: $runDirectory"
+                return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.MissingAppHost -ResultsDirectory $runDirectory -ArtifactsRetained $true
+            }
 
-        foreach ($filter in $filterList) {
-            for ($attempt = 1; $attempt -le $Repeat; $attempt++) {
+            foreach ($filter in $filterList) {
+                for ($attempt = 1; $attempt -le $Repeat; $attempt++) {
                 $invocationIndex++
                 $projectName = [System.IO.Path]::GetFileNameWithoutExtension([string]$project.project)
                 $stem = "$RunLabel-$projectName-$invocationIndex-r$attempt-$filter"
@@ -567,13 +892,14 @@ function Invoke-MtpTestRun {
                 $trxFileName = Get-MtpBoundedFileName -Stem $stem -MaximumLength $fileNameBudget
                 $trxPath = Join-Path $runDirectory $trxFileName
                 $outputLog = Join-Path $runDirectory ([System.IO.Path]::ChangeExtension($trxFileName, '.runner.log'))
+                $expectedTrxPaths.Add($trxPath)
                 try {
-                    $arguments = New-MtpRunnerArguments -Invocation $project -Executable $executable -ResultsDirectory $runDirectory -TrxFileName $trxFileName -Filter $filter
+                    $arguments = New-MtpRunnerArguments -Invocation $project -Executable $executable -ResultsDirectory $runDirectory -TrxFileName $trxFileName -TestHostTimeoutSeconds $TestHostTimeoutSeconds -Filter $filter
                 }
                 catch {
                     Write-Host "RUNNER/TOOLING FAILURE - $($_.Exception.Message)"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return [pscustomobject]@{ ExitCode = $script:ExitCodes.Runner; ResultsDirectory = $runDirectory }
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $lastOwnedProcessId -ExitConfirmed $allExitsConfirmed -ArtifactsRetained $true
                 }
 
                 Write-Host "Running MTP apphost: $executable"
@@ -581,12 +907,34 @@ function Invoke-MtpTestRun {
                     Write-Host "Filter: $filter"
                 }
                 Write-Host "Runner output log: $outputLog"
-                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog
+                $runnerLogPaths.Add($outputLog)
+                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -TestHostTimeoutSeconds $TestHostTimeoutSeconds
+                $lastOwnedProcessId = $run.OwnedProcessId
+                $lastRunnerExitCode = $run.ExitCode
+                $allExitsConfirmed = $allExitsConfirmed -and [bool]$run.ExitConfirmed
+                if (Test-Path -LiteralPath $trxPath -PathType Leaf) {
+                    $trxPaths.Add($trxPath)
+                }
+                if ($run.TimedOut) {
+                    Write-Host "TEST HOST TIMED OUT - apphost exceeded ${TestHostTimeoutSeconds}s. Captured stderr/stdout: $outputLog"
+                    Write-Host "Retained diagnostic directory: $runDirectory"
+                    return New-MtpTerminalResult -Outcome timed-out -ExitCode $script:ExitCodes.Timeout -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed ([bool]$run.ExitConfirmed) -ArtifactsRetained $true
+                }
+                if ($run.RunnerFailed) {
+                    Write-Host "RUNNER/TOOLING FAILURE - apphost could not be started or monitored. Captured stderr/stdout: $outputLog"
+                    Write-Host "Retained diagnostic directory: $runDirectory"
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed ([bool]$run.ExitConfirmed) -ArtifactsRetained $true
+                }
+                if (-not $run.ExitConfirmed) {
+                    Write-Host "CLEANUP FAILURE - owned PID $($run.OwnedProcessId) exit or output drain was not confirmed."
+                    Write-Host "Retained diagnostic directory: $runDirectory"
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Cleanup -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $false -ArtifactsRetained $true
+                }
                 if (-not (Test-Path -LiteralPath $trxPath -PathType Leaf)) {
-                    Write-Host "RUNNER/TOOLING FAILURE - apphost exited $($run.ExitCode) without producing TRX '$trxPath'. This is not a compile failure. Captured stderr/stdout: $outputLog"
+                    Write-Host "COMPLETED WITH MISSING TRX - apphost exited $($run.ExitCode) without producing TRX '$trxPath'. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     $exitCode = if ($run.ExitCode -ne 0) { $run.ExitCode } else { $script:ExitCodes.Runner }
-                    return [pscustomobject]@{ ExitCode = $exitCode; ResultsDirectory = $runDirectory }
+                    return New-MtpTerminalResult -Outcome completed-with-missing-trx -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
                 }
 
                 Write-Host "TRX: $trxPath"
@@ -596,13 +944,13 @@ function Invoke-MtpTestRun {
                 catch {
                     Write-Host "RUNNER/TOOLING FAILURE - $($_.Exception.Message) Apphost exit: $($run.ExitCode). Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return [pscustomobject]@{ ExitCode = $script:ExitCodes.Runner; ResultsDirectory = $runDirectory }
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Runner -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
                 }
                 Write-Host ("{0}: total={1} passed={2} failed={3} skipped={4}" -f $trxFileName, $summary.Total, $summary.Passed, $summary.Failed, $summary.Skipped)
                 if ($summary.Total -le 0) {
                     Write-Host "ZERO TESTS - filter matched no tests. Apphost exit: $($run.ExitCode). TRX: $trxPath"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return [pscustomobject]@{ ExitCode = $script:ExitCodes.ZeroTests; ResultsDirectory = $runDirectory }
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.ZeroTests -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
                 }
                 if ($summary.Failed -gt 0) {
                     foreach ($failedResult in @($summary.Document.TestRun.Results.UnitTestResult | Where-Object outcome -eq 'Failed')) {
@@ -615,15 +963,15 @@ function Invoke-MtpTestRun {
                     Write-Host "TEST FAILURES - $($summary.Failed) test(s) failed. TRX: $trxPath"
                     Write-Host "Retained diagnostic directory: $runDirectory"
                     $exitCode = if ($run.ExitCode -ne 0) { $run.ExitCode } else { 1 }
-                    return [pscustomobject]@{ ExitCode = $exitCode; ResultsDirectory = $runDirectory }
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $exitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
                 }
                 if ($run.ExitCode -ne 0) {
                     Write-Host "RUNNER/TOOLING FAILURE - apphost exited $($run.ExitCode) although its TRX contains no failing tests. This is not a compile failure. Captured stderr/stdout: $outputLog"
                     Write-Host "Retained diagnostic directory: $runDirectory"
-                    return [pscustomobject]@{ ExitCode = $run.ExitCode; ResultsDirectory = $runDirectory }
+                    return New-MtpTerminalResult -Outcome failed -ExitCode $run.ExitCode -RunnerExitCode $run.ExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $run.OwnedProcessId -ExitConfirmed $true -ArtifactsRetained $true
+                }
                 }
             }
-        }
         }
 
         Write-Host "ALL GREEN - clean-run TRX receipts were under '$runDirectory' and will now be removed."
@@ -633,9 +981,9 @@ function Invoke-MtpTestRun {
         catch {
             Write-Host "CLEANUP FAILURE - clean test receipts could not be removed from '$runDirectory': $($_.Exception.Message)"
             Write-Host "Retained diagnostic directory: $runDirectory"
-            return [pscustomobject]@{ ExitCode = $script:ExitCodes.Cleanup; ResultsDirectory = $runDirectory }
+            return New-MtpTerminalResult -Outcome failed -ExitCode $script:ExitCodes.Cleanup -RunnerExitCode $lastRunnerExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $lastOwnedProcessId -ExitConfirmed $allExitsConfirmed -ArtifactsRetained $true
         }
-        return [pscustomobject]@{ ExitCode = 0; ResultsDirectory = $runDirectory }
+        return New-MtpTerminalResult -Outcome completed -ExitCode 0 -RunnerExitCode $lastRunnerExitCode -ResultsDirectory $runDirectory -RunnerLogPaths $runnerLogPaths.ToArray() -TrxPaths $trxPaths.ToArray() -ExpectedTrxPaths $expectedTrxPaths.ToArray() -OwnedProcessId $lastOwnedProcessId -ExitConfirmed $allExitsConfirmed -ArtifactsRetained $false
     }
     finally {
         Restore-MtpEnvironment -Snapshot $environmentSnapshot
@@ -653,5 +1001,6 @@ Export-ModuleMember -Function @(
     'Get-MtpTargetProjects',
     'New-MtpRunnerArguments',
     'Read-MtpTrxResult',
+    'Write-MtpTerminalSummary',
     'Invoke-MtpTestRun'
 )

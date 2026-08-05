@@ -23,7 +23,8 @@ param(
     [string]$Configuration = 'Debug',
     [string]$ResultsRoot,
     [string]$RunnerPath,
-    [string]$DotnetPath = 'dotnet'
+    [string]$DotnetPath = 'dotnet',
+    [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
 )
 
 $ErrorActionPreference = 'Stop'
@@ -74,5 +75,7 @@ $run = Invoke-MtpTestRun `
     -NoBuild:$NoBuild `
     -ResultsRoot $ResultsRoot `
     -RunnerPath $RunnerPath `
-    -DotnetPath $DotnetPath
+    -DotnetPath $DotnetPath `
+    -TestHostTimeoutSeconds $TestHostTimeoutSeconds
+Write-MtpTerminalSummary -Result $run
 exit ([int]$run.ExitCode)
