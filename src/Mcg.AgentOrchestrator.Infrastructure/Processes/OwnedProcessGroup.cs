@@ -437,7 +437,13 @@ internal sealed class OwnedProcessGroup : IDisposable
                 CaptureProbe(
                     "owner_job_ui_restrictions",
                     () => CaptureJobFlags("owner_job_ui_restrictions", IntPtr.Zero, JobObjectBasicUiRestrictions)),
-                CaptureProbe("owned_job_limit_flags", () => CaptureOwnedJobFlags(ownedJob))
+                CaptureProbe("owned_job_limit_flags", () => CaptureOwnedJobFlags(ownedJob)),
+                CaptureProbe(
+                    "owned_job_ui_restrictions",
+                    () => CaptureOwnedJobFlags(
+                        ownedJob,
+                        "owned_job_ui_restrictions",
+                        JobObjectBasicUiRestrictions))
             };
 
             return string.Join("; ", parts);
@@ -1091,9 +1097,10 @@ internal sealed class OwnedProcessGroup : IDisposable
                 _ = InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
                 if (size == IntPtr.Zero)
                 {
-                    throw new Win32Exception(
+                    throw new OwnedProcessLaunchException(
                         Marshal.GetLastWin32Error(),
-                        "Failed to size owned-process attribute list.");
+                        "Failed to size owned-process attribute list.",
+                        CaptureLaunchFailureEvidence(job));
                 }
 
                 var attributeList = Marshal.AllocHGlobal(size);
@@ -1104,9 +1111,10 @@ internal sealed class OwnedProcessGroup : IDisposable
                 {
                     if (!InitializeProcThreadAttributeList(attributeList, 1, 0, ref size))
                     {
-                        throw new Win32Exception(
+                        throw new OwnedProcessLaunchException(
                             Marshal.GetLastWin32Error(),
-                            "Failed to initialize owned-process attribute list.");
+                            "Failed to initialize owned-process attribute list.",
+                            CaptureLaunchFailureEvidence(job));
                     }
 
                     initialized = true;
@@ -1121,9 +1129,10 @@ internal sealed class OwnedProcessGroup : IDisposable
                             IntPtr.Zero,
                             IntPtr.Zero))
                     {
-                        throw new Win32Exception(
+                        throw new OwnedProcessLaunchException(
                             Marshal.GetLastWin32Error(),
-                            "Failed to assign owned job during process creation.");
+                            "Failed to assign owned job during process creation.",
+                            CaptureLaunchFailureEvidence(job));
                     }
 
                     return new WindowsJobAttributeList(attributeList, jobHandleValue, initialized);

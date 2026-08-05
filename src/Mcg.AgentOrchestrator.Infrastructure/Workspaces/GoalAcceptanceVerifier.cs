@@ -6102,7 +6102,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static bool IsInheritedHermeticVerificationEnvironmentVariable(string name) =>
         name.Equals("PATH", StringComparison.OrdinalIgnoreCase) ||
-        name.Equals(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable, StringComparison.OrdinalIgnoreCase) ||
         name.Equals("PATHEXT", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("SystemRoot", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("WINDIR", StringComparison.OrdinalIgnoreCase) ||

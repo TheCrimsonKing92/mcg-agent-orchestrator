@@ -2665,10 +2665,23 @@ public sealed class ConductorBatchLoopTests
             if (useLegacyStartThenAttach)
             {
                 Assert.False(File.Exists(markerPath));
-                Assert.Contains(
-                    "stage=owned-process-group-attachment",
-                    completedAttempt.Detail,
-                    StringComparison.Ordinal);
+                Assert.Contains("stage=owned-process-group-attachment", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("native_error_code=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("native_message=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("candidate_has_exited=true", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("candidate_exit_code=0", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owner_in_job=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("candidate_in_job=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("candidate_in_owned_job=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owner_job_limit_flags=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owner_job_ui_restrictions=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owned_job_limit_flags=", completedAttempt.Detail, StringComparison.Ordinal);
+                Assert.Contains("owned_job_ui_restrictions=", completedAttempt.Detail, StringComparison.Ordinal);
+
+                var candidateProcessId = ParseRegistrationFailureProcessId(completedAttempt.Detail);
+                Assert.False(
+                    IsProcessRunning(candidateProcessId),
+                    $"Failed legacy candidate remained alive after exact-PID cleanup: {DescribeProcess(candidateProcessId)}");
             }
             else
             {
@@ -2678,7 +2691,7 @@ public sealed class ConductorBatchLoopTests
 
             var stdout = TryReadAllTextShared(completedAttempt.StdoutPath);
             Assert.Equal(1, CountOccurrences(stdout, "ACCEPTANCE_LEASE_RELEASE"));
-            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Empty(new SpawnRegistry(workspace.SqliteStatePath).ListActive());
         }
         finally
         {
@@ -2701,8 +2714,6 @@ public sealed class ConductorBatchLoopTests
                     process.Dispose();
                 }
             }
-
-            WorkerProcessJobs.ClearRegistryForTests();
             TryDeleteDirectory(attemptRoot);
             TryDeleteDirectory(root);
         }
@@ -4409,6 +4420,23 @@ public sealed class ConductorBatchLoopTests
         }
 
         throw new InvalidOperationException("Parent conductor output did not include a LOOP_HANDOFF pid.");
+    }
+
+    private static int ParseRegistrationFailureProcessId(string detail)
+    {
+        const string token = "pid=";
+        var start = detail.IndexOf(token, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            throw new InvalidOperationException("Registration failure detail did not include a candidate pid.");
+        }
+
+        start += token.Length;
+        var end = detail.IndexOf(';', start);
+        var value = end < 0 ? detail[start..] : detail[start..end];
+        return int.TryParse(value, out var processId)
+            ? processId
+            : throw new InvalidOperationException($"Registration failure candidate pid was invalid: {value}");
     }
 
     private static bool TryReadTokenValue(string line, string token, out string value)

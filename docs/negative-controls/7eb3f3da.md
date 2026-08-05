@@ -9,12 +9,17 @@ the production background route (`ConductorParallelAcceptanceAttemptCoordinator`
 - RED control: `ParallelAttempt_ExternalOldProductionSeam_FastExitRed` sets the test-only process
   start mode on the external attempt child. The verifier replays the former start-then-attach
   sequence with a deterministic fast exit. The durable attempt is `Failed` at
-  `stage=owned-process-group-attachment`, the command marker is absent, and exactly one stable-slot
-  lease release is recorded.
+  `stage=owned-process-group-attachment`, preserves the native code/message, candidate exit state,
+  owner/candidate memberships, and owner/owned-job limit/UI probes, and the recorded candidate PID
+  is no longer running after exact-PID cleanup. The command marker is absent and exactly one
+  stable-slot lease release is recorded.
 - GREEN behavior: `ParallelAttempt_OwnedStart_ReachesNormalResult` launches the identical external
   attempt and manifest through the default atomic owned start. The durable attempt is `Passed`, the
   command marker contains `started`, the result artifact exists, and exactly one stable-slot lease
   release is recorded.
+- Both external cases inspect `new SpawnRegistry(workspace.SqliteStatePath).ListActive()` only after
+  the external App child exits and require no active durable entries. They do not inspect or clear
+  the parent test process's static `WorkerProcessJobs` registry.
 - Unit comparators retain the direct fast-exit matrix and verify launch diagnostics, non-Windows
   process disposal, and resume rollback without a durable registry residue.
 
@@ -26,10 +31,10 @@ Verification receipt:
 `Invoke-TestSummary.ps1 ... -Filter "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests&DisplayName~OwnedStart"`
 — 1 passed, 0 failed; the real verifier wrote the configured marker.
 
-`Invoke-TestSummary.ps1 ... -Filter "FullyQualifiedName~ConductorBatchLoopTests&DisplayName~FastExitRed"`
+`Invoke-TestSummary.ps1 ... -Filter "Name~ParallelAttemptExternalOldProductionSeamFastExitRed"`
 — 1 passed, 0 failed; external old-seam RED.
 
-`Invoke-TestSummary.ps1 ... -Filter "FullyQualifiedName~ConductorBatchLoopTests&DisplayName~ReachesNormalResult"`
+`Invoke-TestSummary.ps1 ... -Filter "Name~ParallelAttemptOwnedStartReachesNormalResult"`
 — 1 passed, 0 failed; external atomic GREEN.
 
 This proves the old lifecycle window and the atomic launch behavior. It does not claim that every

@@ -909,6 +909,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         Assert.Contains("owner_job_limit_flags=", evidence, StringComparison.Ordinal);
         Assert.Contains("owner_job_ui_restrictions=", evidence, StringComparison.Ordinal);
         Assert.Contains("owned_job_limit_flags=", evidence, StringComparison.Ordinal);
+        Assert.Contains("owned_job_ui_restrictions=", evidence, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_atomic_launch_failure_preserves_native_and_job_receipt")]
