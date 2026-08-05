@@ -154,6 +154,34 @@ internal sealed class OwnedProcessGroup : IDisposable
         return WindowsJob.TryDuplicateCurrentProcessHandle(_jobHandle, out duplicate);
     }
 
+    /// <summary>
+    /// Releases this process group without terminating its members. On Windows the kill-on-close
+    /// limit must be cleared before the final job handle is closed; otherwise a logical detach
+    /// still kills the worker tree when the conductor exits.
+    /// </summary>
+    public bool TryDetachWithoutKill()
+    {
+        if (_disposed)
+        {
+            return true;
+        }
+
+        if (OperatingSystem.IsWindows() &&
+            (_jobHandle is null ||
+             _jobHandle.IsClosed ||
+             _jobHandle.IsInvalid ||
+             !WindowsJob.TryDisableKillOnClose(_jobHandle)))
+        {
+            return false;
+        }
+
+        _disposed = true;
+        _jobHandle?.Dispose();
+        _jobHandle = null;
+        _processGroupId = null;
+        return true;
+    }
+
     public static bool TryReadAccounting(SafeFileHandle jobHandle, out WorkerProcessJobAccounting accounting)
     {
         accounting = WorkerProcessJobAccounting.Empty;
@@ -326,6 +354,32 @@ internal sealed class OwnedProcessGroup : IDisposable
 
         public static bool TryTerminate(SafeFileHandle job) =>
             !job.IsClosed && !job.IsInvalid && TerminateJobObject(job, 1);
+
+        public static bool TryDisableKillOnClose(SafeFileHandle job)
+        {
+            if (!TryQuery(job, JobObjectExtendedLimitInformation, out JOBOBJECT_EXTENDED_LIMIT_INFORMATION info))
+            {
+                return false;
+            }
+
+            if ((info.BasicLimitInformation.LimitFlags & JobObjectLimitKillOnJobClose) == 0)
+            {
+                return true;
+            }
+
+            info.BasicLimitInformation.LimitFlags &= ~JobObjectLimitKillOnJobClose;
+            var length = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
+            var buffer = Marshal.AllocHGlobal(length);
+            try
+            {
+                Marshal.StructureToPtr(info, buffer, false);
+                return SetInformationJobObject(job, JobObjectExtendedLimitInformation, buffer, (uint)length);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
 
         public static bool TryGetActiveProcessCount(SafeFileHandle job, out uint activeProcessCount)
         {

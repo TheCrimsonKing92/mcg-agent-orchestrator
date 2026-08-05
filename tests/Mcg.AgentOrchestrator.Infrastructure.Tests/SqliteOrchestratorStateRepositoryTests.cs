@@ -1448,6 +1448,45 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains(restoredGoal.Timeline, evt => evt.Kind == ProgressKind.TaskProcessStarted);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_round_trips_gracefully_detached_process_marker")]
+    public async Task SqliteOrchestratorStateRepositoryRoundTripsGracefullyDetachedProcessMarker()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "detached process marker");
+        var task = goal.Tasks.Single();
+        var startedAt = DateTimeOffset.UtcNow;
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("local-worker", "worker.exe", "C:\\work", startedAt));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(
+                1234,
+                "worker.exe",
+                "C:\\work",
+                "out.log",
+                "err.log",
+                "exit.txt",
+                startedAt,
+                null,
+                null));
+        kernel.RecordTaskProcessGracefullyDetached(
+            goal.Id,
+            task.Id,
+            task.LastProcess! with { WasGracefullyDetachedByConductor = true });
+
+        await repo.SaveAsync(kernel);
+        var restored = await repo.LoadAsync();
+
+        var restoredTask = restored.GetTask(goal.Id, task.Id);
+        Assert.Equal(WorkTaskStatus.Running, restoredTask.Status);
+        Assert.True(restoredTask.LastProcess!.WasGracefullyDetachedByConductor);
+    }
+
     [Xunit.Fact]
     public async Task TickMerge_HumanWait_PersistsAnswerableRequest()
     {

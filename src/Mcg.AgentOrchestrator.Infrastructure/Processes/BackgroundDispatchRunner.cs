@@ -45,7 +45,8 @@ public sealed record InterruptedDispatchStateRead(
     WorkTaskStatus? TaskStatus,
     string? UnreadableEntity = null,
     string? Error = null,
-    bool WasTaskCancelledByConductor = false)
+    bool WasTaskCancelledByConductor = false,
+    bool WasTaskGracefullyDetachedByConductor = false)
 {
     public bool IsReadable => UnreadableEntity is null;
 
@@ -2199,8 +2200,22 @@ public sealed class BackgroundDispatchRunner
                 continue;
             }
 
-            EvictProcessLogCache(process);
-            detached++;
+            if (WorkerProcessJobs.TryDetachForGracefulStop(process.ProcessId, out var detachFailure))
+            {
+                kernel.RecordTaskProcessGracefullyDetached(
+                    goalId,
+                    task.Id,
+                    process with { WasGracefullyDetachedByConductor = true });
+                EvictProcessLogCache(process);
+                detached++;
+                continue;
+            }
+
+            CancelLatestProcess(kernel, goalId, task.Id, cancelledByConductor: true);
+            kernel.RecordTaskNote(
+                goalId,
+                task.Id,
+                $"{detachFailure}; task marked conductor-cancelled so a successor can requeue it.");
         }
 
         return detached;
@@ -2229,6 +2244,30 @@ public sealed class BackgroundDispatchRunner
                         goal.Id,
                         task.Id,
                         "Auto-requeued interrupted dispatch after conductor loop stop.",
+                        readCurrentState)
+                        ? 1
+                        : 0;
+                    continue;
+                }
+
+                if (task.Status == WorkTaskStatus.Failed &&
+                    task.LastProcess is
+                    {
+                        WasGracefullyDetachedByConductor: true,
+                        WasCancelled: false,
+                        CompletedAt: not null,
+                        ExitArtifactOrigin: DispatchExitArtifactOrigin.Synthetic,
+                        ChildExitCode: null
+                    } detachedFailure &&
+                    task.LastVerification?.WorkerResultPresent != true &&
+                    !AnyTrackedProcessStillRunning(detachedFailure))
+                {
+                    EvictProcessLogCache(detachedFailure);
+                    recovered += TryAutoRequeue(
+                        kernel,
+                        goal.Id,
+                        task.Id,
+                        "Auto-requeued gracefully detached dispatch after synthetic missing-exit recovery.",
                         readCurrentState)
                         ? 1
                         : 0;
@@ -2339,7 +2378,8 @@ public sealed class BackgroundDispatchRunner
 
         if (!IsAutoRequeueTaskStatusAllowed(
                 state.TaskStatus.Value,
-                state.WasTaskCancelledByConductor))
+                state.WasTaskCancelledByConductor,
+                state.WasTaskGracefullyDetachedByConductor))
         {
             blocker = new AutoRequeueBlocker(
                 "task",
@@ -2388,7 +2428,8 @@ public sealed class BackgroundDispatchRunner
             return new InterruptedDispatchStateRead(
                 goal.Status,
                 task.Status,
-                WasTaskCancelledByConductor: task.WasCancelledByConductor);
+                WasTaskCancelledByConductor: task.WasCancelledByConductor,
+                WasTaskGracefullyDetachedByConductor: task.LastProcess?.WasGracefullyDetachedByConductor == true);
         }
         catch (Exception ex)
         {
@@ -2398,9 +2439,11 @@ public sealed class BackgroundDispatchRunner
 
     private static bool IsAutoRequeueTaskStatusAllowed(
         WorkTaskStatus status,
-        bool wasCancelledByConductor) =>
+        bool wasCancelledByConductor,
+        bool wasGracefullyDetachedByConductor) =>
         status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned or WorkTaskStatus.Running ||
-        status == WorkTaskStatus.Cancelled && wasCancelledByConductor;
+        status == WorkTaskStatus.Cancelled && wasCancelledByConductor ||
+        status == WorkTaskStatus.Failed && wasGracefullyDetachedByConductor;
 
     private static bool IsAutoRequeueGoalStatusAllowed(GoalStatus status) =>
         status == GoalStatus.Active;

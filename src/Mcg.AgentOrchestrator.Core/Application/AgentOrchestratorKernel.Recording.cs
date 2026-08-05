@@ -743,6 +743,34 @@ public sealed partial class AgentOrchestratorKernel
         }
     }
 
+    public void RecordTaskProcessGracefullyDetached(
+        GoalId goalId,
+        TaskId taskId,
+        TaskProcessRecord process)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        if (task.Status != WorkTaskStatus.Running ||
+            task.LastProcess is not { IsRunning: true } current ||
+            current.ProcessId != process.ProcessId ||
+            current.StartedAt != process.StartedAt)
+        {
+            throw new InvalidOperationException("Only the current running process attempt can be gracefully detached.");
+        }
+
+        if (!process.WasGracefullyDetachedByConductor || !process.IsRunning)
+        {
+            throw new InvalidOperationException("Gracefully detached process record must remain running and carry its detach marker.");
+        }
+
+        task.RecordProcess(process);
+        Append(
+            goal,
+            taskId,
+            ProgressKind.TaskNote,
+            $"Gracefully detached process {process.ProcessId}; a successor conductor may reconcile it.");
+    }
+
     public void RecordTaskProcessCancelled(GoalId goalId, TaskId taskId, TaskProcessRecord process)
     {
         var goal = GetGoal(goalId);

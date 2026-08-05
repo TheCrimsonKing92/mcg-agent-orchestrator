@@ -7038,6 +7038,7 @@ public sealed class ConductorBatchLoopTests
             Xunit.Assert.Empty(killed);
             Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(watchedGoal.Id, watchedTask.Id).Status);
             Assert.False(kernel.GetTask(watchedGoal.Id, watchedTask.Id).LastProcess!.WasCancelled);
+            Assert.True(kernel.GetTask(watchedGoal.Id, watchedTask.Id).LastProcess!.WasGracefullyDetachedByConductor);
             Assert.False(kernel.GetTask(otherGoal.Id, otherTask.Id).LastProcess!.WasCancelled);
         }
         finally
@@ -7082,6 +7083,30 @@ public sealed class ConductorBatchLoopTests
 
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
         Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
+        Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasGracefullyDetachedByConductor);
+
+        var detachedProcess = kernel.GetTask(goal.Id, task.Id).LastProcess!;
+        Assert.True(detachedProcess.WasGracefullyDetachedByConductor);
+        var failedAt = DateTimeOffset.UtcNow;
+        var syntheticFailure = detachedProcess with
+        {
+            CompletedAt = failedAt,
+            ExitCode = 1,
+            ExitArtifactOrigin = DispatchExitArtifactOrigin.Synthetic,
+            ExitArtifactReason = "successor synthesized completion without a host artifact"
+        };
+        kernel.RecordTaskProcessRefreshed(
+            goal.Id,
+            task.Id,
+            syntheticFailure,
+            new TaskVerificationRecord(
+                syntheticFailure.Command,
+                syntheticFailure.WorkingDirectory,
+                1,
+                string.Empty,
+                "dispatch host disappeared before writing its exit artifact",
+                failedAt));
+        Assert.Equal(WorkTaskStatus.Failed, kernel.GetTask(goal.Id, task.Id).Status);
 
         var dispatches = 0;
         var driver = MakeDriver(
@@ -7161,6 +7186,7 @@ public sealed class ConductorBatchLoopTests
         Xunit.Assert.Equal([goal.Id.Value], detachedGoals);
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
         Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
+        Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasGracefullyDetachedByConductor);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_max_duration_detaches_live_dispatch_without_reaping")]
@@ -7210,6 +7236,7 @@ public sealed class ConductorBatchLoopTests
         Xunit.Assert.Equal([goal.Id.Value], detachedGoals);
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
         Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
+        Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasGracefullyDetachedByConductor);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_bounded_exit_detached_orphan_running_task_is_requeued_and_dispatched")]
@@ -7241,6 +7268,7 @@ public sealed class ConductorBatchLoopTests
 
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
         Assert.False(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasCancelled);
+        Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasGracefullyDetachedByConductor);
 
         var dispatches = 0;
         var driver = MakeDriver(

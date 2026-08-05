@@ -891,6 +891,55 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_graceful_detach_survives_job_close_and_startup_sweep")]
+    public void WorkerProcessJobsGracefulDetachSurvivesJobCloseAndStartupSweep()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? worker = null;
+        try
+        {
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+            worker = StartLongRunningShell();
+            Assert.True(WorkerProcessJobs.TryRegister(worker, "graceful-stop:test"));
+
+            Assert.True(WorkerProcessJobs.TryDetachForGracefulStop(worker.Id, out var failure), failure);
+
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(worker.Id));
+            Assert.True(IsRunning(worker.Id));
+            var detached = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Equal(SpawnRegistryLifecycle.GracefullyDetached, detached.Lifecycle);
+            Assert.Equal(0, WorkerProcessJobs.SweepStartupOrphans());
+            Assert.True(IsRunning(worker.Id));
+            Assert.Contains(
+                "retain-gracefully-detached",
+                Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests()).LastDiagnostic,
+                StringComparison.Ordinal);
+
+            worker.Kill(entireProcessTree: true);
+            Assert.True(worker.WaitForExit(5000));
+            Assert.Equal(0, WorkerProcessJobs.SweepStartupOrphans());
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+        }
+        finally
+        {
+            if (worker is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(worker.Id); } catch { }
+                worker.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_fallback_taskkill_tree_kills_unregistered_wrapper_and_grandchild")]
     public void WorkerProcessJobsFallbackTaskkillTreeKillsUnregisteredWrapperAndGrandchild()
     {
