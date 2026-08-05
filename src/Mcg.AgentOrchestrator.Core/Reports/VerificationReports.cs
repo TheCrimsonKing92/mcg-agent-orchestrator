@@ -7,6 +7,7 @@ public enum VerificationGateReason
     MissingVerification,
     VerificationFailed,
     OutputTokenLimit,
+    TesterWorkerResultBlocker,
     ReviewerWorkerResultBlocker,
     DirtyUsefulRecovery,
     DirtyUnverifiedRecovery

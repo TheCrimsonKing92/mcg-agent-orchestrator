@@ -1985,6 +1985,41 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     AssertExitCode(process.ExitCodePath, 0);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_verification_only_exit_zero_blocker_fails")]
+    public void BackgroundDispatchRunnerTesterVerificationOnlyExitZeroBlockerFails()
+    {
+        const string blocker = "worker-sweep-command-name-safety-list";
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Tester,
+            "dotnet test --logger trx\r\nTRX 5/5 passed.\r\n" +
+                WorkerResultBlock("none", "dotnet test --logger trx", "pass - TRX 5/5 passed", blocker),
+            string.Empty,
+            clock,
+            taskDescription: "Verify behavior with automated and manual checks",
+            verificationPlan: "Run or attempt exact automated tests or manual smoke checks and record pass/fail evidence.");
+        WriteHeartbeat(process, clock.UtcNow, clock.UtcNow, "completed", 256, 0, childPid: null, exitFileExists: true);
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(GoalStatus.Failed, goal.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.Contains(blocker, task.LastVerification.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("rule=tester-worker-result-blocker", StringComparison.Ordinal));
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains(blocker, StringComparison.Ordinal));
+        Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+        AssertExitCode(process.ExitCodePath, 0);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_with_test_commit_and_green_trx_completes")]
     public void BackgroundDispatchRunnerTesterWithTestCommitAndGreenTrxCompletes()
 {

@@ -189,6 +189,34 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
     }
 
+    [Xunit.Theory(DisplayName = "Classify Tester WORKER_RESULT blocker as real failure regardless of process exit")]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(1)]
+    public void ClassifyTesterWorkerResultBlocker(int exitCode)
+    {
+        const string blocker = "worker-sweep-command-name-safety-list";
+        var verification = WorkerResultVerification(
+            exitCode,
+            WorkerResultStdout("pass - focused verification completed", blocker));
+        if (exitCode != 0)
+        {
+            verification = verification with { ProviderFailureKind = ProviderFailureKind.RateLimit };
+        }
+
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Tester),
+            verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Equal(exitCode, outcome.ExitCode);
+        Xunit.Assert.Equal(TaskOutcomeClass.RealFailure, outcome.OutcomeClass);
+        Xunit.Assert.Contains("rule=tester-worker-result-blocker", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"blockers: {blocker}", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("verdict=VerifiedSuccess", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify fails retry developer round with no commit and no deferral")]
     public void ClassifyFailsRetryDeveloperRoundWithNoCommitAndNoDeferral()
     {
@@ -1322,18 +1350,18 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.NotEqual(DispatchOutcomeKind.VerifiedSuccess, outcome.Kind);
     }
 
-    [Xunit.Fact(DisplayName = "Classify keeps Tester fail plus blocker on genuine failure path")]
-    public void ClassifyKeepsTesterFailPlusBlockerOnGenuineFailurePath()
+    [Xunit.Fact(DisplayName = "Classify keeps Tester inconclusive precedence over conflicting blocker")]
+    public void ClassifyKeepsTesterInconclusivePrecedenceOverConflictingBlocker()
     {
         var outcome = DispatchFailureClassifier.Classify(
             SimpleTask(AgentRole.Tester),
             WorkerResultVerification(
                 WorkerResultStdout(
-                    "fail - focused assertion failed",
+                    "inconclusive - focused assertion did not finish",
                     "product behavior returns the wrong value")));
 
-        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
-        Xunit.Assert.NotEqual(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+        Xunit.Assert.Equal(DispatchOutcomeKind.VerificationInconclusive, outcome.Kind);
+        Xunit.Assert.Contains("schema conflict retained for audit", outcome.EvidenceSummary, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Classify binds structured Tester outcome to latest WORKER_RESULT")]
