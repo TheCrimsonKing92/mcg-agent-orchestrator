@@ -695,7 +695,7 @@ public static class DispatchFailureClassifier
                 BuildRecoverableSubscriptionLimitEvidenceSummary(verification)));
         }
 
-        if (IsRecoverableProviderModelRejectionFailure(verification))
+        if (IsRecoverableProviderModelRejectionFailure(verification, task.RequiredRole))
         {
             return BuildOutcome(
                 TaskOutcomeRules.ProviderModelRejection,
@@ -1544,7 +1544,7 @@ public static class DispatchFailureClassifier
         return task.Status == WorkTaskStatus.Failed &&
             IsSubscriptionProviderCliDispatch(task) &&
             task.LastVerification is { Succeeded: false } latest &&
-            IsRecoverableProviderModelRejectionFailure(latest);
+            IsRecoverableProviderModelRejectionFailure(latest, task.RequiredRole);
     }
 
     public static int CountRecoverableProviderConnectivityFailures(TaskSpec task)
@@ -1577,19 +1577,22 @@ public static class DispatchFailureClassifier
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
-    public static bool IsRecoverableProviderModelRejectionFailure(TaskVerificationRecord verification)
+    public static bool IsRecoverableProviderModelRejectionFailure(TaskVerificationRecord verification) =>
+        IsRecoverableProviderModelRejectionFailure(verification, requiredRole: null);
+
+    private static bool IsRecoverableProviderModelRejectionFailure(
+        TaskVerificationRecord verification,
+        AgentRole? requiredRole)
     {
         if (verification.Succeeded)
         {
             return false;
         }
 
-        var output = string.Join(
-            Environment.NewLine,
-            verification.StandardOutput,
-            verification.StandardError);
-
-        return ContainsProviderModelRejectionText(output) &&
+        return TryGetProviderModelRejectionLine(
+                verification,
+                ignoreAuthoritativePlannerContractLines: requiredRole == AgentRole.Planner,
+                out _) &&
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
@@ -1597,7 +1600,7 @@ public static class DispatchFailureClassifier
     {
         return task.VerificationHistory.Count(verification =>
             !verification.Succeeded &&
-            IsRecoverableProviderModelRejectionFailure(verification));
+            IsRecoverableProviderModelRejectionFailure(verification, task.RequiredRole));
     }
 
     public static bool HasRecoverableSubscriptionLimitHistory(TaskSpec task)
@@ -1976,12 +1979,28 @@ public static class DispatchFailureClassifier
         return false;
     }
 
-    private static bool TryGetProviderModelRejectionLine(TaskVerificationRecord verification, out string line)
+    private static bool TryGetProviderModelRejectionLine(
+        TaskVerificationRecord verification,
+        out string line) =>
+        TryGetProviderModelRejectionLine(
+            verification,
+            ignoreAuthoritativePlannerContractLines: true,
+            out line);
+
+    private static bool TryGetProviderModelRejectionLine(
+        TaskVerificationRecord verification,
+        bool ignoreAuthoritativePlannerContractLines,
+        out string line)
     {
-        foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
+        foreach (var rawLine in EnumerateEvidenceLines(
+            verification,
+            includeStandardOutput: true,
+            includeStandardError: true))
         {
             var candidate = rawLine.Trim();
-            if (ContainsProviderModelRejectionText(candidate))
+            if ((!ignoreAuthoritativePlannerContractLines ||
+                 !IsPlannerOutputContractFailureLine(candidate)) &&
+                ContainsProviderModelRejectionText(candidate))
             {
                 line = candidate;
                 return true;
@@ -1991,6 +2010,11 @@ public static class DispatchFailureClassifier
         line = string.Empty;
         return false;
     }
+
+    private static bool IsPlannerOutputContractFailureLine(string line) =>
+        line.StartsWith("Planner output contract failed:", StringComparison.OrdinalIgnoreCase) ||
+        line.StartsWith("Planner durable receipt failed revalidation:", StringComparison.OrdinalIgnoreCase) ||
+        line.StartsWith("Planner output contract could not persist the accepted plan:", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsWorkerResultOpener(string line)
     {

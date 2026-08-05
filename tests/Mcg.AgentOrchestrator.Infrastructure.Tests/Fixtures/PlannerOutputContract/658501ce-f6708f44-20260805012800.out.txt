@@ -1,0 +1,182 @@
+## Premise validity
+
+Valid.
+
+- `WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker` currently treats a successful verification-only Tester blocker as advisory in `src/Mcg.AgentOrchestrator.Core/Application/ReviewerWorkerResultBlockers.cs`.
+- Both `AgentOrchestratorKernel.RecordTaskVerification` and `RecordDispatchExecutionResult` call `TryFailWorkerResultBlocker`, whose advisory exemption permits completion in `src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.Recording.cs`.
+- `DispatchFailureClassifier.Classify` can consequently reach `TaskOutcomeRules.SucceededDispatchCompletionEvidence` and `VerifiedSuccess` in `src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs`.
+- `AgentOrchestratorKernel.BuildTaskVerificationGate` only has a role-specific Reviewer blocker guard in `src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.InternalState.cs`.
+- The local runner preserves exit code and structured output through `BackgroundDispatchRunner.RefreshLatestProcess` in `src/Mcg.AgentOrchestrator.Infrastructure/Processes/BackgroundDispatchRunner.cs`, so no parser or process-host change is needed.
+- Prior evidence in `.orchestrator-context/658501cec8424a1cbd91de28170de7ad/research-notes.md` confirms the live blocker was valid and that the nonzero-exit fix did not cover this exit-0 Tester path.
+
+## Acceptance criteria mapping
+
+1. Exit-0 Tester blockers must not complete or verify the task.
+
+   - Introduce one role-aware predicate for a final authoritative Tester `blockers` value with typed `BlockersStatus.Present`.
+   - Use it in classification, both kernel recording paths, and the acceptance backstop.
+   - Assert process exit remains `0`, while task status becomes `Failed`, no completion event is recorded, and acceptance remains unsatisfied.
+
+2. Preserve discriminating evidence and correct routing.
+
+   - Add a dedicated `tester-worker-result-blocker` rule classified as `TaskOutcomeClass.RealFailure`.
+   - Return `DispatchOutcomeKind.UnknownFailure` with `RecoveryRecommendation.OperatorNeeded`.
+   - Preserve the exact blocker in `EvidenceSummary`, classifier receipt, failure timeline message, and `LastVerification.StandardOutput`.
+   - Do not set subscription retry state or emit a subscription-limit retry event. The existing generic failed-task conductor path then escalates for operator action; an operator may retry the same Tester task. Do not automatically reopen Developer work because passing tests plus a blocker is not the Tester-failure contract used by that specialized route.
+
+3. Preserve unaffected contracts.
+
+   - Exit 0 plus Tester `blockers: none` remains verified success.
+   - Nonzero Tester plus blockers remains a real failure and must outrank provider/subscription prose.
+   - Reviewer open advisory findings remain `Completed` and persist through snapshot restoration under the structured severity ledger.
+   - Developer, Researcher, and Planner advisory/no-change behavior remains unchanged.
+   - Structured Tester `tests: inconclusive` remains non-success with its existing retry semantics; any conflicting blocker remains audit evidence.
+
+4. Cover reconciliation and acceptance state.
+
+   - Exercise `RecordDispatchExecutionResult` and `RecordTaskVerification`.
+   - Simulate an old persisted `Completed` Tester carrying exit-0 blocker evidence and prove `BuildTaskVerificationGate` returns failed verification with the exact blocker.
+   - Exercise `BackgroundDispatchRunner` using its local seeded worktree fixture. It must not start a paid worker, alter the exit artifact, create a commit, or dirty the fixture worktree.
+
+5. Rule (l).
+
+   - Add `docs/negative-controls/658501ce.md` (new file).
+   - Temporarily force the central Tester-blocker predicate to return false. The local exit-0 runner regression must go RED with expected `Failed` versus actual `Completed`.
+   - Restore the predicate and record the same focused test GREEN. A compile-only result is not sufficient.
+
+## Target seams and symbols
+
+Smallest production boundary:
+
+- `src/Mcg.AgentOrchestrator.Core/Application/ReviewerWorkerResultBlockers.cs`
+  - Add a central role-aware predicate such as `TryFindTesterWorkerResultBlocker`.
+  - Make `IsAdvisoryNoChangeContractBlocker` depend on that predicate so disabling the single guard restores the old behavior for the negative control.
+  - Do not change final-block parsing or role-agnostic `WorkerResultParser` semantics.
+
+- `src/Mcg.AgentOrchestrator.Core/Application/DispatchFailureClassifier.cs`
+  - In `DispatchFailureClassifier.Classify`, place the Tester-blocker rule after the existing structured-inconclusive branch but before every success branch.
+  - Produce `UnknownFailure`, `OperatorNeeded`, the dedicated rule token, and exact blocker evidence.
+
+- `src/Mcg.AgentOrchestrator.Core/Reports/TaskOutcomeClassification.cs`
+  - Add `TaskOutcomeRules.TesterWorkerResultBlocker` as `RealFailure` and register it in `Produced`.
+
+- `src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.Recording.cs`
+  - In `TryFailWorkerResultBlocker`, fail a Tester blocker independently of `enforceFailureEvidenceRule`, process exit, commit state, or no-change advisory status.
+  - Both `RecordTaskVerification` and `RecordDispatchExecutionResult` already converge here.
+  - Keep `BuildCompletionMessageWithAdvisoryBlocker` unchanged except for the central predicate preventing Tester blockers from reaching it.
+
+- `src/Mcg.AgentOrchestrator.Core/Application/AgentOrchestratorKernel.InternalState.cs`
+  - Add a Tester blocker branch to `BuildTaskVerificationGate` before `Completed` can pass.
+  - Add its retry/operator guidance in `BuildVerificationSuggestedAction`.
+
+- `src/Mcg.AgentOrchestrator.Core/Reports/VerificationReports.cs`
+  - Add typed `VerificationGateReason.TesterWorkerResultBlocker`.
+
+Focused tests:
+
+- `tests/Mcg.AgentOrchestrator.Core.Tests/DispatchOutcomeClassifyTests.cs`
+- `tests/Mcg.AgentOrchestrator.Core.Tests/DispatchExecutionTests.cs`
+- `tests/Mcg.AgentOrchestrator.Core.Tests/VerificationAndInputWorklistTests.cs`
+- `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/WorkerDispatchTestsWorkerResultClassification.cs`
+- Existing registry coverage in `tests/Mcg.AgentOrchestrator.Core.Tests/ModelOutcomeScorecardTests.cs`
+- `docs/negative-controls/658501ce.md` (new file)
+
+No planned production change to `BackgroundDispatchRunner`, `ConductorDriver`, provider preflight, or `WorkerResultParser`.
+
+## Ownership and lifecycle
+
+- `WorkerResultBlockers` owns extraction and the role-aware meaning of typed blocker evidence.
+- `DispatchFailureClassifier` owns the dispositive outcome and must retain enough evidence to justify it.
+- `AgentOrchestratorKernel` owns task transition and durable timeline recording.
+- `BuildTaskVerificationGate` owns the defense against legacy or corrupted `Completed` states.
+- `BackgroundDispatchRunner` owns process facts only: it must preserve the actual exit code `0` and forward structured evidence without turning process success into verdict success.
+- `ConductorDriver` retains generic failed-task escalation. This slice deliberately chooses operator action for exit-0/pass-plus-blocker rather than reopening upstream implementation automatically.
+
+## External and edge contracts
+
+- Only the final authoritative structured `WORKER_RESULT` blocker field governs; quoted or stale earlier text must not trigger disposition.
+- Typed `BlockersStatus.Present` triggers failure. Existing normalized `none` forms remain non-blocking.
+- Missing, blank, malformed, or unknown blocker states retain their existing schema/contract handling; do not silently map them to either `Present` or `None`.
+- Exit code stays truthful. `TaskVerificationRecord.ExitCode == 0` and the `.exit.txt` artifact remain `0` even though the task verdict is `Failed`.
+- Provider terms such as “rate limit” inside the blocker cannot turn the finding into subscription usage.
+- Reviewer advisory findings remain governed by structured severity and verdict fields, not by the Tester predicate.
+- Explicitly cancelled tasks retain the existing acceptance exclusion.
+- Human-input and structured-inconclusive precedence remain unchanged, provided neither path can become `Completed`.
+
+## Integration seams
+
+1. Add failing classifier, kernel, acceptance-gate, and runner tests before production changes.
+2. Add the central Tester-blocker predicate and make the no-change advisory predicate consult it.
+3. Add and register the real-failure outcome rule.
+4. Insert classification before success paths and assert exact evidence plus `OperatorNeeded`.
+5. Apply the same predicate inside `TryFailWorkerResultBlocker`, covering both kernel recording entry points.
+6. Add the typed acceptance-gate backstop and suggested operator action.
+7. Run the four-case matrix and local worktree reconciliation tests.
+8. Perform the single-predicate rule (l) mutation, record RED, restore, rerun GREEN, and write `docs/negative-controls/658501ce.md`.
+9. Run focused builds and confirm the goal worktree has no unrelated changes.
+
+## Verification commands and classes
+
+All required behavior is **TEST-VERIFIABLE**; no network, dashboard, paid subscription, or live conductor run is required.
+
+- **TEST-VERIFIABLE — focused build**
+
+  `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-WorkerBuildCheck.ps1 src\Mcg.AgentOrchestrator.Core\Mcg.AgentOrchestrator.Core.csproj tests\Mcg.AgentOrchestrator.Core.Tests\Mcg.AgentOrchestrator.Core.Tests.csproj tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`
+
+- **TEST-VERIFIABLE — classifier matrix**
+
+  `.\scripts\Invoke-TestSummary.ps1 -Target .\tests\Mcg.AgentOrchestrator.Core.Tests\Mcg.AgentOrchestrator.Core.Tests.csproj -Filter 'FullyQualifiedName~Classify_TesterExitZeroBlocker_ReturnsRealFailure|FullyQualifiedName~Classify_TesterExitZeroNoBlocker_ReturnsVerifiedSuccess|FullyQualifiedName~Classify_TesterNonzeroBlocker_ReturnsRealFailure'`
+
+  Assert rule `tester-worker-result-blocker`, class `real-failure`, `UnknownFailure`, `OperatorNeeded`, original exit, and exact blocker.
+
+- **TEST-VERIFIABLE — kernel and acceptance reconciliation**
+
+  `.\scripts\Invoke-TestSummary.ps1 -Target .\tests\Mcg.AgentOrchestrator.Core.Tests\Mcg.AgentOrchestrator.Core.Tests.csproj -Filter 'FullyQualifiedName~RecordDispatchExecutionResult_TesterExitZeroBlocker_FailsTask|FullyQualifiedName~BuildTaskVerificationGate_CompletedTesterBlocker_FailsAcceptance|FullyQualifiedName~RecordDispatchExecutionResultReviewerPassAcceptsAndRecordsOpenAdvisoryFindings|FullyQualifiedName~TaskOutcomeClassifierProducerRuleCatalogHasExactCoverage'`
+
+- **TEST-VERIFIABLE — local worker/worktree boundary**
+
+  `.\scripts\Invoke-TestSummary.ps1 -Target .\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj -Filter 'FullyQualifiedName~BackgroundDispatchRunner_TesterExitZeroBlocker_FailsTask|FullyQualifiedName~BackgroundDispatchRunnerTesterVerificationOnlyCleanDispatchPasses'`
+
+  The fixture must use a unique temporary repository, remain parallel-safe, perform no paid-worker start, preserve exit `0`, and assert clean worktree plus failed task state.
+
+- **TEST-VERIFIABLE — rule (l)**
+
+  With only `TryFindTesterWorkerResultBlocker` forced false, rerun:
+
+  `.\scripts\Invoke-TestSummary.ps1 -Target .\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj -Filter 'FullyQualifiedName~BackgroundDispatchRunner_TesterExitZeroBlocker_FailsTask'`
+
+  Record RED `Expected: Failed; Actual: Completed`; restore the predicate, rerun GREEN, and capture both in `docs/negative-controls/658501ce.md`.
+
+- **TEST-VERIFIABLE — repository hygiene**
+
+  `git diff --check`
+
+  `git status --short`
+
+Each test command must report at least one matched test; zero matches are failure evidence.
+
+## Risks and stop conditions
+
+- Stop if the implementation requires changing role-agnostic parsing or globally hardening every blocker; that would regress Developer/no-change and Reviewer severity contracts.
+- Stop if exact blocker evidence is absent from the classifier receipt, task failure timeline, or acceptance gate.
+- Stop if the process exit artifact or `LastVerification.ExitCode` is rewritten from `0`.
+- Stop if provider/subscription retry is selected after a typed Tester blocker.
+- Stop if Reviewer advisory findings cease to complete or persist.
+- Stop if structured Tester inconclusive becomes `Completed`; retain its existing non-success retry path.
+- Stop if the acceptance backstop cannot reject a deliberately reconstructed `Completed` Tester state.
+- Stop if the runner test invokes a subscription provider, depends on machine-global processes, uses a shared repository, or leaves filesystem/git state behind.
+- Stop acceptance if the rule (l) mutation does not produce the specified RED, any focused command matches zero tests, or the worktree contains unrelated changes.
+- If focused evidence disproves the documented generic conductor escalation, add a narrow conductor test before changing routing; do not infer or broaden automatic upstream reopening.
+
+Model fit: OpenAI/gpt-5.6-sol - adequate - cross-layer outcome-contract planning - sufficient for tracing typed evidence through classification, lifecycle, acceptance, and hermetic verification.
+
+WORKER_RESULT:
+files: none
+commands: Get-Content -Raw on role-prioritized context and guidance artifacts; targeted rg symbol/test searches; scripts/Show-RepoFileSlice.ps1 on cited seams; git status --short; git rev-parse --abbrev-ref HEAD; git rev-parse HEAD
+tests: not-run - Planner task was read-only; targeted source inspection confirmed the defect seams, branch goal/658501ce, HEAD 53c7a9932d3001b6ce124d2aec3c4bca12f614a2, and a clean worktree
+commit: none
+blockers: none
+model_fit: OpenAI/gpt-5.6-sol - adequate - cross-layer outcome-contract planning - precise role-aware implementation and falsifiable verification boundary identified
+skills: orchestrator-worker-verification
+confidence: high
+END_WORKER_RESULT

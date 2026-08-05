@@ -1,0 +1,132 @@
+## Premise validity
+
+Valid. Both `refresh-dispatch` paths reconcile and then call unbounded `ConsoleViews.PrintTask` in `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Workers.cs` and `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs`. `ConsoleViews.PrintTaskTimeline` enumerates every matching `Goal.Timeline` event in `src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.TaskDetails.cs`.
+
+The reported 10k-token receipt is not duplicated in the context artifacts, but the source independently proves the flooding mechanism. Durable history already lives in `Goal.Timeline`; no persistence change is needed.
+
+## Acceptance criteria mapping
+
+1. Default output becomes current-round and decision-oriented.
+
+   Add `ConsoleViews.PrintRefreshDispatch` and use it only from both `refresh-dispatch` call sites. Emit bounded, single-line fields for task status; last dispatch worker/provider/model/lane/session/time; wrapper/child process identity and liveness; raw exit and exit-artifact origin/reason; `DispatchStateSurface` state/recovery; `DispatchFailureClassifier` kind/outcome class/recommendation; `WorkerResultBlockers` status/value; latest verification metadata and paths; and `GoalOperatorDispositionSurface.Dispatches` next-safe command. Explicitly print `none` when evidence is absent. Never print worker output, verification bodies, or timeline by default.
+
+2. Deep history remains below 100 lines while retaining every decision-changing field.
+
+   Add a command-level fixture with more than 100 task events and multiline output/blocker inputs. Assert output has fewer than 100 lines, contains every field label and sentinel value above, and contains none of the historical sentinels. Normalize every dynamic value through a bounded single-line preview so the limit is structural, not dependent on fixture text.
+
+3. `--history` exposes complete prior history.
+
+   Reuse `ConsoleViews.PrintTaskTimeline` after the summary. Assert first, middle, and last sentinels appear in chronological order and the number of rendered task events equals the durable task-event count. Preserve the existing explicit task-timeline behavior.
+
+4. Implement the preferred bounded history form.
+
+   `--history-limit <n>` implies history and prints the newest `n` task events, then orders that selected slice oldest-to-newest. A limit larger than the history prints all events. When combined with `--history`, the limit remains authoritative.
+
+5. Both execution paths and help expose identical behavior.
+
+   Parse options through one shared parser before reconciliation in both the in-memory and persistent runners. Add command-specific help and the startup synopsis. Test both paths, both goal-target forms, both history modes, and invalid limits.
+
+6. Durable state remains unchanged by rendering choices.
+
+   Snapshot/timeline assertions must prove pre-existing history survives default, full-history, and limited-history invocations. Only the normal reconciliation mutation may differ; options themselves add no timeline, verification, or snapshot state.
+
+7. Rule (l) negative control proves test authority.
+
+   Create `docs/negative-controls/485363d4.md` (new file). Temporarily restore unconditional timeline rendering in the default refresh renderer, rebuild, and run the deep-history test. Record the RED line-count assertion, restore bounded behavior, rebuild, and record GREEN. If the mutation stays green, the test is not acceptance evidence.
+
+8. Required regression classes remain green without paid execution.
+
+   Run focused parser/renderer/command tests, the existing prepare-only subscription-dispatch tests, and the existing fake-worktree acceptance lifecycle test.
+
+## Target seams and symbols
+
+- `src/Mcg.AgentOrchestrator.App/Cli/CliArgumentParser.RefreshDispatch.cs` — new file: `RefreshDispatchRenderOptions` and a shared extractor that removes/validates history flags while preserving existing targeting and autonomy arguments.
+- `src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.RefreshDispatch.cs` — new file: `PrintRefreshDispatch`, fixed-line summary mapping, and optional injectable `GoalOperatorDispositionSurface` for hermetic tests.
+- `src/Mcg.AgentOrchestrator.App/Cli/ConsoleViews.TaskDetails.cs` — extend `PrintTaskTimeline` with an optional limit while preserving unlimited behavior for existing callers.
+- `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Workers.cs` — parse before `BackgroundDispatchRunner.RefreshLatestProcess`; replace `PrintTask` only in `refresh-dispatch`.
+- `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` — apply the same parser before goal resolution/reconciliation and use the same renderer.
+- `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs` — add `RefreshDispatchUsage`, a validated help entry, flag descriptions, and routing.
+- `src/Mcg.AgentOrchestrator.App/Program.cs` — advertise both history options.
+- `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliArgumentNormalizationTests.cs` — parser semantics and malformed-input tests.
+- `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.RefreshDispatchCommands.cs` — new file: deep-history rendering and in-memory command tests.
+- `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PersistentRunnerCommands.cs` — persistent-path parity, atomicity, and durable-history assertions.
+- `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliHelpTests.cs` — command-specific help and flag-validation coverage.
+- `docs/negative-controls/485363d4.md` — new rule (l) receipt.
+
+Do not change general `PrintTask`, persistence snapshots, `Goal.Timeline`, reconciliation policy, or batch `refresh-dispatches`.
+
+## Ownership and lifecycle
+
+CLI argument parsing owns ephemeral render intent. `BackgroundDispatchRunner` continues to own reconciliation. `ConsoleViews` owns presentation only. `DispatchStateSurface`, `DispatchFailureClassifier`, `WorkerResultBlockers`, and `GoalOperatorDispositionSurface` remain the authoritative decision sources; the renderer must not reimplement their rules.
+
+History remains durable for the goal lifetime in `Goal.Timeline`. `--history` and `--history-limit` affect one invocation only and are never persisted.
+
+## External and edge contracts
+
+- Preserve target forms: task number, goal-prefix plus task number, and `--goal <prefix> <task-number>`.
+- Accept history flags independently of target form by extracting them before existing target resolution.
+- `--history-limit` requires exactly one positive integer. Missing, zero, negative, malformed, or duplicate conflicting values throw `ArgumentException` containing the refresh-specific usage before any reconciliation or transaction.
+- No events: history mode prints the existing “no task timeline events” result.
+- No dispatch/process/verification: summary prints explicit `none` values and still supplies task state and next action.
+- Missing artifacts remain visible as missing; synthetic/native origin and reason must not be collapsed into a generic exit code.
+- Multiline descriptions, commands, blockers, and evidence summaries are flattened and bounded.
+- Tests must use injected process/liveness seams or exited fixture records; verdicts must not depend on machine-global PIDs or inherited provider credentials.
+
+## Integration seams
+
+1. Add and unit-test shared option extraction.
+2. Add the refresh-specific summary renderer using existing authoritative surfaces.
+3. Add limited timeline selection without altering unlimited callers.
+4. Parse options before mutation and wire the renderer into both refresh paths.
+5. Add help routing and synopsis text.
+6. Add command-level deep-history, full-history, bounded-history, invalid-input, and persistent parity tests.
+7. Run focused regressions and lifecycle/preflight canaries.
+8. Perform the rule (l) mutation, record RED, restore, rerun GREEN, and commit only the restored implementation plus receipt.
+
+## Verification commands and classes
+
+- TEST-VERIFIABLE — build once:
+
+  `dotnet build .\Mcg.AgentOrchestrator.sln -v:minimal`
+
+- TEST-VERIFIABLE — focused parser, renderer, command, persistent-path, and help coverage:
+
+  `dotnet test .\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build -v:minimal --filter 'FullyQualifiedName~RefreshDispatch|FullyQualifiedName~CliHelpTests'`
+
+- TEST-VERIFIABLE — no-paid-start preflight:
+
+  `dotnet test .\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build -v:minimal --filter 'FullyQualifiedName~WorkerPreflightTerminalSweepCleansCancelledWorktreeWithoutStartingPaidProcess|FullyQualifiedName~CliSubscriptionDispatchWithoutConfirmDispatchStartOnlyPrepares'`
+
+- TEST-VERIFIABLE — worktree/acceptance state transition:
+
+  `dotnet test .\tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --no-build -v:minimal --filter 'FullyQualifiedName~CliLifecycleSimpleGoalRunsAcceptsAndDefersWorkspaceCleanup'`
+
+- TEST-VERIFIABLE — rule (l): after temporarily restoring unconditional default timeline rendering, rebuild and run only the deep-history default-output test; require RED specifically on the `<100` assertion. Restore, rebuild, rerun, and require GREEN. Record both outputs in `docs/negative-controls/485363d4.md`.
+
+No REAL-WORLD-DEPENDENT verification is required: output, persistence, preflight, and lifecycle contracts are hermetically testable.
+
+## Risks and stop conditions
+
+- Stop if either refresh path bypasses the shared parser or renderer.
+- Stop if invalid options reach reconciliation or open a persistent transaction.
+- Stop if the default can emit raw output, stderr, verification bodies, or any timeline event.
+- Stop if any required field is locally inferred instead of sourced from the existing state/classifier/blocker/disposition surfaces.
+- Stop if history selection changes stored event count, content, or ordering.
+- Stop if `--history` differs from the prior unlimited `PrintTaskTimeline` contract.
+- Stop if the deep-history default reaches 100 lines.
+- Stop if the negative-control mutation remains green.
+- Stop if verification starts a paid worker or relies on machine-global process observations.
+- A CS2012/file-lock failure permits one `dotnet build-server shutdown` and one identical retry; a killed/no-TRX run is inconclusive, not a product failure.
+
+Model fit: OpenAI/gpt-5.6-sol - adequate - read-only cross-layer implementation planning - the task required precise CLI, rendering, persistence, and test-seam synthesis.
+
+WORKER_RESULT:
+files: none
+commands: read context artifacts and test-design discipline with Get-Content; targeted rg source/symbol searches; bounded Show-RepoFileSlice inspections
+tests: not-run - Planner task was read-only; verification commands and falsifiable RED/GREEN criteria are specified above
+commit: none
+blockers: none
+model_fit: OpenAI/gpt-5.6-sol - adequate - read-only cross-layer implementation planning - traced authoritative seams and produced a criterion-mapped handoff
+skills: dotnet-windows-build-hygiene
+confidence: high
+END_WORKER_RESULT

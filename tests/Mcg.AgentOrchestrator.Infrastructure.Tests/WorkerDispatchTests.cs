@@ -824,6 +824,9 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Equal(1, task.LastVerification!.ExitCode);
         Assert.Contains("Planner output contract failed", task.LastVerification.StandardError, StringComparison.Ordinal);
         Assert.Contains("Retry Planner for contract repair", task.LastVerification.StandardError, StringComparison.Ordinal);
+        var outcome = DispatchFailureClassifier.Classify(task, task.LastVerification);
+        Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Assert.Contains("Planner output contract failed", outcome.EvidenceSummary, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Planner_dispatch_persists_canonical_receipt_for_plan_captured_on_stdout")]
