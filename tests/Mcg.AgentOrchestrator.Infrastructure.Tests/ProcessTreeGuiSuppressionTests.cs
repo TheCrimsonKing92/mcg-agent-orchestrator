@@ -125,7 +125,7 @@ public sealed class ProcessTreeGuiSuppressionTests
             "Workspaces",
             "GoalAcceptanceVerifier.cs"));
         Assert.Contains("worker = ProcessTreeGuiSuppression.Start(startInfo);", dispatchHost, StringComparison.Ordinal);
-        Assert.Contains("using var process = ProcessTreeGuiSuppression.Start(startInfo);", gateVerifier, StringComparison.Ordinal);
+        Assert.Contains("using var process = WorkerProcessJobs.StartRegisteredOrThrow(", gateVerifier, StringComparison.Ordinal);
     }
 
     [Fact]

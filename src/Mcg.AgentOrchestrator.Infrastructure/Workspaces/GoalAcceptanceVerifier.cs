@@ -6163,8 +6163,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? startedProcessId = null;
         try
         {
-            using var process = ProcessTreeGuiSuppression.Start(startInfo);
-            WorkerProcessJobs.RegisterOrThrow(process, $"acceptance:{workingDirectory}");
+            using var process = WorkerProcessJobs.StartRegisteredOrThrow(
+                startInfo,
+                $"acceptance:{workingDirectory}");
             startedProcessId = process.Id;
             if (heartbeatContext is not null)
             {
