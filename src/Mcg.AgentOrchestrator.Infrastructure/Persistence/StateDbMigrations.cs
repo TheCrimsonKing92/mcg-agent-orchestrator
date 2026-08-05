@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class StateDbMigrations
 {
     private sealed record Migration(int Number, string Name, Action<SqliteConnection> Apply);
-    private const int CurrentMigrationNumber = 6;
+    private const int CurrentMigrationNumber = 7;
 
     /// <summary>
     /// Reports whether the published state store already has every numbered migration.
@@ -90,7 +90,8 @@ public static class StateDbMigrations
                 new(3, "spawn-registry", ApplySpawnRegistrySchema),
                 new(4, "backlog-intake-records", ApplyBacklogIntakeSchema),
                 new(5, "model-fit-outcome-backfill", repository.ApplyModelFitHistoryBackfillMigration),
-                new(CurrentMigrationNumber, "spawn-registry-owner-identity", ApplySpawnRegistryOwnerIdentitySchema)
+                new(6, "spawn-registry-owner-identity", ApplySpawnRegistryOwnerIdentitySchema),
+                new(CurrentMigrationNumber, "spawn-registry-lifecycle", ApplySpawnRegistryLifecycleSchema)
             };
             ValidateMigrationSequence(migrations);
 
@@ -209,6 +210,14 @@ public static class StateDbMigrations
         ExecuteNonQuery(connection, "ALTER TABLE spawn_registry ADD COLUMN owner_process_id INTEGER NULL", statementObserver: null);
         ExecuteNonQuery(connection, "ALTER TABLE spawn_registry ADD COLUMN owner_process_started_at TEXT NULL", statementObserver: null);
         ExecuteNonQuery(connection, "ALTER TABLE spawn_registry ADD COLUMN owner_process_image_path TEXT NULL", statementObserver: null);
+    }
+
+    private static void ApplySpawnRegistryLifecycleSchema(SqliteConnection connection)
+    {
+        ExecuteNonQuery(
+            connection,
+            "ALTER TABLE spawn_registry ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'Owned'",
+            statementObserver: null);
     }
 
     private static void ApplyBacklogIntakeSchema(SqliteConnection connection)

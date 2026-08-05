@@ -177,7 +177,8 @@ public sealed record TaskProcessRecord(
     int? ChildProcessId = null,
     int? ChildExitCode = null,
     DispatchExitArtifactOrigin ExitArtifactOrigin = DispatchExitArtifactOrigin.None,
-    string? ExitArtifactReason = null)
+    string? ExitArtifactReason = null,
+    bool WasGracefullyDetachedByConductor = false)
 {
     public bool IsRunning => CompletedAt is null && ExitCode is null;
 

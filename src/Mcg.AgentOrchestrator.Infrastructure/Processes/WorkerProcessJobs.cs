@@ -39,6 +39,41 @@ public static class WorkerProcessJobs
         var sweeper = BuildSweeperEvidence();
         foreach (var entry in registry.ListActive())
         {
+            if (entry.Lifecycle == SpawnRegistryLifecycle.GracefullyDetached)
+            {
+                var detachedVictimStatus = SpawnProcessIdentityReader.EvaluateTrackedProcess(
+                    entry,
+                    out var detachedProcess,
+                    out var detachedVictimEvidence);
+                detachedProcess?.Dispose();
+                if (detachedVictimStatus == SpawnTrackedProcessStatus.DeadOrRecycled)
+                {
+                    _ = registry.TryMarkReleasedEntry(
+                        entry.Id,
+                        entry.LastDiagnostic,
+                        BuildSweepDiagnostic(
+                            "detached-worker-exited",
+                            entry,
+                            SpawnOwnerLiveness.Unknown,
+                            "detached-lifecycle",
+                            sweeper,
+                            detachedVictimEvidence));
+                }
+                else
+                {
+                    RecordRetentionDiagnosticIfChanged(
+                        registry,
+                        entry,
+                        "retain-gracefully-detached",
+                        SpawnOwnerLiveness.Unknown,
+                        "detached-lifecycle",
+                        sweeper,
+                        detachedVictimEvidence);
+                }
+
+                continue;
+            }
+
             var ownerLiveness = SpawnProcessIdentityReader.EvaluateOwner(entry, out var ownerEvidence);
             if (ownerLiveness != SpawnOwnerLiveness.DeadOrRecycled)
             {
@@ -172,7 +207,7 @@ public static class WorkerProcessJobs
         string sweeper,
         string? victimEvidence = null) =>
         $"spawn_registry: {action} victim_pid={entry.ProcessId} victim_started_at={entry.ProcessStartedAt:O} " +
-        $"victim_image={entry.ImagePath} owner={entry.OwnerId} owner_pid={entry.OwnerProcessId?.ToString() ?? "unknown"} " +
+        $"victim_image={entry.ImagePath} lifecycle={entry.Lifecycle} owner={entry.OwnerId} owner_pid={entry.OwnerProcessId?.ToString() ?? "unknown"} " +
         $"owner_started_at={entry.OwnerProcessStartedAt?.ToString("O") ?? "unknown"} " +
         $"owner_liveness={ownerLiveness} owner_evidence={SanitizeDiagnostic(ownerEvidence)} " +
         $"victim_evidence={SanitizeDiagnostic(victimEvidence ?? "not-evaluated")} {sweeper}";
@@ -333,7 +368,7 @@ public static class WorkerProcessJobs
             var snapshot = group.TryReadAccounting(out var registrationAccounting)
                 ? registrationAccounting with { AccountingSource = "snapshot" }
                 : null;
-            var registeredJob = new RegisteredJob(group, duplicate, snapshot);
+            var registeredJob = new RegisteredJob(group, duplicate, snapshot, victimIdentity);
             if (Jobs.TryAdd(process.Id, registeredJob))
             {
                 group = null;
@@ -405,6 +440,26 @@ public static class WorkerProcessJobs
     public static bool TryKillOrFallback(int processId, out WorkerProcessJobAccounting? accounting)
     {
         return TryKillOrFallback(processId, allowProtectedDescendant: false, markRegistryReleased: true, out accounting);
+    }
+
+    internal static bool TryKillOrFallbackWithoutRegistry(int processId)
+    {
+        return TryKillOrFallback(processId, allowProtectedDescendant: false, markRegistryReleased: false, out _);
+    }
+
+    internal static bool WasGracefullyDetached(
+        string ownerId,
+        int processId,
+        DateTimeOffset processRecordedAt)
+    {
+        try
+        {
+            return Registry?.WasGracefullyDetached(ownerId, processId, processRecordedAt) == true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     internal static bool TryKillRecordedOwnedChildAndWait(int processId, TimeSpan timeout)
@@ -486,6 +541,95 @@ public static class WorkerProcessJobs
         }
 
         Registry?.MarkReleased(processId, $"spawn_registry: released pid={processId}");
+    }
+
+    internal static bool TryDetachForGracefulStop(int processId, out string failure)
+    {
+        failure = string.Empty;
+        var registry = Registry;
+        if (!Jobs.TryRemove(processId, out var job))
+        {
+            SpawnRegistryEntry[] entries;
+            try
+            {
+                entries = registry?.ListActive()
+                    .Where(entry => entry.ProcessId == processId)
+                    .ToArray() ?? [];
+            }
+            catch (Exception ex)
+            {
+                failure =
+                    $"worker-process-detach-failed: pid={processId}; stage=durable-lifecycle-read; error={ex.GetType().Name}";
+                return false;
+            }
+
+            if (entries.Length == 0 || entries.All(entry => entry.Lifecycle == SpawnRegistryLifecycle.GracefullyDetached))
+            {
+                return true;
+            }
+
+            failure = $"worker-process-detach-failed: pid={processId}; stage=in-memory-ownership-missing";
+            return false;
+        }
+
+        var detachedWithoutKill = false;
+        var failureStage = "durable-lifecycle-transition";
+        try
+        {
+            if (registry is not null)
+            {
+                var identity = job.Identity;
+                var matches = identity is null
+                    ? Array.Empty<SpawnRegistryEntry>()
+                    : registry.ListActive()
+                        .Where(entry =>
+                            entry.ProcessId == identity.ProcessId &&
+                            entry.ProcessStartedAt == identity.StartedAt &&
+                            string.Equals(entry.ImagePath, identity.ImagePath, StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+                if (matches.Length != 1 ||
+                    (matches[0].Lifecycle == SpawnRegistryLifecycle.Owned &&
+                     !registry.TryMarkGracefullyDetached(
+                         matches[0],
+                         $"spawn_registry: gracefully-detached pid={processId}")))
+                {
+                    failure = $"worker-process-detach-failed: pid={processId}; stage={failureStage}";
+                    return false;
+                }
+            }
+
+            failureStage = "os-process-group-detach";
+            if (!TryDetachAndDispose(job))
+            {
+                failure = $"worker-process-detach-failed: pid={processId}; stage={failureStage}";
+                return false;
+            }
+
+            detachedWithoutKill = true;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            failure =
+                $"worker-process-detach-failed: pid={processId}; stage={failureStage}; error={ex.GetType().Name}";
+            return false;
+        }
+        finally
+        {
+            if (!detachedWithoutKill)
+            {
+                ReadAccountingAndDispose(job, kill: true, captureAccounting: false, preferDuplicate: false, out _);
+                try
+                {
+                    registry?.MarkReleased(processId, $"spawn_registry: detach-failed-reaped pid={processId}");
+                }
+                catch
+                {
+                    // The process tree and in-memory ownership are already deterministically cleaned up.
+                    // The caller must still receive false so it records conductor-cancel recovery state.
+                }
+            }
+        }
     }
 
     internal static void ReleaseWithoutAccounting(int processId)
@@ -627,6 +771,24 @@ public static class WorkerProcessJobs
         return killed;
     }
 
+    private static bool TryDetachAndDispose(RegisteredJob job)
+    {
+        try
+        {
+            if (!job.Group.TryDetachWithoutKill())
+            {
+                return false;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        try { job.DuplicateAccountingHandle?.Dispose(); } catch { }
+        return true;
+    }
+
     internal static bool HasRegisteredJob(int processId) => Jobs.ContainsKey(processId);
 
     internal static IReadOnlyList<SpawnRegistryEntry> ListActiveRegistryEntriesForTests() =>
@@ -719,7 +881,8 @@ public static class WorkerProcessJobs
     private sealed record RegisteredJob(
         OwnedProcessGroup Group,
         Microsoft.Win32.SafeHandles.SafeFileHandle? DuplicateAccountingHandle,
-        WorkerProcessJobAccounting? RegistrationSnapshot);
+        WorkerProcessJobAccounting? RegistrationSnapshot,
+        SpawnProcessIdentity? Identity = null);
 
     private static bool DefaultTryKillPidTree(int processId)
     {

@@ -16,7 +16,14 @@ internal sealed record SpawnRegistryEntry(
     string? LastDiagnostic,
     int? OwnerProcessId,
     DateTimeOffset? OwnerProcessStartedAt,
-    string? OwnerProcessImagePath);
+    string? OwnerProcessImagePath,
+    SpawnRegistryLifecycle Lifecycle);
+
+internal enum SpawnRegistryLifecycle
+{
+    Owned,
+    GracefullyDetached
+}
 
 internal sealed record SpawnProcessIdentity(int ProcessId, DateTimeOffset StartedAt, string ImagePath);
 
@@ -94,7 +101,7 @@ internal sealed class SpawnRegistry
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
                 SELECT id, owner_id, process_id, process_started_at, image_path, registered_at, released_at, last_diagnostic,
-                       owner_process_id, owner_process_started_at, owner_process_image_path
+                       owner_process_id, owner_process_started_at, owner_process_image_path, lifecycle
                 FROM spawn_registry
                 WHERE released_at IS NULL
                 ORDER BY registered_at ASC
@@ -213,6 +220,60 @@ internal sealed class SpawnRegistry
         return updated;
     }
 
+    public bool WasGracefullyDetached(string ownerId, int processId, DateTimeOffset processRecordedAt)
+    {
+        if (!File.Exists(_dbPath))
+            return false;
+
+        using var conn = OpenReadConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT lifecycle
+            FROM spawn_registry
+            WHERE owner_id = $owner_id
+              AND process_id = $process_id
+              AND registered_at <= $process_recorded_at
+            ORDER BY registered_at DESC, id DESC
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("$owner_id", ownerId);
+        cmd.Parameters.AddWithValue("$process_id", processId);
+        cmd.Parameters.AddWithValue("$process_recorded_at", processRecordedAt.ToString("O", CultureInfo.InvariantCulture));
+        return string.Equals(
+            cmd.ExecuteScalar() as string,
+            SpawnRegistryLifecycle.GracefullyDetached.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    public bool TryMarkGracefullyDetached(SpawnRegistryEntry entry, string diagnostic)
+    {
+        var updated = false;
+        WithWriteConnection(conn =>
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE spawn_registry
+                SET lifecycle = $detached,
+                    last_diagnostic = $diagnostic
+                WHERE id = $id
+                  AND process_id = $process_id
+                  AND process_started_at = $process_started_at
+                  AND image_path = $image_path
+                  AND released_at IS NULL
+                  AND lifecycle = $owned
+                """;
+            cmd.Parameters.AddWithValue("$detached", SpawnRegistryLifecycle.GracefullyDetached.ToString());
+            cmd.Parameters.AddWithValue("$diagnostic", diagnostic);
+            cmd.Parameters.AddWithValue("$id", entry.Id);
+            cmd.Parameters.AddWithValue("$process_id", entry.ProcessId);
+            cmd.Parameters.AddWithValue("$process_started_at", entry.ProcessStartedAt.ToString("O"));
+            cmd.Parameters.AddWithValue("$image_path", entry.ImagePath);
+            cmd.Parameters.AddWithValue("$owned", SpawnRegistryLifecycle.Owned.ToString());
+            updated = cmd.ExecuteNonQuery() == 1;
+        });
+        return updated;
+    }
+
     private SqliteConnection OpenConnection() =>
         StateDbConnectionFactory.Open(_dbPath, StateDbConnectionProfile.ReadWrite);
 
@@ -249,7 +310,10 @@ internal sealed class SpawnRegistry
                 out var ownerStartedAt)
                     ? null
                     : ownerStartedAt,
-            reader.IsDBNull(10) ? null : reader.GetString(10));
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            Enum.TryParse<SpawnRegistryLifecycle>(reader.GetString(11), ignoreCase: false, out var lifecycle)
+                ? lifecycle
+                : throw new InvalidDataException($"Unknown spawn registry lifecycle '{reader.GetString(11)}'."));
     }
 
 }
