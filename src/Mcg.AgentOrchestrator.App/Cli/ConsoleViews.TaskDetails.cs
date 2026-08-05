@@ -194,7 +194,7 @@ public static void PrintTaskTimeline(Goal goal, TaskSpec task, int? limit = null
 
     foreach (var item in events)
     {
-            Console.WriteLine($"  {item.OccurredAt:u} {item.Kind}: {OutputTextPreview.CreateTimeline(item.Message).Text}");
+        Console.WriteLine($"  {item.OccurredAt:u} {item.Kind}: {OneLine(OutputTextPreview.CreateTimeline(item.Message).Text)}");
     }
 }
 

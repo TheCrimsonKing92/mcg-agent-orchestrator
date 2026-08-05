@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
@@ -12,8 +13,9 @@ public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
         var fixture = CreateDeepHistoryFixture();
 
         var output = ExecuteCliAndCapture(["refresh-dispatch", "1"], fixture.Kernel, fixture.Workspace);
+        var lineCount = CountNonEmptyLines(output);
 
-        Xunit.Assert.True(CountNonEmptyLines(output) < 100, output);
+        Xunit.Assert.True(lineCount < 100, $"Expected fewer than 100 non-empty lines; measured {lineCount}.{Environment.NewLine}{output}");
         Xunit.Assert.Contains($"Task: id={fixture.Task.Id.Value[..8]} status=Completed", output);
         Xunit.Assert.Contains("Dispatch: worker=codex-cli provider=OpenAI model=gpt-test lane=codex-cli session=session-sentinel", output);
         Xunit.Assert.Contains("Process: wrapper_pid=999999 wrapper_alive=false child_pid=888888 child_alive=false running=false", output);
@@ -100,6 +102,7 @@ public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
         var stdout = Path.Combine(root, "refresh.out.log");
         var stderr = Path.Combine(root, "refresh.err.log");
         var exit = Path.Combine(root, "refresh.exit.json");
+        var childExit = Path.Combine(root, "refresh.child-exit.json");
         File.WriteAllText(stdout, """
             WORKER_RESULT:
             files: none
@@ -114,6 +117,11 @@ public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
             """);
         File.WriteAllText(stderr, string.Empty);
         DispatchExitArtifacts.Write(exit, DispatchExitArtifacts.Native(0, "native-exit-sentinel", DateTimeOffset.UtcNow));
+        File.WriteAllText(
+            childExit,
+            JsonSerializer.Serialize(
+                new DispatchProcessHost.DispatchChildExitRecord(888888, 0, DateTimeOffset.UtcNow),
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             "codex-cli",
             "codex exec\n--model gpt-test",
@@ -134,7 +142,8 @@ public sealed class CliCommandTestsRefreshDispatchOutput : CliCommandTestBase
             null,
             null,
             OwnedProcessIds: [999999, 888888],
-            ChildProcessId: 888888));
+            ChildProcessId: 888888,
+            ChildExitRecordPath: childExit));
 
         for (var index = 0; index < 260; index++)
         {
