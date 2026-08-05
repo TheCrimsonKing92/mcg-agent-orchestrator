@@ -230,6 +230,70 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
     }
 
+    [Xunit.Fact]
+    public async Task SnapshotAggregateViolationRoundTripsThroughSqlite()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var reviewerAgent = new AgentDefinition(
+            AgentId.New(),
+            "Reviewer",
+            AgentRole.Reviewer,
+            new ModelProfile("Fake", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        var reviewerTask = new TaskSpec(TaskId.New(), "Review aggregate identity receipt", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist aggregate identity receipt", [reviewerTask]);
+        kernel.ActivateGoal(goal.Id, [reviewerAgent]);
+        var firstLocation = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var secondLocation = new ReviewFindingLocation("src/B.cs", "B.Run", "guard");
+        var mismatches = new[]
+        {
+            new ReviewFindingIdentityMismatch(
+                ReviewFindingConvergence.IdentityMovedViolationCode,
+                "First moved.",
+                "F-01",
+                "F-01",
+                firstLocation,
+                new ReviewFindingLocation("src/Moved.cs", "Moved.Run", "guard")),
+            new ReviewFindingIdentityMismatch(
+                ReviewFindingConvergence.RecycledAnchorIdentityViolationCode,
+                "Second recycled.",
+                "F-02",
+                "F-NEW",
+                secondLocation,
+                secondLocation)
+        };
+        kernel.RecordTaskVerification(goal.Id, reviewerTask.Id, new TaskVerificationRecord(
+            "review",
+            @"C:\repo",
+            1,
+            "invalid round",
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-05T12:00:00Z"),
+            ReviewFindingContractViolation: new ReviewFindingContractViolation(
+                mismatches[0].Code,
+                mismatches[0].Message,
+                mismatches[0].PriorStableId,
+                mismatches[0].SubmittedStableId,
+                mismatches[0].PriorLocation,
+                mismatches[0].SubmittedLocation,
+                mismatches)));
+
+        await repo.SaveAsync(kernel);
+        var restored = await repo.LoadAsync();
+
+        var restoredViolation = restored
+            .GetTask(goal.Id, reviewerTask.Id)
+            .LastVerification!
+            .ReviewFindingContractViolation;
+        var restoredMismatches = Assert.IsAssignableFrom<IReadOnlyList<ReviewFindingIdentityMismatch>>(
+            restoredViolation!.IdentityMismatches);
+        Assert.Equal(2, restoredMismatches.Count);
+        Assert.Equal(["F-01", "F-02"], restoredMismatches.Select(mismatch => mismatch.PriorStableId));
+        Assert.Equal("F-NEW", restoredMismatches[1].SubmittedStableId);
+        Assert.Equal(secondLocation, restoredMismatches[1].SubmittedLocation);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_fast_write_produces_no_write_telemetry_receipt")]
     public async Task FastWriteProducesNoWriteTelemetryReceipt()
     {

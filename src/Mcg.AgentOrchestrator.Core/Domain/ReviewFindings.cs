@@ -156,13 +156,22 @@ public sealed record ReviewFindingRound(
     IReadOnlyList<ReviewFinding> Findings,
     IReadOnlyList<ReviewFindingLocation> TouchedAnchors);
 
+public sealed record ReviewFindingIdentityMismatch(
+    string Code,
+    string Message,
+    string PriorStableId,
+    string SubmittedStableId,
+    ReviewFindingLocation PriorLocation,
+    ReviewFindingLocation SubmittedLocation);
+
 public sealed record ReviewFindingContractViolation(
     string Code,
     string Message,
     string? PriorStableId = null,
     string? SubmittedStableId = null,
     ReviewFindingLocation? PriorLocation = null,
-    ReviewFindingLocation? SubmittedLocation = null);
+    ReviewFindingLocation? SubmittedLocation = null,
+    IReadOnlyList<ReviewFindingIdentityMismatch>? IdentityMismatches = null);
 
 public sealed record ReviewFindingIdentityCanonicalization(
     string PriorStableId,
@@ -338,6 +347,25 @@ public static class ReviewFindingConvergence
         ValidateUniqueStableIds(nextRound.Findings, "next");
 
         var submittedFindings = CanonicalizeLoneNewIdentity(previous, nextRound.Findings, out canonicalizations);
+        var identityMismatches = CollectIdentityMismatches(previous, submittedFindings);
+        if (identityMismatches.Count > 0)
+        {
+            var first = identityMismatches[0];
+            throw new ReviewFindingConvergenceException(
+                first.Code,
+                CountOpen(previous),
+                CountOpen(submittedFindings),
+                first.Message,
+                new ReviewFindingContractViolation(
+                    first.Code,
+                    first.Message,
+                    first.PriorStableId,
+                    first.SubmittedStableId,
+                    first.PriorLocation,
+                    first.SubmittedLocation,
+                    identityMismatches));
+        }
+
         var nextById = submittedFindings.ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
         var merged = new List<ReviewFinding>(Math.Max(previous.Count, nextRound.Findings.Count));
         foreach (var prior in previous)
@@ -349,22 +377,6 @@ public static class ReviewFindingConvergence
             }
 
             var anchorMoved = !SameAnchor(prior.Location, submitted.Location);
-            if (anchorMoved && submitted.State == ReviewFindingState.Open)
-            {
-                var message = BuildIdentityMovedMessage(prior.StableId, prior.Location, submitted.Location);
-                throw new ReviewFindingConvergenceException(
-                    IdentityMovedViolationCode,
-                    CountOpen(previous),
-                    CountOpen(submittedFindings),
-                    message,
-                    new ReviewFindingContractViolation(
-                        IdentityMovedViolationCode,
-                        message,
-                        prior.StableId,
-                        prior.StableId,
-                        prior.Location,
-                        submitted.Location));
-            }
 
             if (prior.State == ReviewFindingState.Resolved &&
                 submitted.State == ReviewFindingState.Open)
@@ -393,25 +405,6 @@ public static class ReviewFindingConvergence
 
         foreach (var newFinding in nextById.Values)
         {
-            var priorAtAnchor = previous.FirstOrDefault(prior =>
-                prior.State == ReviewFindingState.Open &&
-                ExactAnchor(prior.Location, newFinding.Location));
-            if (priorAtAnchor is not null)
-            {
-                throw new ReviewFindingConvergenceException(
-                    RecycledAnchorIdentityViolationCode,
-                    CountOpen(previous),
-                    CountOpen(submittedFindings),
-                    $"Structural anchor '{newFinding.Location}' already belongs to open stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.",
-                    new ReviewFindingContractViolation(
-                        RecycledAnchorIdentityViolationCode,
-                        $"Structural anchor '{newFinding.Location}' already belongs to open stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.",
-                        priorAtAnchor.StableId,
-                        newFinding.StableId,
-                        priorAtAnchor.Location,
-                        newFinding.Location));
-            }
-
             merged.Add(newFinding);
         }
 
@@ -428,6 +421,68 @@ public static class ReviewFindingConvergence
         // without its anchor being touched, and an OPEN finding's exact anchor cannot be re-keyed.
         return merged
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyList<ReviewFindingIdentityMismatch> CollectIdentityMismatches(
+        IReadOnlyList<ReviewFinding> previous,
+        IReadOnlyList<ReviewFinding> submitted)
+    {
+        var submittedById = submitted.ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
+        var previousIds = previous
+            .Select(finding => finding.StableId)
+            .ToHashSet(StringComparer.Ordinal);
+        var mismatches = new List<ReviewFindingIdentityMismatch>();
+
+        foreach (var prior in previous)
+        {
+            if (!submittedById.TryGetValue(prior.StableId, out var next) ||
+                next.State != ReviewFindingState.Open ||
+                SameAnchor(prior.Location, next.Location))
+            {
+                continue;
+            }
+
+            var message = BuildIdentityMovedMessage(prior.StableId, prior.Location, next.Location);
+            mismatches.Add(new ReviewFindingIdentityMismatch(
+                IdentityMovedViolationCode,
+                message,
+                prior.StableId,
+                next.StableId,
+                prior.Location,
+                next.Location));
+        }
+
+        foreach (var newFinding in submitted.Where(finding => !previousIds.Contains(finding.StableId)))
+        {
+            var priorAtAnchor = previous.FirstOrDefault(prior =>
+                prior.State == ReviewFindingState.Open &&
+                ExactAnchor(prior.Location, newFinding.Location));
+            if (priorAtAnchor is null)
+            {
+                continue;
+            }
+
+            var message = $"Structural anchor '{newFinding.Location}' already belongs to open stable_id '{priorAtAnchor.StableId}'; it cannot be recycled as '{newFinding.StableId}'.";
+            mismatches.Add(new ReviewFindingIdentityMismatch(
+                RecycledAnchorIdentityViolationCode,
+                message,
+                priorAtAnchor.StableId,
+                newFinding.StableId,
+                priorAtAnchor.Location,
+                newFinding.Location));
+        }
+
+        return mismatches
+            .OrderBy(mismatch => mismatch.PriorStableId, StringComparer.Ordinal)
+            .ThenBy(mismatch => mismatch.SubmittedStableId, StringComparer.Ordinal)
+            .ThenBy(mismatch => mismatch.Code, StringComparer.Ordinal)
+            .ThenBy(mismatch => mismatch.PriorLocation.File, StringComparer.Ordinal)
+            .ThenBy(mismatch => mismatch.PriorLocation.Region, StringComparer.Ordinal)
+            .ThenBy(mismatch => mismatch.PriorLocation.Hunk, StringComparer.Ordinal)
+            .ThenBy(mismatch => mismatch.SubmittedLocation.File, StringComparer.Ordinal)
+            .ThenBy(mismatch => mismatch.SubmittedLocation.Region, StringComparer.Ordinal)
+            .ThenBy(mismatch => mismatch.SubmittedLocation.Hunk, StringComparer.Ordinal)
             .ToArray();
     }
 

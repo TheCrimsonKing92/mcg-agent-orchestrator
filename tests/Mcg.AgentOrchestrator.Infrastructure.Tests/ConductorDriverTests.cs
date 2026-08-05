@@ -4189,7 +4189,14 @@ public sealed class ConductorDriverTests
         }
 
         DispatchTask(kernel, goal, reviewer, "review-1");
-        var firstLocation = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var opened = Enumerable.Range(0, 15)
+            .Select(index => new ReviewFinding(
+                $"F-{index:D2}",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation($"src/F{index:D2}.cs", $"F{index:D2}.Run", "guard"),
+                $"Advisory {index:D2}.",
+                FindingSeverity.Advisory))
+            .ToArray();
         var firstRound = string.Join(
             Environment.NewLine,
             "WORKER_RESULT:",
@@ -4197,7 +4204,7 @@ public sealed class ConductorDriverTests
             "commands: review",
             "tests: pass - inspected evidence",
             "blockers: none",
-            $"findings: {JsonSerializer.Serialize(new[] { new ReviewFinding("A-1", ReviewFindingState.Open, firstLocation, "Readability suggestion.", FindingSeverity.Advisory) })}",
+            $"findings: {JsonSerializer.Serialize(opened)}",
             "touched_anchors: []",
             "verdict: pass",
             "END_WORKER_RESULT");
@@ -4211,7 +4218,18 @@ public sealed class ConductorDriverTests
             WorkerResultPresent: true));
         kernel.RetryTask(goal.Id, reviewer.Id, "fresh review");
         DispatchTask(kernel, goal, reviewer, "review-2");
-        var secondLocation = new ReviewFindingLocation("src/B.cs", "B.Run", "guard");
+        var rejected = opened
+            .Reverse()
+            .Select(finding => finding.StableId == "F-10"
+                ? finding with { Location = new ReviewFindingLocation("src/Moved.cs", "Moved.Run", "guard") }
+                : finding)
+            .Prepend(new ReviewFinding(
+                "F-RECYCLED",
+                ReviewFindingState.Open,
+                opened[2].Location,
+                "Recycled anchor.",
+                FindingSeverity.Advisory))
+            .ToArray();
         var rejectedRound = string.Join(
             Environment.NewLine,
             "WORKER_RESULT:",
@@ -4219,7 +4237,7 @@ public sealed class ConductorDriverTests
             "commands: review",
             "tests: pass - inspected evidence",
             "blockers: none",
-            $"findings: {JsonSerializer.Serialize(new[] { new ReviewFinding("A-1", ReviewFindingState.Open, secondLocation, "Readability suggestion.", FindingSeverity.Advisory) })}",
+            $"findings: {JsonSerializer.Serialize(rejected)}",
             "touched_anchors: []",
             "verdict: pass",
             "END_WORKER_RESULT");
@@ -4232,16 +4250,20 @@ public sealed class ConductorDriverTests
             DateTimeOffset.UtcNow,
             StandardOutputPath: "C:\\tmp\\reviewer.out.log",
             WorkerResultPresent: true));
-        Assert.NotNull(reviewer.LastVerification!.ReviewFindingContractViolation);
+        var violation = Assert.IsType<ReviewFindingContractViolation>(
+            reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(2, violation.IdentityMismatches!.Count);
 
         TaskId? retriedTaskId = null;
         string? retryMessage = null;
         RetryRoundKind? retryRoundKind = null;
+        var retryCount = 0;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
+                retryCount++;
                 retriedTaskId = taskId;
                 retryMessage = message;
                 retryRoundKind = roundKind;
@@ -4257,9 +4279,39 @@ public sealed class ConductorDriverTests
         Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
         Assert.StartsWith("review-finding contract-repair:", retryMessage, StringComparison.Ordinal);
         Assert.Contains("ERR_REVIEW_FINDING_IDENTITY_MOVED", retryMessage, StringComparison.Ordinal);
+        Assert.Contains("ERR_REVIEW_FINDING_ANCHOR_IDENTITY_RECYCLED", retryMessage, StringComparison.Ordinal);
+        Assert.Contains("violation_count: 2", retryMessage, StringComparison.Ordinal);
+        Assert.Contains("open_count: 15", retryMessage, StringComparison.Ordinal);
+        Assert.All(opened, finding =>
+            Assert.Contains($"stable_id: {finding.StableId}", retryMessage, StringComparison.Ordinal));
         Assert.Contains("avoided_developer_reopen=1", retryMessage, StringComparison.Ordinal);
         Assert.DoesNotContain("auto-review-retry", retryMessage, StringComparison.OrdinalIgnoreCase);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+
+        DispatchTask(kernel, goal, reviewer, "review-3");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-3",
+            "C:\\tmp",
+            0,
+            string.Join(
+                Environment.NewLine,
+                "WORKER_RESULT:",
+                "files: none",
+                "commands: review",
+                "tests: pass - corrected structured receipt",
+                "blockers: none",
+                $"findings: {JsonSerializer.Serialize(opened.Reverse())}",
+                "touched_anchors: []",
+                "verdict: pass",
+                "END_WORKER_RESULT"),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+
+        Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Equal(1, retryCount);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_tester_contract_violation_mechanically_retries_the_same_tester")]
