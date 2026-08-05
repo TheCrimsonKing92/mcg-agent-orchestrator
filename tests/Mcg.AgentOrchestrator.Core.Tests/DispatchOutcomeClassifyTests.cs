@@ -1041,6 +1041,20 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
     }
 
+    [Xunit.Fact(DisplayName = "Classify keeps deterministic Planner contract failure out of ProviderModelRejection")]
+    public void ClassifyPlannerOutputContractFailure()
+    {
+        var outcome = DispatchFailureClassifier.Classify(
+            SimpleTask(AgentRole.Planner),
+            Verification(
+                1,
+                "ERROR: requested model gpt-5.6-sol is not supported.",
+                "Planner output contract failed: target citation 'src/Missing.cs' does not exist and is not marked as a new file. Retry Planner for contract repair."));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Contains("Planner output contract failed", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify reads log path for verification evidence outside retained excerpt")]
     public void ClassifyReadsLogPathForVerificationEvidenceOutsideRetainedExcerpt()
     {

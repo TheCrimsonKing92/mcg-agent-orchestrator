@@ -1579,17 +1579,12 @@ public static class DispatchFailureClassifier
 
     public static bool IsRecoverableProviderModelRejectionFailure(TaskVerificationRecord verification)
     {
-        if (verification.Succeeded)
+        if (verification.Succeeded || HasPlannerOutputContractFailure(verification))
         {
             return false;
         }
 
-        var output = string.Join(
-            Environment.NewLine,
-            verification.StandardOutput,
-            verification.StandardError);
-
-        return ContainsProviderModelRejectionText(output) &&
+        return TryGetProviderModelRejectionLine(verification, out _) &&
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
 
@@ -1981,7 +1976,8 @@ public static class DispatchFailureClassifier
         foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
         {
             var candidate = rawLine.Trim();
-            if (ContainsProviderModelRejectionText(candidate))
+            if (!IsPlannerOutputContractFailureLine(candidate) &&
+                ContainsProviderModelRejectionText(candidate))
             {
                 line = candidate;
                 return true;
@@ -1991,6 +1987,15 @@ public static class DispatchFailureClassifier
         line = string.Empty;
         return false;
     }
+
+    private static bool HasPlannerOutputContractFailure(TaskVerificationRecord verification) =>
+        EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true)
+            .Any(line => IsPlannerOutputContractFailureLine(line.Trim()));
+
+    private static bool IsPlannerOutputContractFailureLine(string line) =>
+        line.Contains("Planner output contract failed", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("Planner durable receipt failed revalidation", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("Planner output contract could not persist", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsWorkerResultOpener(string line)
     {

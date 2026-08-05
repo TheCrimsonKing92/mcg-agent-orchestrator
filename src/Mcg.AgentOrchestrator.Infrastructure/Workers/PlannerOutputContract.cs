@@ -352,6 +352,7 @@ internal static partial class PlannerOutputContract
     private static bool ValidateCitedPaths(string plan, string workingDirectory, out string diagnostic)
     {
         diagnostic = string.Empty;
+        string? contextualDirectory = null;
         var targetHeading = TargetSeamsHeading().Match(plan);
         if (!targetHeading.Success)
         {
@@ -373,15 +374,32 @@ internal static partial class PlannerOutputContract
 
             var lineStart = targetSection.LastIndexOf('\n', Math.Max(0, match.Index - 1));
             lineStart = lineStart < 0 ? 0 : lineStart + 1;
+            var lineEnd = targetSection.IndexOf('\n', match.Index + match.Length);
+            lineEnd = lineEnd < 0 ? targetSection.Length : lineEnd;
             var prefix = targetSection[lineStart..match.Index];
-            if (NewFileCitationPrefix().IsMatch(prefix))
+            var suffix = targetSection[(match.Index + match.Length)..lineEnd];
+
+            var hasExplicitDirectory = citedPath.Contains('/') || citedPath.Contains('\\');
+            var candidate = Path.IsPathFullyQualified(citedPath)
+                ? citedPath
+                : hasExplicitDirectory || contextualDirectory is null
+                    ? Path.Combine(workingDirectory, citedPath.Replace('/', Path.DirectorySeparatorChar))
+                    : Path.Combine(contextualDirectory, citedPath);
+
+            if (hasExplicitDirectory)
+            {
+                contextualDirectory = Directory.Exists(candidate) ||
+                    citedPath.EndsWith('/') ||
+                    citedPath.EndsWith('\\')
+                        ? candidate
+                        : Path.GetDirectoryName(candidate);
+            }
+
+            if (NewFileCitationPrefix().IsMatch(prefix) || NewFileCitationSuffix().IsMatch(suffix))
             {
                 continue;
             }
 
-            var candidate = Path.IsPathFullyQualified(citedPath)
-                ? citedPath
-                : Path.Combine(workingDirectory, citedPath.Replace('/', Path.DirectorySeparatorChar));
             if (!File.Exists(candidate) && !Directory.Exists(candidate))
             {
                 diagnostic = $"target citation '{citation}' does not exist and is not marked as a new file";
@@ -424,7 +442,8 @@ internal static partial class PlannerOutputContract
             "external and edge contracts" =>
                 ExternalEdgeMarker().IsMatch(body),
             "integration seams" =>
-                IntegrationSequenceMarker().IsMatch(body),
+                IntegrationSequenceMarker().IsMatch(body) ||
+                HasSubstantivelyOrderedNumberedList(body),
             "verification commands and classes" =>
                 body.Contains('`') &&
                 (body.Contains("TEST-VERIFIABLE", StringComparison.OrdinalIgnoreCase) ||
@@ -433,6 +452,35 @@ internal static partial class PlannerOutputContract
                 StopConditionMarker().IsMatch(body),
             _ => false
         };
+    }
+
+    private static bool HasSubstantivelyOrderedNumberedList(string body)
+    {
+        var items = NumberedIntegrationItem().Matches(body);
+        if (items.Count < 2)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < items.Count; index++)
+        {
+            var item = items[index];
+            if (!int.TryParse(item.Groups["number"].Value, out var number) ||
+                number != index + 1)
+            {
+                return false;
+            }
+
+            var content = item.Groups["content"].Value.Trim();
+            if (content.Length < 12 ||
+                !content.Any(char.IsLetter) ||
+                IntegrationPlaceholderMarker().IsMatch(content))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string RequiredSectionEvidenceRequirement(string label) =>
@@ -667,6 +715,12 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"(?i)\b(?:before|after|between|into|from|then|sequence)\b")]
     private static partial Regex IntegrationSequenceMarker();
 
+    [GeneratedRegex(@"(?m)^[ \t]*(?<number>\d+)[.)][ \t]+(?<content>\S[^\r\n]*)$")]
+    private static partial Regex NumberedIntegrationItem();
+
+    [GeneratedRegex(@"(?i)\b(?:tbd|todo|placeholder|later)\b")]
+    private static partial Regex IntegrationPlaceholderMarker();
+
     [GeneratedRegex(@"(?i)\b(?:valid|invalid)\b")]
     private static partial Regex PremiseValidityMarker();
 
@@ -681,6 +735,9 @@ internal static partial class PlannerOutputContract
 
     [GeneratedRegex(@"(?i)(?:\bnew[ \t]+file\b|\b(?:create|add)\b(?:[ \t]+(?:a|an|the|new))?)[^`\r\n]{0,24}$")]
     private static partial Regex NewFileCitationPrefix();
+
+    [GeneratedRegex(@"(?i)^[ \t]*(?:—[ \t]*new[ \t]+file\b|\([ \t]*new[ \t]+file[ \t]*\))")]
+    private static partial Regex NewFileCitationSuffix();
 
     [GeneratedRegex(@"`(?<citation>[^`\r\n]+)`")]
     private static partial Regex BacktickedCitation();
