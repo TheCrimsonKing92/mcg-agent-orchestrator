@@ -535,12 +535,19 @@ function New-MtpRunnerArguments {
 }
 
 function ConvertTo-MtpCommandLineArgument {
-    param([AllowNull()][string]$Value)
+    param(
+        [AllowNull()][string]$Value,
+        [switch]$QuoteCmdMetaCharacters
+    )
 
     if ($null -eq $Value) {
         return '""'
     }
-    if ($Value.Length -gt 0 -and $Value.IndexOfAny([char[]]@(' ', "`t", "`n", "`r", '"')) -lt 0) {
+    $charactersRequiringQuotes = @(' ', "`t", "`n", "`r", '"')
+    if ($QuoteCmdMetaCharacters) {
+        $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^')
+    }
+    if ($Value.Length -gt 0 -and $Value.IndexOfAny([char[]]$charactersRequiringQuotes) -lt 0) {
         return $Value
     }
 
@@ -582,15 +589,17 @@ function New-MtpProcessStartInfo {
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    $argumentLine = (@($Arguments | Select-Object -Skip 1 | ForEach-Object { ConvertTo-MtpCommandLineArgument $_ }) -join ' ')
     $extension = [System.IO.Path]::GetExtension($Executable)
     if ($extension.Equals('.cmd', [System.StringComparison]::OrdinalIgnoreCase) -or
         $extension.Equals('.bat', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $argumentLine = (@($Arguments | Select-Object -Skip 1 | ForEach-Object {
+            ConvertTo-MtpCommandLineArgument $_ -QuoteCmdMetaCharacters
+        }) -join ' ')
         $commandInterpreter = $env:ComSpec
         if ([string]::IsNullOrWhiteSpace($commandInterpreter)) {
             $commandInterpreter = Join-Path $env:SystemRoot 'System32\cmd.exe'
         }
-        $commandLine = (ConvertTo-MtpCommandLineArgument $Executable)
+        $commandLine = (ConvertTo-MtpCommandLineArgument $Executable -QuoteCmdMetaCharacters)
         if (-not [string]::IsNullOrWhiteSpace($argumentLine)) {
             $commandLine += ' ' + $argumentLine
         }
@@ -598,6 +607,9 @@ function New-MtpProcessStartInfo {
         $startInfo.Arguments = '/d /s /c "' + $commandLine + '"'
     }
     else {
+        $argumentLine = (@($Arguments | Select-Object -Skip 1 | ForEach-Object {
+            ConvertTo-MtpCommandLineArgument $_
+        }) -join ' ')
         $startInfo.FileName = $Executable
         $startInfo.Arguments = $argumentLine
     }
@@ -690,6 +702,8 @@ function Invoke-MtpAppHost {
     $runnerExit = $script:ExitCodes.Runner
     $timedOut = $false
     $exitConfirmed = $false
+    $processExitConfirmed = $false
+    $streamsDrained = $false
     $processStarted = $false
     $runnerFailed = $false
     try {
@@ -715,9 +729,9 @@ function Invoke-MtpAppHost {
             }
         }
 
-        $exitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
+        $processExitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
         $streamsDrained = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
-        $exitConfirmed = $exitConfirmed -and $streamsDrained
+        $exitConfirmed = $processExitConfirmed -and $streamsDrained
         if ($process.HasExited) {
             $runnerExit = $process.ExitCode
         }
@@ -734,10 +748,14 @@ function Invoke-MtpAppHost {
         if ($null -ne $process -and $processStarted) {
             if (-not $process.HasExited -and $null -ne $startTimeUtc) {
                 [void](Stop-MtpOwnedProcessTree -Process $process -StartTimeUtc $startTimeUtc)
-                $exitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
             }
+            $processExitConfirmed = $process.HasExited -or $process.WaitForExit($script:MtpExitConfirmationSeconds * 1000)
         }
         if ($null -ne $capture) {
+            if ($processStarted) {
+                $streamsDrained = $capture.WaitForCompletion($script:MtpOutputDrainSeconds * 1000)
+            }
+            $exitConfirmed = $processStarted -and $processExitConfirmed -and $streamsDrained
             $captured = @($capture.Snapshot())
             if ($null -ne $process) {
                 $capture.Detach($process)

@@ -157,6 +157,33 @@ public sealed class MtpTestRunnerScriptTests
         using var lockProbe = new FileStream(sandbox.LockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
     }
 
+    [Xunit.Fact]
+    public void MtpCmdRunnerPreservesMetacharactersInPathsAsArgumentData()
+    {
+        using var sandbox = ScriptSandbox.Create("success", rootNamePrefix: "meta&chars");
+
+        var metacharacterResultsRoot = Path.Combine(sandbox.Root, "results&output");
+        var result = sandbox.RunPartition("GoalWorktree", resultsRoot: metacharacterResultsRoot);
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.True(File.Exists(sandbox.ArgumentLog), result.Stdout + result.Stderr);
+        Assert.Contains(File.ReadAllLines(sandbox.ArgumentLog), argument =>
+            argument.Contains("meta&chars", StringComparison.Ordinal));
+        Assert.Equal("completed", TerminalSummary(result).GetProperty("outcome").GetString());
+    }
+
+    [Xunit.Fact]
+    public void MtpExitConfirmationWaitsForRedirectedOutputDrain()
+    {
+        using var sandbox = ScriptSandbox.Create("late-output");
+
+        var result = sandbox.RunPartition("GoalWorktree");
+
+        Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        Assert.Contains("late descendant output", result.Stdout, StringComparison.Ordinal);
+        Assert.True(TerminalSummary(result).GetProperty("exitConfirmed").GetBoolean());
+    }
+
     [Xunit.Fact(DisplayName = "MTP_partition_build_failure_is_loud_and_never_launches_stale_apphost")]
     public void MtpPartitionBuildFailureIsLoudAndNeverLaunchesStaleApphost()
     {
@@ -357,9 +384,10 @@ public sealed class MtpTestRunnerScriptTests
         public string LockPath { get; }
         public string ReadyPath { get; }
 
-        public static ScriptSandbox Create(string behavior)
+        public static ScriptSandbox Create(string behavior, string rootNamePrefix = "sandbox")
         {
-            var root = Path.Combine(Path.GetTempPath(), "mtp-script-tests", Guid.NewGuid().ToString("n"));
+            var root = Path.Combine(
+                Path.GetTempPath(), "mtp-script-tests", $"{rootNamePrefix}-{Guid.NewGuid():n}");
             var resultsRoot = Path.Combine(
                 Path.GetTempPath(), "script-tests", Guid.NewGuid().ToString("n"));
             var scripts = Path.Combine(root, "scripts");
@@ -409,6 +437,7 @@ public sealed class MtpTestRunnerScriptTests
                 "success" => TrxBody(total: 1, passed: 1, failed: 0),
                 "zero" => TrxBody(total: 0, passed: 0, failed: 0),
                 "failed" => TrxBody(total: 1, passed: 0, failed: 1),
+                "late-output" => TrxBody(total: 1, passed: 1, failed: 0),
                 "no-trx" => string.Empty,
                 "hang" => string.Empty,
                 _ => throw new ArgumentOutOfRangeException(nameof(behavior))
@@ -441,6 +470,11 @@ public sealed class MtpTestRunnerScriptTests
                     finally {
                         $lock.Dispose()
                     }
+                }
+                if ('{{behavior}}' -eq 'late-output') {
+                    $lateCommand = "Start-Sleep -Seconds 6; Write-Output 'late descendant output'"
+                    $lateEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($lateCommand))
+                    Start-Process powershell.exe -ArgumentList @('-NoProfile', '-EncodedCommand', $lateEncoded) -NoNewWindow | Out-Null
                 }
                 $resultsIndex = [Array]::IndexOf($Arguments, '--results-directory')
                 $fileIndex = [Array]::IndexOf($Arguments, '--report-trx-filename')
