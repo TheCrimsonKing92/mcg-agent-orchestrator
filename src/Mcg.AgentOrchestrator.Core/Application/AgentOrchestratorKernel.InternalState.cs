@@ -82,6 +82,18 @@ public sealed partial class AgentOrchestratorKernel
                 VerificationGateReason.OutputTokenLimit);
         }
 
+        if (WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, task.LastVerification, out var testerBlocker))
+        {
+            return new TaskVerificationGate(
+                task.Id,
+                task.RequiredRole,
+                task.Description,
+                task.Status,
+                VerificationGateStatus.FailedVerification,
+                $"Tester WORKER_RESULT reported blocker: {testerBlocker}",
+                VerificationGateReason.TesterWorkerResultBlocker);
+        }
+
         if (task.RequiredRole == AgentRole.Reviewer &&
             !WorkerResultBlockers.IsAdvisoryNoChangeContractBlocker(task, task.LastVerification) &&
             WorkerResultBlockers.TryFindHardFailureBlocker(task.LastVerification, out var reviewerBlocker) &&
@@ -142,6 +154,8 @@ public sealed partial class AgentOrchestratorKernel
         {
             VerificationGateReason.OutputTokenLimit =>
                 "Retry with narrower scope or a stronger model, rerun verification, and record model fit if this was subscription/API work.",
+            VerificationGateReason.TesterWorkerResultBlocker =>
+                "Inspect the Tester blocker, retry the same Tester task or escalate to the operator, then rerun Tester verification.",
             VerificationGateReason.ReviewerWorkerResultBlocker =>
                 "Inspect the Reviewer blocker, retry the affected task or escalate to the operator, then rerun Reviewer verification.",
             VerificationGateReason.DirtyUsefulRecovery =>

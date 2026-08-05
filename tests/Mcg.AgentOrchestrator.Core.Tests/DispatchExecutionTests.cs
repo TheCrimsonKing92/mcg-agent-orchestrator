@@ -993,6 +993,93 @@ public sealed class DispatchExecutionTests
     Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
 }
 
+    [Xunit.Theory(DisplayName = "RecordDispatchExecutionResult fails Tester WORKER_RESULT blocker regardless of process exit")]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(1)]
+    public void RecordDispatchExecutionResultFailsTesterWorkerResultBlockerRegardlessOfExitCode(int exitCode)
+    {
+        const string blocker = "worker-sweep-command-name-safety-list";
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Reject Tester blocker",
+            [new TaskSpec(TaskId.New(), "Verify behavior", AgentRole.Tester)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "codex exec",
+            "C:\\repo",
+            clock.UtcNow,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli));
+        var stdout = WorkerResultStdout("none", "pass - verification completed", blocker);
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "codex exec",
+                "C:\\repo",
+                exitCode,
+                stdout,
+                string.Empty,
+                clock.UtcNow,
+                WorkerResultPresent: true,
+                HasCommittedChanges: false,
+                HeartbeatStandardOutputBytes: stdout.Length));
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(GoalStatus.Active, goal.Status);
+        Assert.Equal(exitCode, task.LastVerification!.ExitCode);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("rule=tester-worker-result-blocker", StringComparison.Ordinal));
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains(blocker, StringComparison.Ordinal) &&
+            evt.Message.Contains("same Tester retry or operator action required", StringComparison.Ordinal));
+        Assert.DoesNotContain(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskCompleted);
+    }
+
+    [Xunit.Fact(DisplayName = "RecordTaskVerification fails exit-zero Tester WORKER_RESULT blocker")]
+    public void RecordTaskVerificationFailsExitZeroTesterWorkerResultBlocker()
+    {
+        const string blocker = "worker-sweep-command-name-safety-list";
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Reject Tester blocker from direct verification",
+            [new TaskSpec(TaskId.New(), "Verify behavior", AgentRole.Tester)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.Single();
+        var stdout = WorkerResultStdout("none", "pass - verification completed", blocker);
+
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                "tester stdout",
+                "C:\\repo",
+                0,
+                stdout,
+                string.Empty,
+                clock.UtcNow,
+                WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("rule=tester-worker-result-blocker", StringComparison.Ordinal));
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains(blocker, StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_does_not_complete_tester_with_failing_tests_and_no_changes")]
     public void RecordDispatchExecutionResultDoesNotCompleteTesterWithFailingTestsAndNoChanges()
 {

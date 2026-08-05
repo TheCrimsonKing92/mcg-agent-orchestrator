@@ -17,6 +17,11 @@ public sealed partial class AgentOrchestratorKernel
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Verification {status} ({verification.ExitCode}): {verification.Command}");
         var outcome = DispatchFailureClassifier.Classify(task, verification);
+        if (!string.IsNullOrWhiteSpace(outcome.ClassifierReceipt))
+        {
+            Append(goal, taskId, ProgressKind.TaskNote, outcome.ClassifierReceipt);
+        }
+
         if (outcome.Kind == DispatchOutcomeKind.VerificationInconclusive)
         {
             ReportTaskProgress(
@@ -174,14 +179,14 @@ public sealed partial class AgentOrchestratorKernel
             return;
         }
 
-        if (TryFailWorkerResultBlocker(goalId, task, verification, enforceFailureEvidenceRule: true))
-        {
-            return;
-        }
-
         if (!string.IsNullOrWhiteSpace(outcome.ClassifierReceipt))
         {
             Append(goal, taskId, ProgressKind.TaskNote, outcome.ClassifierReceipt);
+        }
+
+        if (TryFailWorkerResultBlocker(goalId, task, verification, enforceFailureEvidenceRule: true))
+        {
+            return;
         }
 
         if (!verification.Succeeded &&
@@ -421,6 +426,16 @@ public sealed partial class AgentOrchestratorKernel
                 task.Id,
                 WorkTaskStatus.Failed,
                 "Reviewer WORKER_RESULT verdict rejected: zero open blocking structured findings requires verdict: pass.");
+            return true;
+        }
+
+        if (WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker))
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Tester WORKER_RESULT reported blocker: {testerBlocker}; same Tester retry or operator action required.");
             return true;
         }
 

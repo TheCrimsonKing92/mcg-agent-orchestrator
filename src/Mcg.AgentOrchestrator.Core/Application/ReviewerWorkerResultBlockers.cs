@@ -299,6 +299,18 @@ public static class WorkerResultBlockers
             !TryFindHardFailureBlocker(verification, out _);
     }
 
+    public static bool TryFindTesterWorkerResultBlocker(
+        TaskSpec task,
+        TaskVerificationRecord? verification,
+        out string blocker)
+    {
+        blocker = string.Empty;
+        return task.RequiredRole == AgentRole.Tester &&
+            TryGetBlockersStatus(verification, out var status) &&
+            status == BlockersStatus.Present &&
+            TryFindBlocker(verification, out blocker);
+    }
+
     public static bool IsAdvisoryNoChangeContractBlocker(TaskSpec task, TaskVerificationRecord? verification)
     {
         return verification is { Succeeded: true } &&

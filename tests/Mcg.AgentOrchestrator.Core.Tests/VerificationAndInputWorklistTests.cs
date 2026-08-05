@@ -430,6 +430,45 @@ public sealed class VerificationAndInputWorklistTests
     Assert.True(acceptance.IsAccepted);
     Assert.Empty(acceptance.Blockers);
 }
+
+    [Xunit.Fact(DisplayName = "Tester WORKER_RESULT blocker rejects persisted false-positive completion at acceptance gate")]
+    public void TesterWorkerResultBlockerFailsAcceptanceGate()
+    {
+        const string blocker = "worker-sweep-command-name-safety-list";
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal(
+            "Reject persisted Tester blocker",
+            [new TaskSpec(TaskId.New(), "Verify behavior", AgentRole.Tester)]);
+        kernel.ActivateGoal(goal.Id, [DefaultAgents().First(agent => agent.Role == AgentRole.Tester)]);
+        var tester = goal.Tasks.Single();
+        kernel.ReportTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Completed, "Legacy false-positive completion.");
+        tester.RecordVerification(new TaskVerificationRecord(
+            "tester stdout",
+            "C:\\repo",
+            0,
+            $"WORKER_RESULT:\nfiles: none\ncommands: dotnet test\ntests: pass - focused verification completed\ncommit: none\nblockers: {blocker}\nEND_WORKER_RESULT",
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true));
+
+        var gate = kernel.BuildVerificationGate(goal.Id).Tasks.Single();
+        var acceptance = kernel.BuildGoalAcceptanceSummary(goal.Id);
+        var worklist = kernel.BuildVerificationWorklist(goal.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Equal(VerificationGateStatus.FailedVerification, gate.GateStatus);
+        Assert.Equal(VerificationGateReason.TesterWorkerResultBlocker, gate.Reason);
+        Assert.Contains(blocker, gate.Message, StringComparison.Ordinal);
+        Assert.False(acceptance.IsAccepted);
+        Assert.Contains(acceptance.Blockers, item =>
+            item.TaskId == tester.Id &&
+            item.Kind == GoalAcceptanceBlockerKind.VerificationFailed &&
+            item.Message.Contains(blocker, StringComparison.Ordinal));
+        var workItem = Assert.Single(worklist.Items);
+        Assert.Contains("same Tester task", workItem.SuggestedAction, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BuildHumanInputWorklist_reports_pending_questions_with_context")]
     public void BuildHumanInputWorklistReportsPendingQuestionsWithContext()
 {

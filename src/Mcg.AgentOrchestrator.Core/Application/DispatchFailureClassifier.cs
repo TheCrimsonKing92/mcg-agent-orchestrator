@@ -395,6 +395,24 @@ public static class DispatchFailureClassifier
                     evidenceSummary));
         }
 
+        if (WorkerResultBlockers.TryFindTesterWorkerResultBlocker(task, verification, out var testerBlocker))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.TesterWorkerResultBlocker,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                    DispatchOutcomeKind.UnknownFailure,
+                    exitCode,
+                    hasZeroByteOutput,
+                    null,
+                    null,
+                    RecoveryRecommendation.OperatorNeeded,
+                    $"Tester WORKER_RESULT reported blockers: {testerBlocker}"));
+        }
+
         if (verification.Succeeded &&
             GetDispatchRoleOutputCapability(task.RequiredRole) != DispatchRoleOutputCapability.ReadOnly &&
             WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&

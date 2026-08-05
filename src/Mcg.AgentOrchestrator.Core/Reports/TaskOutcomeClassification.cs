@@ -39,6 +39,7 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule SandboxCommitBlocked = new("sandbox-commit-blocked", TaskOutcomeClass.ManufacturedFixed);
 
     public static readonly TaskOutcomeRule SucceededWorkerResultFailingTests = new("succeeded-worker-result-failing-tests", TaskOutcomeClass.RealFailure);
+    public static readonly TaskOutcomeRule TesterWorkerResultBlocker = new("tester-worker-result-blocker", TaskOutcomeClass.RealFailure);
     public static readonly TaskOutcomeRule RealFailure = new("real-failure", TaskOutcomeClass.RealFailure);
 
     public static readonly TaskOutcomeRule ProviderUnknown = new("provider-unknown", TaskOutcomeClass.UnknownEra);
@@ -67,6 +68,7 @@ internal static class TaskOutcomeRules
         RetryRoundProducedNoCommitAndNoDeferral,
         SandboxCommitBlocked,
         SucceededWorkerResultFailingTests,
+        TesterWorkerResultBlocker,
         RealFailure,
         ProviderUnknown,
         TesterVerificationInconclusive,
