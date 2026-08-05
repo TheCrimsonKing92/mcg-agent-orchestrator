@@ -305,19 +305,38 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
                     .OrderBy(stableId => stableId, StringComparer.Ordinal)
                     .ToArray()
                 : [];
+        var mismatches = violation.IdentityMismatches is { Count: > 0 }
+            ? violation.IdentityMismatches
+            :
+            [
+                new ReviewFindingIdentityMismatch(
+                    violation.Code,
+                    violation.Message,
+                    violation.PriorStableId ?? "none",
+                    violation.SubmittedStableId ?? "none",
+                    violation.PriorLocation ?? new ReviewFindingLocation("none", "none"),
+                    violation.SubmittedLocation ?? new ReviewFindingLocation("none", "none"))
+            ];
         var lines = new List<string>
         {
             $"review-finding contract-repair: attempt {attempt}/{maxAttempts}; avoided_developer_reopen=1; {reviewerTask.RequiredRole} task {reviewerTask.Id.Value[..8]}",
             "produced a substantively valid result whose structured findings round was rejected by the review-finding identity contract. Re-submit the SAME conclusion; do not repeat the work and do not change your verdict.",
-            $"violation_code: {violation.Code}",
-            $"violation_prior_stable_id: {violation.PriorStableId ?? "none"}",
-            $"violation_submitted_stable_id: {violation.SubmittedStableId ?? "none"}",
-            $"violation_prior_location: {violation.PriorLocation?.ToString() ?? "none"}",
-            $"violation_submitted_location: {violation.SubmittedLocation?.ToString() ?? "none"}",
-            $"violation_detail: {violation.Message}",
-            "## CANONICAL_OPEN_ACTIVE_RECHECK (authoritative; reuse stable_id and location VERBATIM)",
-            $"open_count: {open.Length}"
+            $"violation_count: {mismatches.Count}"
         };
+        for (var index = 0; index < mismatches.Count; index++)
+        {
+            var mismatch = mismatches[index];
+            var prefix = mismatches.Count == 1 ? "violation" : $"violation_{index + 1}";
+            lines.Add($"{prefix}_code: {mismatch.Code}");
+            lines.Add($"{prefix}_prior_stable_id: {mismatch.PriorStableId}");
+            lines.Add($"{prefix}_submitted_stable_id: {mismatch.SubmittedStableId}");
+            lines.Add($"{prefix}_prior_location: {FormatViolationLocation(mismatch.PriorLocation)}");
+            lines.Add($"{prefix}_submitted_location: {FormatViolationLocation(mismatch.SubmittedLocation)}");
+            lines.Add($"{prefix}_detail: {mismatch.Message}");
+        }
+
+        lines.Add("## CANONICAL_OPEN_ACTIVE_RECHECK (authoritative; reuse stable_id and location VERBATIM)");
+        lines.Add($"open_count: {open.Length}");
         foreach (var finding in open)
         {
             lines.Add(
@@ -341,6 +360,11 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         lines.Add($"Full {reviewerTask.RequiredRole} output: {outputArtifact}");
         return string.Join(Environment.NewLine, lines);
     }
+
+    private static string FormatViolationLocation(ReviewFindingLocation location) =>
+        location.File == "none" && location.Region == "none" && location.Hunk is null
+            ? "none"
+            : location.ToString();
 
     internal static IReadOnlyList<ReviewFinding> ReadStructuredReviewFindingState(
         Goal goal,

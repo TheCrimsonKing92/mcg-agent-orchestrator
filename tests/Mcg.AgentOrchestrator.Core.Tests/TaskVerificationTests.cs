@@ -573,7 +573,23 @@ public sealed class TaskVerificationTests
             "F-1",
             "F-1",
             new ReviewFindingLocation("src/A.cs", "A.Run"),
-            new ReviewFindingLocation("src/B.cs", "B.Run"));
+            new ReviewFindingLocation("src/B.cs", "B.Run"),
+            [
+                new ReviewFindingIdentityMismatch(
+                    ReviewFindingConvergence.IdentityMovedViolationCode,
+                    "Finding moved.",
+                    "F-1",
+                    "F-1",
+                    new ReviewFindingLocation("src/A.cs", "A.Run"),
+                    new ReviewFindingLocation("src/B.cs", "B.Run")),
+                new ReviewFindingIdentityMismatch(
+                    ReviewFindingConvergence.RecycledAnchorIdentityViolationCode,
+                    "Anchor recycled.",
+                    "F-2",
+                    "F-NEW",
+                    new ReviewFindingLocation("src/C.cs", "C.Run"),
+                    new ReviewFindingLocation("src/C.cs", "C.Run"))
+            ]);
         reviewer.RecordVerification(new TaskVerificationRecord(
             "review",
             "C:\\repo",
@@ -590,6 +606,11 @@ public sealed class TaskVerificationTests
             .ReviewFindingContractViolation;
 
         Assert.Equal(violation, restoredViolation);
+        var mismatches = Assert.IsAssignableFrom<IReadOnlyList<ReviewFindingIdentityMismatch>>(
+            restoredViolation!.IdentityMismatches);
+        Assert.Equal(2, mismatches.Count);
+        Assert.Equal(["F-1", "F-2"], mismatches.Select(mismatch => mismatch.PriorStableId));
+        Assert.Equal("F-NEW", mismatches[1].SubmittedStableId);
     }
 
 private static void AssertRetainedTextBounded(string text)

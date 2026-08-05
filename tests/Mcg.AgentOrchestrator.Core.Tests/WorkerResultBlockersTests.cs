@@ -243,6 +243,55 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal("F-RECYCLED", error.Violation.SubmittedStableId);
         Assert.Equal(anchor, error.Violation.PriorLocation);
         Assert.Equal(anchor, error.Violation.SubmittedLocation);
+        var mismatch = Assert.Single(error.Violation.IdentityMismatches!);
+        Assert.Equal(error.Violation.Code, mismatch.Code);
+        Assert.Equal(error.Violation.Message, mismatch.Message);
+    }
+
+    [Xunit.Fact]
+    public void MultipleIdentityMismatchesReturnOneOrderedViolation()
+    {
+        var previous = Enumerable.Range(0, 15)
+            .Select(index => new ReviewFinding(
+                $"F-{index:D2}",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation($"src/F{index:D2}.cs", $"F{index:D2}.Run", "guard"),
+                $"Finding {index:D2}."))
+            .ToArray();
+        var submitted = previous
+            .Reverse()
+            .Select(finding => finding.StableId == "F-10"
+                ? finding with { Location = new ReviewFindingLocation("src/Moved.cs", "Moved.Run", "guard") }
+                : finding)
+            .Prepend(new ReviewFinding(
+                "F-RECYCLED",
+                ReviewFindingState.Open,
+                previous[2].Location,
+                "Recycled anchor."))
+            .ToArray();
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(() =>
+            ReviewFindingConvergence.ApplyRound(previous, new ReviewFindingRound(submitted, [])));
+
+        var mismatches = Assert.IsAssignableFrom<IReadOnlyList<ReviewFindingIdentityMismatch>>(
+            error.Violation.IdentityMismatches);
+        Assert.Equal(2, mismatches.Count);
+        Assert.Equal(
+            [
+                ReviewFindingConvergence.RecycledAnchorIdentityViolationCode,
+                ReviewFindingConvergence.IdentityMovedViolationCode
+            ],
+            mismatches.Select(mismatch => mismatch.Code));
+        Assert.Equal(["F-02", "F-10"], mismatches.Select(mismatch => mismatch.PriorStableId));
+        Assert.Equal("F-RECYCLED", mismatches[0].SubmittedStableId);
+        Assert.Contains("cannot be recycled", mismatches[0].Message, StringComparison.Ordinal);
+        Assert.Contains("different structural anchor", mismatches[1].Message, StringComparison.Ordinal);
+        Assert.Equal(mismatches[0].Code, error.Violation.Code);
+        Assert.Equal(mismatches[0].Message, error.Violation.Message);
+        Assert.Equal(previous[2].Location, previous.Single(finding => finding.StableId == "F-02").Location);
+        Assert.Equal(previous, ReviewFindingConvergence.ApplyRound(
+            previous,
+            new ReviewFindingRound(previous.Reverse().ToArray(), [])));
     }
 
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_canonicalizes_a_lone_new_stable_id_at_an_omitted_open_prior_exact_anchor")]
@@ -413,6 +462,11 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal("F-1", error.Violation.SubmittedStableId);
         Assert.Equal(previous[0].Location, error.Violation.PriorLocation);
         Assert.Equal(next.Findings[0].Location, error.Violation.SubmittedLocation);
+        var mismatch = Assert.Single(error.Violation.IdentityMismatches!);
+        Assert.Equal(error.Violation.Code, mismatch.Code);
+        Assert.Equal(error.Violation.Message, mismatch.Message);
+        Assert.Equal(error.Violation.PriorStableId, mismatch.PriorStableId);
+        Assert.Equal(error.Violation.SubmittedStableId, mismatch.SubmittedStableId);
     }
 
     [Xunit.Theory(DisplayName = "ReviewFindingConvergence_keeps_identity_across_region_paraphrases_and_refreshes_raw_region")]

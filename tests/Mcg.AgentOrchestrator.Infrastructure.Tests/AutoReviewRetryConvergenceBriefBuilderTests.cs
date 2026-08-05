@@ -813,6 +813,80 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             .State);
     }
 
+    [Xunit.Fact]
+    public void AggregateRepairBriefContainsAllDiagnosticsAndCanonicalAnchors()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Repair aggregate reviewer contract");
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        var opened = Enumerable.Range(0, 15)
+            .Select(index => new ReviewFinding(
+                $"F-{index:D2}",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation($"src/F{index:D2}.cs", $"F{index:D2}.Run", "guard"),
+                $"Finding {index:D2}.",
+                FindingSeverity.Advisory))
+            .ToArray();
+        var rejected = opened
+            .Reverse()
+            .Select(finding => finding.StableId == "F-10"
+                ? finding with { Location = new ReviewFindingLocation("src/Moved.cs", "Moved.Run", "guard") }
+                : finding)
+            .Prepend(new ReviewFinding(
+                "F-RECYCLED",
+                ReviewFindingState.Open,
+                opened[2].Location,
+                "Recycled anchor.",
+                FindingSeverity.Advisory))
+            .ToArray();
+        var violation = Assert.Throws<ReviewFindingConvergenceException>(() =>
+            ReviewFindingConvergence.ApplyRound(opened, new ReviewFindingRound(rejected, []))).Violation;
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1",
+            @"C:\tmp",
+            0,
+            ReviewerOutput("pass", opened),
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-05T10:00:00Z"),
+            WorkerResultPresent: true));
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2",
+            @"C:\tmp",
+            0,
+            ReviewerOutput("pass", rejected),
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-05T10:01:00Z"),
+            StandardOutputPath: @"C:\tmp\reviewer.out.log",
+            WorkerResultPresent: true,
+            ReviewFindingContractViolation: violation));
+
+        var brief = AutoReviewRetryConvergenceBriefBuilder.BuildContractRepairBrief(
+            goal,
+            reviewer,
+            violation,
+            1,
+            2,
+            @"C:\tmp\reviewer.out.log");
+
+        Assert.Contains("violation_count: 2", brief, StringComparison.Ordinal);
+        Assert.Contains("violation_1_code: ERR_REVIEW_FINDING_ANCHOR_IDENTITY_RECYCLED", brief, StringComparison.Ordinal);
+        Assert.Contains("violation_2_code: ERR_REVIEW_FINDING_IDENTITY_MOVED", brief, StringComparison.Ordinal);
+        Assert.Contains("cannot be recycled", brief, StringComparison.Ordinal);
+        Assert.Contains("different structural anchor", brief, StringComparison.Ordinal);
+        Assert.Contains("open_count: 15", brief, StringComparison.Ordinal);
+        Assert.All(opened, finding =>
+            Assert.Contains($"stable_id: {finding.StableId} | severity=advisory | {finding.Location}", brief, StringComparison.Ordinal));
+        Assert.Equal(15, ReviewFindingConvergence.ApplyRound(
+            opened,
+            new ReviewFindingRound(opened.Reverse().ToArray(), [])).Count);
+        Assert.Equal(15, AutoReviewRetryConvergenceBriefBuilder
+            .ReadStructuredReviewFindingState(goal, reviewer)
+            .Count);
+    }
+
     private static string ReviewerOutput(string verdict, IReadOnlyList<ReviewFinding> findings) =>
         string.Join(
             Environment.NewLine,
