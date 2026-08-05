@@ -392,6 +392,7 @@ internal static partial class PlannerOutputContract
 
             var inheritedNewFileMarker = false;
             if (!hasExplicitDirectory &&
+                contextualDirectory is null &&
                 !File.Exists(candidate) &&
                 !Directory.Exists(candidate) &&
                 precedingCitations.TryGetValue(Path.GetFileName(citedPath), out var precedingMatches))

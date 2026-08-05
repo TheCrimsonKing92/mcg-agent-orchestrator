@@ -673,8 +673,8 @@ public sealed class RunGoalServiceTests
             "codex-cli exec",
             workspace.ExecutionDirectory,
             1,
-            "ERROR: requested model gpt-5.6-sol is not supported.",
-            "  Planner output contract failed: missing required evidence. Retry Planner for contract repair.",
+            "Connecting to API...",
+            "  Planner output contract failed: model-home target citation 'models/gpt-5.6-sol' does not exist. Retry Planner for contract repair.",
             completedAt));
 
         var result = await RunGoalService.RunAsync(

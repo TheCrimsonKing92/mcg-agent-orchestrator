@@ -1589,11 +1589,9 @@ public static class DispatchFailureClassifier
             return false;
         }
 
-        var hasAuthoritativePlannerContractFailure =
-            requiredRole == AgentRole.Planner && HasAuthoritativePlannerOutputContractFailure(verification);
         return TryGetProviderModelRejectionLine(
                 verification,
-                includeStandardOutput: !hasAuthoritativePlannerContractFailure,
+                ignoreAuthoritativePlannerContractLines: requiredRole == AgentRole.Planner,
                 out _) &&
             !HasUsefulPreWorkOutput(verification.StandardOutput);
     }
@@ -1984,20 +1982,24 @@ public static class DispatchFailureClassifier
     private static bool TryGetProviderModelRejectionLine(
         TaskVerificationRecord verification,
         out string line) =>
-        TryGetProviderModelRejectionLine(verification, includeStandardOutput: true, out line);
+        TryGetProviderModelRejectionLine(
+            verification,
+            ignoreAuthoritativePlannerContractLines: true,
+            out line);
 
     private static bool TryGetProviderModelRejectionLine(
         TaskVerificationRecord verification,
-        bool includeStandardOutput,
+        bool ignoreAuthoritativePlannerContractLines,
         out string line)
     {
         foreach (var rawLine in EnumerateEvidenceLines(
             verification,
-            includeStandardOutput,
+            includeStandardOutput: true,
             includeStandardError: true))
         {
             var candidate = rawLine.Trim();
-            if (!IsPlannerOutputContractFailureLine(candidate) &&
+            if ((!ignoreAuthoritativePlannerContractLines ||
+                 !IsPlannerOutputContractFailureLine(candidate)) &&
                 ContainsProviderModelRejectionText(candidate))
             {
                 line = candidate;
@@ -2008,10 +2010,6 @@ public static class DispatchFailureClassifier
         line = string.Empty;
         return false;
     }
-
-    private static bool HasAuthoritativePlannerOutputContractFailure(TaskVerificationRecord verification) =>
-        EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true)
-            .Any(line => IsPlannerOutputContractFailureLine(line.Trim()));
 
     private static bool IsPlannerOutputContractFailureLine(string line) =>
         line.StartsWith("Planner output contract failed:", StringComparison.OrdinalIgnoreCase) ||

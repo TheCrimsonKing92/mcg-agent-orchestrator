@@ -136,6 +136,29 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void PlannerContract_ActiveContextDoesNotUseHistoricalSameBasenameFallback()
+    {
+        var workingDirectory = CreateTempDirectory();
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "prior"));
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "active"));
+        File.WriteAllText(Path.Combine(workingDirectory, "prior", "Sibling.cs"), "prior");
+        File.WriteAllText(Path.Combine(workingDirectory, "active", "Anchor.cs"), "anchor");
+        var plan = PlannerContractPlanFixture().Replace(
+            PlannerContractAcceptanceMappingBody,
+            "1. Preserve the earlier explicit citation `prior/Sibling.cs` as historical evidence for the negative control.",
+            StringComparison.Ordinal);
+        plan = ReplaceSectionBody(
+            plan,
+            "## Target seams and symbols",
+            "- Extend `active/Anchor.cs` and `Sibling.cs` with focused contract coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("target citation 'Sibling.cs' does not exist", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_UnmarkedNonexistentPath_Fails()
     {
         var workingDirectory = CreateTempDirectory();
