@@ -2506,6 +2506,160 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ParallelAttempt_RegistrationFailure_FailsAndReleasesLease")]
+    public void ParallelAttemptRegistrationFailureFailsAndReleasesLease()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var (_, goal) = SimpleGoal("Update docs/RegistrationFailure.md");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-registration-failure");
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var candidate = ConductorParallelAcceptanceCandidate.Create(
+            goal,
+            0,
+            ["docs/RegistrationFailure.md"],
+            "branch",
+            "main");
+        DotnetBuildEnvironment? leasedEnvironment = null;
+        const string registrationFailure =
+            "worker-process-registration-failed; pid=36824; stage=owned-process-group-attachment; " +
+            "cleanup=process-tree-termination-requested; exception=OwnedProcessAttachmentException; " +
+            "native_error_code=5; native_message=Access is denied.; candidate_in_job=true";
+
+        try
+        {
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var decision = coordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (_, _, stableSlotLease, _) =>
+                    {
+                        leasedEnvironment = stableSlotLease?.Environment;
+                        throw new InvalidOperationException(registrationFailure);
+                    });
+
+                Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Failed, decision.Attempt.Outcome);
+                Assert.NotNull(decision.Run?.Exception);
+                Assert.Contains(registrationFailure, decision.Run!.Exception!.Message, StringComparison.Ordinal);
+                Assert.Contains(registrationFailure, decision.Attempt.Detail, StringComparison.Ordinal);
+                Assert.Contains(registrationFailure, File.ReadAllText(decision.Attempt.StderrPath), StringComparison.Ordinal);
+            });
+
+            Assert.NotNull(leasedEnvironment);
+            Assert.Contains("ACCEPTANCE_LEASE_RELEASE", output, StringComparison.Ordinal);
+            Assert.Equal(1, CountOccurrences(output, "ACCEPTANCE_LEASE_RELEASE"));
+            using var reacquired = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                leasedEnvironment!,
+                TimeSpan.Zero);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAttempt_OwnedStart_ReachesNormalResult")]
+    public void ParallelAttemptOwnedStartReachesNormalResult()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var _ = IsolatedDotnetRootScope();
+        var root = CreateSeededGitRepository();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-owned-start");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update docs/OwnedStart.md");
+        DotnetBuildEnvironment? leasedEnvironment = null;
+
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "config"));
+            File.WriteAllText(
+                Path.Combine(root, "config", "acceptance-manifest.json"),
+                AcceptanceManifestTestDefaults.WithEngine(
+                    """
+                    {
+                      "version": 1,
+                      "checks": [
+                        {
+                          "name": "background owned start marker",
+                          "type": "command",
+                          "command": "powershell",
+                          "arguments": [
+                            "-NoProfile",
+                            "-Command",
+                            "Set-Content -LiteralPath 'background-owned-start.marker' -Value started"
+                          ],
+                          "timeoutMinutes": 1
+                        }
+                      ],
+                      "forbiddenChangedPathGlobs": []
+                    }
+                    """));
+            RunGit(root, "add", "config/acceptance-manifest.json");
+            RunGit(root, "commit", "-m", "Seed acceptance manifest");
+
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var stateRepository = OpenStateRepository(workspace.SqliteStatePath);
+            var worktree = GoalWorktrees.Ensure(root, goal.Id);
+            Directory.CreateDirectory(Path.Combine(worktree, "docs"));
+            File.WriteAllText(Path.Combine(worktree, "docs", "OwnedStart.md"), "owned start lifecycle");
+            RunGit(worktree, "add", "-A");
+            RunGit(worktree, "commit", "-m", "Add owned start lifecycle fixture");
+            stateRepository.SaveAsync(kernel).GetAwaiter().GetResult();
+
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                new GoalAcceptanceVerifier(),
+                DefaultAgents(),
+                WorkerProfileCatalog.Default());
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                ["docs/OwnedStart.md"]);
+
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var decision = coordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (attemptCandidate, policy, stableSlotLease, cancellationToken) =>
+                    {
+                        leasedEnvironment = stableSlotLease?.Environment;
+                        return driver.RunParallelLandingAcceptance(
+                            attemptCandidate,
+                            policy,
+                            stableSlotLease,
+                            cancellationToken);
+                    });
+
+                Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, decision.Kind);
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, decision.Attempt.Outcome);
+                Assert.True(decision.Run?.Acceptance?.Passed, decision.Run?.Acceptance?.FailureDetail);
+                Assert.Equal("started", File.ReadAllText(Path.Combine(worktree, "background-owned-start.marker")).Trim());
+            });
+
+            Assert.NotNull(leasedEnvironment);
+            Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Contains("ACCEPTANCE_LEASE_RELEASE", output, StringComparison.Ordinal);
+            Assert.Equal(1, CountOccurrences(output, "ACCEPTANCE_LEASE_RELEASE"));
+            using var reacquired = DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                leasedEnvironment!,
+                TimeSpan.Zero);
+        }
+        finally
+        {
+            WorkerProcessJobs.ClearRegistryForTests();
+            TryDeleteDirectory(attemptRoot);
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ParallelAcceptance_attempt_holds_stable_slot_lease_until_terminal")]
     public void ParallelAcceptanceAttemptHoldsStableSlotLeaseUntilTerminal()
     {
