@@ -410,7 +410,7 @@ public static class DispatchFailureClassifier
                     null,
                     null,
                     RecoveryRecommendation.OperatorNeeded,
-                    $"Tester WORKER_RESULT reported blocker: {testerBlocker}"));
+                    $"Tester WORKER_RESULT reported blockers: {testerBlocker}"));
         }
 
         if (verification.Succeeded &&

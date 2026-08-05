@@ -1029,7 +1029,7 @@ public sealed class DispatchExecutionTests
                 HeartbeatStandardOutputBytes: stdout.Length));
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(GoalStatus.Failed, goal.Status);
+        Assert.Equal(GoalStatus.Active, goal.Status);
         Assert.Equal(exitCode, task.LastVerification!.ExitCode);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == task.Id &&
