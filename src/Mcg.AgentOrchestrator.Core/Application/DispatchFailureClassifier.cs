@@ -1999,9 +1999,9 @@ public static class DispatchFailureClassifier
             .Any(line => IsPlannerOutputContractFailureLine(line.Trim()));
 
     private static bool IsPlannerOutputContractFailureLine(string line) =>
-        line.Contains("Planner output contract failed", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("Planner durable receipt failed revalidation", StringComparison.OrdinalIgnoreCase) ||
-        line.Contains("Planner output contract could not persist", StringComparison.OrdinalIgnoreCase);
+        line.StartsWith("Planner output contract failed:", StringComparison.OrdinalIgnoreCase) ||
+        line.StartsWith("Planner durable receipt failed revalidation:", StringComparison.OrdinalIgnoreCase) ||
+        line.StartsWith("Planner output contract could not persist the accepted plan:", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsWorkerResultOpener(string line)
     {

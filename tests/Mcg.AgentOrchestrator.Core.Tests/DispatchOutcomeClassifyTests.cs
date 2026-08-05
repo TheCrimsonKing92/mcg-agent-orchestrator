@@ -1062,8 +1062,8 @@ public sealed class DispatchOutcomeClassifyTests
             SimpleTask(AgentRole.Planner),
             Verification(
                 1,
-                "The diagnostic text may say 'Planner output contract failed' after a completed provider start.",
-                "Error: unknown model 'claude-xxx-4-99'. Model not supported."));
+                "Connecting to API...",
+                "Error: unknown model 'claude-xxx-4-99'. Model not supported; diagnostic text may quote 'Planner output contract failed'."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);

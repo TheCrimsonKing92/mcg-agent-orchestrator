@@ -353,6 +353,7 @@ internal static partial class PlannerOutputContract
     {
         diagnostic = string.Empty;
         string? contextualDirectory = null;
+        var contextualLineStart = -2;
         var targetHeading = TargetSeamsHeading().Match(plan);
         if (!targetHeading.Success)
         {
@@ -368,6 +369,13 @@ internal static partial class PlannerOutputContract
             workingDirectory);
         foreach (Match match in BacktickedCitation().Matches(targetSection))
         {
+            var lineStart = targetSection.LastIndexOf('\n', match.Index);
+            if (lineStart != contextualLineStart)
+            {
+                contextualDirectory = null;
+                contextualLineStart = lineStart;
+            }
+
             var citation = match.Groups["citation"].Value.Trim();
             var citedPath = NormalizeCitedPath(citation);
             if (citedPath is null)
@@ -782,7 +790,7 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"(?m)^[ \t]*(?<number>\d+)[.)][ \t]+(?<content>\S[^\r\n]*)$")]
     private static partial Regex NumberedIntegrationItem();
 
-    [GeneratedRegex(@"(?i)\b(?:tbd|todo|placeholder|later)\b")]
+    [GeneratedRegex(@"(?i)\b(?:tbd|todo|placeholder)\b")]
     private static partial Regex IntegrationPlaceholderMarker();
 
     [GeneratedRegex(@"(?i)\b(?:valid|invalid)\b")]
