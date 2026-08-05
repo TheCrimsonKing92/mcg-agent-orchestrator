@@ -1995,7 +1995,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
             root,
             AgentRole.Tester,
             "dotnet test --logger trx\r\nTRX 5/5 passed.\r\n" +
-                WorkerResultBlock("none", "dotnet test --logger trx", "pass - TRX 5/5 passed", blocker),
+                WorkerResultBlock("none", "dotnet test --logger trx", "pass - TRX 5/5 passed", blockers: blocker),
             string.Empty,
             clock,
             taskDescription: "Verify behavior with automated and manual checks",
