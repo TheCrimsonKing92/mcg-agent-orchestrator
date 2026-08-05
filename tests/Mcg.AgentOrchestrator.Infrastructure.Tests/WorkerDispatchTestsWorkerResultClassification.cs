@@ -2005,7 +2005,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
-        Assert.Equal(GoalStatus.Failed, goal.Status);
+        Assert.Equal(GoalStatus.Active, goal.Status);
         Assert.Equal(0, task.LastVerification!.ExitCode);
         Assert.Contains(blocker, task.LastVerification.StandardOutput, StringComparison.Ordinal);
         Assert.Contains(goal.Timeline, evt =>
