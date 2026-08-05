@@ -547,7 +547,11 @@ function ConvertTo-MtpCommandLineArgument {
     if ($QuoteCmdMetaCharacters) {
         $charactersRequiringQuotes += @('&', '|', '<', '>', '(', ')', '^')
     }
-    if ($Value.Length -gt 0 -and $Value.IndexOfAny([char[]]$charactersRequiringQuotes) -lt 0) {
+    $requiresQuotes = $Value.Length -eq 0 -or $Value.IndexOfAny([char[]]$charactersRequiringQuotes) -ge 0
+    if (-not $requiresQuotes) {
+        if ($QuoteCmdMetaCharacters) {
+            return $Value.Replace('%', '^%')
+        }
         return $Value
     }
 
@@ -568,6 +572,10 @@ function ConvertTo-MtpCommandLineArgument {
         if ($backslashes -gt 0) {
             [void]$quoted.Append('\', $backslashes)
             $backslashes = 0
+        }
+        if ($QuoteCmdMetaCharacters -and $character -eq '%') {
+            [void]$quoted.Append('^%')
+            continue
         }
         [void]$quoted.Append($character)
     }

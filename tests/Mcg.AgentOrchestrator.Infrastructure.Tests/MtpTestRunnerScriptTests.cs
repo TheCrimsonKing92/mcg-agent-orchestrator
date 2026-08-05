@@ -158,17 +158,17 @@ public sealed class MtpTestRunnerScriptTests
     }
 
     [Xunit.Fact]
-    public void MtpCmdRunnerPreservesMetacharactersInPathsAsArgumentData()
+    public void MtpCmdRunnerPreservesMetacharactersAndPercentExpansionsInPathsAsArgumentData()
     {
-        using var sandbox = ScriptSandbox.Create("success", rootNamePrefix: "meta&chars");
+        using var sandbox = ScriptSandbox.Create("success", rootNamePrefix: "meta%SystemRoot%&chars");
 
-        var metacharacterResultsRoot = Path.Combine(sandbox.Root, "results&output");
+        var metacharacterResultsRoot = Path.Combine(sandbox.Root, "results%SystemRoot%&output");
         var result = sandbox.RunPartition("GoalWorktree", resultsRoot: metacharacterResultsRoot);
 
         Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         Assert.True(File.Exists(sandbox.ArgumentLog), result.Stdout + result.Stderr);
         Assert.Contains(File.ReadAllLines(sandbox.ArgumentLog), argument =>
-            argument.Contains("meta&chars", StringComparison.Ordinal));
+            argument.Contains("meta%SystemRoot%&chars", StringComparison.Ordinal));
         Assert.Equal("completed", TerminalSummary(result).GetProperty("outcome").GetString());
     }
 
