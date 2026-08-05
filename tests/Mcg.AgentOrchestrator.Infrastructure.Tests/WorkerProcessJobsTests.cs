@@ -951,7 +951,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
         {
             var exception = Assert.Throws<InvalidOperationException>(() =>
                 WorkerProcessJobs.StartAndRegisterNonWindows(
-                    new ProcessStartInfo(),
+                    new ProcessStartInfo { CreateNoWindow = true },
                     "non-windows-disposal",
                     _ => candidate,
                     (_, _) => throw new InvalidOperationException("synthetic registration failure")));
