@@ -940,6 +940,39 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_graceful_detach_registry_exception_reaps_job_and_returns_failure")]
+    public void WorkerProcessJobsGracefulDetachRegistryExceptionReapsJobAndReturnsFailure()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"), "state.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? worker = null;
+        try
+        {
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+            worker = StartLongRunningShell();
+            Assert.True(WorkerProcessJobs.TryRegister(worker, "graceful-stop:registry-failure"));
+            File.WriteAllText(dbPath, "not a sqlite database");
+
+            Assert.False(WorkerProcessJobs.TryDetachForGracefulStop(worker.Id, out var failure));
+
+            Assert.Contains("durable-lifecycle-transition", failure, StringComparison.Ordinal);
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(worker.Id));
+            Assert.True(WaitUntilNotRunning(worker.Id, TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            if (worker is not null)
+            {
+                try { WorkerProcessJobs.TryKillOrFallback(worker.Id); } catch { }
+                worker.Dispose();
+            }
+
+            WorkerProcessJobs.ClearRegistryForTests();
+            try { Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProcessJobs_fallback_taskkill_tree_kills_unregistered_wrapper_and_grandchild")]
     public void WorkerProcessJobsFallbackTaskkillTreeKillsUnregisteredWrapperAndGrandchild()
     {

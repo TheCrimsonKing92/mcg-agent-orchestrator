@@ -529,9 +529,20 @@ public static class WorkerProcessJobs
         var registry = Registry;
         if (!Jobs.TryRemove(processId, out var job))
         {
-            var entries = registry?.ListActive()
-                .Where(entry => entry.ProcessId == processId)
-                .ToArray() ?? [];
+            SpawnRegistryEntry[] entries;
+            try
+            {
+                entries = registry?.ListActive()
+                    .Where(entry => entry.ProcessId == processId)
+                    .ToArray() ?? [];
+            }
+            catch (Exception ex)
+            {
+                failure =
+                    $"worker-process-detach-failed: pid={processId}; stage=durable-lifecycle-read; error={ex.GetType().Name}";
+                return false;
+            }
+
             if (entries.Length == 0 || entries.All(entry => entry.Lifecycle == SpawnRegistryLifecycle.GracefullyDetached))
             {
                 return true;
@@ -541,39 +552,64 @@ public static class WorkerProcessJobs
             return false;
         }
 
-        if (registry is not null)
+        var detachedWithoutKill = false;
+        var failureStage = "durable-lifecycle-transition";
+        try
         {
-            var identity = job.Identity;
-            var matches = identity is null
-                ? Array.Empty<SpawnRegistryEntry>()
-                : registry.ListActive()
-                    .Where(entry =>
-                        entry.ProcessId == identity.ProcessId &&
-                        entry.ProcessStartedAt == identity.StartedAt &&
-                        string.Equals(entry.ImagePath, identity.ImagePath, StringComparison.OrdinalIgnoreCase))
-                    .ToArray();
-            if (matches.Length != 1 ||
-                (matches[0].Lifecycle == SpawnRegistryLifecycle.Owned &&
-                 !registry.TryMarkGracefullyDetached(
-                     matches[0],
-                     $"spawn_registry: gracefully-detached pid={processId}")))
+            if (registry is not null)
             {
-                failure = $"worker-process-detach-failed: pid={processId}; stage=durable-lifecycle-transition";
-                ReadAccountingAndDispose(job, kill: true, captureAccounting: false, preferDuplicate: false, out _);
-                registry.MarkReleased(processId, $"spawn_registry: detach-failed-reaped pid={processId}");
+                var identity = job.Identity;
+                var matches = identity is null
+                    ? Array.Empty<SpawnRegistryEntry>()
+                    : registry.ListActive()
+                        .Where(entry =>
+                            entry.ProcessId == identity.ProcessId &&
+                            entry.ProcessStartedAt == identity.StartedAt &&
+                            string.Equals(entry.ImagePath, identity.ImagePath, StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+                if (matches.Length != 1 ||
+                    (matches[0].Lifecycle == SpawnRegistryLifecycle.Owned &&
+                     !registry.TryMarkGracefullyDetached(
+                         matches[0],
+                         $"spawn_registry: gracefully-detached pid={processId}")))
+                {
+                    failure = $"worker-process-detach-failed: pid={processId}; stage={failureStage}";
+                    return false;
+                }
+            }
+
+            failureStage = "os-process-group-detach";
+            if (!TryDetachAndDispose(job))
+            {
+                failure = $"worker-process-detach-failed: pid={processId}; stage={failureStage}";
                 return false;
             }
-        }
 
-        if (!TryDetachAndDispose(job))
+            detachedWithoutKill = true;
+            return true;
+        }
+        catch (Exception ex)
         {
-            failure = $"worker-process-detach-failed: pid={processId}; stage=os-process-group-detach";
-            ReadAccountingAndDispose(job, kill: true, captureAccounting: false, preferDuplicate: false, out _);
-            registry?.MarkReleased(processId, $"spawn_registry: detach-failed-reaped pid={processId}");
+            failure =
+                $"worker-process-detach-failed: pid={processId}; stage={failureStage}; error={ex.GetType().Name}";
             return false;
         }
-
-        return true;
+        finally
+        {
+            if (!detachedWithoutKill)
+            {
+                ReadAccountingAndDispose(job, kill: true, captureAccounting: false, preferDuplicate: false, out _);
+                try
+                {
+                    registry?.MarkReleased(processId, $"spawn_registry: detach-failed-reaped pid={processId}");
+                }
+                catch
+                {
+                    // The process tree and in-memory ownership are already deterministically cleaned up.
+                    // The caller must still receive false so it records conductor-cancel recovery state.
+                }
+            }
+        }
     }
 
     internal static void ReleaseWithoutAccounting(int processId)

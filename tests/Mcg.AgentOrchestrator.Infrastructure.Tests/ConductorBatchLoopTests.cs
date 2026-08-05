@@ -7047,6 +7047,70 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_stop_retries_busy_checkpoint_until_detached_marker_is_durable")]
+    public async Task BatchLoopStopRetriesBusyCheckpointUntilDetachedMarkerIsDurable()
+    {
+        var root = CreateTempDirectory("mcg-loop-stop-detach-busy-checkpoint");
+        try
+        {
+            var repository = OpenStateRepository(Path.Combine(root, "state.db"));
+            var kernel = new AgentOrchestratorKernel();
+            var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "durable detached marker");
+            var task = goal.Tasks.Single();
+            var now = DateTimeOffset.UtcNow;
+            kernel.RecordTaskDispatch(goal.Id, task.Id,
+                new TaskDispatchRecord("test-worker", "worker.exe", root, now));
+            kernel.RecordTaskProcessStarted(goal.Id, task.Id,
+                new TaskProcessRecord(444, "worker.exe", root, "out.log", "err.log", "exit.txt",
+                    now, null, null, OwnedProcessIds: [444]));
+            await repository.SaveAsync(kernel);
+
+            var attempts = 0;
+            var runner = new BackgroundDispatchRunner();
+            var stopFile = ExistingStopPath();
+            try
+            {
+                var summary = new ConductorBatchLoop(
+                    detachGoalRunningDispatches: (loopKernel, loopGoal) =>
+                        runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
+                        kernel,
+                        MakeDriver(),
+                        ConductorAutonomyPolicy.Conservative,
+                        stopFile,
+                        onlyGoalId: goal.Id.Value,
+                        persistGoalTick: (checkpoint, changedGoalIds) =>
+                        {
+                            attempts++;
+                            if (attempts == 1)
+                            {
+                                throw SqliteBusy();
+                            }
+
+                            var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+                            var snapshots = checkpoint.ExportSnapshot().Goals
+                                .Where(snapshot => changed.Contains(snapshot.Id))
+                                .ToArray();
+                            repository.SaveGoalSnapshotsAsync(snapshots, CancellationToken.None).GetAwaiter().GetResult();
+                        },
+                        busyWriteDelay: _ => { });
+
+                Assert.True(summary.StopRequested);
+            }
+            finally
+            {
+                File.Delete(stopFile);
+            }
+
+            var reloaded = await repository.LoadAsync();
+            Assert.Equal(2, attempts);
+            Assert.True(reloaded.GetTask(goal.Id, task.Id).LastProcess!.WasGracefullyDetachedByConductor);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_stop_detached_orphan_running_task_is_requeued_and_dispatched")]
     public void BatchLoopStopDetachedOrphanRunningTaskIsRequeuedAndDispatched()
     {

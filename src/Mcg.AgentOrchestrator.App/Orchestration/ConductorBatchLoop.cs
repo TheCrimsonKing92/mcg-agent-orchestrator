@@ -257,7 +257,8 @@ internal sealed class ConductorBatchLoop
                 StopLoop("stop-file");
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop", null, busyWriteDelay);
+                PersistGracefulDetachCheckpoint(
+                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop", null, busyWriteDelay);
                 break;
             }
 
@@ -268,7 +269,8 @@ internal sealed class ConductorBatchLoop
                 StopLoop("max-iter", $"max={maxIterations.Value}");
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-iterations", null, busyWriteDelay);
+                PersistGracefulDetachCheckpoint(
+                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-iterations", null, busyWriteDelay);
                 break;
             }
 
@@ -279,7 +281,8 @@ internal sealed class ConductorBatchLoop
                 StopLoop("max-duration", $"seconds={(int)maxDuration.Value.TotalSeconds}");
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-duration", null, busyWriteDelay);
+                PersistGracefulDetachCheckpoint(
+                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-duration", null, busyWriteDelay);
                 maxDurationReached = true;
                 break;
             }
@@ -595,7 +598,7 @@ internal sealed class ConductorBatchLoop
                         stopRequested = true;
                         StopLoop("stop-after-operator-intent");
                         DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                        TryPersistCheckpoint(
+                        PersistGracefulDetachCheckpoint(
                             persistTick,
                             persistGoalTick,
                             kernel,
@@ -647,7 +650,7 @@ internal sealed class ConductorBatchLoop
                                 ? $"[conduct --loop] Max iterations ({blockedRecheckBudget.Value}) reached after {totalTicks} ticks and {blockedRecheckCycles} blocked rechecks."
                                 : $"[conduct --loop] Blocked recheck budget ({blockedRecheckBudget.Value}) exhausted after {totalTicks} ticks and {blockedRecheckCycles} blocked rechecks.");
                             DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                            TryPersistCheckpoint(
+                            PersistGracefulDetachCheckpoint(
                                 persistTick,
                                 persistGoalTick,
                                 kernel,
@@ -685,7 +688,8 @@ internal sealed class ConductorBatchLoop
                         stopRequested = true;
                         StopLoop("stop-while-idle");
                         DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                        TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-while-idle", null, busyWriteDelay);
+                        PersistGracefulDetachCheckpoint(
+                            persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-while-idle", null, busyWriteDelay);
                         break;
                     }
 
@@ -1125,7 +1129,8 @@ internal sealed class ConductorBatchLoop
                     StopLoop("no-progress-no-watch");
                     Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                    TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "no-progress", tickLines, busyWriteDelay);
+                    PersistGracefulDetachCheckpoint(
+                        persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "no-progress", tickLines, busyWriteDelay);
                     onTick?.Invoke(tickSummary);
                     break;
                 }
@@ -1160,7 +1165,8 @@ internal sealed class ConductorBatchLoop
                     StopLoop("stop-file-during-sleep");
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
-                    TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-during-sleep", tickLines, busyWriteDelay);
+                    PersistGracefulDetachCheckpoint(
+                        persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-during-sleep", tickLines, busyWriteDelay);
                     break;
                 }
 
@@ -1529,6 +1535,38 @@ internal sealed class ConductorBatchLoop
             kind,
             tickLines,
             busyWriteDelay);
+    }
+
+    private static void PersistGracefulDetachCheckpoint(
+        Action<AgentOrchestratorKernel>? persistTick,
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick,
+        AgentOrchestratorKernel kernel,
+        int tick,
+        string? onlyGoalId,
+        string kind,
+        List<string>? tickLines,
+        Action<TimeSpan>? busyWriteDelay)
+    {
+        var delay = TimeSpan.FromMilliseconds(50);
+        while (!TryPersistCheckpoint(
+                   persistTick,
+                   persistGoalTick,
+                   kernel,
+                   tick,
+                   onlyGoalId,
+                   kind,
+                   tickLines,
+                   busyWriteDelay))
+        {
+            EmitProgress(
+                $"TICK_WRITE_RETRYING tick={tick} kind={kind} goal={ResolveGoalContext(kernel, onlyGoalId)} reason=graceful-detach-checkpoint-required",
+                tickLines);
+            if (busyWriteDelay is null)
+                Thread.Sleep(delay);
+            else
+                busyWriteDelay(delay);
+            delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 1000));
+        }
     }
 
     private static GoalId[] ResolveCheckpointGoalIds(AgentOrchestratorKernel kernel, string? onlyGoalId)
