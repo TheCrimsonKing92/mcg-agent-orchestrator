@@ -180,12 +180,18 @@ public static class RepositoryChangeClassifier
             "enforceStructuralCoverage",
             "engine.enforceStructuralCoverage",
             changed);
+        CompareSecurityCriticalEngineField(
+            trusted.RootElement,
+            candidate.RootElement,
+            "partitionVerdictFullRerunEveryN",
+            "engine.partitionVerdictFullRerunEveryN",
+            changed);
 
         return changed.Count == 0
             ? new AcceptanceManifestTrustDecision(
                 false,
                 [],
-                "positive evidence: structural coverage enforcement and security-critical MTP executable dimensions are unchanged; MTP arguments use the non-semantic reporting allowlist")
+                "positive evidence: structural coverage enforcement, partition-verdict full-rerun cadence, and security-critical MTP executable dimensions are unchanged; MTP arguments use the non-semantic reporting allowlist")
             : new AcceptanceManifestTrustDecision(
                 true,
                 changed,

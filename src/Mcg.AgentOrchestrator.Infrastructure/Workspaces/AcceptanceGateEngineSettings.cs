@@ -4,6 +4,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class AcceptanceGateEngineSettings
 {
+    private const int DefaultPartitionVerdictFullRerunEveryN = 5;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
@@ -14,6 +16,7 @@ internal sealed class AcceptanceGateEngineSettings
     public AcceptanceGateTimeoutSettings Timeouts { get; init; } = new();
     public int MaxConcurrentShards { get; init; } = 1;
     public bool EnforceStructuralCoverage { get; init; }
+    public int PartitionVerdictFullRerunEveryN { get; init; } = DefaultPartitionVerdictFullRerunEveryN;
 
     public static AcceptanceGateEngineSettings Load(string worktreePath)
     {
@@ -67,6 +70,12 @@ internal sealed class AcceptanceGateEngineSettings
         if (MaxConcurrentShards < 1)
         {
             throw new InvalidDataException("Acceptance manifest engine maxConcurrentShards must be at least 1.");
+        }
+
+        if (PartitionVerdictFullRerunEveryN < 1)
+        {
+            throw new InvalidDataException(
+                "Acceptance manifest engine partitionVerdictFullRerunEveryN must be at least 1.");
         }
 
         var duplicateLane = InfrastructureTestLanes

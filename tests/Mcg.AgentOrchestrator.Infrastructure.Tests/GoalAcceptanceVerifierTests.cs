@@ -4303,10 +4303,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         var failFirstPartitionOnForcedRerun = false;
-        var previousBackstop = GoalAcceptanceVerifier.PartitionVerdictFullRerunEveryN;
+        var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        manifest["engine"]!["partitionVerdictFullRerunEveryN"] = 2;
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
         GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
-        GoalAcceptanceVerifier.PartitionVerdictFullRerunEveryN = 2;
         try
         {
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
@@ -4350,7 +4352,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            GoalAcceptanceVerifier.PartitionVerdictFullRerunEveryN = previousBackstop;
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
             DeleteDirectoryWithRetry(root);
