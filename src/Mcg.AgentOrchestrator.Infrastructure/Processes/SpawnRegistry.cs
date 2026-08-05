@@ -220,6 +220,31 @@ internal sealed class SpawnRegistry
         return updated;
     }
 
+    public bool WasGracefullyDetached(string ownerId, int processId, DateTimeOffset processRecordedAt)
+    {
+        if (!File.Exists(_dbPath))
+            return false;
+
+        using var conn = OpenReadConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT lifecycle
+            FROM spawn_registry
+            WHERE owner_id = $owner_id
+              AND process_id = $process_id
+              AND registered_at <= $process_recorded_at
+            ORDER BY registered_at DESC, id DESC
+            LIMIT 1
+            """;
+        cmd.Parameters.AddWithValue("$owner_id", ownerId);
+        cmd.Parameters.AddWithValue("$process_id", processId);
+        cmd.Parameters.AddWithValue("$process_recorded_at", processRecordedAt.ToString("O", CultureInfo.InvariantCulture));
+        return string.Equals(
+            cmd.ExecuteScalar() as string,
+            SpawnRegistryLifecycle.GracefullyDetached.ToString(),
+            StringComparison.Ordinal);
+    }
+
     public bool TryMarkGracefullyDetached(SpawnRegistryEntry entry, string diagnostic)
     {
         var updated = false;

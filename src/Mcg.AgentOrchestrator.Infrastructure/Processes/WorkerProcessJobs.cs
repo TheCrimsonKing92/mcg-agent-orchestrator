@@ -442,6 +442,26 @@ public static class WorkerProcessJobs
         return TryKillOrFallback(processId, allowProtectedDescendant: false, markRegistryReleased: true, out accounting);
     }
 
+    internal static bool TryKillOrFallbackWithoutRegistry(int processId)
+    {
+        return TryKillOrFallback(processId, allowProtectedDescendant: false, markRegistryReleased: false, out _);
+    }
+
+    internal static bool WasGracefullyDetached(
+        string ownerId,
+        int processId,
+        DateTimeOffset processRecordedAt)
+    {
+        try
+        {
+            return Registry?.WasGracefullyDetached(ownerId, processId, processRecordedAt) == true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     internal static bool TryKillRecordedOwnedChildAndWait(int processId, TimeSpan timeout)
     {
         return TryKillOrFallbackAndWait(processId, timeout, allowProtectedDescendant: true);

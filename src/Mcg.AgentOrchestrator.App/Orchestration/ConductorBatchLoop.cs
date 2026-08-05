@@ -14,6 +14,7 @@ internal sealed class ConductorBatchLoop
     internal const int WatchStopPollIntervalSeconds = 5;
     internal const int QuietSummaryEveryTicks = 20;
     internal const int DefaultMaxBusyWriteAttempts = 1;
+    internal const int DefaultGracefulDetachCheckpointAttempts = 3;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
     // Parallel-acceptance WIDTH: how many landing-acceptance gates may run concurrently.
@@ -1548,18 +1549,31 @@ internal sealed class ConductorBatchLoop
         Action<TimeSpan>? busyWriteDelay)
     {
         var delay = TimeSpan.FromMilliseconds(50);
-        while (!TryPersistCheckpoint(
-                   persistTick,
-                   persistGoalTick,
-                   kernel,
-                   tick,
-                   onlyGoalId,
-                   kind,
-                   tickLines,
-                   busyWriteDelay))
+        for (var attempt = 1; attempt <= DefaultGracefulDetachCheckpointAttempts; attempt++)
         {
+            if (TryPersistCheckpoint(
+                    persistTick,
+                    persistGoalTick,
+                    kernel,
+                    tick,
+                    onlyGoalId,
+                    kind,
+                    tickLines,
+                    busyWriteDelay))
+            {
+                return;
+            }
+
+            if (attempt == DefaultGracefulDetachCheckpointAttempts)
+            {
+                EmitProgress(
+                    $"TICK_WRITE_DETACH_CHECKPOINT_FAILED tick={tick} kind={kind} goal={ResolveGoalContext(kernel, onlyGoalId)} attempts={attempt} recoveryEvidence=spawn-registry-lifecycle",
+                    tickLines);
+                return;
+            }
+
             EmitProgress(
-                $"TICK_WRITE_RETRYING tick={tick} kind={kind} goal={ResolveGoalContext(kernel, onlyGoalId)} reason=graceful-detach-checkpoint-required",
+                $"TICK_WRITE_RETRYING tick={tick} kind={kind} goal={ResolveGoalContext(kernel, onlyGoalId)} attempt={attempt} reason=graceful-detach-checkpoint-required",
                 tickLines);
             if (busyWriteDelay is null)
                 Thread.Sleep(delay);

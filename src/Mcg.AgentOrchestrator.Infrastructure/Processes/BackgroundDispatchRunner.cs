@@ -2132,7 +2132,8 @@ public sealed class BackgroundDispatchRunner
         AgentOrchestratorKernel kernel,
         GoalId goalId,
         TaskId taskId,
-        bool cancelledByConductor)
+        bool cancelledByConductor,
+        bool bypassTrackedJobRegistry = false)
     {
         var task = kernel.GetTask(goalId, taskId);
         var processRecord = task.LastProcess
@@ -2141,17 +2142,32 @@ public sealed class BackgroundDispatchRunner
         TaskProcessResourceAccounting? resourceAccounting = null;
         if (processRecord.IsRunning)
         {
-            try
+            if (bypassTrackedJobRegistry)
             {
-                resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
+                resourceAccounting = SnapshotTrackedProcessAccounting(processRecord);
+                TryKillTrackedProcesses(processRecord, waitForExit: true, bypassTrackedJobRegistry: true);
+                if (resourceAccounting is not null)
+                {
+                    resourceAccounting = resourceAccounting with { Reaped = true };
+                }
             }
-            catch (ArgumentException)
+            else
             {
-                // Process already exited; still record the user-requested cancellation.
+                try
+                {
+                    resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
+                }
+                catch (ArgumentException)
+                {
+                    // Process already exited; still record the user-requested cancellation.
+                }
             }
         }
 
-        resourceAccounting ??= ReleaseTrackedProcessJobs(processRecord);
+        if (!bypassTrackedJobRegistry)
+        {
+            resourceAccounting ??= ReleaseTrackedProcessJobs(processRecord);
+        }
         var cancelled = processRecord with
         {
             CompletedAt = _clock.UtcNow,
@@ -2211,7 +2227,12 @@ public sealed class BackgroundDispatchRunner
                 continue;
             }
 
-            CancelLatestProcess(kernel, goalId, task.Id, cancelledByConductor: true);
+            CancelLatestProcess(
+                kernel,
+                goalId,
+                task.Id,
+                cancelledByConductor: true,
+                bypassTrackedJobRegistry: true);
             kernel.RecordTaskNote(
                 goalId,
                 task.Id,
@@ -2253,12 +2274,16 @@ public sealed class BackgroundDispatchRunner
                 if (task.Status == WorkTaskStatus.Failed &&
                     task.LastProcess is
                     {
-                        WasGracefullyDetachedByConductor: true,
                         WasCancelled: false,
                         CompletedAt: not null,
                         ExitArtifactOrigin: DispatchExitArtifactOrigin.Synthetic,
                         ChildExitCode: null
                     } detachedFailure &&
+                    (detachedFailure.WasGracefullyDetachedByConductor ||
+                     WorkerProcessJobs.WasGracefullyDetached(
+                         $"{goal.Id.Value}:{task.Id.Value}",
+                         detachedFailure.ProcessId,
+                         detachedFailure.StartedAt)) &&
                     task.LastVerification?.WorkerResultPresent != true &&
                     !AnyTrackedProcessStillRunning(detachedFailure))
                 {
@@ -2268,7 +2293,8 @@ public sealed class BackgroundDispatchRunner
                         goal.Id,
                         task.Id,
                         "Auto-requeued gracefully detached dispatch after synthetic missing-exit recovery.",
-                        readCurrentState)
+                        readCurrentState,
+                        hasDurableGracefulDetachEvidence: true)
                         ? 1
                         : 0;
                     continue;
@@ -2302,7 +2328,8 @@ public sealed class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         string message,
-        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState)
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState,
+        bool hasDurableGracefulDetachEvidence = false)
     {
         var currentTask = kernel.GetTask(goalId, taskId);
         var interruptedDispatch = currentTask.LastDispatch;
@@ -2321,7 +2348,13 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        if (TryReadAutoRequeueBlocker(kernel, goalId, taskId, readCurrentState, out var blocker))
+        if (TryReadAutoRequeueBlocker(
+                kernel,
+                goalId,
+                taskId,
+                readCurrentState,
+                out var blocker,
+                hasDurableGracefulDetachEvidence))
         {
             kernel.RecordTaskRequeueSkipped(
                 goalId,
@@ -2351,7 +2384,8 @@ public sealed class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState,
-        out AutoRequeueBlocker blocker)
+        out AutoRequeueBlocker blocker,
+        bool hasDurableGracefulDetachEvidence = false)
     {
         InterruptedDispatchStateRead state;
         try
@@ -2379,7 +2413,8 @@ public sealed class BackgroundDispatchRunner
         if (!IsAutoRequeueTaskStatusAllowed(
                 state.TaskStatus.Value,
                 state.WasTaskCancelledByConductor,
-                state.WasTaskGracefullyDetachedByConductor))
+                state.WasTaskGracefullyDetachedByConductor ||
+                (hasDurableGracefulDetachEvidence && state.TaskStatus == WorkTaskStatus.Failed)))
         {
             blocker = new AutoRequeueBlocker(
                 "task",
@@ -3649,11 +3684,21 @@ public sealed class BackgroundDispatchRunner
         return processIds.ToArray();
     }
 
-    private void TryKillTrackedProcesses(TaskProcessRecord processRecord, bool waitForExit)
+    private void TryKillTrackedProcesses(
+        TaskProcessRecord processRecord,
+        bool waitForExit,
+        bool bypassTrackedJobRegistry = false)
     {
         foreach (var processId in processRecord.TrackedProcessIds.Distinct())
         {
-            _tryKillOwnedProcess(processId);
+            if (bypassTrackedJobRegistry)
+            {
+                WorkerProcessJobs.TryKillOrFallbackWithoutRegistry(processId);
+            }
+            else
+            {
+                _tryKillOwnedProcess(processId);
+            }
             if (!waitForExit)
             {
                 continue;
