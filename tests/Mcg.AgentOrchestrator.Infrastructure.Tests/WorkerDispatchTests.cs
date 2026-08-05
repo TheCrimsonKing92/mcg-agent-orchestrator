@@ -498,37 +498,50 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
 
     protected static void RunGit(string workingDirectory, string[] arguments, DateTimeOffset commitTime)
 {
-    var startInfo = new ProcessStartInfo
+    const int maximumAttempts = 2;
+    for (var attempt = 1; attempt <= maximumAttempts; attempt++)
     {
-        FileName = "git",
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        UseShellExecute = false,
-        CreateNoWindow = true,
-        WorkingDirectory = workingDirectory
-    };
-    RemoveAmbientGitRepositoryEnvironment(startInfo);
-    if (arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal)))
-    {
-        startInfo.Environment["GIT_AUTHOR_DATE"] = commitTime.ToString("O");
-        startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.ToString("O");
-    }
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "git",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = workingDirectory
+        };
+        RemoveAmbientGitRepositoryEnvironment(startInfo);
+        if (arguments.Any(argument => string.Equals(argument, "commit", StringComparison.Ordinal)))
+        {
+            startInfo.Environment["GIT_AUTHOR_DATE"] = commitTime.ToString("O");
+            startInfo.Environment["GIT_COMMITTER_DATE"] = commitTime.ToString("O");
+        }
 
-    foreach (var argument in arguments)
-    {
-        startInfo.ArgumentList.Add(argument);
-    }
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
 
-    using var process = Process.Start(startInfo)
-        ?? throw new InvalidOperationException("Failed to start git.");
-    var output = process.StandardOutput.ReadToEnd();
-    var error = process.StandardError.ReadToEnd();
-    process.WaitForExit(60000);
-    if (process.ExitCode != 0)
-    {
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start git.");
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit(60000);
+        if (process.ExitCode == 0)
+        {
+            return;
+        }
+
         var detail = string.Join(Environment.NewLine, [output.Trim(), error.Trim()])
             .Trim();
-        throw new InvalidOperationException($"git {string.Join(' ', arguments)} failed: {detail}");
+        if (detail.Length == 0 && attempt < maximumAttempts)
+        {
+            continue;
+        }
+
+        throw new InvalidOperationException(
+            $"git {string.Join(' ', arguments)} failed with exit code {process.ExitCode} " +
+            $"after {attempt} attempt(s): {detail}");
     }
 }
 

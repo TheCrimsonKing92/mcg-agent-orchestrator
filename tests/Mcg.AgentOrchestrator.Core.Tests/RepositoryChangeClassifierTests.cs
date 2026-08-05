@@ -143,12 +143,37 @@ public sealed class RepositoryChangeClassifierTests
     public void RepositoryChangeClassifierRoutesPartitionVerdictFullRerunCadenceChangeToTrustedReview()
     {
         const string trusted = """{ "engine": { "partitionVerdictFullRerunEveryN": 5 } }""";
-        const string candidate = """{ "engine": { "partitionVerdictFullRerunEveryN": 10 } }""";
+        string[] candidates =
+        [
+            """{ "engine": { "partitionVerdictFullRerunEveryN": 10 } }""",
+            """{ "engine": { } }"""
+        ];
 
-        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+        foreach (var candidate in candidates)
+        {
+            var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
 
-        Assert.True(decision.RequiresTrustedReview);
-        Assert.Contains("engine.partitionVerdictFullRerunEveryN", decision.SecurityCriticalChanges);
+            Assert.True(decision.RequiresTrustedReview);
+            Assert.Contains("engine.partitionVerdictFullRerunEveryN", decision.SecurityCriticalChanges);
+        }
+
+        var added = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(
+            """{ "engine": { } }""",
+            trusted);
+        Assert.True(added.RequiresTrustedReview);
+        Assert.Contains("engine.partitionVerdictFullRerunEveryN", added.SecurityCriticalChanges);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_accepts_unchanged_partition_verdict_full_rerun_cadence_with_positive_evidence")]
+    public void RepositoryChangeClassifierAcceptsUnchangedPartitionVerdictFullRerunCadenceWithPositiveEvidence()
+    {
+        const string manifest = """{ "engine": { "partitionVerdictFullRerunEveryN": 5 } }""";
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(manifest, manifest);
+
+        Assert.False(decision.RequiresTrustedReview);
+        Assert.Empty(decision.SecurityCriticalChanges);
+        Assert.Contains("partition-verdict full-rerun cadence", decision.Evidence, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_case_alias_matches_case_sensitive_engine_interpreter")]
