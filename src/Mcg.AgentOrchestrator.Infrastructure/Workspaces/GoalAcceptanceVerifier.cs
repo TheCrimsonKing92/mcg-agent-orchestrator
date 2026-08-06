@@ -6130,8 +6130,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         CancellationToken cancellationToken)
     {
         // Keep the shell-to-file transport: a grandchild can inherit a file handle without keeping
-        // this process blocked on a managed pipe. A concurrent size watchdog kills the producing
-        // process tree at the configured cap and the completed file is truncated with a terminator.
+        // this process blocked on a managed pipe. A concurrent size watchdog repeatedly truncates
+        // captures at the configured cap while the producer continues to drain normally.
         var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.out");
         var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.err");
 
@@ -6158,11 +6158,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 [stdoutPath, stderrPath],
                 EngineSettings.OutputCaptureLimitBytes,
                 CaptureLimitPollInterval,
-                () =>
-                {
-                    try { WorkerProcessJobs.TryKillOrFallback(process.Id, out killedAccounting); } catch { }
-                    try { process.Kill(entireProcessTree: true); } catch { }
-                },
+                () => { },
                 captureMonitorCts.Token);
             if (heartbeatContext is not null)
             {
@@ -6205,14 +6201,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 EmitCaptureLimitReached(heartbeatContext, capture.Path, EngineSettings.OutputCaptureLimitBytes);
             }
 
-            var stdoutLength = TryGetFileLength(stdoutPath);
-            var stderrLength = TryGetFileLength(stderrPath);
-            var stdout = await ReadFileWithRetryAsync(
+            var cappedPaths = captureResults
+                .Where(result => result.LimitReached)
+                .Select(result => result.Path)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var stdout = await ReadCapturedFileWithRetryAsync(
                 stdoutPath,
-                stdoutLength > CappedOutputPreviewBytes ? CappedOutputPreviewBytes : null).ConfigureAwait(false);
-            var stderr = await ReadFileWithRetryAsync(
+                cappedPaths.Contains(stdoutPath)).ConfigureAwait(false);
+            var stderr = await ReadCapturedFileWithRetryAsync(
                 stderrPath,
-                stderrLength > CappedOutputPreviewBytes ? CappedOutputPreviewBytes : null).ConfigureAwait(false);
+                cappedPaths.Contains(stderrPath)).ConfigureAwait(false);
             var stdoutBytes = TryGetFileLength(stdoutPath);
             var stderrBytes = TryGetFileLength(stderrPath);
             elapsed.Stop();
@@ -6431,6 +6429,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return string.Empty;
     }
 
+    internal static Task<string> ReadCapturedFileWithRetryAsync(string path, bool captureLimitReached) =>
+        ReadFileWithRetryAsync(path, captureLimitReached ? CappedOutputPreviewBytes : null);
+
     internal static ProcessStartInfo BuildAcceptanceProcessStartInfo(
         string[] arguments,
         string workingDirectory,
@@ -6466,13 +6467,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Action onLimitReached,
         CancellationToken cancellationToken)
     {
+        var cappedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var observedBytes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var notified = false;
         while (!cancellationToken.IsCancellationRequested)
         {
             var results = CaptureLimitResults(paths, limitBytes);
-            if (results.Any(result => result.LimitReached))
+            foreach (var result in results)
             {
+                observedBytes[result.Path] = Math.Max(
+                    observedBytes.GetValueOrDefault(result.Path),
+                    result.WrittenBytes);
+                if (!result.LimitReached)
+                    continue;
+
+                cappedPaths.Add(result.Path);
+                TruncateCaptureAtLimit(result.Path, limitBytes);
+            }
+
+            if (!notified && cappedPaths.Count > 0)
+            {
+                notified = true;
                 onLimitReached();
-                return results;
             }
 
             try
@@ -6485,7 +6501,35 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
         }
 
-        return CaptureLimitResults(paths, limitBytes);
+        var finalResults = CaptureLimitResults(paths, limitBytes);
+        return finalResults
+            .Select(result => new CaptureLimitResult(
+                result.Path,
+                Math.Max(observedBytes.GetValueOrDefault(result.Path), result.WrittenBytes),
+                cappedPaths.Contains(result.Path) || result.LimitReached))
+            .ToArray();
+    }
+
+    internal static void TruncateCaptureAtLimit(string path, long limitBytes)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > limitBytes)
+                stream.SetLength(limitBytes);
+        }
+        catch (IOException)
+        {
+            // The producer may be between opening and sharing the file. The next poll retries.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Best effort until the producer releases its handle; finalization enforces the cap.
+        }
     }
 
     private static CaptureLimitResult[] CaptureLimitResults(IReadOnlyList<string> paths, long limitBytes) =>
@@ -6559,13 +6603,26 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static void EmitCaptureLimitReached(
         GateHeartbeatContext? context,
         string path,
-        long capBytes)
+        long capBytes) =>
+        EmitCaptureLimitReached(
+            context?.GoalId,
+            CurrentAcceptanceAttemptPrefix.Value,
+            path,
+            capBytes,
+            Console.Out);
+
+    internal static void EmitCaptureLimitReached(
+        string? goalId,
+        string? attemptPrefix,
+        string path,
+        long capBytes,
+        TextWriter writer)
     {
         var runId = Path.GetFileName(
-            CurrentAcceptanceAttemptPrefix.Value ?? Path.GetFileNameWithoutExtension(path));
-        Console.WriteLine(
-            $"ACCEPTANCE_CAPTURE_LIMIT_REACHED goal={FormatNullableToken(context?.GoalId, 8)} run={QuoteProgressToken(runId)} path={QuoteProgressToken(path)} cap_bytes={capBytes}");
-        Console.Out.Flush();
+            attemptPrefix ?? Path.GetFileNameWithoutExtension(path));
+        writer.WriteLine(
+            $"ACCEPTANCE_CAPTURE_LIMIT_REACHED goal={FormatNullableToken(goalId, 8)} run={QuoteProgressToken(runId)} path={QuoteProgressToken(path)} cap_bytes={capBytes}");
+        writer.Flush();
     }
 
     internal static string DecodeCapturedOutput(ReadOnlySpan<byte> bytes)

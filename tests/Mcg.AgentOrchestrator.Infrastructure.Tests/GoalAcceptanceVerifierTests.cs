@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+[Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class AcceptanceOutputCaptureTests
 {
     [Xunit.Fact]
@@ -35,12 +36,17 @@ public sealed class AcceptanceOutputCaptureTests
         {
             await File.WriteAllBytesAsync(path, payload);
             var limitNotifications = 0;
+            using var monitorCts = new CancellationTokenSource();
             var results = await GoalAcceptanceVerifier.MonitorCaptureLimitsAsync(
                 [path],
                 limitBytes: 512,
                 pollInterval: TimeSpan.FromMilliseconds(1),
-                onLimitReached: () => limitNotifications++,
-                CancellationToken.None);
+                onLimitReached: () =>
+                {
+                    limitNotifications++;
+                    monitorCts.Cancel();
+                },
+                monitorCts.Token);
             await GoalAcceptanceVerifier.FinalizeCappedCaptureAsync(
                 path,
                 limitBytes: 512,
@@ -60,6 +66,79 @@ public sealed class AcceptanceOutputCaptureTests
         {
             try { File.Delete(path); } catch { }
         }
+    }
+
+    [Xunit.Fact]
+    public async Task BelowCapReadPreservesOutputLargerThanPreviewByteForByte()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcg-below-cap-capture-{Guid.NewGuid():N}.out");
+        var payload = Enumerable.Range(0, 96 * 1024)
+            .Select(index => (byte)('a' + index % 26))
+            .ToArray();
+        try
+        {
+            await File.WriteAllBytesAsync(path, payload);
+
+            var output = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(
+                path,
+                captureLimitReached: false);
+
+            Xunit.Assert.Equal(Encoding.UTF8.GetString(payload), output);
+            Xunit.Assert.DoesNotContain("captured output omitted", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task CaptureCanKeepProducingAfterLimitAndIsTrimmedAgainWithoutTermination()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcg-draining-capture-{Guid.NewGuid():N}.out");
+        try
+        {
+            await File.WriteAllBytesAsync(path, new byte[2048]);
+            GoalAcceptanceVerifier.TruncateCaptureAtLimit(path, 512);
+            Xunit.Assert.Equal(512, new FileInfo(path).Length);
+
+            await using (var producer = new FileStream(
+                path,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete))
+            {
+                await producer.WriteAsync(new byte[1024]);
+            }
+
+            Xunit.Assert.Equal(1536, new FileInfo(path).Length);
+            GoalAcceptanceVerifier.TruncateCaptureAtLimit(path, 512);
+            Xunit.Assert.Equal(512, new FileInfo(path).Length);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    [Xunit.Fact]
+    public void CaptureLimitEventIsTypedAndCarriesGoalRunPathAndCap()
+    {
+        using var writer = new StringWriter();
+
+        GoalAcceptanceVerifier.EmitCaptureLimitReached(
+            "0123456789abcdef",
+            Path.Combine("attempts", "run-42"),
+            @"C:\temp\capture.out",
+            1024,
+            writer);
+
+        var line = writer.ToString().Trim();
+        Xunit.Assert.StartsWith("ACCEPTANCE_CAPTURE_LIMIT_REACHED ", line, StringComparison.Ordinal);
+        Xunit.Assert.Contains("goal=01234567", line, StringComparison.Ordinal);
+        Xunit.Assert.Contains("run=run-42", line, StringComparison.Ordinal);
+        Xunit.Assert.Contains("capture.out", line, StringComparison.Ordinal);
+        Xunit.Assert.Contains("cap_bytes=1024", line, StringComparison.Ordinal);
     }
 
     private static int CountOccurrences(string value, string needle) =>

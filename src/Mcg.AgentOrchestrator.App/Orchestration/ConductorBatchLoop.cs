@@ -427,6 +427,7 @@ internal sealed class ConductorBatchLoop
                 onlyGoalId,
                 setAsideGoals,
                 selfClearedSetAsideEntries,
+                excludedGoals,
                 escalatedGoals,
                 reapedGoals,
                 goalProjectionCache);
@@ -1658,6 +1659,7 @@ internal sealed class ConductorBatchLoop
                 EmitProgress(
                     $"TICK_WRITE_DETACH_CHECKPOINT_FAILED tick={tick} kind={kind} goal={ResolveGoalContext(kernel, onlyGoalId)} attempts={attempt} recoveryEvidence=spawn-registry-lifecycle",
                     tickLines);
+                CompleteWriteRetryDiagnostics(ResolveGoalContext(kernel, onlyGoalId), kind, tickLines);
                 return;
             }
 
@@ -1675,7 +1677,6 @@ internal sealed class ConductorBatchLoop
                 busyWriteDelay(delay);
         }
 
-        CompleteWriteRetryDiagnostics(ResolveGoalContext(kernel, onlyGoalId), kind, tickLines);
     }
 
     private static GoalId[] ResolveCheckpointGoalIds(AgentOrchestratorKernel kernel, string? onlyGoalId)
@@ -3027,6 +3028,7 @@ internal sealed class ConductorBatchLoop
         string? onlyGoalId,
         Dictionary<string, BatchSetAsideEntry> setAsideGoals,
         Dictionary<string, BatchSetAsideEntry> selfClearedSetAsideEntries,
+        HashSet<string> excludedGoals,
         HashSet<string> escalatedGoals,
         HashSet<string> reapedGoals,
         GoalProjectionCache goalProjectionCache)
@@ -3079,6 +3081,7 @@ internal sealed class ConductorBatchLoop
                     EmitProgress(
                         $"ESCALATION_RECHECK_UNSATISFIABLE goal={entry.GoalId[..8]} condition=pre-landing_rebase_conflict reason=git_merge-tree_could_not_start observation={terminalObservation}");
                     setAsideGoals.Remove(entry.GoalId);
+                    excludedGoals.Add(entry.GoalId);
                     continue;
                 }
 
