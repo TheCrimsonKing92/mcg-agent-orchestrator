@@ -1676,7 +1676,18 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, $"PERSISTENT_HISTORY_{index:00}");
         }
         File.WriteAllText(task.LastProcess!.ExitCodePath, "0");
-        File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
+        File.WriteAllText(task.LastProcess.StandardOutputPath, """
+            WORKER_RESULT:
+            files: none
+            commands: inspected dispatch output
+            tests: pass - focused verification passed
+            commit: none
+            blockers: none
+            model_fit: OpenAI/gpt-test - adequate - verification - sufficient
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """);
         var repository = new InMemoryTransactionalStateRepository(kernel);
 
         var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
