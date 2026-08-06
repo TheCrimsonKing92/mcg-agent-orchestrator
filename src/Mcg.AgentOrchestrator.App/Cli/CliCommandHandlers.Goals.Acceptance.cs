@@ -15,6 +15,24 @@ internal static partial class CliCommandHandlers
 private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, bool skipVerify = false)
 {
     var goal = context.CurrentGoal!;
+    var owner = $"acceptance:{Environment.ProcessId}:{Guid.NewGuid():N}";
+    var lease = new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath)
+        .TryAcquireAcceptanceLease(goal.Id.Value, owner, TimeSpan.FromMinutes(30));
+    if (lease is null)
+    {
+        Console.WriteLine($"BLOCKER step=acceptance-claim goal={goal.Id.Value[..8]} reason=already-running action=\"Wait for the active acceptance operation to finish.\"");
+        return false;
+    }
+
+    using (lease)
+    {
+        return RunAcceptanceWorkspaceMergeCore(context, skipVerify);
+    }
+}
+
+private static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context, bool skipVerify = false)
+{
+    var goal = context.CurrentGoal!;
     if (TryReconcileLandedCleanedAcceptance(context, goal, "acceptance retry", out var reconciledDetail))
     {
         Console.WriteLine(reconciledDetail);

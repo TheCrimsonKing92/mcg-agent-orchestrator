@@ -11,6 +11,7 @@ internal sealed class ConductorBatchLoop
     internal const int DefaultMaxVerifyRetries = 2;
     internal const int DefaultWatchIntervalSeconds = 15;
     internal const int DefaultBlockedRecheckCycles = 2;
+    internal static readonly TimeSpan DefaultBlockedRecheckHeartbeatInterval = TimeSpan.FromMinutes(5);
     internal const int WatchStopPollIntervalSeconds = 5;
     internal const int QuietSummaryEveryTicks = 20;
     internal const int DefaultMaxBusyWriteAttempts = 1;
@@ -51,6 +52,7 @@ internal sealed class ConductorBatchLoop
     private readonly ConductorLifecycleRecorder? _lifecycleRecorder;
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
+    private readonly TimeSpan _blockedRecheckHeartbeatInterval;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
     private static readonly object ParallelAcceptanceFairnessGate = new();
     private static string? s_parallelAcceptanceOldestWaiter;
@@ -75,7 +77,8 @@ internal sealed class ConductorBatchLoop
         PostLandingCanaryCoordinator? postLandingCanary = null,
         AcceptanceEngineCircuitBreaker? acceptanceEngineCircuit = null,
         Func<string, GoalStatus?>? evictedGoalStatusLookup = null,
-        ConductorLifecycleRecorder? lifecycleRecorder = null)
+        ConductorLifecycleRecorder? lifecycleRecorder = null,
+        TimeSpan? blockedRecheckHeartbeatInterval = null)
     {
         _sweep = measuredSweep ?? (kernel =>
         {
@@ -99,6 +102,11 @@ internal sealed class ConductorBatchLoop
         _lifecycleRecorder = lifecycleRecorder;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _evictedGoalStatusLookup = evictedGoalStatusLookup ?? (_ => null);
+        _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
+        if (_blockedRecheckHeartbeatInterval <= TimeSpan.Zero || _blockedRecheckHeartbeatInterval > TimeSpan.FromMinutes(10))
+        {
+            throw new ArgumentOutOfRangeException(nameof(blockedRecheckHeartbeatInterval));
+        }
     }
 
     public BatchLoopSummary Run(
@@ -133,6 +141,8 @@ internal sealed class ConductorBatchLoop
         CurrentConductEventLogWriter.Value = _conductEventLogWriter;
         var totalTicks = 0;
         var blockedRecheckCycles = 0;
+        var totalBlockedRechecks = 0;
+        DateTimeOffset? lastBlockedRecheckHeartbeatAt = null;
         string? stopReason = null;
         ConductorLifecycleSession? lifecycleSession = null;
         driver.LandingMutationBlocker = () =>
@@ -198,7 +208,7 @@ internal sealed class ConductorBatchLoop
         {
             stopReason ??= reason;
             lifecycleSession?.Stop(reason, totalTicks, detail);
-            EmitProgress($"LOOP_STOP tick={totalTicks} reason={reason}" +
+            EmitProgress($"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason={reason}" +
                          (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
         }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
@@ -292,6 +302,10 @@ internal sealed class ConductorBatchLoop
             var preTickTimingLines = new List<string>();
             var sweepClock = Stopwatch.StartNew();
             var sweepResult = RunJanitorialPhase("sweep", nextTick, () => _sweep(kernel));
+            foreach (var sweepEvent in sweepResult?.Events ?? [])
+            {
+                EmitProgress(sweepEvent);
+            }
             RunJanitorialPhase("recover-interrupted-dispatches", nextTick, () =>
             {
                 _recoverInterruptedDispatches(kernel);
@@ -630,6 +644,14 @@ internal sealed class ConductorBatchLoop
                     if (recheckableBlockedGoals > 0)
                     {
                         blockedRecheckCycles++;
+                        totalBlockedRechecks++;
+                        var now = _utcNow();
+                        if (lastBlockedRecheckHeartbeatAt is null ||
+                            now - lastBlockedRecheckHeartbeatAt.Value >= _blockedRecheckHeartbeatInterval)
+                        {
+                            EmitProgress(FormatBlockedRecheckHeartbeat(sweepResult, totalBlockedRechecks));
+                            lastBlockedRecheckHeartbeatAt = now;
+                        }
                         var blockedRecheckBudget = maxIterations ??
                             (watchInterval is not null
                                 ? null
@@ -666,10 +688,10 @@ internal sealed class ConductorBatchLoop
 
                     var configuredInterval = watchInterval ?? TimeSpan.FromSeconds(DefaultWatchIntervalSeconds);
                     var idleInterval = GetWatchFallbackInterval(kernel, onlyGoalId, configuredInterval);
-                    EmitProgress(
-                        recheckableBlockedGoals > 0
-                            ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals} seconds={(int)idleInterval.TotalSeconds}"
-                            : $"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
+                    if (recheckableBlockedGoals == 0)
+                    {
+                        EmitProgress($"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
+                    }
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
                         : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
@@ -1195,7 +1217,7 @@ internal sealed class ConductorBatchLoop
         {
             StopLoop("loop-return");
         }
-        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason);
+        return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks);
         }
         finally
         {
@@ -1300,7 +1322,9 @@ internal sealed class ConductorBatchLoop
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
             return;
 
-        var required = kind is "loop-relaunch-rollback" or "goal-stalled" ||
+        var required = kind is "loop-relaunch-rollback" or "goal-stalled" or "sweep-blocker" or
+            "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or
+            "blocked-recheck-heartbeat" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
         try
         {
@@ -1351,6 +1375,11 @@ internal sealed class ConductorBatchLoop
             "LOOP_JANITORIAL_FAILED" => "loop-janitorial-failure",
             "LOOP_START" => "loop-start",
             "LOOP_STOP" => "loop-stop",
+            "SWEEP_BLOCKER" => "sweep-blocker",
+            "SWEEP_ESCALATION" => "sweep-escalation",
+            "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",
+            "SWEEP_REMEDY_RESULT" => "sweep-remedy-result",
+            "BLOCKED_RECHECK_HEARTBEAT" => "blocked-recheck-heartbeat",
             "TICK_WRITE_BUSY" => "lock-blocker",
             "TICK_WRITE_DEGRADED" => "lock-blocker",
             "GLANCE" => "progressive-review-glance",
@@ -1359,6 +1388,18 @@ internal sealed class ConductorBatchLoop
         };
 
         return kind.Length > 0;
+    }
+
+    private static string FormatBlockedRecheckHeartbeat(
+        TerminalGoalSweepResult? sweepResult,
+        int totalBlockedRechecks)
+    {
+        var blocked = sweepResult?.Goals
+            .SelectMany(goal => goal.Blockers.Select(blocker => $"{goal.GoalPrefix}:{blocker.Kind}"))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray() ?? [];
+        return $"BLOCKED_RECHECK_HEARTBEAT rechecks={totalBlockedRechecks} blocked={string.Join(',', blocked)}";
     }
 
     private static string ClassifyGoalEvent(string line)
@@ -3486,7 +3527,8 @@ public sealed record BatchLoopSummary(
     int Done,
     bool StopRequested,
     ConductorLoopHandoffResult? Handoff = null,
-    string? StopReason = null);
+    string? StopReason = null,
+    int Rechecks = 0);
 
 public sealed record ConductorLoopHandoffRequest(
     int Tick,

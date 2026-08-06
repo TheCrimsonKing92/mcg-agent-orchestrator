@@ -13,7 +13,20 @@ internal sealed record TerminalGoalSweepRepair(
 internal sealed record TerminalGoalSweepBlocker(
     string Kind,
     string Evidence,
-    string Command);
+    TerminalGoalRemedy Remedy)
+{
+    public TerminalGoalSweepBlocker(string kind, string evidence, string command)
+        : this(kind, evidence, TerminalGoalRemedy.OperatorOnly(new GoalId("unknown"), "unknown", command))
+    {
+    }
+
+    public TerminalGoalSweepBlocker(string kind, string evidence, string command, GoalId goalId, string goalPrefix)
+        : this(kind, evidence, TerminalGoalRemedy.OperatorOnly(goalId, goalPrefix, command))
+    {
+    }
+
+    public string Command => Remedy.RenderCommand();
+}
 
 internal sealed record TerminalGoalSweepGoalResult(
     GoalId GoalId,
@@ -31,12 +44,14 @@ internal sealed record TerminalGoalSweepResult(
     int CacheMissCount = 0,
     IReadOnlyList<GoalId>? SweptGoalIds = null,
     int TerminalizedGoalCount = 0,
-    int ResolvedAttentionItemCount = 0)
+    int ResolvedAttentionItemCount = 0,
+    IReadOnlyList<string>? ProgressEvents = null)
 {
     public bool Changed => Goals.Any(goal => goal.Changed);
     public IReadOnlyList<TerminalGoalSweepBlocker> Blockers => Goals.SelectMany(goal => goal.Blockers).ToArray();
     public IReadOnlyList<GoalId> ExplicitlySweptGoalIds =>
         SweptGoalIds ?? Goals.Select(goal => goal.GoalId).Distinct().ToArray();
+    public IReadOnlyList<string> Events => ProgressEvents ?? [];
 }
 
 internal sealed class TerminalGoalSweepCache
@@ -399,7 +414,9 @@ internal static class TerminalGoalSweep
                 blockers.Add(new TerminalGoalSweepBlocker(
                     "merge-evidence-backfill-bound-exceeded",
                     $"merge evidence matched {mergeEvidenceCandidateCount} non-terminal goals; safety bound is {MaxMergeEvidenceTerminalizationsPerSweep}; no goals were terminalized",
-                    "inspect merge-evidence ancestry and rerun conduct"));
+                    "inspect merge-evidence ancestry and rerun conduct",
+                    originalGoal.Id,
+                    prefix));
             }
 
             if (integrationEvidenceByGoal.TryGetValue(originalGoal.Id, out var integrationEvidence))
@@ -444,14 +461,18 @@ internal static class TerminalGoalSweep
                 blockers.Add(new TerminalGoalSweepBlocker(
                     "terminal-dirty-worktree",
                     dirtyEvidence,
-                    dirtyCommand));
+                    dirtyCommand,
+                    goal.Id,
+                    prefix));
             }
             else if (branchFacts.BranchAlreadyLanded && goal.Status == GoalStatus.Verified)
             {
                 blockers.Add(new TerminalGoalSweepBlocker(
                     "verified-merged-branch-missing-integrate-commit",
                     $"verified goal branch {GoalWorktrees.BranchName(goal.Id)} is reachable from main, but no reachable Integrate commit identifies the landing",
-                    $"goal-mark-landed {prefix} --confirm-goal-mark-landed"));
+                    $"goal-mark-landed {prefix} --confirm-goal-mark-landed",
+                    goal.Id,
+                    prefix));
             }
             else if (branchFacts.BranchAlreadyLanded)
             {
@@ -488,7 +509,9 @@ internal static class TerminalGoalSweep
                         blockers.Add(new TerminalGoalSweepBlocker(
                             "landing-intent-auto-repair-failed",
                             $"goal branch {GoalWorktrees.BranchName(goal.Id)} appears merged, but auto-repair could not recover the merge commit",
-                            $"goal-mark-landed {prefix} --confirm-goal-mark-landed"));
+                            $"goal-mark-landed {prefix} --confirm-goal-mark-landed",
+                            goal.Id,
+                            prefix));
                     }
                 }
             }
@@ -500,7 +523,9 @@ internal static class TerminalGoalSweep
                 blockers.Add(new TerminalGoalSweepBlocker(
                     "terminal-live-dispatch",
                     liveDispatchEvidence,
-                    liveDispatchCommand));
+                    liveDispatchCommand,
+                    goal.Id,
+                    prefix));
             }
             else if (!blockedByDirtyWorktree &&
                      !branchFacts.BranchAlreadyLanded &&
@@ -513,7 +538,9 @@ internal static class TerminalGoalSweep
                 blockers.Add(new TerminalGoalSweepBlocker(
                     "stale-terminal-excluded",
                     staleTerminalExclusionEvidence,
-                    "excluded"));
+                    "excluded",
+                    goal.Id,
+                    prefix));
             }
             if (!blockedByDirtyWorktree &&
                 blockers.Count == 0 &&
@@ -531,7 +558,9 @@ internal static class TerminalGoalSweep
                     blockers.Add(new TerminalGoalSweepBlocker(
                         "terminal-worktree-cleanup-needed",
                         removeResult.Message,
-                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop"));
+                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop",
+                        goal.Id,
+                        prefix));
                 }
                 else
                 {
@@ -579,7 +608,7 @@ internal static class TerminalGoalSweep
                 blockers.Add(new TerminalGoalSweepBlocker(
                     "completed-branch-unmerged",
                     $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
-                    $"acceptance {prefix}"));
+                    BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
                 results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
                 continue;
             }
@@ -600,14 +629,16 @@ internal static class TerminalGoalSweep
                     blockers.Add(new TerminalGoalSweepBlocker(
                         "completed-branch-unmerged",
                         removeResult.Message,
-                        $"acceptance {prefix}"));
+                        BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
                 }
                 else if (!removeResult.IsComplete)
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
                         "completed-worktree-cleanup-needed",
                         removeResult.Message,
-                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop"));
+                        removeResult.ResumeCommand ?? $"conduct {prefix} --loop",
+                        goal.Id,
+                        prefix));
                 }
                 else if (!removeResult.Message.Contains("already clean", StringComparison.OrdinalIgnoreCase))
                 {
@@ -636,7 +667,9 @@ internal static class TerminalGoalSweep
                     blockers.Add(new TerminalGoalSweepBlocker(
                         "owned-ephemeral-cleanup-needed",
                         $"owned ephemeral cleanup incomplete; leftovers={string.Join(",", ephemeralCleanup.LeftoverPaths)}",
-                        $"conduct {prefix} --loop"));
+                        $"conduct {prefix} --loop",
+                        goal.Id,
+                        prefix));
                 }
                 else if (ephemeralCleanup.RemovedCount > 0)
                 {
@@ -973,7 +1006,9 @@ internal static class TerminalGoalSweep
                 blockers.Add(new TerminalGoalSweepBlocker(
                     "terminal-live-dispatch",
                     liveDispatchEvidence,
-                    liveDispatchCommand));
+                    liveDispatchCommand,
+                    goal.Id,
+                    prefix));
             }
 
             var branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
@@ -984,7 +1019,7 @@ internal static class TerminalGoalSweep
                 blockers.Add(new TerminalGoalSweepBlocker(
                     "completed-branch-unmerged",
                     $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
-                    $"acceptance {prefix}"));
+                    BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
             }
 
             if (blockers.Count > 0)
@@ -997,6 +1032,25 @@ internal static class TerminalGoalSweep
             results,
             CountGlobalStaleTerminalExclusions(results),
             SweptGoalIds: kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).Select(goal => goal.Id).ToArray());
+    }
+
+    private static TerminalGoalRemedy BuildAcceptanceRemedy(
+        string executionDirectory,
+        Goal goal,
+        string prefix,
+        GoalGitFactIndex branchFactIndex)
+    {
+        var branchHeadSha = branchFactIndex.TryGetGoalBranchTip(goal.Id);
+        var passedGate = GoalOperationJournal.NewestPassedGateForBranch(
+            GoalOperationJournal.Read(executionDirectory, goal.Id),
+            branchHeadSha);
+        var artifact = passedGate is null || string.IsNullOrWhiteSpace(branchHeadSha)
+            ? null
+            : new TerminalGoalGateArtifact(
+                passedGate.IdempotencyKey,
+                branchHeadSha,
+                passedGate.AcceptanceOutcome ?? "gate-passed");
+        return TerminalGoalRemedy.Acceptance(goal.Id, prefix, artifact);
     }
 
     private static void AddOwnedEphemeralCleanupRepair(
