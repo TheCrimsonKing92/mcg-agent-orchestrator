@@ -6146,6 +6146,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var startInfo = BuildAcceptanceProcessStartInfo(arguments, workingDirectory);
         CancellationTokenSource? captureDrainCts = null;
         Task<CaptureLimitResult>[]? captureDrains = null;
+        Stream[]? captureSources = null;
 
         ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
 
@@ -6155,17 +6156,22 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             using var process = StartAcceptanceProcess(startInfo, workingDirectory);
             startedProcessId = process.Id;
             captureDrainCts = new CancellationTokenSource();
+            captureSources =
+            [
+                process.StandardOutput.BaseStream,
+                process.StandardError.BaseStream
+            ];
             captureDrains =
             [
                 DrainCappedCaptureAsync(
-                    process.StandardOutput.BaseStream,
+                    captureSources[0],
                     stdoutPath,
                     EngineSettings.OutputCaptureLimitBytes,
                     () => DateTimeOffset.UtcNow,
                     onLimitReached: null,
                     cancellationToken: captureDrainCts.Token),
                 DrainCappedCaptureAsync(
-                    process.StandardError.BaseStream,
+                    captureSources[1],
                     stderrPath,
                     EngineSettings.OutputCaptureLimitBytes,
                     () => DateTimeOffset.UtcNow,
@@ -6204,7 +6210,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             var captureResults = await CompleteCaptureDrainsAsync(
                 process,
                 captureDrains,
-                captureDrainCts).ConfigureAwait(false);
+                captureDrainCts,
+                captureSources).ConfigureAwait(false);
             captureDrains = null;
             captureDrainCts.Dispose();
             captureDrainCts = null;
@@ -6274,11 +6281,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             if (captureDrainCts is not null)
             {
-                try { await captureDrainCts.CancelAsync().ConfigureAwait(false); } catch { }
-                if (captureDrains is not null)
-                {
-                    try { await Task.WhenAll(captureDrains).ConfigureAwait(false); } catch { }
-                }
+                await CancelCaptureDrainsAsync(
+                    captureDrainCts,
+                    captureDrains,
+                    captureSources).ConfigureAwait(false);
                 captureDrainCts.Dispose();
             }
 
@@ -6479,7 +6485,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static async Task<IReadOnlyList<CaptureLimitResult>> CompleteCaptureDrainsAsync(
         Process process,
         Task<CaptureLimitResult>[] captureDrains,
-        CancellationTokenSource captureDrainCts)
+        CancellationTokenSource captureDrainCts,
+        IReadOnlyList<Stream> captureSources)
     {
         try
         {
@@ -6492,7 +6499,48 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             await captureDrainCts.CancelAsync().ConfigureAwait(false);
             try { WorkerProcessJobs.TryKillOrFallback(process.Id, out _); } catch { /* best effort */ }
             try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-            return await Task.WhenAll(captureDrains).ConfigureAwait(false);
+            DisposeCaptureSources(captureSources);
+            return await Task.WhenAll(captureDrains)
+                .WaitAsync(CaptureDrainTimeout)
+                .ConfigureAwait(false);
+        }
+    }
+
+    private static async Task CancelCaptureDrainsAsync(
+        CancellationTokenSource captureDrainCts,
+        Task<CaptureLimitResult>[]? captureDrains,
+        IReadOnlyList<Stream>? captureSources)
+    {
+        try { await captureDrainCts.CancelAsync().ConfigureAwait(false); } catch { }
+        DisposeCaptureSources(captureSources);
+        if (captureDrains is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.WhenAll(captureDrains)
+                .WaitAsync(CaptureDrainTimeout)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // Cleanup is best effort, but it is always time-bounded. A descendant can retain a
+            // copied pipe handle even after process-tree termination fails.
+        }
+    }
+
+    private static void DisposeCaptureSources(IReadOnlyList<Stream>? captureSources)
+    {
+        if (captureSources is null)
+        {
+            return;
+        }
+
+        foreach (var source in captureSources)
+        {
+            try { source.Dispose(); } catch { }
         }
     }
 
@@ -6520,7 +6568,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 while (true)
                 {
-                    var read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    int read;
+                    try
+                    {
+                        read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (IOException ex) when (IsClosedPipe(ex))
+                    {
+                        break;
+                    }
                     if (read == 0)
                         break;
 
@@ -6547,6 +6603,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 // A descendant may inherit the pipe after the shell exits. Cancellation ends the
                 // bounded drain; bytes already observed remain valid capture evidence.
             }
+            catch (Exception ex) when (
+                cancellationToken.IsCancellationRequested &&
+                ex is IOException or ObjectDisposedException)
+            {
+                // Closing the pipe reader is the reliable cancellation mechanism for synchronous
+                // redirected FileStreams on Windows; it can surface either exception.
+            }
 
             await destination.FlushAsync(CancellationToken.None).ConfigureAwait(false);
         }
@@ -6561,6 +6624,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         return new CaptureLimitResult(path, writtenBytes, limitReached);
+    }
+
+    private static bool IsClosedPipe(IOException exception)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        var nativeErrorCode = exception.HResult & 0xffff;
+        return nativeErrorCode is 109 or 232 or 233; // broken pipe, no data, pipe not connected
     }
 
     internal static async Task FinalizeCappedCaptureAsync(

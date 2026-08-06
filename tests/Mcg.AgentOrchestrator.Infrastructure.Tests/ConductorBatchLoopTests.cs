@@ -2667,11 +2667,12 @@ public sealed class ConductorBatchLoopTests
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
             Assert.NotNull(completedAttempt);
 
-            Assert.Equal(
-                useLegacyStartThenAttach
-                    ? ConductorParallelAcceptanceAttemptOutcome.Failed
-                    : ConductorParallelAcceptanceAttemptOutcome.Passed,
-                completedAttempt!.Outcome);
+            var expectedOutcome = useLegacyStartThenAttach
+                ? ConductorParallelAcceptanceAttemptOutcome.Failed
+                : ConductorParallelAcceptanceAttemptOutcome.Passed;
+            Assert.True(
+                completedAttempt!.Outcome == expectedOutcome,
+                $"Expected {expectedOutcome}, actual {completedAttempt.Outcome}: {completedAttempt.Detail}");
             var markerPath = Path.Combine(worktree, "background-owned-start.marker");
             if (useLegacyStartThenAttach)
             {

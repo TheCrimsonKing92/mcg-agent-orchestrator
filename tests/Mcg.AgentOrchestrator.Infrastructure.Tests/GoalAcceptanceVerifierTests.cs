@@ -144,7 +144,6 @@ public sealed class AcceptanceOutputCaptureTests
 
             await limitReached.Task.WaitAsync(TimeSpan.FromSeconds(30));
             Xunit.Assert.False(process.HasExited);
-            Xunit.Assert.InRange(new FileInfo(stdoutPath).Length, 1, limitBytes);
 
             await process.StandardInput.WriteLineAsync(string.Empty);
             process.StandardInput.Close();

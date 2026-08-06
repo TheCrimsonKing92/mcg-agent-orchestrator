@@ -218,6 +218,42 @@ internal sealed class ConductorBatchLoop
             EmitProgress($"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason={reason}" +
                          (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
         }
+
+        TimeSpan ConsumeWatchInterval(TimeSpan configuredInterval, int recheckableBlockedGoals)
+        {
+            var computedInterval = GetWatchFallbackInterval(kernel, onlyGoalId, configuredInterval);
+            if (recheckableBlockedGoals <= 0)
+            {
+                return computedInterval;
+            }
+
+            var effectiveInterval = RetryLoopPolicy.ClampInterval(
+                computedInterval,
+                TimeSpan.FromSeconds(WatchStopPollIntervalSeconds));
+            if (effectiveInterval == computedInterval)
+            {
+                return effectiveInterval;
+            }
+
+            foreach (var entry in setAsideGoals.Values.Where(entry =>
+                         (onlyGoalId is null || entry.GoalId == onlyGoalId) &&
+                         kernel.Goals.Any(goal =>
+                             goal.Id.Value == entry.GoalId &&
+                             !IsTerminalGoal(goal))))
+            {
+                var key = new RetryDiagnosticKey(
+                    "BLOCKED_RECHECK_INTERVAL_CLAMPED",
+                    ShortGoalId(entry.GoalId),
+                    entry.Condition.ToString().ToLowerInvariant());
+                if (clampedRechecks.Add(key))
+                {
+                    EmitProgress(
+                        $"BLOCKED_RECHECK_INTERVAL_CLAMPED goal={key.Goal} condition={key.Condition} computedSeconds={computedInterval.TotalSeconds:0.###} floorSeconds={WatchStopPollIntervalSeconds}");
+                }
+            }
+
+            return effectiveInterval;
+        }
         var initiallyCompletedGoalIds = GetCompletedGoalIds(kernel);
         if ((_selfRelaunchEnabled && _selfRelaunch is not null) ||
             _postLandingCanary is not null)
@@ -695,31 +731,7 @@ internal sealed class ConductorBatchLoop
                     }
 
                     var configuredInterval = watchInterval ?? TimeSpan.FromSeconds(DefaultWatchIntervalSeconds);
-                    var computedIdleInterval = GetWatchFallbackInterval(kernel, onlyGoalId, configuredInterval);
-                    var idleInterval = recheckableBlockedGoals > 0
-                        ? RetryLoopPolicy.ClampInterval(
-                            computedIdleInterval,
-                            TimeSpan.FromSeconds(WatchStopPollIntervalSeconds))
-                        : computedIdleInterval;
-                    if (recheckableBlockedGoals > 0 && idleInterval != computedIdleInterval)
-                    {
-                        foreach (var entry in setAsideGoals.Values.Where(entry =>
-                                     (onlyGoalId is null || entry.GoalId == onlyGoalId) &&
-                                     kernel.Goals.Any(goal =>
-                                         goal.Id.Value == entry.GoalId &&
-                                         !IsTerminalGoal(goal))))
-                        {
-                            var key = new RetryDiagnosticKey(
-                                "BLOCKED_RECHECK_INTERVAL_CLAMPED",
-                                ShortGoalId(entry.GoalId),
-                                entry.Condition.ToString().ToLowerInvariant());
-                            if (clampedRechecks.Add(key))
-                            {
-                                EmitProgress(
-                                    $"BLOCKED_RECHECK_INTERVAL_CLAMPED goal={key.Goal} condition={key.Condition} computedSeconds={computedIdleInterval.TotalSeconds:0.###} floorSeconds={WatchStopPollIntervalSeconds}");
-                            }
-                        }
-                    }
+                    var idleInterval = ConsumeWatchInterval(configuredInterval, recheckableBlockedGoals);
                     EmitProgress(
                         recheckableBlockedGoals > 0
                             ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals} seconds={(int)idleInterval.TotalSeconds}"
@@ -1190,7 +1202,11 @@ internal sealed class ConductorBatchLoop
                     break;
                 }
 
-                var fallbackInterval = GetWatchFallbackInterval(kernel, onlyGoalId, watchInterval.Value);
+                var recheckableBlockedGoals = CountRecheckableNonTerminalGoals(
+                    kernel,
+                    onlyGoalId,
+                    setAsideGoals);
+                var fallbackInterval = ConsumeWatchInterval(watchInterval.Value, recheckableBlockedGoals);
                 var sleepSeconds = (int)fallbackInterval.TotalSeconds;
                 if (CountRecheckableNonTerminalGoals(kernel, onlyGoalId, setAsideGoals) > 0)
                 {
