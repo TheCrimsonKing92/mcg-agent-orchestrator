@@ -66,4 +66,16 @@ public sealed class RetryLoopPolicyTests
         Xunit.Assert.Contains(lines, line => line.Contains("goal=goal-b", StringComparison.Ordinal));
         Xunit.Assert.Equal(2, lines.Count(line => line.StartsWith("RETRY_TERMINAL_SUMMARY", StringComparison.Ordinal)));
     }
+
+    [Xunit.Fact]
+    public void CompletedConditionGetsFreshVerbatimBudgetWhenItRecurs()
+    {
+        var coalescer = new RetryDiagnosticCoalescer(() => DateTimeOffset.UnixEpoch);
+        var key = new RetryDiagnosticKey("EVENT", "goal", "condition");
+        for (var attempt = 0; attempt < 4; attempt++)
+            _ = coalescer.Observe(key, $"first-run-{attempt}");
+
+        Xunit.Assert.NotNull(coalescer.Complete(key));
+        Xunit.Assert.Equal("second-run", coalescer.Observe(key, "second-run"));
+    }
 }

@@ -45,13 +45,20 @@ internal static class GitCli
         Run(workingDirectory, DefaultTimeoutMilliseconds, args);
 
     public static GitResult Run(string workingDirectory, int timeoutMilliseconds, params string[] args)
+        => RunExecutable("git", workingDirectory, timeoutMilliseconds, args);
+
+    internal static GitResult RunExecutable(
+        string executable,
+        string workingDirectory,
+        int timeoutMilliseconds,
+        params string[] args)
     {
         var processStarted = false;
         try
         {
             var startInfo = new ProcessStartInfo
             {
-                FileName = "git",
+                FileName = executable,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

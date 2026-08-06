@@ -8,23 +8,49 @@ using System.Text.Json.Nodes;
 public sealed class AcceptanceOutputCaptureTests
 {
     [Xunit.Fact]
-    public async Task CappedCapturePreservesHeadWritesOneTerminatorAndContinuesDraining()
+    public void AcceptanceProcessUsesShellFileRedirectionInsteadOfManagedPipes()
+    {
+        var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            ["dotnet", "test"],
+            Path.GetTempPath(),
+            "stdout path.log",
+            "stderr path.log");
+
+        Xunit.Assert.False(startInfo.RedirectStandardOutput);
+        Xunit.Assert.False(startInfo.RedirectStandardError);
+        Xunit.Assert.Equal(OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh", startInfo.FileName);
+        var command = OperatingSystem.IsWindows()
+            ? startInfo.Arguments
+            : startInfo.ArgumentList.Last();
+        Xunit.Assert.Contains(">", command, StringComparison.Ordinal);
+        Xunit.Assert.Contains("2>", command, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task CappedShellCapturePreservesHeadWritesOneTerminatorAndReportsLimit()
     {
         var path = Path.Combine(Path.GetTempPath(), $"mcg-capped-capture-{Guid.NewGuid():N}.out");
         var payload = Encoding.UTF8.GetBytes(new string('x', 4096));
-        await using var source = new MemoryStream(payload);
         try
         {
-            var result = await GoalAcceptanceVerifier.DrainCapturedOutputAsync(
-                source,
+            await File.WriteAllBytesAsync(path, payload);
+            var limitNotifications = 0;
+            var results = await GoalAcceptanceVerifier.MonitorCaptureLimitsAsync(
+                [path],
+                limitBytes: 512,
+                pollInterval: TimeSpan.FromMilliseconds(1),
+                onLimitReached: () => limitNotifications++,
+                CancellationToken.None);
+            await GoalAcceptanceVerifier.FinalizeCappedCaptureAsync(
                 path,
                 limitBytes: 512,
-                CancellationToken.None);
+                DateTimeOffset.UnixEpoch);
 
             var bytes = await File.ReadAllBytesAsync(path);
             var text = Encoding.UTF8.GetString(bytes);
-            Xunit.Assert.True(result.LimitReached);
-            Xunit.Assert.Equal(payload.Length, source.Position);
+            Xunit.Assert.Single(results);
+            Xunit.Assert.True(results[0].LimitReached);
+            Xunit.Assert.Equal(1, limitNotifications);
             Xunit.Assert.Equal(512, bytes.Length);
             Xunit.Assert.StartsWith(new string('x', 32), text, StringComparison.Ordinal);
             Xunit.Assert.Equal(1, CountOccurrences(text, "ACCEPTANCE_CAPTURE_LIMIT_REACHED"));

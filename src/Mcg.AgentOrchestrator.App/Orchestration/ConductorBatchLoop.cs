@@ -51,6 +51,7 @@ internal sealed class ConductorBatchLoop
     private readonly ConductEventLogWriter? _conductEventLogWriter;
     private readonly ConductorLifecycleRecorder? _lifecycleRecorder;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly Func<double> _writeJitter;
     private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
     private readonly TimeSpan _blockedRecheckHeartbeatInterval;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
@@ -79,6 +80,7 @@ internal sealed class ConductorBatchLoop
         AcceptanceEngineCircuitBreaker? acceptanceEngineCircuit = null,
         Func<string, GoalStatus?>? evictedGoalStatusLookup = null,
         ConductorLifecycleRecorder? lifecycleRecorder = null,
+        Func<double>? writeJitter = null,
         TimeSpan? blockedRecheckHeartbeatInterval = null)
     {
         _sweep = measuredSweep ?? (kernel =>
@@ -102,6 +104,7 @@ internal sealed class ConductorBatchLoop
         _conductEventLogWriter = conductEventLogWriter;
         _lifecycleRecorder = lifecycleRecorder;
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _writeJitter = writeJitter ?? Random.Shared.NextDouble;
         _evictedGoalStatusLookup = evictedGoalStatusLookup ?? (_ => null);
         _blockedRecheckHeartbeatInterval = blockedRecheckHeartbeatInterval ?? DefaultBlockedRecheckHeartbeatInterval;
         if (_blockedRecheckHeartbeatInterval <= TimeSpan.Zero || _blockedRecheckHeartbeatInterval > TimeSpan.FromMinutes(10))
@@ -699,7 +702,8 @@ internal sealed class ConductorBatchLoop
                         : computedIdleInterval;
                     if (recheckableBlockedGoals > 0 && idleInterval != computedIdleInterval)
                     {
-                        foreach (var entry in setAsideGoals.Values)
+                        foreach (var entry in setAsideGoals.Values.Where(entry =>
+                                     entry.Condition == BatchSetAsideCondition.PreLandingRebaseConflict))
                         {
                             var key = new RetryDiagnosticKey(
                                 "BLOCKED_RECHECK_INTERVAL_CLAMPED",
@@ -1622,7 +1626,7 @@ internal sealed class ConductorBatchLoop
             diagnosticAttempt);
     }
 
-    private static void PersistGracefulDetachCheckpoint(
+    private void PersistGracefulDetachCheckpoint(
         Action<AgentOrchestratorKernel>? persistTick,
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>>? persistGoalTick,
         AgentOrchestratorKernel kernel,
@@ -1645,6 +1649,7 @@ internal sealed class ConductorBatchLoop
                     busyWriteDelay,
                     attempt))
             {
+                CompleteWriteRetryDiagnostics(ResolveGoalContext(kernel, onlyGoalId), kind, tickLines);
                 return;
             }
 
@@ -1663,12 +1668,14 @@ internal sealed class ConductorBatchLoop
                 kind,
                 $"TICK_WRITE_RETRYING tick={tick} kind={kind} goal={goalContext} attempt={attempt} reason=graceful-detach-checkpoint-required",
                 tickLines);
-            var delay = RetryLoopPolicy.GetWriteDelay(attempt, Random.Shared.NextDouble());
+            var delay = RetryLoopPolicy.GetWriteDelay(attempt, _writeJitter());
             if (busyWriteDelay is null)
                 Thread.Sleep(delay);
             else
                 busyWriteDelay(delay);
         }
+
+        CompleteWriteRetryDiagnostics(ResolveGoalContext(kernel, onlyGoalId), kind, tickLines);
     }
 
     private static GoalId[] ResolveCheckpointGoalIds(AgentOrchestratorKernel kernel, string? onlyGoalId)
@@ -3058,6 +3065,11 @@ internal sealed class ConductorBatchLoop
                     continue;
                 }
 
+                CompleteRetryDiagnostic(
+                    "ESCALATION_RECHECK_FAILED",
+                    entry.GoalId[..8],
+                    "pre-landing_rebase_conflict");
+
                 if (recheck.TerminalUnsatisfiable)
                 {
                     var terminalObservation = Sanitize(recheck.Observation);
@@ -3608,6 +3620,25 @@ internal sealed class ConductorBatchLoop
         var line = CurrentRetryDiagnostics.Value is { } diagnostics
             ? diagnostics.Observe(new RetryDiagnosticKey(eventName, goal, condition), verbatim)
             : verbatim;
+        if (line is not null)
+            EmitProgress(line, tickLines);
+    }
+
+    private static void CompleteWriteRetryDiagnostics(string goal, string kind, List<string>? tickLines)
+    {
+        CompleteRetryDiagnostic("TICK_WRITE_BUSY", goal, kind, tickLines);
+        CompleteRetryDiagnostic("TICK_WRITE_DEGRADED", goal, kind, tickLines);
+        CompleteRetryDiagnostic("TICK_WRITE_RETRYING", goal, kind, tickLines);
+    }
+
+    private static void CompleteRetryDiagnostic(
+        string eventName,
+        string goal,
+        string condition,
+        List<string>? tickLines = null)
+    {
+        var line = CurrentRetryDiagnostics.Value?.Complete(
+            new RetryDiagnosticKey(eventName, goal, condition));
         if (line is not null)
             EmitProgress(line, tickLines);
     }

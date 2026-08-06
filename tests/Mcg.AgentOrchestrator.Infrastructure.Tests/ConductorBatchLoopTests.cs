@@ -7423,8 +7423,8 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_stop_persistent_busy_detach_checkpoint_is_bounded")]
-    public void BatchLoopStopPersistentBusyDetachCheckpointIsBounded()
+    [Xunit.Fact]
+    public void Stop_TenSimulatedBusyMinutes_HasBoundedOutput()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
@@ -7432,7 +7432,7 @@ public sealed class ConductorBatchLoopTests
             DefaultAgents(),
             "bounded detached checkpoint failure");
         var task = goal.Tasks.Single();
-        var now = DateTimeOffset.UtcNow;
+        var now = DateTimeOffset.UnixEpoch;
         kernel.RecordTaskDispatch(
             goal.Id,
             task.Id,
@@ -7462,7 +7462,9 @@ public sealed class ConductorBatchLoopTests
             var output = AsyncLocalConsoleRouter.Capture(() =>
                 summary = new ConductorBatchLoop(
                     detachGoalRunningDispatches: (loopKernel, loopGoal) =>
-                        runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
+                        runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                    utcNow: () => now,
+                    writeJitter: () => 0).Run(
                         kernel,
                         MakeDriver(),
                         ConductorAutonomyPolicy.Conservative,
@@ -7473,14 +7475,40 @@ public sealed class ConductorBatchLoopTests
                             attempts++;
                             throw SqliteBusy();
                         },
-                        busyWriteDelay: delays.Add));
+                        busyWriteDelay: delay =>
+                        {
+                            delays.Add(delay);
+                            now = now.AddMinutes(5);
+                        }));
 
             Assert.NotNull(summary);
             Assert.True(summary!.StopRequested);
-            Assert.Contains("TICK_WRITE_BUSY", output, StringComparison.Ordinal);
-            Assert.Contains("attempt=1", output, StringComparison.Ordinal);
-            Assert.Contains("attempt=2", output, StringComparison.Ordinal);
-            Assert.Contains("attempt=3", output, StringComparison.Ordinal);
+            var outputLines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            var busyLines = outputLines
+                .Where(line => line.StartsWith("TICK_WRITE_BUSY ", StringComparison.Ordinal))
+                .ToArray();
+            var degradedLines = outputLines
+                .Where(line => line.StartsWith("TICK_WRITE_DEGRADED ", StringComparison.Ordinal))
+                .ToArray();
+            var retryingLines = outputLines
+                .Where(line => line.StartsWith("TICK_WRITE_RETRYING ", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Collection(
+                busyLines,
+                line => Assert.Contains(" attempt=1 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=2 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=3 ", line, StringComparison.Ordinal));
+            Assert.Collection(
+                degradedLines,
+                line => Assert.Contains(" attempt=1 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=2 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=3 ", line, StringComparison.Ordinal));
+            Assert.Collection(
+                retryingLines,
+                line => Assert.Contains(" attempt=1 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=2 ", line, StringComparison.Ordinal));
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(output) < 1024 * 1024);
+            Assert.Equal(TimeSpan.FromMinutes(10), now - DateTimeOffset.UnixEpoch);
         }
         finally
         {

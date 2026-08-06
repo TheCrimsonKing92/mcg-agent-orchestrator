@@ -570,34 +570,12 @@ internal sealed class ConductorDriver
             }
 
             var evidence = ReadLandingRecheckEvidence(worktreePath);
-            ReviewerMergeTreeStatus mergeTree;
-            try
-            {
-                mergeTree = new WorkerGitContext().ReadReviewerMergeTreeStatus(
+            return ClassifyPreLandingRebaseConflict(
+                () => new WorkerGitContext().ReadReviewerMergeTreeStatus(
                     worktreePath,
                     evidence.MainHead,
-                    evidence.BranchHead);
-            }
-            catch (ReviewerMergeTreeStatusException ex) when (!ex.GitProcessStarted)
-            {
-                return new LandingEscalationRecheckResult(
-                    ConditionResolved: false,
-                    Status: "GitMergeTreeCouldNotStart",
-                    Observation: ex.Message,
-                    EvidenceFingerprint: evidence.Fingerprint,
-                    TerminalUnsatisfiable: true);
-            }
-            return mergeTree.IsClean
-                ? new LandingEscalationRecheckResult(
-                    ConditionResolved: true,
-                    Status: "MergeTreeClean",
-                    Observation: "Read-only merge-tree check found no conflict with main.",
-                    EvidenceFingerprint: evidence.Fingerprint)
-                : new LandingEscalationRecheckResult(
-                    ConditionResolved: false,
-                    Status: "MergeTreeConflict",
-                    Observation: $"Read-only merge-tree check still conflicts with main: {string.Join(", ", mergeTree.ConflictPaths)}",
-                    EvidenceFingerprint: evidence.Fingerprint);
+                    evidence.BranchHead),
+                evidence.Fingerprint);
         };
 
         _land = (goal, policy) =>
@@ -721,6 +699,38 @@ internal sealed class ConductorDriver
             BuildPreReviewEvidenceContext(
                 TryResolveAcceptanceBranchHead(goal),
                 _getLandingFileScopes(goal));
+    }
+
+    internal static LandingEscalationRecheckResult ClassifyPreLandingRebaseConflict(
+        Func<ReviewerMergeTreeStatus> readMergeTree,
+        string evidenceFingerprint)
+    {
+        ReviewerMergeTreeStatus mergeTree;
+        try
+        {
+            mergeTree = readMergeTree();
+        }
+        catch (ReviewerMergeTreeStatusException ex) when (!ex.GitProcessStarted)
+        {
+            return new LandingEscalationRecheckResult(
+                ConditionResolved: false,
+                Status: "GitMergeTreeCouldNotStart",
+                Observation: ex.Message,
+                EvidenceFingerprint: evidenceFingerprint,
+                TerminalUnsatisfiable: true);
+        }
+
+        return mergeTree.IsClean
+            ? new LandingEscalationRecheckResult(
+                ConditionResolved: true,
+                Status: "MergeTreeClean",
+                Observation: "Read-only merge-tree check found no conflict with main.",
+                EvidenceFingerprint: evidenceFingerprint)
+            : new LandingEscalationRecheckResult(
+                ConditionResolved: false,
+                Status: "MergeTreeConflict",
+                Observation: $"Read-only merge-tree check still conflicts with main: {string.Join(", ", mergeTree.ConflictPaths)}",
+                EvidenceFingerprint: evidenceFingerprint);
     }
 
     internal ConductorDriver(

@@ -245,6 +245,22 @@ public sealed class GitCliTests
         Assert.True(result.ExitCode != 0);
     }
 
+    [Xunit.Fact]
+    public void Run_NonexistentExecutable_ReportsNotStarted()
+    {
+        var executable = Path.Combine(Path.GetTempPath(), $"missing-git-{Guid.NewGuid():N}.exe");
+
+        var result = GitCli.RunExecutable(
+            executable,
+            Path.GetTempPath(),
+            5_000,
+            "status");
+
+        Assert.False(result.Succeeded);
+        Assert.False(result.ProcessStarted);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
+    }
+
     private static string CreateSeededRepository()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-gitcli-tests", Guid.NewGuid().ToString("n"));
