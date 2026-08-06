@@ -34,6 +34,11 @@ internal static partial class CliCommandHandlers
             .ToList();
     }
 
+    private static List<CollaborationItem> AllClarificationsForGoal(CollaborationItemStore store, Goal goal) =>
+        AllClarifications(store)
+            .Where(item => string.Equals(item.GoalId, goal.Id.Value, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
     private static bool IsSpecClarification(CollaborationItem item) =>
         !string.IsNullOrWhiteSpace(item.CorrelationKey) &&
         item.CorrelationKey!.StartsWith("spec-clarification:", StringComparison.Ordinal);
@@ -454,7 +459,7 @@ internal static partial class CliCommandHandlers
                         "--text-file");
                     var clarification = scoped
                         ? ResolveClarificationByShortId(
-                            OpenClarificationsForGoal(store, goal!),
+                            AllClarificationsForGoal(store, goal!),
                             clarificationIdentityUniverse
                                 .Where(item => string.Equals(item.GoalId, goal!.Id.Value, StringComparison.OrdinalIgnoreCase))
                                 .ToList(),
@@ -462,6 +467,12 @@ internal static partial class CliCommandHandlers
                             $"Clarification id '{id}' does not belong to goal '{goal!.Id.Value}'.",
                             $"Id '{id}' is ambiguous ({{0}} matches); copy a full id from `attention show {goal!.Id.Value[..8]}` or use a full correlation key.")
                         : globalClarification!;
+
+                    if (CollaborationItemLifecycle.IsTerminal(clarification.Status))
+                    {
+                        throw new InvalidOperationException(
+                            $"Clarification '{id}' is already answered — use supersede.");
+                    }
 
                     var refinementService = new GoalRefinementService(
                         context.Providers,

@@ -851,7 +851,18 @@ public static HumanInputDto ToHumanInputDto(AgentOrchestratorKernel kernel, Huma
         request.Answer is null ? null : SummaryText(request.Answer),
         request.AnsweredAt,
         counts.Total,
-        counts.Open);
+        counts.Open,
+        request.AnswerHistory
+            .OrderBy(answer => answer.AnsweredAt)
+            .Select(answer => new HumanInputAnswerDto(
+                answer.Id,
+                answer.Text,
+                answer.AnsweredAt,
+                answer.Origin,
+                request.AuthoritativeAnswer?.Id == answer.Id,
+                answer.IsRetracted,
+                answer.SupersededByAnswerId))
+            .ToArray());
 }
 
 private static string SummaryText(string? text) =>

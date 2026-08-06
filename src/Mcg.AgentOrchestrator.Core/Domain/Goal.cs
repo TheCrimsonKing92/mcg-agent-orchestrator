@@ -316,7 +316,8 @@ public sealed class Goal
                     q.NormalizedQuestionKey,
                     q.Criterion,
                     q.BlastRadius)).ToList(),
-                RefinedSpec.OperatorOwnedAcceptanceCriteria.ToList()),
+                RefinedSpec.OperatorOwnedAcceptanceCriteria.ToList(),
+                RefinedSpec.ClarificationAnswerHistory.ToList()),
             LatestAcceptanceFailure is null
                 ? null
                 : new AcceptanceFailureSnapshot(
@@ -403,7 +404,8 @@ public sealed class Goal
                     q.Criterion,
                     q.BlastRadius)).ToList())
             {
-                OperatorOwnedAcceptanceCriteria = rs.OperatorOwnedAcceptanceCriteria ?? []
+                OperatorOwnedAcceptanceCriteria = rs.OperatorOwnedAcceptanceCriteria ?? [],
+                ClarificationAnswerHistory = rs.ClarificationAnswerHistory ?? []
             });
         }
 

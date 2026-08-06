@@ -85,6 +85,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "rollback-goal",
     "cancel-goal",
     "supersede-goal",
+    "supersede",
     "agents",
     "agent-add",
     "model-functions",

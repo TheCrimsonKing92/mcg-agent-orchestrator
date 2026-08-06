@@ -29,7 +29,12 @@ public sealed record CollaborationItem(
     string? CorrelationKey,
     DateTimeOffset RaisedAt,
     DateTimeOffset? ResolvedAt,
-    string? Resolution);
+    string? Resolution,
+    IReadOnlyList<HumanInputAnswerRecord>? AnswerHistory = null)
+{
+    public HumanInputAnswerRecord? AuthoritativeAnswer =>
+        AnswerHistory?.LastOrDefault(answer => !answer.IsRetracted);
+}
 
 public static class CollaborationItemLifecycle
 {

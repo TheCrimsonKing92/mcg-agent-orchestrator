@@ -74,6 +74,8 @@ public sealed partial class CollaborationItemStore
             CREATE INDEX IF NOT EXISTS idx_collaboration_items_goal_id
                 ON collaboration_items (goal_id)
             """);
+        if (!ColumnExists(conn, "collaboration_items", "answer_history_json"))
+            RunNonQuery(conn, "ALTER TABLE collaboration_items ADD COLUMN answer_history_json TEXT");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS collaboration_item_actions (
                 correlation_key              TEXT NOT NULL,
@@ -196,6 +198,20 @@ public sealed partial class CollaborationItemStore
         using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    private static bool ColumnExists(SqliteConnection conn, string table, string column)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"PRAGMA table_info({table})";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private static async Task RunNonQueryAsync(SqliteConnection conn, string sql, CancellationToken cancellationToken)

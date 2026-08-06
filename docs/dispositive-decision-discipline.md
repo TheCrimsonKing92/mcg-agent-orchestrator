@@ -50,6 +50,21 @@ Never resolve it by guessing at the consumer.
 - **Timeout means the deadline fired.** Caller cancellation and a dependency that cancels itself are separate
   reasons; record timeout only when the deadline token or timer supplies the discriminating evidence.
 
+## Corrected operator decisions
+
+Clarification answers are append-only operator decisions. If an answer is wrong, the operator supersedes it:
+the replacement becomes the single authoritative answer, while each earlier answer remains in audit history
+as retracted with a pointer to its replacement. A retracted operator statement is not a competing directive.
+
+Role context must contain the authoritative answer and omit retracted answer text, including stale copies
+quoted by completed upstream artifacts. Completed artifacts retain their original bytes for audit; prompt
+assembly applies the retraction when rendering them. If a role encounters a stale value through some other
+history view, it follows the authoritative answer instead of stopping to ask which statement governs.
+
+Superseding does not rewrite or invalidate completed work. It resolves matching clarification waits and
+their derived blocker records so only tasks stopped on the contradiction become dispatchable again. Re-running
+a completed task remains an explicit operator retry decision.
+
 ## Why the existing discipline did not catch these
 
 `docs/test-design-discipline.md` governs tests, and the evidence-first principle governs the

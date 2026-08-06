@@ -74,6 +74,16 @@ internal static partial class ConsoleViews
                 Console.WriteLine($"    body: {item.Body}");
             if (!string.IsNullOrWhiteSpace(item.Resolution))
                 Console.WriteLine($"    resolution: {item.Resolution}");
+            if (includeHistory && item.AnswerHistory is { Count: > 0 })
+            {
+                foreach (var answer in item.AnswerHistory.OrderBy(answer => answer.AnsweredAt))
+                {
+                    var state = answer.IsRetracted
+                        ? $"retracted supersededBy={answer.SupersededByAnswerId}"
+                        : "authoritative";
+                    Console.WriteLine($"    answer-history: {answer.Id} {state}: {answer.Text}");
+                }
+            }
             Console.WriteLine($"    raised: {item.RaisedAt:u}");
             if (item.ResolvedAt is not null)
                 Console.WriteLine($"    resolved: {item.ResolvedAt:u}");

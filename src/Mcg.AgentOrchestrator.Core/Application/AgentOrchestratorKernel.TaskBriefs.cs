@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
@@ -46,6 +47,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         IReadOnlyList<ReviewFinding> state = [];
         List<string>? skipped = null;
+        var latestFindingOccurrences = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         foreach (var verification in goal.Tasks
             .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
             .SelectMany(candidate => candidate.VerificationHistory)
@@ -71,6 +73,11 @@ public sealed partial class AgentOrchestratorKernel
             try
             {
                 state = ReviewFindingConvergence.ApplyRound(state, round);
+                foreach (var finding in round.Findings)
+                {
+                    latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
+                }
+                state = ApplyHumanInputSupersedeFindingResolutions(goal, state, latestFindingOccurrences);
             }
             catch (ReviewFindingConvergenceException error)
             {
@@ -473,13 +480,107 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var lines = ApplyTaskBriefBudget(segments, task.RequiredRole, usesFileAccessContext);
+        var content = ApplyHumanInputRetractions(
+            string.Join(Environment.NewLine, lines),
+            HumanInputRequests.Where(request => request.GoalId == goalId).ToArray(),
+            goal.RefinedSpec?.ClarificationAnswerHistory ?? []);
 
         return new TaskBrief(
             goal.Id,
             task.Id,
             task.RequiredRole,
             $"{task.RequiredRole}: {PromptContextFormatter.TrimPromptTitle(task.Description)}",
-            string.Join(Environment.NewLine, lines));
+            content);
+    }
+
+    private static string ApplyHumanInputRetractions(
+        string content,
+        IReadOnlyList<HumanInputRequest> requests,
+        IReadOnlyList<HumanInputAnswerRecord> clarificationAnswerHistory)
+    {
+        var authoritativeTexts = requests
+            .Select(request => request.AuthoritativeAnswer?.Text)
+            .Concat(clarificationAnswerHistory
+                .Where(answer => !answer.IsRetracted)
+                .Select(answer => answer.Text))
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Select(text => text!)
+            .Distinct(StringComparer.Ordinal)
+            .OrderByDescending(text => text.Length)
+            .ToArray();
+        var supersededRequestIds = requests
+            .Where(request => request.AnswerHistory.Any(answer => answer.IsRetracted))
+            .Select(request => request.Id)
+            .ToHashSet();
+        var retractedTexts = requests
+            .SelectMany(request => request.AnswerHistory)
+            .Concat(clarificationAnswerHistory)
+            .Where(answer => answer.IsRetracted)
+            .Select(answer => answer.Text)
+            .Concat(requests
+                .Where(request =>
+                    request.AnswerHistory.Any(answer => answer.IsRetracted) ||
+                    (request.SupersededByRequestId is not null && supersededRequestIds.Contains(request.SupersededByRequestId)))
+                .Select(request => request.DerivedBlockerEvidence)
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Select(text => text!))
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Except(authoritativeTexts, StringComparer.Ordinal)
+            .Distinct(StringComparer.Ordinal)
+            .OrderByDescending(text => text.Length)
+            .ToArray();
+        if (retractedTexts.Length == 0)
+        {
+            return content;
+        }
+
+        var alternatives = authoritativeTexts
+            .Select(text => (Text: text, IsRetracted: false))
+            .Concat(retractedTexts.Select(text => (Text: text, IsRetracted: true)))
+            .OrderByDescending(candidate => candidate.Text.Length)
+            .ThenBy(candidate => candidate.IsRetracted)
+            .ToArray();
+        var retractedSet = retractedTexts.ToHashSet(StringComparer.Ordinal);
+        var pattern = $@"(?<![\p{{L}}\p{{N}}])(?:{string.Join('|', alternatives.Select(candidate => Regex.Escape(candidate.Text)))})(?![\p{{L}}\p{{N}}])";
+        return Regex.Replace(
+            content,
+            pattern,
+            match => retractedSet.Contains(match.Value) ? string.Empty : match.Value,
+            RegexOptions.CultureInvariant);
+    }
+
+    private static IReadOnlyList<ReviewFinding> ApplyHumanInputSupersedeFindingResolutions(
+        Goal goal,
+        IReadOnlyList<ReviewFinding> findings,
+        IReadOnlyDictionary<string, DateTimeOffset> latestFindingOccurrences)
+    {
+        const string marker = "resolvedStableIds=";
+        var resolvedIds = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.HumanInputSuperseded)
+            .SelectMany(evt =>
+            {
+                var start = evt.Message.IndexOf(marker, StringComparison.Ordinal);
+                if (start < 0)
+                {
+                    return [];
+                }
+
+                start += marker.Length;
+                var end = evt.Message.IndexOf(' ', start);
+                var value = end < 0 ? evt.Message[start..] : evt.Message[start..end];
+                return value.Equals("none", StringComparison.Ordinal)
+                    ? []
+                    : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Select(stableId => (StableId: stableId, evt.OccurredAt));
+            })
+            .Where(resolution =>
+                !latestFindingOccurrences.TryGetValue(resolution.StableId, out var latestOccurrence) ||
+                resolution.OccurredAt >= latestOccurrence)
+            .Select(resolution => resolution.StableId)
+            .ToHashSet(StringComparer.Ordinal);
+        return resolvedIds.Count == 0
+            ? findings
+            : findings.Where(finding => !resolvedIds.Contains(finding.StableId)).ToArray();
     }
 
     private static List<string> ApplyTaskBriefBudget(

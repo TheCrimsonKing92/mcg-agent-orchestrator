@@ -549,6 +549,62 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
+        case "supersede":
+            const string supersedeUsage = "supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
+            CliArgumentParser.RequirePartCount(parts, 4, supersedeUsage);
+            var supersedeGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            var supersedeText = ResolveTextArgument(parts, inlineIndex: 3, supersedeUsage, "--text-file");
+            var matchesHumanInput = context.Kernel.HumanInputRequests
+                .Any(request => request.Id.Value.StartsWith(parts[2], StringComparison.OrdinalIgnoreCase));
+            string authoritativeText;
+            string supersededId;
+            if (matchesHumanInput)
+            {
+                var supersedeRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(
+                    context.Kernel,
+                    supersedeGoal.Id,
+                    parts[2]);
+                var authoritativeAnswer = context.Kernel.SupersedeHumanInput(
+                    supersedeGoal.Id,
+                    supersedeRequest.Id,
+                    supersedeText,
+                    HumanInputAnswerOrigin.Operator);
+                authoritativeText = authoritativeAnswer.Text;
+                supersededId = supersedeRequest.Id.Value[..8];
+            }
+            else
+            {
+                var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
+                var identityUniverse = AllClarifications(store);
+                var clarification = ResolveClarificationByShortId(
+                    AllClarificationsForGoal(store, supersedeGoal),
+                    identityUniverse
+                        .Where(item => string.Equals(item.GoalId, supersedeGoal.Id.Value, StringComparison.OrdinalIgnoreCase))
+                        .ToArray(),
+                    parts[2],
+                    $"Clarification id '{parts[2]}' was not found on goal '{supersedeGoal.Id.Value}'.",
+                    $"Id '{parts[2]}' is ambiguous ({{0}} matches); copy a full id from `attention show {supersedeGoal.Id.Value[..8]} --all` or use a full correlation key.");
+                var updated = store.SupersedeClarificationAsync(
+                    supersedeGoal.Id.Value,
+                    clarification.Id,
+                    supersedeText,
+                    HumanInputAnswerOrigin.Operator).GetAwaiter().GetResult();
+                var refinementService = new GoalRefinementService(
+                    context.Providers,
+                    ModelFunctionCatalog.Empty,
+                    store,
+                    new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
+                refinementService.SyncAnsweredClarifications(context.Kernel, supersedeGoal.Id);
+                authoritativeText = updated.AuthoritativeAnswer?.Text ?? updated.Resolution!;
+                supersededId = ClarificationId(updated, identityUniverse);
+            }
+            context.CurrentGoal = supersedeGoal;
+            Console.WriteLine(
+                $"Superseded clarification {supersededId}. " +
+                $"Authoritative answer: {authoritativeText}");
+            ConsoleViews.PrintGoal(context.CurrentGoal);
+            return true;
+
         case "gate-satisfied":
             const string gateSatisfiedUsage = "gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
             CliArgumentParser.RequirePartCount(parts, 4, gateSatisfiedUsage);

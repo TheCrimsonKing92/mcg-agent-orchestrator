@@ -104,7 +104,7 @@ public sealed partial class CollaborationItemStore
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution
+            SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution, answer_history_json
             FROM collaboration_items
             WHERE correlation_key = $key AND status NOT IN ('Resolved', 'Closed')
             ORDER BY raised_at ASC
@@ -127,21 +127,120 @@ public sealed partial class CollaborationItemStore
             await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
             try
             {
-                var resolvedAt = DateTimeOffset.UtcNow.ToString("O");
+                var answeredAt = DateTimeOffset.UtcNow;
+                var resolvedAt = answeredAt.ToString("O");
+                var answerHistory = new[]
+                {
+                    new HumanInputAnswerRecord(Guid.NewGuid().ToString("n"), resolution, answeredAt)
+                };
                 await using var cmd = conn.CreateCommand();
                 // Idempotent: only update if currently in a non-terminal state.
                 cmd.CommandText = """
                     UPDATE collaboration_items
-                    SET status = 'Resolved', resolved_at = $resolved_at, resolution = $resolution
+                    SET status = 'Resolved', resolved_at = $resolved_at, resolution = $resolution,
+                        answer_history_json = $answer_history_json
                     WHERE correlation_key = $key
                       AND status NOT IN ('Resolved', 'Closed')
                     """;
                 cmd.Parameters.AddWithValue("$resolved_at", resolvedAt);
                 cmd.Parameters.AddWithValue("$resolution", resolution);
+                cmd.Parameters.AddWithValue("$answer_history_json", Serialize(answerHistory));
                 cmd.Parameters.AddWithValue("$key", correlationKey);
                 var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
                 await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
                 return rows > 0;
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
+    }
+
+    public async Task<CollaborationItem> SupersedeClarificationAsync(
+        string goalId,
+        string itemId,
+        string replacementAnswer,
+        HumanInputAnswerOrigin origin,
+        CancellationToken cancellationToken = default)
+    {
+        if (origin != HumanInputAnswerOrigin.Operator)
+            throw new UnauthorizedAccessException("Only operator-origin answers can supersede a clarification.");
+        if (string.IsNullOrWhiteSpace(replacementAnswer))
+            throw new ArgumentException("Replacement answer cannot be empty.", nameof(replacementAnswer));
+
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
+            {
+                await using var read = conn.CreateCommand();
+                read.CommandText = """
+                    SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution, answer_history_json
+                    FROM collaboration_items
+                    WHERE id = $id AND goal_id = $goal_id
+                    """;
+                read.Parameters.AddWithValue("$id", itemId);
+                read.Parameters.AddWithValue("$goal_id", goalId);
+                CollaborationItem item;
+                await using (var reader = await read.ExecuteReaderAsync(cancellationToken))
+                {
+                    item = await reader.ReadAsync(cancellationToken)
+                        ? ReadItem(reader)
+                        : throw new KeyNotFoundException(
+                            $"Clarification '{itemId}' was not found on goal '{goalId}'.");
+                }
+
+                if (item.Type != CollaborationItemType.Clarification ||
+                    !CollaborationItemLifecycle.IsTerminal(item.Status) ||
+                    string.IsNullOrWhiteSpace(item.Resolution))
+                {
+                    throw new InvalidOperationException(
+                        $"Clarification '{itemId}' has no answered clarification to supersede.");
+                }
+
+                var history = (item.AnswerHistory ?? LegacyAnswerHistory(
+                        item.Id,
+                        item.Resolution,
+                        item.ResolvedAt ?? item.RaisedAt))
+                    .OrderBy(answer => answer.AnsweredAt)
+                    .ToList();
+                var priorIndex = history.FindLastIndex(answer => !answer.IsRetracted);
+                if (priorIndex < 0)
+                    throw new InvalidOperationException($"Clarification '{itemId}' has no authoritative answer.");
+
+                var replacement = new HumanInputAnswerRecord(
+                    Guid.NewGuid().ToString("n"),
+                    replacementAnswer.Trim(),
+                    DateTimeOffset.UtcNow,
+                    origin);
+                history[priorIndex] = history[priorIndex] with { SupersededByAnswerId = replacement.Id };
+                history.Add(replacement);
+
+                await using var update = conn.CreateCommand();
+                update.CommandText = """
+                    UPDATE collaboration_items
+                    SET resolution = $resolution, resolved_at = $resolved_at, answer_history_json = $answer_history_json
+                    WHERE id = $id AND goal_id = $goal_id
+                    """;
+                update.Parameters.AddWithValue("$resolution", replacement.Text);
+                update.Parameters.AddWithValue("$resolved_at", replacement.AnsweredAt.ToString("O"));
+                update.Parameters.AddWithValue("$answer_history_json", Serialize(history));
+                update.Parameters.AddWithValue("$id", item.Id);
+                update.Parameters.AddWithValue("$goal_id", goalId);
+                if (await update.ExecuteNonQueryAsync(cancellationToken) != 1)
+                    throw new InvalidOperationException($"Clarification '{itemId}' changed while it was being superseded.");
+
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return item with
+                {
+                    Resolution = replacement.Text,
+                    ResolvedAt = replacement.AnsweredAt,
+                    AnswerHistory = history
+                };
             }
             catch
             {
@@ -239,11 +338,11 @@ public sealed partial class CollaborationItemStore
         await using var cmd = conn.CreateCommand();
         if (goalId is null)
         {
-            cmd.CommandText = "SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution FROM collaboration_items ORDER BY raised_at ASC";
+            cmd.CommandText = "SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution, answer_history_json FROM collaboration_items ORDER BY raised_at ASC";
         }
         else
         {
-            cmd.CommandText = "SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution FROM collaboration_items WHERE goal_id = $goal_id ORDER BY raised_at ASC";
+            cmd.CommandText = "SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution, answer_history_json FROM collaboration_items WHERE goal_id = $goal_id ORDER BY raised_at ASC";
             cmd.Parameters.AddWithValue("$goal_id", goalId);
         }
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
@@ -276,7 +375,7 @@ public sealed partial class CollaborationItemStore
         }
 
         cmd.CommandText = $"""
-            SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution
+            SELECT id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution, answer_history_json
             FROM collaboration_items
             WHERE goal_id IN ({string.Join(", ", parameterNames)})
             ORDER BY raised_at ASC
@@ -751,8 +850,8 @@ public sealed partial class CollaborationItemStore
     {
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
-            INSERT INTO collaboration_items (id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution)
-            VALUES ($id, $type, $goal_id, $status, $subject, $body, $correlation_key, $raised_at, $resolved_at, $resolution)
+            INSERT INTO collaboration_items (id, type, goal_id, status, subject, body, correlation_key, raised_at, resolved_at, resolution, answer_history_json)
+            VALUES ($id, $type, $goal_id, $status, $subject, $body, $correlation_key, $raised_at, $resolved_at, $resolution, $answer_history_json)
             """;
         cmd.Parameters.AddWithValue("$id", item.Id);
         cmd.Parameters.AddWithValue("$type", item.Type.ToString());
@@ -764,6 +863,7 @@ public sealed partial class CollaborationItemStore
         cmd.Parameters.AddWithValue("$raised_at", item.RaisedAt.ToString("O"));
         cmd.Parameters.AddWithValue("$resolved_at", (object?)item.ResolvedAt?.ToString("O") ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$resolution", (object?)item.Resolution ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$answer_history_json", item.AnswerHistory is null ? DBNull.Value : Serialize(item.AnswerHistory));
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 }

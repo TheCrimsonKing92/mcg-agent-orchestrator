@@ -567,6 +567,7 @@ public sealed partial class AgentOrchestratorKernel
         diagnostic = string.Empty;
         violation = null;
         canonicalizations = [];
+        var latestFindingOccurrences = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var historicalVerifications = goal.Tasks
             .Where(candidate => candidate.RequiredRole == role)
             .SelectMany(candidate => candidate.VerificationHistory)
@@ -592,6 +593,11 @@ public sealed partial class AgentOrchestratorKernel
                 state = isCurrentRound
                     ? ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations)
                     : ReviewFindingConvergence.ApplyRound(state, round);
+                foreach (var finding in round.Findings)
+                {
+                    latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
+                }
+                state = ApplyHumanInputSupersedeFindingResolutions(goal, state, latestFindingOccurrences);
             }
             catch (ReviewFindingConvergenceException ex)
             {

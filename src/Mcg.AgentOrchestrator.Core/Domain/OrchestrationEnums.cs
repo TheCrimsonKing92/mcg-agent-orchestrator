@@ -102,7 +102,15 @@ public enum ProgressKind
     DuplicateHumanInputSuppressed = 27,
     PreReviewMappingEscalationSuppressed = 28,
     OperatorTaskNote = 29,
-    OperatorGateSatisfied = 30
+    OperatorGateSatisfied = 30,
+    HumanInputSuperseded = 31,
+    ContradictoryRecordDetected = 32
+}
+
+public enum HumanInputAnswerOrigin
+{
+    Operator,
+    Worker
 }
 
 public enum TaskAttentionKind

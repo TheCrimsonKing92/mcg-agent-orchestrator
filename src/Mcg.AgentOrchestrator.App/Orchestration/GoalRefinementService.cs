@@ -398,14 +398,16 @@ internal sealed class GoalRefinementService
     public RefinedSpec? SyncAnsweredClarifications(AgentOrchestratorKernel kernel, GoalId goalId)
     {
         var goal = kernel.Goals.FirstOrDefault(candidate => candidate.Id == goalId);
-        if (goal?.RefinedSpec is not { } spec || !spec.HasOpenQuestions)
+        if (goal?.RefinedSpec is not { } spec)
             return goal?.RefinedSpec;
 
-        var answers = _collaboration.ListAsync(goalId.Value).GetAwaiter().GetResult()
+        var resolvedItems = _collaboration.ListAsync(goalId.Value).GetAwaiter().GetResult()
             .Where(item =>
                 item.Type == CollaborationItemType.Clarification &&
                 CollaborationItemLifecycle.IsTerminal(item.Status) &&
                 !string.IsNullOrWhiteSpace(item.CorrelationKey))
+            .ToArray();
+        var answers = resolvedItems
             .GroupBy(item => item.CorrelationKey!, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => BuildResolutionText(group.First()), StringComparer.Ordinal);
 
@@ -420,21 +422,52 @@ internal sealed class GoalRefinementService
                 if (string.Equals(question.ForkKind, AcceptanceCriterionFeasibility.ForkKind, StringComparison.OrdinalIgnoreCase))
                     return question;
 
-                if (string.Equals(question.Status, "Answered", StringComparison.OrdinalIgnoreCase) ||
-                    !answers.TryGetValue(question.Id, out var answer))
+                if (!answers.TryGetValue(question.Id, out var answer))
                     return question;
 
-                changed = true;
-                decisions.Add(new RefinedSpecDecision(
-                    question.Question, answer, $"Answered by operator (key: {question.Id})."));
-                return question with { Status = "Answered", Answer = answer };
+                var rationale = $"Answered by operator (key: {question.Id}).";
+                var decisionIndex = decisions.FindIndex(decision =>
+                    string.Equals(decision.Rationale, rationale, StringComparison.Ordinal));
+                var replacementDecision = new RefinedSpecDecision(question.Question, answer, rationale);
+                if (decisionIndex < 0)
+                {
+                    decisions.Add(replacementDecision);
+                    changed = true;
+                }
+                else if (decisions[decisionIndex] != replacementDecision)
+                {
+                    decisions[decisionIndex] = replacementDecision;
+                    changed = true;
+                }
+
+                if (!string.Equals(question.Status, "Answered", StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(question.Answer, answer, StringComparison.Ordinal))
+                {
+                    changed = true;
+                    return question with { Status = "Answered", Answer = answer };
+                }
+
+                return question;
             })
             .ToList();
+
+        var answerHistory = resolvedItems
+            .SelectMany(item => item.AnswerHistory ?? [])
+            .OrderBy(answer => answer.AnsweredAt)
+            .ThenBy(answer => answer.Id, StringComparer.Ordinal)
+            .ToArray();
+        if (!spec.ClarificationAnswerHistory.SequenceEqual(answerHistory))
+            changed = true;
 
         if (!changed)
             return spec;
 
-        var updated = spec with { Decisions = decisions, OpenQuestions = questions };
+        var updated = spec with
+        {
+            Decisions = decisions,
+            OpenQuestions = questions,
+            ClarificationAnswerHistory = answerHistory
+        };
         kernel.SetGoalRefinedSpec(goalId, updated);
         kernel.RecordGoalPolicyDecision(goalId, "Synced operator answers from resolved clarification items into the RefinedSpec.");
         return updated;

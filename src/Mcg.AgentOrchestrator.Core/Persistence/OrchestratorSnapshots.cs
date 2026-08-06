@@ -62,7 +62,8 @@ public sealed record RefinedSpecSnapshot(
     string VerificationClass,
     IReadOnlyList<RefinedSpecDecisionSnapshot> Decisions,
     IReadOnlyList<RefinedSpecOpenQuestionSnapshot> OpenQuestions,
-    IReadOnlyList<string>? OperatorOwnedAcceptanceCriteria = null);
+    IReadOnlyList<string>? OperatorOwnedAcceptanceCriteria = null,
+    IReadOnlyList<HumanInputAnswerRecord>? ClarificationAnswerHistory = null);
 
 public sealed record RefinedSpecDecisionSnapshot(string Question, string Choice, string Rationale);
 
@@ -227,7 +228,8 @@ public sealed record HumanInputRequestSnapshot(
     string? BlockerFingerprint = null,
     int SuppressionCount = 0,
     string? SupersededByRequestId = null,
-    IReadOnlyList<OperatorGateRecord>? OperatorGates = null);
+    IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
+    IReadOnlyList<HumanInputAnswerRecord>? AnswerHistory = null);
 
 public static class VerificationTextBounds
 {

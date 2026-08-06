@@ -84,6 +84,25 @@ public static HumanInputRequest ResolveHumanInputRequest(AgentOrchestratorKernel
     throw new KeyNotFoundException($"Human input request or goal '{idOrPrefix}' was not found.");
 }
 
+public static HumanInputRequest ResolveHumanInputRequest(
+    AgentOrchestratorKernel kernel,
+    GoalId goalId,
+    string idOrPrefix)
+{
+    var matches = kernel.HumanInputRequests
+        .Where(request =>
+            request.GoalId == goalId &&
+            request.Id.Value.StartsWith(idOrPrefix, StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+    return matches.Length switch
+    {
+        1 => matches[0],
+        0 => throw new KeyNotFoundException(
+            $"Human input request '{idOrPrefix}' was not found on goal '{goalId.Value}'."),
+        _ => throw BuildAmbiguousHumanInputException(idOrPrefix, matches)
+    };
+}
+
 public static (Goal Goal, string SourceRecordId) ResolveOperatorTaskNoteGateSource(
     AgentOrchestratorKernel kernel,
     string idOrPrefix)
