@@ -62,7 +62,8 @@ public sealed record RefinedSpecSnapshot(
     string VerificationClass,
     IReadOnlyList<RefinedSpecDecisionSnapshot> Decisions,
     IReadOnlyList<RefinedSpecOpenQuestionSnapshot> OpenQuestions,
-    IReadOnlyList<string>? OperatorOwnedAcceptanceCriteria = null);
+    IReadOnlyList<string>? OperatorOwnedAcceptanceCriteria = null,
+    IReadOnlyList<HumanInputAnswerRecord>? ClarificationAnswerHistory = null);
 
 public sealed record RefinedSpecDecisionSnapshot(string Question, string Choice, string Rationale);
 

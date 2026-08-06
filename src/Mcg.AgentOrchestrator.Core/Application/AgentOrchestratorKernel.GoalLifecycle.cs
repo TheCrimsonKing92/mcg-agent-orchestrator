@@ -1354,7 +1354,6 @@ public sealed partial class AgentOrchestratorKernel
             var allMatchingRequests = matchingRequests.Append(request).ToArray();
             var retractionTerms = allMatchingRequests
                 .Select(candidate => candidate.DerivedBlockerEvidence)
-                .Append(previousAnswer.Text)
                 .Where(term => !string.IsNullOrWhiteSpace(term))
                 .Select(term => NormalizeRetractionMatch(term!))
                 .Where(term => term.Length > 0)
@@ -1366,8 +1365,7 @@ public sealed partial class AgentOrchestratorKernel
                     retractionTerms.Any(term =>
                     {
                         var description = NormalizeRetractionMatch(finding.Description);
-                        return description.Contains(term, StringComparison.Ordinal) ||
-                            term.Contains(description, StringComparison.Ordinal);
+                        return description.Equals(term, StringComparison.Ordinal);
                     }))
                 .Select(finding => finding.StableId)
                 .Distinct(StringComparer.Ordinal)

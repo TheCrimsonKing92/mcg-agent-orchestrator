@@ -550,22 +550,61 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             return true;
 
         case "supersede":
-            const string supersedeUsage = "supersede <goal-id> <request-id> <answer> | supersede <goal-id> <request-id> --text-file <path>";
+            const string supersedeUsage = "supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
             CliArgumentParser.RequirePartCount(parts, 4, supersedeUsage);
             var supersedeGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
-            var supersedeRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(
-                context.Kernel,
-                supersedeGoal.Id,
-                parts[2]);
-            var authoritativeAnswer = context.Kernel.SupersedeHumanInput(
-                supersedeGoal.Id,
-                supersedeRequest.Id,
-                ResolveTextArgument(parts, inlineIndex: 3, supersedeUsage, "--text-file"),
-                HumanInputAnswerOrigin.Operator);
+            var supersedeText = ResolveTextArgument(parts, inlineIndex: 3, supersedeUsage, "--text-file");
+            var matchingHumanInputs = context.Kernel.HumanInputRequests
+                .Where(request =>
+                    request.GoalId == supersedeGoal.Id &&
+                    request.Id.Value.StartsWith(parts[2], StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            string authoritativeText;
+            string supersededId;
+            if (matchingHumanInputs.Length > 0)
+            {
+                var supersedeRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(
+                    context.Kernel,
+                    supersedeGoal.Id,
+                    parts[2]);
+                var authoritativeAnswer = context.Kernel.SupersedeHumanInput(
+                    supersedeGoal.Id,
+                    supersedeRequest.Id,
+                    supersedeText,
+                    HumanInputAnswerOrigin.Operator);
+                authoritativeText = authoritativeAnswer.Text;
+                supersededId = supersedeRequest.Id.Value[..8];
+            }
+            else
+            {
+                var store = CollaborationItemStore.ForDirectory(context.Workspace.OrchestratorDirectory);
+                var identityUniverse = AllClarifications(store);
+                var clarification = ResolveClarificationByShortId(
+                    AllClarificationsForGoal(store, supersedeGoal),
+                    identityUniverse
+                        .Where(item => string.Equals(item.GoalId, supersedeGoal.Id.Value, StringComparison.OrdinalIgnoreCase))
+                        .ToArray(),
+                    parts[2],
+                    $"Clarification id '{parts[2]}' was not found on goal '{supersedeGoal.Id.Value}'.",
+                    $"Id '{parts[2]}' is ambiguous ({{0}} matches); copy a full id from `attention show {supersedeGoal.Id.Value[..8]} --all` or use a full correlation key.");
+                var updated = store.SupersedeClarificationAsync(
+                    supersedeGoal.Id.Value,
+                    clarification.Id,
+                    supersedeText,
+                    HumanInputAnswerOrigin.Operator).GetAwaiter().GetResult();
+                var refinementService = new GoalRefinementService(
+                    context.Providers,
+                    ModelFunctionCatalog.Empty,
+                    store,
+                    new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
+                refinementService.SyncAnsweredClarifications(context.Kernel, supersedeGoal.Id);
+                authoritativeText = updated.AuthoritativeAnswer?.Text ?? updated.Resolution!;
+                supersededId = ClarificationId(updated, identityUniverse);
+            }
             context.CurrentGoal = supersedeGoal;
             Console.WriteLine(
-                $"Superseded clarification {supersedeRequest.Id.Value[..8]}. " +
-                $"Authoritative answer: {authoritativeAnswer.Text}");
+                $"Superseded clarification {supersededId}. " +
+                $"Authoritative answer: {authoritativeText}");
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 

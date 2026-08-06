@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Core;
 
@@ -46,6 +47,7 @@ public sealed partial class AgentOrchestratorKernel
     {
         IReadOnlyList<ReviewFinding> state = [];
         List<string>? skipped = null;
+        var latestFindingOccurrences = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         foreach (var verification in goal.Tasks
             .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
             .SelectMany(candidate => candidate.VerificationHistory)
@@ -71,7 +73,11 @@ public sealed partial class AgentOrchestratorKernel
             try
             {
                 state = ReviewFindingConvergence.ApplyRound(state, round);
-                state = ApplyHumanInputSupersedeFindingResolutions(goal, state);
+                foreach (var finding in round.Findings)
+                {
+                    latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
+                }
+                state = ApplyHumanInputSupersedeFindingResolutions(goal, state, latestFindingOccurrences);
             }
             catch (ReviewFindingConvergenceException error)
             {
@@ -122,6 +128,7 @@ public sealed partial class AgentOrchestratorKernel
         var resolvedInput = HumanInputRequests
             .Where(request =>
                 request.GoalId == goalId &&
+                (request.TaskId == taskId || request.TaskId is null) &&
                 request.IsCompleted &&
                 !request.WasDismissed &&
                 !request.IsSyntheticParkedHumanWaitCompletion &&
@@ -475,7 +482,8 @@ public sealed partial class AgentOrchestratorKernel
         var lines = ApplyTaskBriefBudget(segments, task.RequiredRole, usesFileAccessContext);
         var content = ApplyHumanInputRetractions(
             string.Join(Environment.NewLine, lines),
-            HumanInputRequests.Where(request => request.GoalId == goalId).ToArray());
+            HumanInputRequests.Where(request => request.GoalId == goalId).ToArray(),
+            goal.RefinedSpec?.ClarificationAnswerHistory ?? []);
 
         return new TaskBrief(
             goal.Id,
@@ -487,10 +495,14 @@ public sealed partial class AgentOrchestratorKernel
 
     private static string ApplyHumanInputRetractions(
         string content,
-        IReadOnlyList<HumanInputRequest> requests)
+        IReadOnlyList<HumanInputRequest> requests,
+        IReadOnlyList<HumanInputAnswerRecord> clarificationAnswerHistory)
     {
         var authoritativeTexts = requests
             .Select(request => request.AuthoritativeAnswer?.Text)
+            .Concat(clarificationAnswerHistory
+                .Where(answer => !answer.IsRetracted)
+                .Select(answer => answer.Text))
             .Where(text => !string.IsNullOrWhiteSpace(text))
             .Select(text => text!)
             .Distinct(StringComparer.Ordinal)
@@ -502,6 +514,7 @@ public sealed partial class AgentOrchestratorKernel
             .ToHashSet();
         var retractedTexts = requests
             .SelectMany(request => request.AnswerHistory)
+            .Concat(clarificationAnswerHistory)
             .Where(answer => answer.IsRetracted)
             .Select(answer => answer.Text)
             .Concat(requests
@@ -521,52 +534,49 @@ public sealed partial class AgentOrchestratorKernel
             return content;
         }
 
-        var rendered = content;
-        var placeholders = authoritativeTexts
-            .Select((text, index) => (Text: text, Token: $"\u001aAUTHORITATIVE_ANSWER_{index}\u001a"))
+        var alternatives = authoritativeTexts
+            .Select(text => (Text: text, IsRetracted: false))
+            .Concat(retractedTexts.Select(text => (Text: text, IsRetracted: true)))
+            .OrderByDescending(candidate => candidate.Text.Length)
+            .ThenBy(candidate => candidate.IsRetracted)
             .ToArray();
-        foreach (var placeholder in placeholders)
-        {
-            rendered = rendered.Replace(placeholder.Text, placeholder.Token, StringComparison.Ordinal);
-        }
-
-        foreach (var retractedText in retractedTexts)
-        {
-            rendered = rendered.Replace(
-                retractedText,
-                "[retracted operator answer omitted]",
-                StringComparison.Ordinal);
-        }
-
-        foreach (var placeholder in placeholders)
-        {
-            rendered = rendered.Replace(placeholder.Token, placeholder.Text, StringComparison.Ordinal);
-        }
-
-        return rendered;
+        var retractedSet = retractedTexts.ToHashSet(StringComparer.Ordinal);
+        var pattern = $@"(?<![\p{{L}}\p{{N}}])(?:{string.Join('|', alternatives.Select(candidate => Regex.Escape(candidate.Text)))})(?![\p{{L}}\p{{N}}])";
+        return Regex.Replace(
+            content,
+            pattern,
+            match => retractedSet.Contains(match.Value) ? string.Empty : match.Value,
+            RegexOptions.CultureInvariant);
     }
 
     private static IReadOnlyList<ReviewFinding> ApplyHumanInputSupersedeFindingResolutions(
         Goal goal,
-        IReadOnlyList<ReviewFinding> findings)
+        IReadOnlyList<ReviewFinding> findings,
+        IReadOnlyDictionary<string, DateTimeOffset> latestFindingOccurrences)
     {
         const string marker = "resolvedStableIds=";
         var resolvedIds = goal.Timeline
             .Where(evt => evt.Kind == ProgressKind.HumanInputSuperseded)
-            .Select(evt =>
+            .SelectMany(evt =>
             {
                 var start = evt.Message.IndexOf(marker, StringComparison.Ordinal);
                 if (start < 0)
                 {
-                    return string.Empty;
+                    return [];
                 }
 
                 start += marker.Length;
                 var end = evt.Message.IndexOf(' ', start);
-                return end < 0 ? evt.Message[start..] : evt.Message[start..end];
+                var value = end < 0 ? evt.Message[start..] : evt.Message[start..end];
+                return value.Equals("none", StringComparison.Ordinal)
+                    ? []
+                    : value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Select(stableId => (StableId: stableId, evt.OccurredAt));
             })
-            .Where(value => !string.IsNullOrWhiteSpace(value) && !value.Equals("none", StringComparison.Ordinal))
-            .SelectMany(value => value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Where(resolution =>
+                !latestFindingOccurrences.TryGetValue(resolution.StableId, out var latestOccurrence) ||
+                resolution.OccurredAt >= latestOccurrence)
+            .Select(resolution => resolution.StableId)
             .ToHashSet(StringComparer.Ordinal);
         return resolvedIds.Count == 0
             ? findings

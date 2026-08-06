@@ -59,7 +59,7 @@ public sealed class HumanInputSupersedeTests
             [planner, developer]);
         var request = kernel.RequestHumanInput(
             goal.Id,
-            planner.Id,
+            null,
             $"Which floor?{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {derivedBlocker}");
         kernel.SubmitHumanInput(request.Id, "recheck floor = 1 second");
         kernel.SupersedeHumanInput(
@@ -73,7 +73,35 @@ public sealed class HumanInputSupersedeTests
         Assert.Contains("recheck floor = 5 seconds", brief, StringComparison.Ordinal);
         Assert.DoesNotContain("recheck floor = 1 second", brief, StringComparison.Ordinal);
         Assert.DoesNotContain(derivedBlocker, brief, StringComparison.Ordinal);
-        Assert.Contains("[retracted operator answer omitted]", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void BuildTaskBrief_RedactsContainingAnswer_WithoutCorruptingShortSubstrings()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var task = new TaskSpec(TaskId.New(), "Use 5 seconds; Notice remains visible.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Prior operator answers: Use 5 seconds and No. Notice remains visible.", [task]);
+        var containing = kernel.RequestHumanInput(goal.Id, null, "Which duration?");
+        kernel.SubmitHumanInput(containing.Id, "Use 5 seconds");
+        kernel.SupersedeHumanInput(
+            goal.Id,
+            containing.Id,
+            "5 seconds",
+            HumanInputAnswerOrigin.Operator);
+        var shortAnswer = kernel.RequestHumanInput(goal.Id, null, "Should the notice be removed?");
+        kernel.SubmitHumanInput(shortAnswer.Id, "No");
+        kernel.SupersedeHumanInput(
+            goal.Id,
+            shortAnswer.Id,
+            "Keep it",
+            HumanInputAnswerOrigin.Operator);
+
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+        Assert.Contains("5 seconds", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("Use 5 seconds", brief, StringComparison.Ordinal);
+        Assert.Contains("Notice remains visible", brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("Prior answer: No", brief, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -110,6 +138,39 @@ public sealed class HumanInputSupersedeTests
         Assert.Equal("legacy answer", legacyAnswer.Text);
         Assert.False(legacyAnswer.IsRetracted);
         Assert.Equal(legacyAnswer, legacy.AuthoritativeAnswer);
+    }
+
+    [Xunit.Fact]
+    public void Supersede_ResolvesOnlyExactDerivedFinding_AndAllowsLaterReopen()
+    {
+        const string derivedBlocker = "exact-blocker - conflicting 1s/5s floor requires clarification";
+        const string unrelated = "The 1 second timeout remains an unrelated implementation defect.";
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Review correction propagation.", [reviewer]);
+        var request = kernel.RequestHumanInput(
+            goal.Id,
+            null,
+            $"Which floor?{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {derivedBlocker}");
+        kernel.SubmitHumanInput(request.Id, "1 second");
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
+            clock.UtcNow,
+            $$"""[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{derivedBlocker}}"},{"stable_id":"unrelated","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"{{unrelated}}"}]"""));
+
+        clock.Advance();
+        kernel.SupersedeHumanInput(goal.Id, request.Id, "5 seconds", HumanInputAnswerOrigin.Operator);
+
+        var afterSupersede = kernel.GetReviewFindingState(goal.Id);
+        Assert.DoesNotContain(afterSupersede, finding => finding.StableId == "derived");
+        Assert.Contains(afterSupersede, finding => finding.StableId == "unrelated");
+
+        clock.Advance();
+        kernel.RecordTaskVerification(goal.Id, reviewer.Id, ReviewVerification(
+            clock.UtcNow,
+            $$"""[{"stable_id":"derived","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"{{derivedBlocker}}"},{"stable_id":"unrelated","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"{{unrelated}}"}]"""));
+
+        Assert.Contains(kernel.GetReviewFindingState(goal.Id), finding => finding.StableId == "derived");
     }
 
     [Xunit.Fact]
@@ -160,6 +221,21 @@ public sealed class HumanInputSupersedeTests
         Assert.Contains("distinctTasks=2", signal.Message, StringComparison.Ordinal);
         Assert.Contains("totalOccurrences=3", signal.Message, StringComparison.Ordinal);
         Assert.Contains(first.Request.Id.Value, signal.Message, StringComparison.Ordinal);
-        Assert.Equal(AgentOrchestratorKernel.DuplicateHumanInputDistinctTaskThreshold, 2);
+        Assert.Equal(2, AgentOrchestratorKernel.DuplicateHumanInputDistinctTaskThreshold);
     }
+
+    private static TaskVerificationRecord ReviewVerification(DateTimeOffset completedAt, string findings) =>
+        new(
+            "review",
+            "C:\\repo",
+            1,
+            $"""
+            WORKER_RESULT:
+            findings: {findings}
+            touched_anchors: []
+            verdict: needs-work
+            END_WORKER_RESULT
+            """,
+            string.Empty,
+            completedAt);
 }

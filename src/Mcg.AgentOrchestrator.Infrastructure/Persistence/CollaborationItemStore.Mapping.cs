@@ -34,18 +34,36 @@ public sealed partial class CollaborationItemStore
         JsonSerializer.Deserialize<T>(json, JsonOptions)
         ?? throw new InvalidOperationException("Failed to deserialize collaboration decision payload.");
 
-    private static CollaborationItem ReadItem(SqliteDataReader reader) =>
-        new(
-            reader.GetString(0),
+    private static CollaborationItem ReadItem(SqliteDataReader reader)
+    {
+        var id = reader.GetString(0);
+        var raisedAt = DateTimeOffset.Parse(reader.GetString(7));
+        DateTimeOffset? resolvedAt = reader.IsDBNull(8) ? null : DateTimeOffset.Parse(reader.GetString(8));
+        var resolution = reader.IsDBNull(9) ? null : reader.GetString(9);
+        var answerHistory = reader.IsDBNull(10)
+            ? LegacyAnswerHistory(id, resolution, resolvedAt ?? raisedAt)
+            : Deserialize<IReadOnlyList<HumanInputAnswerRecord>>(reader.GetString(10));
+        return new CollaborationItem(
+            id,
             Enum.Parse<CollaborationItemType>(reader.GetString(1)),
             reader.IsDBNull(2) ? null : reader.GetString(2),
             Enum.Parse<CollaborationItemStatus>(reader.GetString(3)),
             reader.GetString(4),
             reader.GetString(5),
             reader.IsDBNull(6) ? null : reader.GetString(6),
-            DateTimeOffset.Parse(reader.GetString(7)),
-            reader.IsDBNull(8) ? null : DateTimeOffset.Parse(reader.GetString(8)),
-            reader.IsDBNull(9) ? null : reader.GetString(9));
+            raisedAt,
+            resolvedAt,
+            resolution,
+            answerHistory);
+    }
+
+    private static IReadOnlyList<HumanInputAnswerRecord> LegacyAnswerHistory(
+        string itemId,
+        string? resolution,
+        DateTimeOffset answeredAt) =>
+        string.IsNullOrWhiteSpace(resolution)
+            ? []
+            : [new HumanInputAnswerRecord($"legacy:{itemId}", resolution, answeredAt)];
 
     private static CollaborationBoundAction ReadAction(SqliteDataReader reader) =>
         new(
