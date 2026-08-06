@@ -195,6 +195,14 @@ internal sealed class WorkerGitContext
             "--name-only",
             baseReference,
             headReference);
+        if (!mergeTreeResult.ProcessStarted)
+        {
+            throw new ReviewerMergeTreeStatusException(
+                ReviewerMergeTreeUnavailableErrorCode,
+                "Reviewer merge-tree status unavailable because git could not start.",
+                mergeTreeResult.Error,
+                gitProcessStarted: false);
+        }
         if (mergeTreeResult.ExitCode == 0)
         {
             return new ReviewerMergeTreeStatus(IsClean: true, [], 0);
@@ -605,13 +613,19 @@ internal sealed class ReviewerChangedFileScopeException : InvalidOperationExcept
 
 internal sealed class ReviewerMergeTreeStatusException : InvalidOperationException
 {
-    public ReviewerMergeTreeStatusException(string errorCode, string message, string? detail = null)
+    public ReviewerMergeTreeStatusException(
+        string errorCode,
+        string message,
+        string? detail = null,
+        bool gitProcessStarted = true)
         : base(string.IsNullOrWhiteSpace(detail) ? message : $"{message} {detail.Trim()}")
     {
         ErrorCode = errorCode;
+        GitProcessStarted = gitProcessStarted;
     }
 
     public string ErrorCode { get; }
+    public bool GitProcessStarted { get; }
 }
 
 internal sealed class ReviewerRoundTouchScopeException : InvalidOperationException

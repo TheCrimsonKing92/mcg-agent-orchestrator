@@ -13,6 +13,7 @@ public sealed class GitCliTests
             var result = GitCli.Run(repo, "rev-parse", "HEAD");
 
             Assert.True(result.Succeeded);
+            Assert.True(result.ProcessStarted);
             Assert.Equal(0, result.ExitCode);
             Assert.False(string.IsNullOrWhiteSpace(result.Output));
         }
@@ -31,6 +32,7 @@ public sealed class GitCliTests
             var result = GitCli.Run(repo, "rev-parse", "--verify", "refs/heads/branch-that-does-not-exist");
 
             Assert.False(result.Succeeded);
+            Assert.True(result.ProcessStarted);
             Assert.True(result.ExitCode != 0);
         }
         finally

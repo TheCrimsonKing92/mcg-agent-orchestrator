@@ -54,6 +54,7 @@ internal sealed class ConductorBatchLoop
     private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
     private readonly TimeSpan _blockedRecheckHeartbeatInterval;
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
+    private static readonly AsyncLocal<RetryDiagnosticCoalescer?> CurrentRetryDiagnostics = new();
     private static readonly object ParallelAcceptanceFairnessGate = new();
     private static string? s_parallelAcceptanceOldestWaiter;
     private static int s_parallelAcceptanceConsecutiveOvertakes;
@@ -134,11 +135,13 @@ internal sealed class ConductorBatchLoop
         string? journalMode = null)
     {
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
+        var previousRetryDiagnostics = CurrentRetryDiagnostics.Value;
         var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
         var previousLandingMutationBlocker = driver.LandingMutationBlocker;
         var canaryTasks = new List<Task<PostLandingCanaryDisposition>>();
         var canaryTasksGate = new object();
         CurrentConductEventLogWriter.Value = _conductEventLogWriter;
+        CurrentRetryDiagnostics.Value = new RetryDiagnosticCoalescer(_utcNow);
         var totalTicks = 0;
         var blockedRecheckCycles = 0;
         var totalBlockedRechecks = 0;
@@ -179,6 +182,7 @@ internal sealed class ConductorBatchLoop
         var lastGoalDisposition = new Dictionary<string, string>(StringComparer.Ordinal);
         var unscopedDispatchableTicks = new Dictionary<string, int>(StringComparer.Ordinal);
         var goalProjectionCache = new GoalProjectionCache();
+        var clampedRechecks = new HashSet<RetryDiagnosticKey>();
         var totalAdvanced = 0;
         var totalHeld = 0;
         var totalEscalated = 0;
@@ -687,11 +691,31 @@ internal sealed class ConductorBatchLoop
                     }
 
                     var configuredInterval = watchInterval ?? TimeSpan.FromSeconds(DefaultWatchIntervalSeconds);
-                    var idleInterval = GetWatchFallbackInterval(kernel, onlyGoalId, configuredInterval);
-                    if (recheckableBlockedGoals == 0)
+                    var computedIdleInterval = GetWatchFallbackInterval(kernel, onlyGoalId, configuredInterval);
+                    var idleInterval = recheckableBlockedGoals > 0
+                        ? RetryLoopPolicy.ClampInterval(
+                            computedIdleInterval,
+                            TimeSpan.FromSeconds(WatchStopPollIntervalSeconds))
+                        : computedIdleInterval;
+                    if (recheckableBlockedGoals > 0 && idleInterval != computedIdleInterval)
                     {
-                        EmitProgress($"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
+                        foreach (var entry in setAsideGoals.Values)
+                        {
+                            var key = new RetryDiagnosticKey(
+                                "BLOCKED_RECHECK_INTERVAL_CLAMPED",
+                                ShortGoalId(entry.GoalId),
+                                entry.Condition.ToString().ToLowerInvariant());
+                            if (clampedRechecks.Add(key))
+                            {
+                                EmitProgress(
+                                    $"BLOCKED_RECHECK_INTERVAL_CLAMPED goal={key.Goal} condition={key.Condition} computedSeconds={computedIdleInterval.TotalSeconds:0.###} floorSeconds={WatchStopPollIntervalSeconds}");
+                            }
+                        }
                     }
+                    EmitProgress(
+                        recheckableBlockedGoals > 0
+                            ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals} seconds={(int)idleInterval.TotalSeconds}"
+                            : $"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
                         : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
@@ -1236,6 +1260,9 @@ internal sealed class ConductorBatchLoop
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.LandingMutationBlocker = previousLandingMutationBlocker;
+            foreach (var line in CurrentRetryDiagnostics.Value?.CompleteAll() ?? [])
+                EmitProgress(line);
+            CurrentRetryDiagnostics.Value = previousRetryDiagnostics;
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
         }
     }
@@ -1537,7 +1564,8 @@ internal sealed class ConductorBatchLoop
         string goals,
         string kind,
         List<string>? tickLines,
-        Action<TimeSpan>? busyWriteDelay)
+        Action<TimeSpan>? busyWriteDelay,
+        int? diagnosticAttempt = null)
     {
         if (persistTick is null)
         {
@@ -1550,7 +1578,8 @@ internal sealed class ConductorBatchLoop
             goals,
             kind,
             tickLines,
-            busyWriteDelay);
+            busyWriteDelay,
+            diagnosticAttempt);
     }
 
     private static bool TryPersistCheckpoint(
@@ -1561,7 +1590,8 @@ internal sealed class ConductorBatchLoop
         string? onlyGoalId,
         string kind,
         List<string>? tickLines,
-        Action<TimeSpan>? busyWriteDelay)
+        Action<TimeSpan>? busyWriteDelay,
+        int? diagnosticAttempt = null)
     {
         if (persistGoalTick is null)
         {
@@ -1572,7 +1602,8 @@ internal sealed class ConductorBatchLoop
                 ResolveGoalContext(kernel, onlyGoalId),
                 kind,
                 tickLines,
-                busyWriteDelay);
+                busyWriteDelay,
+                diagnosticAttempt);
         }
 
         var goalIds = ResolveCheckpointGoalIds(kernel, onlyGoalId);
@@ -1587,7 +1618,8 @@ internal sealed class ConductorBatchLoop
             ResolveGoalContext(goalIds, onlyGoalId),
             kind,
             tickLines,
-            busyWriteDelay);
+            busyWriteDelay,
+            diagnosticAttempt);
     }
 
     private static void PersistGracefulDetachCheckpoint(
@@ -1600,7 +1632,6 @@ internal sealed class ConductorBatchLoop
         List<string>? tickLines,
         Action<TimeSpan>? busyWriteDelay)
     {
-        var delay = TimeSpan.FromMilliseconds(50);
         for (var attempt = 1; attempt <= DefaultGracefulDetachCheckpointAttempts; attempt++)
         {
             if (TryPersistCheckpoint(
@@ -1611,7 +1642,8 @@ internal sealed class ConductorBatchLoop
                     onlyGoalId,
                     kind,
                     tickLines,
-                    busyWriteDelay))
+                    busyWriteDelay,
+                    attempt))
             {
                 return;
             }
@@ -1624,14 +1656,18 @@ internal sealed class ConductorBatchLoop
                 return;
             }
 
-            EmitProgress(
-                $"TICK_WRITE_RETRYING tick={tick} kind={kind} goal={ResolveGoalContext(kernel, onlyGoalId)} attempt={attempt} reason=graceful-detach-checkpoint-required",
+            var goalContext = ResolveGoalContext(kernel, onlyGoalId);
+            EmitRetryDiagnostic(
+                "TICK_WRITE_RETRYING",
+                goalContext,
+                kind,
+                $"TICK_WRITE_RETRYING tick={tick} kind={kind} goal={goalContext} attempt={attempt} reason=graceful-detach-checkpoint-required",
                 tickLines);
+            var delay = RetryLoopPolicy.GetWriteDelay(attempt, Random.Shared.NextDouble());
             if (busyWriteDelay is null)
                 Thread.Sleep(delay);
             else
                 busyWriteDelay(delay);
-            delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 1000));
         }
     }
 
@@ -1649,7 +1685,8 @@ internal sealed class ConductorBatchLoop
         string goals,
         string kind,
         List<string>? tickLines,
-        Action<TimeSpan>? busyWriteDelay)
+        Action<TimeSpan>? busyWriteDelay,
+        int? diagnosticAttempt = null)
     {
         var delay = TimeSpan.FromMilliseconds(50);
         for (var attempt = 1; attempt <= DefaultMaxBusyWriteAttempts; attempt++)
@@ -1661,14 +1698,21 @@ internal sealed class ConductorBatchLoop
             }
             catch (Exception ex) when (IsTransientSqliteLock(ex))
             {
-                EmitProgress(
-                    $"TICK_WRITE_BUSY tick={tick} kind={kind} goal={goals} attempt={attempt} likelyHolder=concurrent-per-command-host",
+                var reportedAttempt = diagnosticAttempt ?? attempt;
+                EmitRetryDiagnostic(
+                    "TICK_WRITE_BUSY",
+                    goals,
+                    kind,
+                    $"TICK_WRITE_BUSY tick={tick} kind={kind} goal={goals} attempt={reportedAttempt} likelyHolder=concurrent-per-command-host",
                     tickLines);
 
                 if (attempt == DefaultMaxBusyWriteAttempts)
                 {
-                    EmitProgress(
-                        $"TICK_WRITE_DEGRADED tick={tick} kind={kind} goal={goals} attempt={attempt} likelyHolder=concurrent-per-command-host error={Sanitize(ex.Message)}",
+                    EmitRetryDiagnostic(
+                        "TICK_WRITE_DEGRADED",
+                        goals,
+                        kind,
+                        $"TICK_WRITE_DEGRADED tick={tick} kind={kind} goal={goals} attempt={reportedAttempt} likelyHolder=concurrent-per-command-host error={Sanitize(ex.Message)}",
                         tickLines);
                     return false;
                 }
@@ -3006,8 +3050,23 @@ internal sealed class ConductorBatchLoop
                     kernel.RecordGoalPolicyDecision(
                         goal.Id,
                         $"Landing escalation recheck failed; goal remains set aside: {failureObservation}");
-                    EmitProgress(
+                    EmitRetryDiagnostic(
+                        "ESCALATION_RECHECK_FAILED",
+                        entry.GoalId[..8],
+                        "pre-landing_rebase_conflict",
                         $"ESCALATION_RECHECK_FAILED goal={entry.GoalId[..8]} condition=pre-landing_rebase_conflict observation={failureObservation}");
+                    continue;
+                }
+
+                if (recheck.TerminalUnsatisfiable)
+                {
+                    var terminalObservation = Sanitize(recheck.Observation);
+                    kernel.RecordGoalPolicyDecision(
+                        goal.Id,
+                        $"Landing escalation recheck is terminal-unsatisfiable for this invocation: {terminalObservation}");
+                    EmitProgress(
+                        $"ESCALATION_RECHECK_UNSATISFIABLE goal={entry.GoalId[..8]} condition=pre-landing_rebase_conflict reason=git_merge-tree_could_not_start observation={terminalObservation}");
+                    setAsideGoals.Remove(entry.GoalId);
                     continue;
                 }
 
@@ -3538,6 +3597,20 @@ internal sealed class ConductorBatchLoop
         ConductorAdvanceOutcome.Done d      => $"done ({d.State})",
         _                                   => outcome.ToString()!
     };
+
+    private static void EmitRetryDiagnostic(
+        string eventName,
+        string goal,
+        string condition,
+        string verbatim,
+        List<string>? tickLines = null)
+    {
+        var line = CurrentRetryDiagnostics.Value is { } diagnostics
+            ? diagnostics.Observe(new RetryDiagnosticKey(eventName, goal, condition), verbatim)
+            : verbatim;
+        if (line is not null)
+            EmitProgress(line, tickLines);
+    }
 }
 
 internal enum BatchSetAsideCondition

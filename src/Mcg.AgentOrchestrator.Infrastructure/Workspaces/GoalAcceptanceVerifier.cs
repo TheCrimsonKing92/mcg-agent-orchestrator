@@ -190,6 +190,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static TimeSpan TransientNoHolderBuildLockWaitWindow { get; set; } = TimeSpan.FromSeconds(75);
     internal static TimeSpan TransientNoHolderBuildLockPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
     internal static int TransientNoHolderBuildLockMaxRetryCycles { get; set; } = 2;
+    private static readonly TimeSpan CaptureDrainTimeout = TimeSpan.FromSeconds(12);
+    private const int CappedOutputPreviewBytes = 64 * 1024;
     internal static Func<string, string?>? ResolveBaseBuildMainShaForTests { get; set; }
     internal static Func<string, string?>? ResolvePartitionVerdictCandidateTreeShaForTests { get; set; }
     internal static Func<string, string?>? ResolvePartitionVerdictMainShaForTests { get; set; }
@@ -6127,13 +6129,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
-        // Capture output to FILES via the platform shell, not pipes. A test or build can spawn a
-        // grandchild that inherits the child's stdout/stderr handle and outlives it; with a
-        // redirected PIPE the test runner never reaches EOF while that grandchild holds the write
-        // end, so `dotnet test` never exits and the whole command rides the configured timeout to a
-        // "A task was canceled". A plain `dotnet test > out 2> err` exits cleanly in that same
-        // scenario, so we mirror it: every process exits regardless of a lingering grandchild and
-        // we read the files afterward with a shared, delete-tolerant handle.
+        // Drain redirected streams concurrently into capped files. The drain remains active after
+        // the persisted head reaches its limit, preventing the child from blocking on a full pipe.
+        // Completion is bounded because a detached grandchild can inherit the pipe handle.
         var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.out");
         var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.err");
 
@@ -6148,23 +6146,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var keepOutputFiles = false;
         var startInfo = new ProcessStartInfo
         {
+            FileName = arguments[0],
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
-
-        if (OperatingSystem.IsWindows())
-        {
-            startInfo.FileName = "cmd.exe";
-            // cmd /c strips one surrounding quote pair, so wrap the whole redirected command once.
-            startInfo.Arguments = $"/c \"{BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForCmd)}\"";
-        }
-        else
-        {
-            startInfo.FileName = "/bin/sh";
-            startInfo.ArgumentList.Add("-c");
-            startInfo.ArgumentList.Add(BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForPosix));
-        }
+        foreach (var argument in arguments.Skip(1))
+            startInfo.ArgumentList.Add(argument);
 
         ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
 
@@ -6173,6 +6163,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             using var process = StartAcceptanceProcess(startInfo, workingDirectory);
             startedProcessId = process.Id;
+            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var stdoutDrain = DrainCapturedOutputAsync(
+                process.StandardOutput.BaseStream,
+                stdoutPath,
+                EngineSettings.OutputCaptureLimitBytes,
+                drainCts.Token);
+            var stderrDrain = DrainCapturedOutputAsync(
+                process.StandardError.BaseStream,
+                stderrPath,
+                EngineSettings.OutputCaptureLimitBytes,
+                drainCts.Token);
             if (heartbeatContext is not null)
             {
                 heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -6202,8 +6203,36 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 timedOut = true;
             }
 
-            var stdout = await ReadFileWithRetryAsync(stdoutPath).ConfigureAwait(false);
-            var stderr = await ReadFileWithRetryAsync(stderrPath).ConfigureAwait(false);
+            var allDrains = Task.WhenAll(stdoutDrain, stderrDrain);
+            if (await Task.WhenAny(allDrains, Task.Delay(CaptureDrainTimeout, CancellationToken.None)).ConfigureAwait(false) != allDrains)
+            {
+                await drainCts.CancelAsync().ConfigureAwait(false);
+                try { WorkerProcessJobs.TryKillOrFallback(process.Id, out killedAccounting); } catch { }
+            }
+
+            CaptureDrainResult[] captureResults;
+            try
+            {
+                captureResults = await allDrains.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                captureResults =
+                [
+                    new CaptureDrainResult(stdoutPath, TryGetFileLength(stdoutPath), LimitReached: false),
+                    new CaptureDrainResult(stderrPath, TryGetFileLength(stderrPath), LimitReached: false)
+                ];
+            }
+
+            foreach (var capture in captureResults.Where(result => result.LimitReached))
+                EmitCaptureLimitReached(heartbeatContext, capture.Path, EngineSettings.OutputCaptureLimitBytes);
+
+            var stdout = await ReadFileWithRetryAsync(
+                stdoutPath,
+                captureResults[0].LimitReached ? CappedOutputPreviewBytes : null).ConfigureAwait(false);
+            var stderr = await ReadFileWithRetryAsync(
+                stderrPath,
+                captureResults[1].LimitReached ? CappedOutputPreviewBytes : null).ConfigureAwait(false);
             var stdoutBytes = TryGetFileLength(stdoutPath);
             var stderrBytes = TryGetFileLength(stderrPath);
             elapsed.Stop();
@@ -6376,7 +6405,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string QuoteForPosix(string value) =>
         $"'{value.Replace("'", "'\\''", StringComparison.Ordinal)}'";
 
-    internal static async Task<string> ReadFileWithRetryAsync(string path)
+    internal static async Task<string> ReadFileWithRetryAsync(string path, int? maximumBytes = null)
     {
         // A reparented grandchild may still hold the file's write handle; open shared and tolerate
         // transient locks. The output we need (the child's own writes) is already flushed on exit.
@@ -6387,7 +6416,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 using var stream = new FileStream(
                     path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                 using var buffer = new MemoryStream();
-                await stream.CopyToAsync(buffer).ConfigureAwait(false);
+                if (maximumBytes is { } limit && stream.Length > limit)
+                {
+                    var headBytes = Math.Max(1, limit * 3 / 4);
+                    var tailBytes = Math.Max(1, limit - headBytes);
+                    await CopyAtMostAsync(stream, buffer, headBytes).ConfigureAwait(false);
+                    stream.Seek(-Math.Min(tailBytes, stream.Length), SeekOrigin.End);
+                    await CopyAtMostAsync(stream, buffer, tailBytes).ConfigureAwait(false);
+                }
+                else
+                {
+                    await stream.CopyToAsync(buffer).ConfigureAwait(false);
+                }
                 return DecodeCapturedOutput(buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)));
             }
             catch (FileNotFoundException)
@@ -6401,6 +6441,77 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         return string.Empty;
+    }
+
+    internal static async Task<CaptureDrainResult> DrainCapturedOutputAsync(
+        Stream source,
+        string path,
+        long limitBytes,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[64 * 1024];
+        await using var destination = new FileStream(
+            path, FileMode.Create, FileAccess.Write, FileShare.Read | FileShare.Delete, buffer.Length, useAsync: true);
+        long written = 0;
+        var limitReached = false;
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                break;
+
+            if (!limitReached)
+            {
+                var remaining = limitBytes - written;
+                if (remaining > 0)
+                {
+                    var persist = (int)Math.Min(read, remaining);
+                    await destination.WriteAsync(buffer.AsMemory(0, persist), cancellationToken).ConfigureAwait(false);
+                    written += persist;
+                }
+
+                if (written >= limitBytes || read > remaining)
+                {
+                    limitReached = true;
+                    var terminator = Encoding.UTF8.GetBytes(
+                        $"\n[ACCEPTANCE_CAPTURE_LIMIT_REACHED cap_bytes={limitBytes} written_bytes={written} timestamp={DateTimeOffset.UtcNow:O}]\n");
+                    var reserved = Math.Min(terminator.Length, checked((int)Math.Min(limitBytes, int.MaxValue)));
+                    destination.SetLength(Math.Max(0, limitBytes - reserved));
+                    destination.Position = destination.Length;
+                    await destination.WriteAsync(terminator.AsMemory(terminator.Length - reserved, reserved), cancellationToken).ConfigureAwait(false);
+                    written = destination.Length;
+                }
+            }
+        }
+
+        await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+        return new CaptureDrainResult(path, written, limitReached);
+    }
+
+    private static async Task CopyAtMostAsync(Stream source, Stream destination, int maximumBytes)
+    {
+        var buffer = new byte[Math.Min(16 * 1024, maximumBytes)];
+        var remaining = maximumBytes;
+        while (remaining > 0)
+        {
+            var read = await source.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining))).ConfigureAwait(false);
+            if (read == 0)
+                break;
+            await destination.WriteAsync(buffer.AsMemory(0, read)).ConfigureAwait(false);
+            remaining -= read;
+        }
+    }
+
+    private static void EmitCaptureLimitReached(
+        GateHeartbeatContext? context,
+        string path,
+        long capBytes)
+    {
+        var runId = Path.GetFileName(
+            CurrentAcceptanceAttemptPrefix.Value ?? Path.GetFileNameWithoutExtension(path));
+        Console.WriteLine(
+            $"ACCEPTANCE_CAPTURE_LIMIT_REACHED goal={FormatNullableToken(context?.GoalId, 8)} run={QuoteProgressToken(runId)} path={QuoteProgressToken(path)} cap_bytes={capBytes}");
+        Console.Out.Flush();
     }
 
     internal static string DecodeCapturedOutput(ReadOnlySpan<byte> bytes)
@@ -6764,6 +6875,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool ContributesToCheck);
 
     private readonly record struct TransientBuildLockWaitResult(long WaitedMilliseconds, bool Released);
+
+    internal readonly record struct CaptureDrainResult(string Path, long WrittenBytes, bool LimitReached);
 
     private sealed record GateHeartbeatContext(
         string? GoalId,

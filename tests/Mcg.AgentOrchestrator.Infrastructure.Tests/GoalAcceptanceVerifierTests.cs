@@ -5,6 +5,41 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
+public sealed class AcceptanceOutputCaptureTests
+{
+    [Xunit.Fact]
+    public async Task CappedCapturePreservesHeadWritesOneTerminatorAndContinuesDraining()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcg-capped-capture-{Guid.NewGuid():N}.out");
+        var payload = Encoding.UTF8.GetBytes(new string('x', 4096));
+        await using var source = new MemoryStream(payload);
+        try
+        {
+            var result = await GoalAcceptanceVerifier.DrainCapturedOutputAsync(
+                source,
+                path,
+                limitBytes: 512,
+                CancellationToken.None);
+
+            var bytes = await File.ReadAllBytesAsync(path);
+            var text = Encoding.UTF8.GetString(bytes);
+            Xunit.Assert.True(result.LimitReached);
+            Xunit.Assert.Equal(payload.Length, source.Position);
+            Xunit.Assert.Equal(512, bytes.Length);
+            Xunit.Assert.StartsWith(new string('x', 32), text, StringComparison.Ordinal);
+            Xunit.Assert.Equal(1, CountOccurrences(text, "ACCEPTANCE_CAPTURE_LIMIT_REACHED"));
+            Xunit.Assert.Contains("cap_bytes=512", text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
+
+    private static int CountOccurrences(string value, string needle) =>
+        value.Split(needle, StringSplitOptions.None).Length - 1;
+}
+
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class HermeticVerificationEnvironmentTests
 {
