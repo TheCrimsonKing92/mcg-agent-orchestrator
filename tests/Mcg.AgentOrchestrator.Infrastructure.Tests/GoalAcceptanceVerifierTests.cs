@@ -10,20 +10,34 @@ using System.Text.Json.Nodes;
 public sealed class AcceptanceOutputCaptureTests
 {
     [Xunit.Fact]
-    public void AcceptanceProcessUsesShellWithManagedOutputPipes()
+    public void AcceptanceProcessUsesOwnedStartCompatibleCaptureTransport()
     {
+        const string stdoutTarget = @"\\.\pipe\mcg-test-stdout";
+        const string stderrTarget = @"\\.\pipe\mcg-test-stderr";
         var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
             ["dotnet", "test"],
-            Path.GetTempPath());
+            Path.GetTempPath(),
+            stdoutTarget,
+            stderrTarget);
 
-        Xunit.Assert.True(startInfo.RedirectStandardOutput);
-        Xunit.Assert.True(startInfo.RedirectStandardError);
         Xunit.Assert.Equal(OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh", startInfo.FileName);
         var command = OperatingSystem.IsWindows()
             ? startInfo.Arguments
             : startInfo.ArgumentList.Last();
-        Xunit.Assert.DoesNotContain(" > ", command, StringComparison.Ordinal);
-        Xunit.Assert.DoesNotContain("2>", command, StringComparison.Ordinal);
+        if (OperatingSystem.IsWindows())
+        {
+            Xunit.Assert.False(startInfo.RedirectStandardOutput);
+            Xunit.Assert.False(startInfo.RedirectStandardError);
+            Xunit.Assert.Contains(stdoutTarget, command, StringComparison.Ordinal);
+            Xunit.Assert.Contains(stderrTarget, command, StringComparison.Ordinal);
+        }
+        else
+        {
+            Xunit.Assert.True(startInfo.RedirectStandardOutput);
+            Xunit.Assert.True(startInfo.RedirectStandardError);
+            Xunit.Assert.DoesNotContain(" > ", command, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("2>", command, StringComparison.Ordinal);
+        }
     }
 
     [Xunit.Fact]

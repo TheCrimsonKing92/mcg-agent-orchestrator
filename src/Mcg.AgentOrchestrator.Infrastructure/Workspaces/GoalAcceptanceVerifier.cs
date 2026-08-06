@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Collections.Concurrent;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -6143,7 +6144,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Task? heartbeatTask = null;
         GateHeartbeatRuntime? heartbeat = null;
         var keepOutputFiles = false;
-        var startInfo = BuildAcceptanceProcessStartInfo(arguments, workingDirectory);
+        var stdoutPipeName = OperatingSystem.IsWindows() ? $"mcg-acc-{Guid.NewGuid():N}-out" : null;
+        var stderrPipeName = OperatingSystem.IsWindows() ? $"mcg-acc-{Guid.NewGuid():N}-err" : null;
+        var startInfo = BuildAcceptanceProcessStartInfo(
+            arguments,
+            workingDirectory,
+            stdoutPipeName is null ? null : $@"\\.\pipe\{stdoutPipeName}",
+            stderrPipeName is null ? null : $@"\\.\pipe\{stderrPipeName}");
         CancellationTokenSource? captureDrainCts = null;
         Task<CaptureLimitResult>[]? captureDrains = null;
         Stream[]? captureSources = null;
@@ -6153,14 +6160,37 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? startedProcessId = null;
         try
         {
+            captureDrainCts = new CancellationTokenSource();
+            Task[]? captureConnections = null;
+            if (stdoutPipeName is not null && stderrPipeName is not null)
+            {
+                var stdoutPipe = CreateCapturePipe(stdoutPipeName);
+                var stderrPipe = CreateCapturePipe(stderrPipeName);
+                captureSources = [stdoutPipe, stderrPipe];
+                captureConnections =
+                [
+                    stdoutPipe.WaitForConnectionAsync(captureDrainCts.Token),
+                    stderrPipe.WaitForConnectionAsync(captureDrainCts.Token)
+                ];
+            }
+
             using var process = StartAcceptanceProcess(startInfo, workingDirectory);
             startedProcessId = process.Id;
-            captureDrainCts = new CancellationTokenSource();
-            captureSources =
-            [
-                process.StandardOutput.BaseStream,
-                process.StandardError.BaseStream
-            ];
+            if (captureConnections is not null)
+            {
+                await Task.WhenAll(captureConnections)
+                    .WaitAsync(CaptureDrainTimeout, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                captureSources =
+                [
+                    process.StandardOutput.BaseStream,
+                    process.StandardError.BaseStream
+                ];
+            }
+
             captureDrains =
             [
                 DrainCappedCaptureAsync(
@@ -6215,6 +6245,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             captureDrains = null;
             captureDrainCts.Dispose();
             captureDrainCts = null;
+            DisposeCaptureSources(captureSources);
+            captureSources = null;
 
             foreach (var capture in captureResults.Where(result => result.LimitReached))
             {
@@ -6456,24 +6488,44 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal static ProcessStartInfo BuildAcceptanceProcessStartInfo(
         string[] arguments,
-        string workingDirectory)
+        string workingDirectory,
+        string? stdoutRedirectTarget = null,
+        string? stderrRedirectTarget = null)
     {
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
+            WorkingDirectory = workingDirectory
         };
 
         if (OperatingSystem.IsWindows())
         {
+            if (string.IsNullOrWhiteSpace(stdoutRedirectTarget) != string.IsNullOrWhiteSpace(stderrRedirectTarget))
+            {
+                throw new ArgumentException("Both capture redirection targets must be provided together.");
+            }
+
             startInfo.FileName = "cmd.exe";
-            startInfo.Arguments = $"/c \"{BuildShellCommand(arguments, QuoteForCmd)}\"";
+            var command = BuildShellCommand(arguments, QuoteForCmd);
+            if (!string.IsNullOrWhiteSpace(stdoutRedirectTarget))
+            {
+                command = $"{command} > {QuoteForCmd(stdoutRedirectTarget)} 2> {QuoteForCmd(stderrRedirectTarget!)}";
+            }
+            else
+            {
+                // Retain the managed-pipe form for focused capture tests and non-owned callers.
+                startInfo.RedirectStandardOutput = true;
+                startInfo.RedirectStandardError = true;
+            }
+
+            // cmd /c strips one surrounding quote pair, so wrap the whole command once.
+            startInfo.Arguments = $"/c \"{command}\"";
         }
         else
         {
+            startInfo.RedirectStandardOutput = true;
+            startInfo.RedirectStandardError = true;
             startInfo.FileName = "/bin/sh";
             startInfo.ArgumentList.Add("-c");
             startInfo.ArgumentList.Add(BuildShellCommand(arguments, QuoteForPosix));
@@ -6481,6 +6533,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         return startInfo;
     }
+
+    private static NamedPipeServerStream CreateCapturePipe(string pipeName) =>
+        new(
+            pipeName,
+            PipeDirection.In,
+            maxNumberOfServerInstances: 1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous);
 
     private static async Task<IReadOnlyList<CaptureLimitResult>> CompleteCaptureDrainsAsync(
         Process process,
