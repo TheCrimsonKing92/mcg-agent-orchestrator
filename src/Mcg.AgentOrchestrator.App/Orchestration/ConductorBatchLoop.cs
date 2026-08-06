@@ -704,7 +704,10 @@ internal sealed class ConductorBatchLoop
                     if (recheckableBlockedGoals > 0 && idleInterval != computedIdleInterval)
                     {
                         foreach (var entry in setAsideGoals.Values.Where(entry =>
-                                     entry.Condition == BatchSetAsideCondition.PreLandingRebaseConflict))
+                                     (onlyGoalId is null || entry.GoalId == onlyGoalId) &&
+                                     kernel.Goals.Any(goal =>
+                                         goal.Id.Value == entry.GoalId &&
+                                         !IsTerminalGoal(goal))))
                         {
                             var key = new RetryDiagnosticKey(
                                 "BLOCKED_RECHECK_INTERVAL_CLAMPED",

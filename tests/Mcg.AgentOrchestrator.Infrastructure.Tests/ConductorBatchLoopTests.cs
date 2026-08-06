@@ -5835,24 +5835,32 @@ public sealed class ConductorBatchLoopTests
             },
             writeEscalation: (_, _, _) => escalations++);
 
-        var summary = new ConductorBatchLoop().Run(
-            kernel,
-            driver,
-            ConductorAutonomyPolicy.Conservative,
-            NoStopPath(),
-            maxIterations: 2,
-            watchInterval: TimeSpan.FromMilliseconds(1),
-            sleepFunc: _ =>
-            {
-                hasOpenClarification = false;
-                return false;
-            });
+        BatchLoopSummary? summary = null;
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ =>
+                {
+                    hasOpenClarification = false;
+                    return false;
+                }));
 
-        Assert.Equal(2, summary.Ticks);
+        Assert.NotNull(summary);
+        Assert.Equal(2, summary!.Ticks);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, summary.Advanced);
         Assert.Equal(1, escalations);
         Assert.Equal(1, workspaceCreates);
+        Assert.Equal(1, CountOccurrences(output, "BLOCKED_RECHECK_INTERVAL_CLAMPED"));
+        Assert.Contains(
+            $"BLOCKED_RECHECK_INTERVAL_CLAMPED goal={goal.Id.Value[..8]} condition=awaitingclarification computedSeconds=0.001 floorSeconds={ConductorBatchLoop.WatchStopPollIntervalSeconds}",
+            output,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_readmits_store_answered_clarification_without_restart_and_dispatches")]
