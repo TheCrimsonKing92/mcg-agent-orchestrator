@@ -792,7 +792,7 @@ internal sealed class ConductorBatchLoop
                     : GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel);
                 if (depHoldReason is not null)
                 {
-                    var progressLine = $"GOAL goal={label} result=held reason={Sanitize(depHoldReason)}";
+                    var progressLine = $"GOAL goal={label} result=held reason={SanitizeReason(depHoldReason)}";
                     if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
                     {
                         changedGoalIds.Add(goal.Id);
@@ -834,7 +834,7 @@ internal sealed class ConductorBatchLoop
                 {
                     var holdReason =
                         $"invalidated acceptance attempt {invalidatedAttempt.AttemptId} process {invalidatedAttempt.OwnerProcessId} is still exiting";
-                    var progressLine = $"GOAL goal={label} result=held reason={Sanitize(holdReason)}";
+                    var progressLine = $"GOAL goal={label} result=held reason={SanitizeReason(holdReason)}";
                     if (RecordChangedDisposition(goal.Id.Value, progressLine, lastGoalDisposition, changedGoalLines))
                     {
                         changedGoalIds.Add(goal.Id);
@@ -1785,7 +1785,7 @@ internal sealed class ConductorBatchLoop
                 (long)(observedAt - observation.Hold.StartedAt).TotalSeconds);
             EmitProgress(
                 $"GOAL_STALLED goal={goal.Id.Value[..8]} state={Sanitize(state)} " +
-                $"repeatedForSeconds={repeatedForSeconds} blocker={Sanitize(blocker)}",
+                $"repeatedForSeconds={repeatedForSeconds} blocker={SanitizeReason(blocker)}",
                 tickLines);
         }
         catch (Exception ex)
@@ -1850,6 +1850,13 @@ internal sealed class ConductorBatchLoop
     {
         var s = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
         return s.Length > 40 ? s[..40] : s;
+    }
+
+    internal static string SanitizeReason(string value)
+    {
+        const int maxReasonLength = 512;
+        var sanitized = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
+        return sanitized.Length > maxReasonLength ? sanitized[..maxReasonLength] : sanitized;
     }
 
     private static string SanitizeHandoffDetail(string value) =>
@@ -2728,7 +2735,7 @@ internal sealed class ConductorBatchLoop
         return outcome switch
         {
             ConductorAdvanceOutcome.Executed e  => $"GOAL goal={label} result=executed state={e.FromState}{slot}",
-            ConductorAdvanceOutcome.Held h      => $"GOAL goal={label} result=held state={h.State}{slot} reason={Sanitize(h.Reason)}",
+            ConductorAdvanceOutcome.Held h      => $"GOAL goal={label} result=held state={h.State}{slot} reason={SanitizeReason(h.Reason)}",
             ConductorAdvanceOutcome.Escalated e => $"GOAL goal={label} result=escalated state={e.State}{slot} reason={Sanitize(e.Reason)}",
             ConductorAdvanceOutcome.Done d      => $"GOAL goal={label} result=done state={d.State}{slot}",
             _                                   => $"GOAL goal={label} result=unknown{slot}"

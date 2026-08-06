@@ -10,6 +10,8 @@ internal sealed record GoalRecoveryReport(
     string? WorktreePath,
     bool WorktreeExists,
     bool? WorktreeDirty,
+    IReadOnlyList<string> WorktreeDirtyPaths,
+    string? WorktreeStatusError,
     bool HasBranchDiff,
     RepositoryChangeSummary ChangeSummary,
     RepositoryTestImpactPlan TestImpactPlan,
@@ -38,7 +40,18 @@ internal static class GoalRecoveryPlanner
         bool includeCleanupBackoff = true)
     {
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
-        var dirty = worktree is null ? null : TryIsWorktreeDirty(worktree);
+        GitCli.WorktreeStatusInspection? worktreeInspection = worktree is null
+            ? null
+            : GitCli.InspectWorktreeStatus(worktree);
+        bool? dirty = worktreeInspection is null || !worktreeInspection.Value.Succeeded
+            ? null
+            : worktreeInspection.Value.IsDirty;
+        IReadOnlyList<string> dirtyPaths = worktreeInspection is { Succeeded: true }
+            ? worktreeInspection.Value.CommitWorthyPaths
+            : [];
+        string? worktreeStatusError = worktreeInspection is { Succeeded: false }
+            ? worktreeInspection.Value.Error
+            : null;
         var hasDiff = GoalWorktrees.TryGetBranchDiff(executionDirectory, goal.Id) is not null;
         var changeSummary = RepositoryChangeClassifier.Classify(worktree is null ? Array.Empty<string>() : TryGetChangedFiles(worktree));
         var testImpactPlan = RepositoryTestImpactPlanner.Plan(changeSummary);
@@ -56,7 +69,7 @@ internal static class GoalRecoveryPlanner
             AddTaskFindings(findings, goal, task, index + 1);
         }
 
-        var actions = BuildRecommendedActions(goal, worktree, dirty, hasDiff, buildLease, cleanupBackoff, pendingInput, findings);
+        var actions = BuildRecommendedActions(goal, worktree, dirty, worktreeStatusError, hasDiff, buildLease, cleanupBackoff, pendingInput, findings);
         actions.InsertRange(0, BuildJournalRecommendedActions(operationJournal));
         return new GoalRecoveryReport(
             goal.Id,
@@ -65,6 +78,8 @@ internal static class GoalRecoveryPlanner
             worktree,
             worktree is not null,
             dirty,
+            dirtyPaths,
+            worktreeStatusError,
             hasDiff,
             changeSummary,
             testImpactPlan,
@@ -187,6 +202,7 @@ internal static class GoalRecoveryPlanner
         Goal goal,
         string? worktree,
         bool? dirty,
+        string? worktreeStatusError,
         bool hasDiff,
         DotnetBuildLeaseStatus buildLease,
         GoalWorktreeCleanupBackoff? cleanupBackoff,
@@ -199,10 +215,6 @@ internal static class GoalRecoveryPlanner
             actions.Add("answer pending human input before resuming automation");
         }
 
-        actions.AddRange(findings
-            .Select(finding => finding.SuggestedCommand)
-            .Distinct(StringComparer.OrdinalIgnoreCase));
-
         if (worktree is null && goal.Tasks.Any(task => task.RequiredRole is AgentRole.Developer or AgentRole.Tester))
         {
             actions.Add("workspace create");
@@ -212,6 +224,14 @@ internal static class GoalRecoveryPlanner
         {
             actions.Add("inspect worktree dirty state before dispatching more file work");
         }
+        else if (!string.IsNullOrWhiteSpace(worktreeStatusError))
+        {
+            actions.Add("inspect worktree status failure before dispatching more file work");
+        }
+
+        actions.AddRange(findings
+            .Select(finding => finding.SuggestedCommand)
+            .Distinct(StringComparer.OrdinalIgnoreCase));
 
         if (goal.Status == GoalStatus.Completed && hasDiff)
         {
@@ -230,7 +250,7 @@ internal static class GoalRecoveryPlanner
                 : $"workspace remove {goal.Id.Value[..8]} after {GoalWorktrees.FormatCleanupBackoff(cleanupBackoff)}");
         }
 
-        if (!IsTerminal(goal.Status) && (findings.Count > 0 || dirty == true))
+        if (!IsTerminal(goal.Status) && (findings.Count > 0 || dirty == true || worktreeStatusError is not null))
         {
             actions.Add($"park-goal {goal.Id.Value[..8]} <reason> --confirm-goal-park");
         }
@@ -245,12 +265,6 @@ internal static class GoalRecoveryPlanner
 
     private static bool IsTerminal(GoalStatus status) =>
         status is GoalStatus.Completed or GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded;
-
-    private static bool? TryIsWorktreeDirty(string worktree)
-    {
-        var result = GitCli.Run(worktree, "status", "--porcelain");
-        return result.ExitCode == 0 ? !string.IsNullOrWhiteSpace(result.Output) : null;
-    }
 
     private static string[] TryGetChangedFiles(string worktree)
     {

@@ -47,6 +47,30 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         actions++;
     }
 
+    var worktreeRecovery = GoalRecoveryPlanner.Build(
+        context.Kernel,
+        goal,
+        context.Workspace.ExecutionDirectory,
+        includeCleanupBackoff: false);
+    var worktreeBlocksDiagnosis = worktreeRecovery.WorktreeDirty == true ||
+        !string.IsNullOrWhiteSpace(worktreeRecovery.WorktreeStatusError);
+    if (worktreeRecovery.WorktreeDirty == true)
+    {
+        var paths = worktreeRecovery.WorktreeDirtyPaths.Take(5).ToArray();
+        var omitted = worktreeRecovery.WorktreeDirtyPaths.Count > paths.Length
+            ? $", +{worktreeRecovery.WorktreeDirtyPaths.Count - paths.Length} more"
+            : string.Empty;
+        Console.WriteLine(
+            $"recover: dirty worktree blocks Developer/Tester dispatch; paths=[{string.Join(", ", paths)}{omitted}]. " +
+            "Inspect and preserve real work before cleaning; recover will not delete, stash, ignore, or commit these paths.");
+    }
+    else if (!string.IsNullOrWhiteSpace(worktreeRecovery.WorktreeStatusError))
+    {
+        Console.WriteLine(
+            $"recover: worktree cleanliness unavailable ({worktreeRecovery.WorktreeStatusError}); " +
+            "lifecycle/task desync recovery is unsafe until git status succeeds.");
+    }
+
     foreach (var request in context.Kernel.GetPendingHumanInput(goal.Id).ToList())
     {
         context.Kernel.SubmitHumanInput(request.Id, note);
@@ -136,6 +160,7 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
     foreach (var task in goal.Tasks)
     {
         if (alreadyReset.Contains(task.Id) ||
+            (worktreeBlocksDiagnosis && task.RequiredRole is (AgentRole.Developer or AgentRole.Tester)) ||
             task.Status != WorkTaskStatus.Assigned ||
             task.LastProcess is { IsRunning: true } ||
             task.LastDispatch is not null ||
@@ -173,7 +198,11 @@ private static bool HandleRecover(CliExecutionContext context, IReadOnlyList<str
         actions++;
     }
 
-    if (actions == 0)
+    if (actions == 0 && worktreeBlocksDiagnosis)
+    {
+        Console.WriteLine("recover: no automatic lifecycle recovery performed while worktree cleanliness blocks diagnosis.");
+    }
+    else if (actions == 0)
     {
         Console.WriteLine("recover: nothing to recover (no pending input, stuck tasks, or lifecycle/task desync).");
     }

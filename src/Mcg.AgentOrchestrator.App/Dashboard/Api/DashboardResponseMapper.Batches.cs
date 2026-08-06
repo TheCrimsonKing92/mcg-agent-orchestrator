@@ -82,7 +82,8 @@ private static ReadyBlockedDiagnosticDto ToReadyBlockedDiagnosticDto(ReadyBlocke
         diagnostic.TaskId,
         diagnostic.Provider,
         diagnostic.Reason,
-        diagnostic.ToLine());
+        diagnostic.ToLine(),
+        diagnostic.Details);
 
 public static ParallelExecutionPlanDto ToParallelExecutionPlanDto(ParallelExecutionPlan plan)
 {

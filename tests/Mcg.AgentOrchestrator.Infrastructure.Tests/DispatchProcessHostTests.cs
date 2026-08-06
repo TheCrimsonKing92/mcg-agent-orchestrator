@@ -494,6 +494,7 @@ public sealed class DispatchProcessHostTests
             };
             startInfo.ArgumentList.Add("Write-Output ok");
             var childPathBefore = startInfo.Environment["PATH"];
+            var childLocalAppDataBefore = startInfo.Environment["LOCALAPPDATA"];
             var parameters = new DispatchProcessHost.DispatchRunParameters(
                 "Write-Output ok",
                 worktree,
@@ -513,7 +514,11 @@ public sealed class DispatchProcessHostTests
                 protectWorkspaceBoundary: _ => { });
 
             var sandboxBin = Path.Combine(worktree, ".mcg-sandbox", "bin");
+            var powershellCache = Path.Combine(worktree, ".mcg-sandbox", "powershell", "ModuleAnalysisCache");
             Assert.True(Directory.Exists(sandboxBin));
+            Assert.True(Directory.Exists(Path.GetDirectoryName(powershellCache)!));
+            Assert.Equal(powershellCache, startInfo.Environment["PSModuleAnalysisCachePath"]);
+            Assert.Equal(childLocalAppDataBefore, startInfo.Environment["LOCALAPPDATA"]);
             Assert.True(File.Exists(Path.Combine(sandboxBin, "git.cmd")));
             Assert.True(File.Exists(Path.Combine(sandboxBin, "dotnet.cmd")));
             Assert.NotNull(childPathBefore);

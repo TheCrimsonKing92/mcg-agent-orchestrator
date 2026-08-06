@@ -28,6 +28,14 @@ internal static class GitCli
         public bool Succeeded => ExitCode == 0;
     }
 
+    internal readonly record struct WorktreeStatusInspection(
+        bool Succeeded,
+        IReadOnlyList<string> CommitWorthyPaths,
+        string? Error)
+    {
+        public bool IsDirty => CommitWorthyPaths.Count > 0;
+    }
+
     public static GitResult Run(string workingDirectory, params string[] args) =>
         Run(workingDirectory, DefaultTimeoutMilliseconds, args);
 
@@ -99,8 +107,16 @@ internal static class GitCli
     // unverified state).
     public static bool IsWorktreeDirty(string workingDirectory)
     {
-        var result = Run(workingDirectory, "status", "--porcelain", "--untracked-files=all");
-        return result.ExitCode != 0 || !string.IsNullOrWhiteSpace(FilterCommitWorthyStatus(result.Output));
+        var inspection = InspectWorktreeStatus(workingDirectory);
+        return !inspection.Succeeded || inspection.IsDirty;
+    }
+
+    internal static WorktreeStatusInspection InspectWorktreeStatus(string workingDirectory)
+    {
+        var result = Run(workingDirectory, "status", "--porcelain=v1", "--untracked-files=all");
+        return result.ExitCode == 0
+            ? new WorktreeStatusInspection(true, ParseCommitWorthyStatusPaths(result.Output), null)
+            : new WorktreeStatusInspection(false, [], string.IsNullOrWhiteSpace(result.Error) ? "git status failed" : result.Error.Trim());
     }
 
     internal static string FilterCommitWorthyStatus(string statusOutput)
@@ -171,6 +187,7 @@ internal static class GitCli
         }
 
         return normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Equals("Microsoft/Windows/PowerShell/ModuleAnalysisCache", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals(".orchestrator-handoff.md", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals(WorkerSandboxPreparer.MarkerFileName, StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals(WorkerSandboxPreparer.ReceiptFileName, StringComparison.OrdinalIgnoreCase) ||

@@ -246,7 +246,7 @@ public sealed class DispatchStateSurface
             return new DispatchWorktreeState(workingDirectory, true, false, null, null, null, [], "not a git worktree");
         }
 
-        var status = GitCli.Run(workingDirectory, "status", "--short");
+        var status = GitCli.Run(workingDirectory, "status", "--short", "--untracked-files=all");
         var head = GitCli.Run(workingDirectory, "rev-parse", "--short", "HEAD");
         int? commitsAfterDispatch = null;
         if (dispatchedAt is not null)

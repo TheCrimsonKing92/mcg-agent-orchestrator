@@ -1342,8 +1342,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Contains("Subscription dispatches created: 0", stdout);
         var lines = ReadyBlockedLines(stderr);
         Xunit.Assert.Equal(2, lines.Length);
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=worker-profile", lines[0]);
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=2 provider=codex-cli reason=worker-profile", lines[1]);
+        Xunit.Assert.StartsWith($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-cli reason=worker-profile details=", lines[0]);
+        Xunit.Assert.StartsWith($"READY_BLOCKED goal={goal.Id.Value[..8]} task=2 provider=codex-cli reason=worker-profile details=", lines[1]);
         Xunit.Assert.Null(first.LastDispatch);
         Xunit.Assert.Null(second.LastDispatch);
     }
@@ -1383,7 +1383,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
 
         Xunit.Assert.Contains("Subscription dispatches created: 0", stdout);
         var line = Xunit.Assert.Single(ReadyBlockedLines(stderr));
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-spark reason=dirty-worktree", line);
+        Xunit.Assert.StartsWith($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-spark reason=dirty-worktree details=", line);
+        Xunit.Assert.Contains("dirty.txt", line, StringComparison.Ordinal);
         Xunit.Assert.Null(task.LastDispatch);
         Xunit.Assert.Null(task.LastProcess);
     }
@@ -1415,7 +1416,8 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Equal(1, diagnostic.Task);
         Xunit.Assert.Equal("codex-spark", diagnostic.Provider);
         Xunit.Assert.Equal("dirty-worktree", diagnostic.Reason);
-        Xunit.Assert.Equal($"READY_BLOCKED goal={goal.Id.Value[..8]} task=1 provider=codex-spark reason=dirty-worktree", diagnostic.Line);
+        Xunit.Assert.Contains("dirty.txt", diagnostic.Line, StringComparison.Ordinal);
+        Xunit.Assert.Contains(diagnostic.Details!, detail => detail.Contains("dirty.txt", StringComparison.Ordinal));
     }
 
 

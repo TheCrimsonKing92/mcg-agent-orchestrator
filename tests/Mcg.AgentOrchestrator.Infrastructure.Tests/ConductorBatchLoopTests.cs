@@ -16,6 +16,17 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.DotnetBuildSlots)]
 public sealed class ConductorBatchLoopTests
 {
+    [Xunit.Fact(DisplayName = "ConductorBatchLoop_reason_sanitizer_preserves_dirty_worktree_path")]
+    public void ReasonSanitizerPreservesDirtyWorktreePath()
+    {
+        var reason = "No tasks dispatched; reason=dirty-worktree paths=[src/nested/dirty.cs]";
+
+        var sanitized = ConductorBatchLoop.SanitizeReason(reason);
+
+        Xunit.Assert.Contains("dirty-worktree", sanitized, StringComparison.Ordinal);
+        Xunit.Assert.Contains("src/nested/dirty.cs", sanitized, StringComparison.Ordinal);
+        Xunit.Assert.True(sanitized.Length > 40);
+    }
     private readonly ITestOutputHelper _output;
 
     public ConductorBatchLoopTests(ITestOutputHelper output)

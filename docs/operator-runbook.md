@@ -229,7 +229,18 @@ For lifecycle repairs, use `set-goal-status` only with Core-valid `GoalStatus` v
 
 **Symptom.** `conduct --loop` repeatedly holds or escalates a goal at `WorkspaceReady` / "no ready batch" after the Developer task completed, with Tester or Reviewer tasks still `Assigned`. In the 2026-06-27 incident, example goals `6d76b216` and `abf4967a` showed this pattern; future incidents will have different prefixes.
 
-**Diagnosis.** First identify the assigned-but-not-starting verification task:
+**Diagnosis.** First inspect the emitted `READY_BLOCKED` / held reason. A `dirty-worktree`
+diagnostic includes the commit-worthy paths that prevented dispatch. Confirm it from the goal
+worktree before changing policy or providers:
+
+```powershell
+git -C .orchestrator-worktrees/<goal-prefix> status --short --untracked-files=all
+```
+
+Preserve real work. Remove only a confirmed disposable artifact; never broadly clean, stash, or
+ignore the goal worktree. `recover` reports these paths and deliberately does not mutate them.
+
+If no dirty-worktree diagnostic is present, identify the assigned-but-not-starting verification task:
 
 ```
 .\scripts\Invoke-RepoScript.ps1 scripts\Invoke-OrchestratorCommand.ps1 status <goal-prefix>

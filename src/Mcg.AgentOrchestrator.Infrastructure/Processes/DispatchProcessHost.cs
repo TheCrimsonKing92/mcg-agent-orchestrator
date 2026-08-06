@@ -244,8 +244,10 @@ public static class DispatchProcessHost
             // provider-specific home/config directories. The sandbox root is labeled before child paths are
             // materialized so they inherit Low without a second recursive icacls traversal.
             var tempDir = Path.Combine(sandboxRoot, "temp");
+            var powershellDir = Path.Combine(sandboxRoot, "powershell");
             var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
             Directory.CreateDirectory(tempDir);
+            Directory.CreateDirectory(powershellDir);
             WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
 
             SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
@@ -257,6 +259,10 @@ public static class DispatchProcessHost
 
             startInfo.Environment["TEMP"] = tempDir;
             startInfo.Environment["TMP"] = tempDir;
+            // PowerShell otherwise derives this cache from inherited profile locations. Keep only
+            // its disposable module-analysis cache inside the ignored worker sandbox; relocating
+            // LOCALAPPDATA/APPDATA breaks unrelated per-user tool and PowerShell resolution.
+            startInfo.Environment["PSModuleAnalysisCachePath"] = Path.Combine(powershellDir, "ModuleAnalysisCache");
             startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
             WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, effectivePreparation);
 
