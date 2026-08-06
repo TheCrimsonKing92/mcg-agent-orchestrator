@@ -6167,10 +6167,32 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 var stdoutPipe = CreateCapturePipe(stdoutPipeName);
                 var stderrPipe = CreateCapturePipe(stderrPipeName);
                 captureSources = [stdoutPipe, stderrPipe];
-                captureConnections =
+                var stdoutConnection = stdoutPipe.WaitForConnectionAsync(captureDrainCts.Token);
+                var stderrConnection = stderrPipe.WaitForConnectionAsync(captureDrainCts.Token);
+                captureConnections = [stdoutConnection, stderrConnection];
+                // Begin accepting and draining before process start. The test-only legacy
+                // start-then-attach control waits for the child to exit inside
+                // StartAcceptanceProcess; delaying the drains until that method returned could
+                // fill the named-pipe buffer and deadlock the child before the expected attach
+                // failure was observed.
+                captureDrains =
                 [
-                    stdoutPipe.WaitForConnectionAsync(captureDrainCts.Token),
-                    stderrPipe.WaitForConnectionAsync(captureDrainCts.Token)
+                    ConnectAndDrainCappedCaptureAsync(
+                        stdoutPipe,
+                        stdoutConnection,
+                        stdoutPath,
+                        EngineSettings.OutputCaptureLimitBytes,
+                        () => DateTimeOffset.UtcNow,
+                        onLimitReached: null,
+                        captureDrainCts.Token),
+                    ConnectAndDrainCappedCaptureAsync(
+                        stderrPipe,
+                        stderrConnection,
+                        stderrPath,
+                        EngineSettings.OutputCaptureLimitBytes,
+                        () => DateTimeOffset.UtcNow,
+                        onLimitReached: null,
+                        captureDrainCts.Token)
                 ];
             }
 
@@ -6189,25 +6211,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     process.StandardOutput.BaseStream,
                     process.StandardError.BaseStream
                 ];
+                captureDrains =
+                [
+                    DrainCappedCaptureAsync(
+                        captureSources[0],
+                        stdoutPath,
+                        EngineSettings.OutputCaptureLimitBytes,
+                        () => DateTimeOffset.UtcNow,
+                        onLimitReached: null,
+                        cancellationToken: captureDrainCts.Token),
+                    DrainCappedCaptureAsync(
+                        captureSources[1],
+                        stderrPath,
+                        EngineSettings.OutputCaptureLimitBytes,
+                        () => DateTimeOffset.UtcNow,
+                        onLimitReached: null,
+                        cancellationToken: captureDrainCts.Token)
+                ];
             }
-
-            captureDrains =
-            [
-                DrainCappedCaptureAsync(
-                    captureSources[0],
-                    stdoutPath,
-                    EngineSettings.OutputCaptureLimitBytes,
-                    () => DateTimeOffset.UtcNow,
-                    onLimitReached: null,
-                    cancellationToken: captureDrainCts.Token),
-                DrainCappedCaptureAsync(
-                    captureSources[1],
-                    stderrPath,
-                    EngineSettings.OutputCaptureLimitBytes,
-                    () => DateTimeOffset.UtcNow,
-                    onLimitReached: null,
-                    cancellationToken: captureDrainCts.Token)
-            ];
             if (heartbeatContext is not null)
             {
                 heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -6541,6 +6562,25 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             maxNumberOfServerInstances: 1,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous);
+
+    private static async Task<CaptureLimitResult> ConnectAndDrainCappedCaptureAsync(
+        NamedPipeServerStream source,
+        Task connection,
+        string path,
+        long limitBytes,
+        Func<DateTimeOffset> utcNow,
+        Action? onLimitReached,
+        CancellationToken cancellationToken)
+    {
+        await connection.ConfigureAwait(false);
+        return await DrainCappedCaptureAsync(
+            source,
+            path,
+            limitBytes,
+            utcNow,
+            onLimitReached,
+            cancellationToken).ConfigureAwait(false);
+    }
 
     private static async Task<IReadOnlyList<CaptureLimitResult>> CompleteCaptureDrainsAsync(
         Process process,
