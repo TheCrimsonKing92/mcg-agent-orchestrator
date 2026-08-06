@@ -73,6 +73,115 @@ public sealed class ReconcileSweepRemediationTests
     }
 
     [Xunit.Fact]
+    public void TransientSlotUnavailabilityDoesNotConsumeRemedyBudget()
+    {
+        var dbPath = NewDatabasePath();
+        var calls = 0;
+        var blocker = NewAcceptanceBlocker("slot contention then terminal failure");
+        var coordinator = new ReconcileSweepRemediationCoordinator(
+            new ReconcileSweepRemediationStore(dbPath),
+            ReconcileSweepOptions.Default,
+            _ => ++calls <= 5
+                ? TerminalGoalRemedyExecutionResult.Retryable(75, $"slot unavailable {calls}")
+                : new TerminalGoalRemedyExecutionResult(17, $"terminal failure {calls}"),
+            _ => blocker.Remedy.GateArtifact!.CandidateBranchSha);
+        var events = new List<string>();
+
+        for (var i = 0; i < 10; i++)
+        {
+            events.AddRange(coordinator.Process(Sweep(blocker)).Events);
+        }
+
+        Xunit.Assert.Equal(8, calls);
+        Xunit.Assert.Equal(8, events.Count(line => line.StartsWith("SWEEP_REMEDY_ATTEMPT", StringComparison.Ordinal)));
+        Xunit.Assert.Equal(8, events.Count(line => line.StartsWith("SWEEP_REMEDY_RESULT", StringComparison.Ordinal)));
+        Xunit.Assert.Equal(5, events.Count(line => line.Contains("retryable=true", StringComparison.Ordinal)));
+        Xunit.Assert.Single(events, line => line.StartsWith("SWEEP_ESCALATION", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void PendingRemedyHoldsSharedAcceptanceLeaseUntilItsCurrentAttemptCompletes()
+    {
+        var dbPath = NewDatabasePath();
+        var blocker = NewAcceptanceBlocker("background acceptance in progress");
+        var executorCalls = 0;
+        var store = new ReconcileSweepRemediationStore(dbPath);
+        var coordinator = new ReconcileSweepRemediationCoordinator(
+            store,
+            ReconcileSweepOptions.Default,
+            _ => ++executorCalls == 1
+                ? TerminalGoalRemedyExecutionResult.Pending("background attempt started")
+                : new TerminalGoalRemedyExecutionResult(0, "current background attempt landed"),
+            _ => blocker.Remedy.GateArtifact!.CandidateBranchSha);
+
+        var started = coordinator.Process(Sweep(blocker));
+        using var overlap = store.TryAcquireAcceptanceLease(
+            blocker.Remedy.GoalId.Value,
+            "manual-operator",
+            TimeSpan.FromMinutes(30));
+        var completed = coordinator.Process(Sweep(blocker));
+        using var afterCompletion = store.TryAcquireAcceptanceLease(
+            blocker.Remedy.GoalId.Value,
+            "manual-operator",
+            TimeSpan.FromMinutes(30));
+
+        Xunit.Assert.Null(overlap);
+        Xunit.Assert.NotNull(afterCompletion);
+        Xunit.Assert.Single(started.Events, line => line.StartsWith("SWEEP_REMEDY_ATTEMPT", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(started.Events, line => line.StartsWith("SWEEP_REMEDY_RESULT", StringComparison.Ordinal));
+        Xunit.Assert.Single(completed.Events, line => line.Contains("current background attempt landed", StringComparison.Ordinal));
+        Xunit.Assert.True(completed.RemedySucceeded);
+    }
+
+    [Xunit.Fact]
+    public void ReplaysOneHundredFortyBlockedRechecksAndRemediesOnFirstRecheckAfterCleanup()
+    {
+        var dbPath = NewDatabasePath();
+        var blocker = NewAcceptanceBlocker("verified goal still has unmerged branch goal/4b57adc0");
+        var blockerPresent = true;
+        var rootCauseCleared = false;
+        var calls = 0;
+        var successRecheck = -1;
+        var coordinator = new ReconcileSweepRemediationCoordinator(
+            new ReconcileSweepRemediationStore(dbPath),
+            ReconcileSweepOptions.Default,
+            _ =>
+            {
+                calls++;
+                if (!rootCauseCleared)
+                {
+                    return TerminalGoalRemedyExecutionResult.Retryable(75, "dirty worktree still blocks pre-merge rebase");
+                }
+
+                blockerPresent = false;
+                return new TerminalGoalRemedyExecutionResult(0, "acceptance landed after dirty worktree cleanup");
+            },
+            _ => blocker.Remedy.GateArtifact!.CandidateBranchSha);
+        var events = new List<string>();
+
+        for (var recheck = 0; recheck < 140; recheck++)
+        {
+            if (recheck == 2)
+            {
+                rootCauseCleared = true;
+            }
+
+            var outcome = coordinator.Process(blockerPresent ? Sweep(blocker) : new TerminalGoalSweepResult([]));
+            events.AddRange(outcome.Events);
+            if (outcome.RemedySucceeded)
+            {
+                successRecheck = recheck;
+            }
+        }
+
+        Xunit.Assert.Equal(2, successRecheck);
+        Xunit.Assert.Equal(3, calls);
+        Xunit.Assert.Single(events, line => line.StartsWith("SWEEP_BLOCKER", StringComparison.Ordinal));
+        Xunit.Assert.Single(events, line => line.StartsWith("SWEEP_REMEDY_RESULT", StringComparison.Ordinal) && line.Contains("exit=0", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain(events, line => line.StartsWith("SWEEP_ESCALATION", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
     public void ChangedEvidenceCreatesNewNotificationState()
     {
         var dbPath = NewDatabasePath();

@@ -5,9 +5,25 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
-internal sealed record TerminalGoalRemedyExecutionResult(int ExitStatus, string Output)
+internal enum TerminalGoalRemedyExecutionDisposition
 {
-    public bool Succeeded => ExitStatus == 0;
+    Completed,
+    Pending,
+    Retryable
+}
+
+internal sealed record TerminalGoalRemedyExecutionResult(
+    int ExitStatus,
+    string Output,
+    TerminalGoalRemedyExecutionDisposition Disposition = TerminalGoalRemedyExecutionDisposition.Completed)
+{
+    public bool Succeeded => Disposition == TerminalGoalRemedyExecutionDisposition.Completed && ExitStatus == 0;
+
+    public static TerminalGoalRemedyExecutionResult Pending(string output) =>
+        new(0, output, TerminalGoalRemedyExecutionDisposition.Pending);
+
+    public static TerminalGoalRemedyExecutionResult Retryable(int exitStatus, string output) =>
+        new(exitStatus, output, TerminalGoalRemedyExecutionDisposition.Retryable);
 }
 
 internal sealed record ReconcileSweepRemediationOutcome(
@@ -20,6 +36,8 @@ internal sealed class ReconcileSweepRemediationCoordinator(
     Func<TerminalGoalRemedy, TerminalGoalRemedyExecutionResult> executor,
     Func<TerminalGoalRemedy, string?> currentBranchHead)
 {
+    private static readonly TimeSpan AttemptStaleAfter = TimeSpan.FromMinutes(30);
+
     public ReconcileSweepRemediationOutcome Process(TerminalGoalSweepResult sweep)
     {
         var events = new List<string>();
@@ -46,6 +64,25 @@ internal sealed class ReconcileSweepRemediationCoordinator(
                     continue;
                 }
 
+                if (!string.IsNullOrWhiteSpace(state.InFlightOwner) &&
+                    state.InFlightAt >= DateTimeOffset.UtcNow.Subtract(AttemptStaleAfter))
+                {
+                    var pendingResult = Execute(remedy);
+                    if (pendingResult.Disposition != TerminalGoalRemedyExecutionDisposition.Pending)
+                    {
+                        CompleteAttempt(
+                            events,
+                            goal.GoalPrefix,
+                            blocker,
+                            stateKey,
+                            state.InFlightOwner,
+                            state.AttemptCount,
+                            pendingResult);
+                        remedySucceeded |= pendingResult.Succeeded;
+                    }
+                    continue;
+                }
+
                 var owner = $"{Environment.ProcessId}:{Guid.NewGuid():N}";
                 var claim = store.TryClaimAttempt(stateKey, options.MaximumAttempts, owner);
                 if (!claim.Claimed)
@@ -61,32 +98,71 @@ internal sealed class ReconcileSweepRemediationCoordinator(
                     $"SWEEP_REMEDY_ATTEMPT goal={goal.GoalPrefix} kind={blocker.Kind} attempt={claim.AttemptNumber} " +
                     $"remedy={remedy.Verb} command={JsonSerializer.Serialize(remedy.RenderCommand())} artifact={FormatArtifact(remedy.GateArtifact)}");
 
-                TerminalGoalRemedyExecutionResult result;
-                try
+                if (!store.TryClaimAcceptanceLease(remedy.GoalId.Value, owner, AttemptStaleAfter))
                 {
-                    result = executor(remedy);
-                }
-                catch (Exception ex)
-                {
-                    result = new TerminalGoalRemedyExecutionResult(1, $"{ex.GetType().Name}: {ex.Message}");
+                    CompleteAttempt(
+                        events,
+                        goal.GoalPrefix,
+                        blocker,
+                        stateKey,
+                        owner,
+                        claim.AttemptNumber,
+                        TerminalGoalRemedyExecutionResult.Retryable(
+                            75,
+                            "acceptance lease unavailable; another acceptance operation is active"));
+                    continue;
                 }
 
-                store.CompleteAttempt(stateKey, owner, result.ExitStatus, result.Output);
-                events.Add(
-                    $"SWEEP_REMEDY_RESULT goal={goal.GoalPrefix} kind={blocker.Kind} attempt={claim.AttemptNumber} " +
-                    $"exit={result.ExitStatus} output={JsonSerializer.Serialize(result.Output)}");
+                var result = Execute(remedy);
+                if (result.Disposition == TerminalGoalRemedyExecutionDisposition.Pending)
+                {
+                    continue;
+                }
+
+                CompleteAttempt(events, goal.GoalPrefix, blocker, stateKey, owner, claim.AttemptNumber, result);
                 remedySucceeded |= result.Succeeded;
-
-                if (!result.Succeeded &&
-                    claim.AttemptNumber >= options.MaximumAttempts &&
-                    store.TryMarkEscalationEmitted(stateKey))
-                {
-                    events.Add(RenderEscalation(goal.GoalPrefix, blocker, "attempt-budget-exhausted"));
-                }
             }
         }
 
         return new ReconcileSweepRemediationOutcome(events, remedySucceeded);
+    }
+
+    private TerminalGoalRemedyExecutionResult Execute(TerminalGoalRemedy remedy)
+    {
+        try
+        {
+            return executor(remedy);
+        }
+        catch (Exception ex)
+        {
+            return new TerminalGoalRemedyExecutionResult(1, $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private void CompleteAttempt(
+        List<string> events,
+        string goalPrefix,
+        TerminalGoalSweepBlocker blocker,
+        string stateKey,
+        string owner,
+        int attemptNumber,
+        TerminalGoalRemedyExecutionResult result)
+    {
+        var consumesAttempt = result.Disposition == TerminalGoalRemedyExecutionDisposition.Completed;
+        store.CompleteAttempt(stateKey, owner, result.ExitStatus, result.Output, consumesAttempt);
+        store.ReleaseAcceptanceLease(blocker.Remedy.GoalId.Value, owner);
+        events.Add(
+            $"SWEEP_REMEDY_RESULT goal={goalPrefix} kind={blocker.Kind} attempt={attemptNumber} " +
+            $"exit={result.ExitStatus} output={JsonSerializer.Serialize(result.Output)}" +
+            (consumesAttempt ? string.Empty : " retryable=true"));
+
+        if (consumesAttempt &&
+            !result.Succeeded &&
+            attemptNumber >= options.MaximumAttempts &&
+            store.TryMarkEscalationEmitted(stateKey))
+        {
+            events.Add(RenderEscalation(goalPrefix, blocker, "attempt-budget-exhausted"));
+        }
     }
 
     private bool IsAutoRunnable(TerminalGoalSweepBlocker blocker, TerminalGoalRemedy remedy)

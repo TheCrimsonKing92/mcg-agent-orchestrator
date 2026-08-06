@@ -2570,6 +2570,85 @@ internal sealed class ConductorBatchLoop
         }
     }
 
+    internal static TerminalGoalRemedyExecutionResult ExecuteReconcileSweepAcceptanceRemedy(
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
+        TerminalGoalRemedy remedy,
+        ConductorAutonomyPolicy policy)
+    {
+        var mutationBlockReason = driver.LandingMutationBlocker?.Invoke();
+        if (!string.IsNullOrWhiteSpace(mutationBlockReason))
+        {
+            return TerminalGoalRemedyExecutionResult.Retryable(
+                75,
+                $"landing mutation boundary unavailable: {mutationBlockReason}");
+        }
+
+        var goal = kernel.GetGoal(remedy.GoalId);
+        var candidate = TryBuildParallelAcceptanceCandidate(driver, goal, policy, slotIndex: 0, out var buildException);
+        if (candidate is null)
+        {
+            return new TerminalGoalRemedyExecutionResult(
+                1,
+                buildException is null
+                    ? $"acceptance candidate unavailable for goal {remedy.GoalPrefix}"
+                    : $"acceptance candidate unavailable: {buildException.GetType().Name}: {buildException.Message}");
+        }
+
+        var decision = driver.ParallelAcceptanceAttemptCoordinator.Evaluate(
+            candidate,
+            policy,
+            driver.RunParallelLandingAcceptance);
+        if (decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Started &&
+            decision.Attempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
+        {
+            decision = driver.ParallelAcceptanceAttemptCoordinator.Evaluate(
+                candidate,
+                policy,
+                driver.RunParallelLandingAcceptance);
+        }
+
+        if (decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Started or
+            ConductorParallelAcceptanceAttemptDecisionKind.Running)
+        {
+            return TerminalGoalRemedyExecutionResult.Pending(
+                $"background acceptance attempt {decision.Attempt.AttemptId} is {decision.Kind.ToString().ToLowerInvariant()}");
+        }
+
+        if (decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun)
+        {
+            var retryable = IsRetryableTerminalAttempt(decision.Attempt);
+            var output =
+                $"attempt={decision.Attempt.AttemptId} outcome={AcceptanceAttemptOutcomeToken(decision.Attempt.Outcome)} " +
+                $"detail={decision.Attempt.Detail ?? "no result artifact was produced"}";
+            driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
+            return retryable
+                ? TerminalGoalRemedyExecutionResult.Retryable(75, output)
+                : new TerminalGoalRemedyExecutionResult(1, output);
+        }
+
+        var run = decision.Run ?? ConductorParallelAcceptanceRunResult.Fault(
+            candidate,
+            new InvalidOperationException("Completed acceptance attempt had no run result."));
+        ReconcileParallelAcceptanceTerminalState(kernel, goal, run, decision.Attempt);
+        var completion = CompleteParallelAcceptanceRun(driver, policy, run);
+        driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
+        var capturedOutput =
+            $"attempt={decision.Attempt.AttemptId} outcome={AcceptanceRunDisposition(run)} " +
+            $"detail={decision.Attempt.Detail ?? "no attempt detail was recorded"} completion={completion.Outcome}";
+
+        if (run.Exception is DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException ||
+            IsEnvironmentInterferenceAcceptanceRun(run) ||
+            completion.IsHeld && run.EarlyResult is null)
+        {
+            return TerminalGoalRemedyExecutionResult.Retryable(75, capturedOutput);
+        }
+
+        return new TerminalGoalRemedyExecutionResult(
+            completion.WasExecuted || completion.IsDone ? 0 : 1,
+            capturedOutput);
+    }
+
     private static ConductorAdvanceResult CompleteParallelAcceptanceRun(
         ConductorDriver driver,
         ConductorAutonomyPolicy policy,

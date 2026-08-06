@@ -17,9 +17,11 @@ public interface IReconcileSweepRemediationStore
     ReconcileSweepRemediationState Observe(string stateKey, string goalId, string blockerKind, string evidence, string remedy);
     bool TryMarkBlockerEmitted(string stateKey);
     ReconcileSweepAttemptClaim TryClaimAttempt(string stateKey, int maximumAttempts, string owner);
-    void CompleteAttempt(string stateKey, string owner, int exitStatus, string output);
+    void CompleteAttempt(string stateKey, string owner, int exitStatus, string output, bool consumeAttempt = true);
     bool TryMarkEscalationEmitted(string stateKey);
+    bool TryClaimAcceptanceLease(string goalId, string owner, TimeSpan staleAfter);
     IDisposable? TryAcquireAcceptanceLease(string goalId, string owner, TimeSpan staleAfter);
+    void ReleaseAcceptanceLease(string goalId, string owner);
 }
 
 public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationStore
@@ -140,7 +142,12 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         }
     }
 
-    public void CompleteAttempt(string stateKey, string owner, int exitStatus, string output)
+    public void CompleteAttempt(
+        string stateKey,
+        string owner,
+        int exitStatus,
+        string output,
+        bool consumeAttempt = true)
     {
         using var connection = Open();
         BeginImmediate(connection);
@@ -149,7 +156,8 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
             using var update = connection.CreateCommand();
             update.CommandText = """
                 UPDATE reconcile_sweep_remediation
-                SET in_flight_owner = NULL,
+                SET attempt_count = CASE WHEN $consume = 1 THEN attempt_count ELSE MAX(attempt_count - 1, 0) END,
+                    in_flight_owner = NULL,
                     in_flight_at = NULL,
                     last_exit_status = $exit,
                     last_output = $output,
@@ -157,6 +165,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
                 WHERE state_key = $key AND in_flight_owner = $owner
                 """;
             update.Parameters.AddWithValue("$exit", exitStatus);
+            update.Parameters.AddWithValue("$consume", consumeAttempt ? 1 : 0);
             update.Parameters.AddWithValue("$output", output ?? string.Empty);
             update.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
             update.Parameters.AddWithValue("$key", stateKey);
@@ -175,6 +184,13 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
     }
 
     public IDisposable? TryAcquireAcceptanceLease(string goalId, string owner, TimeSpan staleAfter)
+    {
+        return TryClaimAcceptanceLease(goalId, owner, staleAfter)
+            ? new AcceptanceLease(_dbPath, goalId, owner)
+            : null;
+    }
+
+    public bool TryClaimAcceptanceLease(string goalId, string owner, TimeSpan staleAfter)
     {
         using var connection = Open();
         BeginImmediate(connection);
@@ -195,13 +211,32 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
             insert.Parameters.AddWithValue("$at", now.ToString("O"));
             var acquired = insert.ExecuteNonQuery() == 1;
             Commit(connection);
-            return acquired ? new AcceptanceLease(_dbPath, goalId, owner) : null;
+            return acquired;
         }
         catch
         {
             Rollback(connection);
             throw;
         }
+    }
+
+    public void ReleaseAcceptanceLease(string goalId, string owner)
+        => ReleaseAcceptanceLease(_dbPath, goalId, owner);
+
+    private static void ReleaseAcceptanceLease(string dbPath, string goalId, string owner)
+    {
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+            DefaultTimeout = 5
+        }.ToString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM reconcile_acceptance_leases WHERE goal_id = $goal AND owner = $owner";
+        command.Parameters.AddWithValue("$goal", goalId);
+        command.Parameters.AddWithValue("$owner", owner);
+        command.ExecuteNonQuery();
     }
 
     private bool TrySetOnce(string stateKey, string column)
@@ -310,18 +345,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
             {
                 return;
             }
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
-            {
-                DataSource = dbPath,
-                Mode = SqliteOpenMode.ReadWrite,
-                DefaultTimeout = 5
-            }.ToString());
-            connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = "DELETE FROM reconcile_acceptance_leases WHERE goal_id = $goal AND owner = $owner";
-            command.Parameters.AddWithValue("$goal", goalId);
-            command.Parameters.AddWithValue("$owner", owner);
-            command.ExecuteNonQuery();
+            ReleaseAcceptanceLease(dbPath, goalId, owner);
         }
     }
 }

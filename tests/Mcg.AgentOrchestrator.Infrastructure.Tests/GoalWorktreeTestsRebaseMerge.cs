@@ -602,6 +602,7 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
 
             Directory.Delete(Path.Combine(worktreePath, "Microsoft"), recursive: true);
+            var timelineCountBeforeRemedy = goal.Timeline.Count;
             var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, repo, goal.Id).Blockers);
             var executionOutput = string.Empty;
             var coordinator = new ReconcileSweepRemediationCoordinator(
@@ -609,8 +610,9 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
                 ReconcileSweepOptions.Default,
                 _ =>
                 {
-                    executionOutput = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
-                    var succeeded = File.Exists(Path.Combine(repo, "feature.txt"));
+                    var succeeded = false;
+                    executionOutput = CaptureConsole(() =>
+                        succeeded = CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
                     return new TerminalGoalRemedyExecutionResult(succeeded ? 0 : 1, executionOutput);
                 },
                 remedy => RunGitOutput(repo, "rev-parse", GoalWorktrees.BranchName(remedy.GoalId)).Trim());
@@ -624,7 +626,9 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
             Assert.Contains(outcome.Events, line => line.StartsWith("SWEEP_REMEDY_RESULT", StringComparison.Ordinal) && line.Contains("exit=0", StringComparison.Ordinal));
             Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
             Assert.Empty(TerminalGoalSweep.Diagnose(kernel, repo, goal.Id).Blockers);
-            Assert.Contains(goal.Timeline, entry => entry.Message.Contains("Verifying", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                goal.Timeline.Skip(timelineCountBeforeRemedy),
+                entry => entry.Message.Contains("Verifying", StringComparison.OrdinalIgnoreCase));
             if (Directory.Exists(worktreePath))
             {
                 Assert.Equal(string.Empty, RunGitOutput(worktreePath, "status", "--short").Trim());

@@ -1160,30 +1160,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var reconcileSweepCoordinator = new ReconcileSweepRemediationCoordinator(
                     new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath),
                     reconcileSweepOptions,
-                    remedy =>
-                    {
-                        var previousGoal = context.CurrentGoal;
-                        try
-                        {
-                            context.CurrentGoal = context.Kernel.GetGoal(remedy.GoalId);
-                            var succeeded = RunAcceptanceWorkspaceMerge(context);
-                            var acceptanceOutput = GoalOperationJournal.Read(
-                                    context.Workspace.ExecutionDirectory,
-                                    remedy.GoalId)
-                                .Entries
-                                .LastOrDefault(entry => !string.IsNullOrWhiteSpace(entry.AcceptanceOutcome))
-                                ?.Detail;
-                            return new TerminalGoalRemedyExecutionResult(
-                                succeeded ? 0 : 1,
-                                acceptanceOutput ?? (succeeded
-                                    ? "acceptance completed"
-                                    : "acceptance did not complete; see acceptance events for current failure evidence"));
-                        }
-                        finally
-                        {
-                            context.CurrentGoal = previousGoal;
-                        }
-                    },
+                    remedy => ConductorBatchLoop.ExecuteReconcileSweepAcceptanceRemedy(
+                        context.Kernel,
+                        loopDriver,
+                        remedy,
+                        loopPolicy),
                     remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory)
                         .TryGetGoalBranchTip(remedy.GoalId));
                 var loopReaper = new BackgroundDispatchRunner();
