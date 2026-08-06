@@ -134,6 +134,35 @@ public sealed class ReconcileSweepRemediationTests
     }
 
     [Xunit.Fact]
+    public void PendingRemedyCompletesAfterSuccessfulAcceptanceRemovesCurrentBlocker()
+    {
+        var dbPath = NewDatabasePath();
+        var blocker = NewAcceptanceBlocker("background acceptance in progress");
+        var executorCalls = 0;
+        var store = new ReconcileSweepRemediationStore(dbPath);
+        var coordinator = new ReconcileSweepRemediationCoordinator(
+            store,
+            ReconcileSweepOptions.Default,
+            _ => ++executorCalls == 1
+                ? TerminalGoalRemedyExecutionResult.Pending("background attempt started")
+                : new TerminalGoalRemedyExecutionResult(0, "background attempt landed and blocker cleared"),
+            _ => blocker.Remedy.GateArtifact!.CandidateBranchSha);
+
+        var started = coordinator.Process(Sweep(blocker));
+        var completed = coordinator.Process(new TerminalGoalSweepResult([]));
+        using var afterCompletion = store.TryAcquireAcceptanceLease(
+            blocker.Remedy.GoalId.Value,
+            "manual-operator",
+            TimeSpan.FromMinutes(30));
+
+        Xunit.Assert.Single(started.Events, line => line.StartsWith("SWEEP_REMEDY_ATTEMPT", StringComparison.Ordinal));
+        Xunit.Assert.Single(completed.Events, line => line.StartsWith("SWEEP_REMEDY_RESULT", StringComparison.Ordinal));
+        Xunit.Assert.Contains(completed.Events, line => line.Contains("blocker cleared", StringComparison.Ordinal));
+        Xunit.Assert.True(completed.RemedySucceeded);
+        Xunit.Assert.NotNull(afterCompletion);
+    }
+
+    [Xunit.Fact]
     public void ReplaysOneHundredFortyBlockedRechecksAndRemediesOnFirstRecheckAfterCleanup()
     {
         var dbPath = NewDatabasePath();

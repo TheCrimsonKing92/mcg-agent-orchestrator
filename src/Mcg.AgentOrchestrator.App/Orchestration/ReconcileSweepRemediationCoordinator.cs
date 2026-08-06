@@ -37,11 +37,13 @@ internal sealed class ReconcileSweepRemediationCoordinator(
     Func<TerminalGoalRemedy, string?> currentBranchHead)
 {
     private static readonly TimeSpan AttemptStaleAfter = TimeSpan.FromMinutes(30);
+    private readonly Dictionary<string, PendingAttempt> _pendingAttempts = new(StringComparer.Ordinal);
 
     public ReconcileSweepRemediationOutcome Process(TerminalGoalSweepResult sweep)
     {
         var events = new List<string>();
         var remedySucceeded = false;
+        var polledStateKeys = PollPendingAttempts(events, ref remedySucceeded);
 
         foreach (var goal in sweep.Goals)
         {
@@ -49,6 +51,10 @@ internal sealed class ReconcileSweepRemediationCoordinator(
             {
                 var remedy = blocker.Remedy;
                 var stateKey = BuildStateKey(goal.GoalId.Value, blocker.Kind, blocker.Evidence, remedy);
+                if (polledStateKeys.Contains(stateKey))
+                {
+                    continue;
+                }
                 var state = store.Observe(stateKey, goal.GoalId.Value, blocker.Kind, blocker.Evidence, remedy.RenderCommand());
                 if (store.TryMarkBlockerEmitted(stateKey))
                 {
@@ -79,6 +85,15 @@ internal sealed class ReconcileSweepRemediationCoordinator(
                             state.AttemptCount,
                             pendingResult);
                         remedySucceeded |= pendingResult.Succeeded;
+                    }
+                    else
+                    {
+                        _pendingAttempts[stateKey] = new PendingAttempt(
+                            goal.GoalPrefix,
+                            blocker,
+                            remedy,
+                            state.InFlightOwner,
+                            state.AttemptCount);
                     }
                     continue;
                 }
@@ -116,6 +131,12 @@ internal sealed class ReconcileSweepRemediationCoordinator(
                 var result = Execute(remedy);
                 if (result.Disposition == TerminalGoalRemedyExecutionDisposition.Pending)
                 {
+                    _pendingAttempts[stateKey] = new PendingAttempt(
+                        goal.GoalPrefix,
+                        blocker,
+                        remedy,
+                        owner,
+                        claim.AttemptNumber);
                     continue;
                 }
 
@@ -125,6 +146,33 @@ internal sealed class ReconcileSweepRemediationCoordinator(
         }
 
         return new ReconcileSweepRemediationOutcome(events, remedySucceeded);
+    }
+
+    private HashSet<string> PollPendingAttempts(List<string> events, ref bool remedySucceeded)
+    {
+        var polledStateKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (stateKey, pending) in _pendingAttempts.ToArray())
+        {
+            polledStateKeys.Add(stateKey);
+            var result = Execute(pending.Remedy);
+            if (result.Disposition == TerminalGoalRemedyExecutionDisposition.Pending)
+            {
+                continue;
+            }
+
+            CompleteAttempt(
+                events,
+                pending.GoalPrefix,
+                pending.Blocker,
+                stateKey,
+                pending.Owner,
+                pending.AttemptNumber,
+                result);
+            _pendingAttempts.Remove(stateKey);
+            remedySucceeded |= result.Succeeded;
+        }
+
+        return polledStateKeys;
     }
 
     private TerminalGoalRemedyExecutionResult Execute(TerminalGoalRemedy remedy)
@@ -207,4 +255,11 @@ internal sealed class ReconcileSweepRemediationCoordinator(
 
     private static string FormatArtifact(TerminalGoalGateArtifact? artifact) =>
         artifact is null ? "none" : JsonSerializer.Serialize(artifact.Id);
+
+    private sealed record PendingAttempt(
+        string GoalPrefix,
+        TerminalGoalSweepBlocker Blocker,
+        TerminalGoalRemedy Remedy,
+        string Owner,
+        int AttemptNumber);
 }
