@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -9,22 +10,20 @@ using System.Text.Json.Nodes;
 public sealed class AcceptanceOutputCaptureTests
 {
     [Xunit.Fact]
-    public void AcceptanceProcessUsesShellFileRedirectionInsteadOfManagedPipes()
+    public void AcceptanceProcessUsesShellWithManagedOutputPipes()
     {
         var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
             ["dotnet", "test"],
-            Path.GetTempPath(),
-            "stdout path.log",
-            "stderr path.log");
+            Path.GetTempPath());
 
-        Xunit.Assert.False(startInfo.RedirectStandardOutput);
-        Xunit.Assert.False(startInfo.RedirectStandardError);
+        Xunit.Assert.True(startInfo.RedirectStandardOutput);
+        Xunit.Assert.True(startInfo.RedirectStandardError);
         Xunit.Assert.Equal(OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh", startInfo.FileName);
         var command = OperatingSystem.IsWindows()
             ? startInfo.Arguments
             : startInfo.ArgumentList.Last();
-        Xunit.Assert.Contains(">", command, StringComparison.Ordinal);
-        Xunit.Assert.Contains("2>", command, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(" > ", command, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("2>", command, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -34,28 +33,23 @@ public sealed class AcceptanceOutputCaptureTests
         var payload = Encoding.UTF8.GetBytes(new string('x', 4096));
         try
         {
-            await File.WriteAllBytesAsync(path, payload);
             var limitNotifications = 0;
-            using var monitorCts = new CancellationTokenSource();
-            var results = await GoalAcceptanceVerifier.MonitorCaptureLimitsAsync(
-                [path],
+            await using var source = new MemoryStream(payload);
+            var result = await GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+                source,
+                path,
                 limitBytes: 512,
-                pollInterval: TimeSpan.FromMilliseconds(1),
+                utcNow: () => DateTimeOffset.UnixEpoch,
                 onLimitReached: () =>
                 {
                     limitNotifications++;
-                    monitorCts.Cancel();
                 },
-                monitorCts.Token);
-            await GoalAcceptanceVerifier.FinalizeCappedCaptureAsync(
-                path,
-                limitBytes: 512,
-                DateTimeOffset.UnixEpoch);
+                CancellationToken.None);
 
             var bytes = await File.ReadAllBytesAsync(path);
             var text = Encoding.UTF8.GetString(bytes);
-            Xunit.Assert.Single(results);
-            Xunit.Assert.True(results[0].LimitReached);
+            Xunit.Assert.True(result.LimitReached);
+            Xunit.Assert.Equal(payload.Length, result.WrittenBytes);
             Xunit.Assert.Equal(1, limitNotifications);
             Xunit.Assert.Equal(512, bytes.Length);
             Xunit.Assert.StartsWith(new string('x', 32), text, StringComparison.Ordinal);
@@ -77,12 +71,21 @@ public sealed class AcceptanceOutputCaptureTests
             .ToArray();
         try
         {
-            await File.WriteAllBytesAsync(path, payload);
+            await using var source = new MemoryStream(payload);
+            var result = await GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+                source,
+                path,
+                limitBytes: payload.Length + 1,
+                utcNow: () => DateTimeOffset.UnixEpoch,
+                onLimitReached: null,
+                CancellationToken.None);
 
             var output = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(
                 path,
                 captureLimitReached: false);
 
+            Xunit.Assert.False(result.LimitReached);
+            Xunit.Assert.Equal(payload.Length, result.WrittenBytes);
             Xunit.Assert.Equal(Encoding.UTF8.GetString(payload), output);
             Xunit.Assert.DoesNotContain("captured output omitted", output, StringComparison.Ordinal);
         }
@@ -93,31 +96,74 @@ public sealed class AcceptanceOutputCaptureTests
     }
 
     [Xunit.Fact]
-    public async Task CaptureCanKeepProducingAfterLimitAndIsTrimmedAgainWithoutTermination()
+    public async Task RedirectedProcessKeepsDrainingAfterLimitWhileCaptureStaysBounded()
     {
-        var path = Path.Combine(Path.GetTempPath(), $"mcg-draining-capture-{Guid.NewGuid():N}.out");
+        const long limitBytes = 512;
+        const long producedBytes = 1024 * 1024;
+        var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-draining-capture-{Guid.NewGuid():N}.out");
+        var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-draining-capture-{Guid.NewGuid():N}.err");
         try
         {
-            await File.WriteAllBytesAsync(path, new byte[2048]);
-            GoalAcceptanceVerifier.TruncateCaptureAtLimit(path, 512);
-            Xunit.Assert.Equal(512, new FileInfo(path).Length);
-
-            await using (var producer = new FileStream(
-                path,
-                FileMode.Append,
-                FileAccess.Write,
-                FileShare.ReadWrite | FileShare.Delete))
+            string[] arguments;
+            if (OperatingSystem.IsWindows())
             {
-                await producer.WriteAsync(new byte[1024]);
+                arguments =
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "$stream=[Console]::OpenStandardOutput(); $bytes=[byte[]]::new(65536); " +
+                    "for($i=0;$i -lt 16;$i++){ $stream.Write($bytes,0,$bytes.Length); $stream.Flush() }; " +
+                    "[Console]::In.ReadLine() | Out-Null"
+                ];
+            }
+            else
+            {
+                arguments = ["/bin/sh", "-c", "dd if=/dev/zero bs=65536 count=16 2>/dev/null; read line"];
             }
 
-            Xunit.Assert.Equal(1536, new FileInfo(path).Length);
-            GoalAcceptanceVerifier.TruncateCaptureAtLimit(path, 512);
-            Xunit.Assert.Equal(512, new FileInfo(path).Length);
+            var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(arguments, Path.GetTempPath());
+            startInfo.RedirectStandardInput = true;
+            using var process = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Failed to start redirected capture producer.");
+            var limitReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var stdoutDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+                process.StandardOutput.BaseStream,
+                stdoutPath,
+                limitBytes,
+                () => DateTimeOffset.UnixEpoch,
+                () => limitReached.TrySetResult(),
+                CancellationToken.None);
+            var stderrDrain = GoalAcceptanceVerifier.DrainCappedCaptureAsync(
+                process.StandardError.BaseStream,
+                stderrPath,
+                limitBytes,
+                () => DateTimeOffset.UnixEpoch,
+                onLimitReached: null,
+                CancellationToken.None);
+
+            await limitReached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            Xunit.Assert.False(process.HasExited);
+            Xunit.Assert.InRange(new FileInfo(stdoutPath).Length, 1, limitBytes);
+
+            await process.StandardInput.WriteLineAsync(string.Empty);
+            process.StandardInput.Close();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            var stdoutResult = await stdoutDrain.WaitAsync(TimeSpan.FromSeconds(30));
+            await stderrDrain.WaitAsync(TimeSpan.FromSeconds(30));
+
+            var capture = await File.ReadAllTextAsync(stdoutPath);
+            Xunit.Assert.Equal(0, process.ExitCode);
+            Xunit.Assert.True(stdoutResult.LimitReached);
+            Xunit.Assert.Equal(producedBytes, stdoutResult.WrittenBytes);
+            Xunit.Assert.Equal(limitBytes, new FileInfo(stdoutPath).Length);
+            Xunit.Assert.Contains($"written_bytes={producedBytes}", capture, StringComparison.Ordinal);
+            Xunit.Assert.Equal(1, CountOccurrences(capture, "ACCEPTANCE_CAPTURE_LIMIT_REACHED"));
         }
         finally
         {
-            try { File.Delete(path); } catch { }
+            try { File.Delete(stdoutPath); } catch { }
+            try { File.Delete(stderrPath); } catch { }
         }
     }
 

@@ -190,7 +190,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     internal static TimeSpan TransientNoHolderBuildLockWaitWindow { get; set; } = TimeSpan.FromSeconds(75);
     internal static TimeSpan TransientNoHolderBuildLockPollInterval { get; set; } = TimeSpan.FromMilliseconds(250);
     internal static int TransientNoHolderBuildLockMaxRetryCycles { get; set; } = 2;
-    private static readonly TimeSpan CaptureLimitPollInterval = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan CaptureDrainTimeout = TimeSpan.FromSeconds(12);
     private const int CappedOutputPreviewBytes = 64 * 1024;
     internal static Func<string, string?>? ResolveBaseBuildMainShaForTests { get; set; }
     internal static Func<string, string?>? ResolvePartitionVerdictCandidateTreeShaForTests { get; set; }
@@ -6129,9 +6129,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         TimeSpan commandTimeout,
         CancellationToken cancellationToken)
     {
-        // Keep the shell-to-file transport: a grandchild can inherit a file handle without keeping
-        // this process blocked on a managed pipe. A concurrent size watchdog repeatedly truncates
-        // captures at the configured cap while the producer continues to drain normally.
+        // Keep the shell command semantics, but own the capture file offsets in this process. The
+        // drain keeps consuming after the cap so a noisy child cannot block or grow the files.
         var stdoutPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.out");
         var stderrPath = Path.Combine(Path.GetTempPath(), $"mcg-acc-{Guid.NewGuid():N}.err");
 
@@ -6144,7 +6143,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Task? heartbeatTask = null;
         GateHeartbeatRuntime? heartbeat = null;
         var keepOutputFiles = false;
-        var startInfo = BuildAcceptanceProcessStartInfo(arguments, workingDirectory, stdoutPath, stderrPath);
+        var startInfo = BuildAcceptanceProcessStartInfo(arguments, workingDirectory);
+        CancellationTokenSource? captureDrainCts = null;
+        Task<CaptureLimitResult>[]? captureDrains = null;
 
         ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
 
@@ -6153,13 +6154,24 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             using var process = StartAcceptanceProcess(startInfo, workingDirectory);
             startedProcessId = process.Id;
-            using var captureMonitorCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var captureMonitor = MonitorCaptureLimitsAsync(
-                [stdoutPath, stderrPath],
-                EngineSettings.OutputCaptureLimitBytes,
-                CaptureLimitPollInterval,
-                () => { },
-                captureMonitorCts.Token);
+            captureDrainCts = new CancellationTokenSource();
+            captureDrains =
+            [
+                DrainCappedCaptureAsync(
+                    process.StandardOutput.BaseStream,
+                    stdoutPath,
+                    EngineSettings.OutputCaptureLimitBytes,
+                    () => DateTimeOffset.UtcNow,
+                    onLimitReached: null,
+                    cancellationToken: captureDrainCts.Token),
+                DrainCappedCaptureAsync(
+                    process.StandardError.BaseStream,
+                    stderrPath,
+                    EngineSettings.OutputCaptureLimitBytes,
+                    () => DateTimeOffset.UtcNow,
+                    onLimitReached: null,
+                    cancellationToken: captureDrainCts.Token)
+            ];
             if (heartbeatContext is not null)
             {
                 heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -6189,15 +6201,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 timedOut = true;
             }
 
-            try { await captureMonitorCts.CancelAsync().ConfigureAwait(false); } catch { }
-            var captureResults = await captureMonitor.ConfigureAwait(false);
+            var captureResults = await CompleteCaptureDrainsAsync(
+                process,
+                captureDrains,
+                captureDrainCts).ConfigureAwait(false);
+            captureDrains = null;
+            captureDrainCts.Dispose();
+            captureDrainCts = null;
 
             foreach (var capture in captureResults.Where(result => result.LimitReached))
             {
-                await FinalizeCappedCaptureAsync(
-                    capture.Path,
-                    EngineSettings.OutputCaptureLimitBytes,
-                    DateTimeOffset.UtcNow).ConfigureAwait(false);
                 EmitCaptureLimitReached(heartbeatContext, capture.Path, EngineSettings.OutputCaptureLimitBytes);
             }
 
@@ -6259,6 +6272,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
         finally
         {
+            if (captureDrainCts is not null)
+            {
+                try { await captureDrainCts.CancelAsync().ConfigureAwait(false); } catch { }
+                if (captureDrains is not null)
+                {
+                    try { await Task.WhenAll(captureDrains).ConfigureAwait(false); } catch { }
+                }
+                captureDrainCts.Dispose();
+            }
+
             if (heartbeatCts is not null)
             {
                 try { await heartbeatCts.CancelAsync().ConfigureAwait(false); } catch { }
@@ -6367,15 +6390,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
             : value;
 
-    private static string BuildRedirectedCommand(
-        string[] arguments,
-        string stdoutPath,
-        string stderrPath,
-        Func<string, string> quote)
-    {
-        var command = string.Join(' ', arguments.Select(quote));
-        return $"{command} > {quote(stdoutPath)} 2> {quote(stderrPath)}";
-    }
+    private static string BuildShellCommand(string[] arguments, Func<string, string> quote) =>
+        string.Join(' ', arguments.Select(quote));
 
     private static string QuoteForCmd(string value) =>
         $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
@@ -6434,119 +6450,127 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal static ProcessStartInfo BuildAcceptanceProcessStartInfo(
         string[] arguments,
-        string workingDirectory,
-        string stdoutPath,
-        string stderrPath)
+        string workingDirectory)
     {
         var startInfo = new ProcessStartInfo
         {
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = workingDirectory
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
         if (OperatingSystem.IsWindows())
         {
             startInfo.FileName = "cmd.exe";
-            startInfo.Arguments = $"/c \"{BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForCmd)}\"";
+            startInfo.Arguments = $"/c \"{BuildShellCommand(arguments, QuoteForCmd)}\"";
         }
         else
         {
             startInfo.FileName = "/bin/sh";
             startInfo.ArgumentList.Add("-c");
-            startInfo.ArgumentList.Add(BuildRedirectedCommand(arguments, stdoutPath, stderrPath, QuoteForPosix));
+            startInfo.ArgumentList.Add(BuildShellCommand(arguments, QuoteForPosix));
         }
 
         return startInfo;
     }
 
-    internal static async Task<IReadOnlyList<CaptureLimitResult>> MonitorCaptureLimitsAsync(
-        IReadOnlyList<string> paths,
-        long limitBytes,
-        TimeSpan pollInterval,
-        Action onLimitReached,
-        CancellationToken cancellationToken)
-    {
-        var cappedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var observedBytes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-        var notified = false;
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            var results = CaptureLimitResults(paths, limitBytes);
-            foreach (var result in results)
-            {
-                observedBytes[result.Path] = Math.Max(
-                    observedBytes.GetValueOrDefault(result.Path),
-                    result.WrittenBytes);
-                if (!result.LimitReached)
-                    continue;
-
-                cappedPaths.Add(result.Path);
-                TruncateCaptureAtLimit(result.Path, limitBytes);
-            }
-
-            if (!notified && cappedPaths.Count > 0)
-            {
-                notified = true;
-                onLimitReached();
-            }
-
-            try
-            {
-                await Task.Delay(pollInterval, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-        }
-
-        var finalResults = CaptureLimitResults(paths, limitBytes);
-        return finalResults
-            .Select(result => new CaptureLimitResult(
-                result.Path,
-                Math.Max(observedBytes.GetValueOrDefault(result.Path), result.WrittenBytes),
-                cappedPaths.Contains(result.Path) || result.LimitReached))
-            .ToArray();
-    }
-
-    internal static void TruncateCaptureAtLimit(string path, long limitBytes)
+    private static async Task<IReadOnlyList<CaptureLimitResult>> CompleteCaptureDrainsAsync(
+        Process process,
+        Task<CaptureLimitResult>[] captureDrains,
+        CancellationTokenSource captureDrainCts)
     {
         try
         {
-            using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Write,
-                FileShare.ReadWrite | FileShare.Delete);
-            if (stream.Length > limitBytes)
-                stream.SetLength(limitBytes);
+            return await Task.WhenAll(captureDrains)
+                .WaitAsync(CaptureDrainTimeout)
+                .ConfigureAwait(false);
         }
-        catch (IOException)
+        catch (TimeoutException)
         {
-            // The producer may be between opening and sharing the file. The next poll retries.
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Best effort until the producer releases its handle; finalization enforces the cap.
+            await captureDrainCts.CancelAsync().ConfigureAwait(false);
+            try { WorkerProcessJobs.TryKillOrFallback(process.Id, out _); } catch { /* best effort */ }
+            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            return await Task.WhenAll(captureDrains).ConfigureAwait(false);
         }
     }
 
-    private static CaptureLimitResult[] CaptureLimitResults(IReadOnlyList<string> paths, long limitBytes) =>
-        paths.Select(path =>
+    internal static async Task<CaptureLimitResult> DrainCappedCaptureAsync(
+        Stream source,
+        string path,
+        long limitBytes,
+        Func<DateTimeOffset> utcNow,
+        Action? onLimitReached,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new byte[64 * 1024];
+        long writtenBytes = 0;
+        long persistedBytes = 0;
+        var limitReached = false;
+        await using (var destination = new FileStream(
+            path,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete,
+            buffer.Length,
+            useAsync: true))
         {
-            var length = TryGetFileLength(path);
-            return new CaptureLimitResult(path, length, length >= limitBytes);
-        }).ToArray();
+            try
+            {
+                while (true)
+                {
+                    var read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    if (read == 0)
+                        break;
+
+                    writtenBytes = writtenBytes > long.MaxValue - read
+                        ? long.MaxValue
+                        : writtenBytes + read;
+                    var persist = checked((int)Math.Min(read, Math.Max(0, limitBytes - persistedBytes)));
+                    if (persist > 0)
+                    {
+                        await destination.WriteAsync(buffer.AsMemory(0, persist), cancellationToken)
+                            .ConfigureAwait(false);
+                        persistedBytes += persist;
+                    }
+
+                    if (!limitReached && writtenBytes >= limitBytes)
+                    {
+                        limitReached = true;
+                        onLimitReached?.Invoke();
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // A descendant may inherit the pipe after the shell exits. Cancellation ends the
+                // bounded drain; bytes already observed remain valid capture evidence.
+            }
+
+            await destination.FlushAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+
+        if (limitReached)
+        {
+            await FinalizeCappedCaptureAsync(
+                path,
+                limitBytes,
+                writtenBytes,
+                utcNow()).ConfigureAwait(false);
+        }
+
+        return new CaptureLimitResult(path, writtenBytes, limitReached);
+    }
 
     internal static async Task FinalizeCappedCaptureAsync(
         string path,
         long limitBytes,
+        long writtenBytes,
         DateTimeOffset timestamp)
     {
-        var observedBytes = TryGetFileLength(path);
         var terminator = Encoding.UTF8.GetBytes(
-            $"\n[ACCEPTANCE_CAPTURE_LIMIT_REACHED cap_bytes={limitBytes} written_bytes={observedBytes} timestamp={timestamp:O}]\n");
+            $"\n[ACCEPTANCE_CAPTURE_LIMIT_REACHED cap_bytes={limitBytes} written_bytes={writtenBytes} timestamp={timestamp:O}]\n");
         var reserved = Math.Min(terminator.Length, checked((int)Math.Min(limitBytes, int.MaxValue)));
         await using var destination = new FileStream(
             path,
