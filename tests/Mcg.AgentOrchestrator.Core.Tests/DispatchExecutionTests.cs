@@ -464,6 +464,7 @@ public sealed class DispatchExecutionTests
         output,
         string.Empty,
         clock.UtcNow,
+        WorkerResultPresent: true,
         HumanInputQuestion: AgentOutputDirectives.TryParseHumanInputRequest(output));
 
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);

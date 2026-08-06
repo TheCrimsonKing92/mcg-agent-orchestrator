@@ -695,13 +695,34 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 : request.IsCompleted || request.SuppressionCount > existing.SuppressionCount
                     ? request
                     : existing;
+            var suppressionWinner = CompareSuppressionVersion(request, existing) switch
+            {
+                > 0 => request,
+                < 0 => existing,
+                _ => request.SuppressionCount > existing.SuppressionCount ? request : existing
+            };
+            var suppressionCount = existing.IsCompleted && !request.IsCompleted
+                ? Math.Max(existing.SuppressionCount, request.SuppressionCount)
+                : suppressionWinner.SuppressionCount;
             merged[request.Id] = winner with
             {
-                SuppressionCount = Math.Max(existing.SuppressionCount, request.SuppressionCount)
+                SuppressionCount = suppressionCount,
+                SuppressionAnswerRevision = suppressionWinner.SuppressionAnswerRevision,
+                SuppressionRevision = suppressionWinner.SuppressionRevision
             };
         }
 
         return merged.Values.ToArray();
+    }
+
+    private static int CompareSuppressionVersion(
+        HumanInputRequestSnapshot left,
+        HumanInputRequestSnapshot right)
+    {
+        var answerRevision = left.SuppressionAnswerRevision.CompareTo(right.SuppressionAnswerRevision);
+        return answerRevision != 0
+            ? answerRevision
+            : left.SuppressionRevision.CompareTo(right.SuppressionRevision);
     }
 
     private static GoalStateSnapshot ValidateConsistentGoalState(

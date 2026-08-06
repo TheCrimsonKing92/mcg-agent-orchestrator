@@ -1082,7 +1082,9 @@ public sealed partial class AgentOrchestratorKernel
         string? suggestedDefaultAnswer = null,
         string? resumeCommand = null,
         string? questionFingerprint = null,
-        string? blockerFingerprint = null)
+        string? blockerFingerprint = null,
+        int? completedRound = null,
+        string? workerResultLogReference = null)
     {
         var goal = GetGoal(goalId);
         if (taskId is not null)
@@ -1107,9 +1109,19 @@ public sealed partial class AgentOrchestratorKernel
             var open = matches.FirstOrDefault(candidate => !candidate.IsCompleted);
             if (open is not null)
             {
+                if (completedRound is not null)
+                {
+                    ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, exceptRequestId: null);
+                }
                 open.IncrementSuppressionCount();
                 HoldTaskForExistingHumanInput(goal, taskId);
-                AppendDuplicateHumanInputSuppressed(goal, taskId, open, answered: false);
+                AppendDuplicateHumanInputSuppressed(
+                    goal,
+                    taskId,
+                    open,
+                    answered: false,
+                    completedRound,
+                    workerResultLogReference);
                 return new HumanInputRequestCreationResult(open, WasReused: true, WasSuppressedByAnswer: false);
             }
 
@@ -1123,13 +1135,32 @@ public sealed partial class AgentOrchestratorKernel
                     string.Equals(candidate.BlockerFingerprint, blockerFingerprint, StringComparison.Ordinal));
                 if (answered is not null)
                 {
+                    if (completedRound is not null)
+                    {
+                        ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, answered.Id);
+                    }
                     answered.IncrementSuppressionCount();
-                    RestoreTaskAfterSuppressedAnsweredInput(goal, taskId, answered);
-                    AppendDuplicateHumanInputSuppressed(goal, taskId, answered, answered: true);
+                    RestoreTaskAfterSuppressedAnsweredInput(
+                        goal,
+                        taskId,
+                        answered,
+                        completedRound,
+                        workerResultLogReference);
+                    AppendDuplicateHumanInputSuppressed(
+                        goal,
+                        taskId,
+                        answered,
+                        answered: true,
+                        completedRound,
+                        workerResultLogReference);
                     return new HumanInputRequestCreationResult(answered, WasReused: false, WasSuppressedByAnswer: true);
                 }
             }
 
+            if (completedRound is not null)
+            {
+                ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, exceptRequestId: null);
+            }
             var id = HumanInputRequestId.New();
             var request = new HumanInputRequest(
                 id,
@@ -1219,7 +1250,9 @@ public sealed partial class AgentOrchestratorKernel
     private void RestoreTaskAfterSuppressedAnsweredInput(
         Goal goal,
         TaskId? taskId,
-        HumanInputRequest request)
+        HumanInputRequest request,
+        int? completedRound,
+        string? workerResultLogReference)
     {
         if (taskId is not null)
         {
@@ -1236,8 +1269,9 @@ public sealed partial class AgentOrchestratorKernel
                             goal,
                             taskId,
                             ProgressKind.TaskFailed,
-                            $"Unchanged human-input blocker persisted after the operator answer for request " +
-                            $"{request.Id.Value[..8]}; suppression threshold " +
+                            $"Answered human-input request {request.Id.Value[..8]} was genuinely re-raised by " +
+                            $"completed worker round={completedRound?.ToString() ?? "unknown"}; " +
+                            $"worker_result_log={FormatWorkerResultLogReference(workerResultLogReference)}; suppression threshold " +
                             $"{DuplicateHumanInputSuppressionThreshold} reached. Automatic redispatch stopped.");
                     }
                 }
@@ -1255,7 +1289,9 @@ public sealed partial class AgentOrchestratorKernel
         Goal goal,
         TaskId? taskId,
         HumanInputRequest request,
-        bool answered)
+        bool answered,
+        int? completedRound = null,
+        string? workerResultLogReference = null)
     {
         var thresholdReceipt = request.SuppressionCount == DuplicateHumanInputSuppressionThreshold
             ? "; repeated suppression threshold reached"
@@ -1265,8 +1301,39 @@ public sealed partial class AgentOrchestratorKernel
             taskId,
             ProgressKind.DuplicateHumanInputSuppressed,
             $"kind=duplicate-human-input-suppressed request={request.Id.Value[..8]} " +
-            $"count={request.SuppressionCount} state={(answered ? "answered" : "open")}{thresholdReceipt}");
+            $"count={request.SuppressionCount} state={(answered ? "answered" : "open")} " +
+            $"round={completedRound?.ToString() ?? "unknown"} " +
+            $"worker_result_log={FormatWorkerResultLogReference(workerResultLogReference)}{thresholdReceipt}");
     }
+
+    private void ResetAnsweredHumanInputSuppressionStreaks(
+        GoalId goalId,
+        TaskId? taskId,
+        HumanInputRequestId? exceptRequestId)
+    {
+        foreach (var request in _humanInputRequests.Values.Where(candidate =>
+                     candidate.GoalId == goalId &&
+                     candidate.TaskId == taskId &&
+                     candidate.IsCompleted &&
+                     !candidate.WasDismissed &&
+                     candidate.Id != exceptRequestId))
+        {
+            request.ResetSuppressionCount();
+        }
+    }
+
+    private void ResetAnsweredHumanInputSuppressionStreaks(GoalId goalId, TaskId taskId)
+    {
+        lock (_humanInputRequestLock)
+        {
+            ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, exceptRequestId: null);
+        }
+    }
+
+    private static string FormatWorkerResultLogReference(string? workerResultLogReference) =>
+        string.IsNullOrWhiteSpace(workerResultLogReference)
+            ? "unavailable"
+            : workerResultLogReference.Trim();
 
     public void SubmitHumanInput(
         HumanInputRequestId requestId,

@@ -301,6 +301,70 @@ public sealed class VerificationAndProcessLogTests
         "WORKER_RESULT must still be detected when the block opens inside the head-preview window");
 }
 
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_ignores_prompt_human_input_and_upstream_blocker_in_stderr")]
+    public void RefreshLatestProcessIgnoresPromptHumanInputAndUpstreamBlockerInStderr()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Use only current worker output", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        const string question = "Confirm the authoritative retry floor?";
+        const string upstreamBlocker = "exact-blocker - operator decision required";
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            question,
+            questionFingerprint: HumanInputRequest.BuildQuestionFingerprint(question),
+            blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                task.Id,
+                task.RequiredRole,
+                question,
+                upstreamBlocker)).Request;
+        kernel.SubmitHumanInput(request.Id, "Use five seconds.");
+        var stdoutPath = Path.Combine(root, "out.log");
+        var stderrPath = Path.Combine(root, "err.log");
+        var exitPath = Path.Combine(root, "exit.txt");
+        File.WriteAllText(stdoutPath, $$"""
+            WORKER_RESULT:
+            files: none
+            commands: focused review
+            tests: pass - focused review passed
+            blockers: none
+            model_fit: OpenAI/gpt-5.6-sol - adequate
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """);
+        File.WriteAllText(stderrPath, $$"""
+            Prompt context from an upstream role:
+            WORKER_RESULT:
+            files: none
+            commands: none
+            tests: deferred - awaiting operator
+            blockers: {{upstreamBlocker}}
+            model_fit: OpenAI/gpt-5.6-sol - adequate
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            HUMAN_INPUT: {{question}}
+            """);
+        File.WriteAllText(exitPath, "0");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null));
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.True(task.LastVerification!.WorkerResultPresent);
+        Assert.Null(task.LastVerification.HumanInputQuestion);
+        Assert.Equal(0, request.SuppressionCount);
+        Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed);
+    }
+
     [Xunit.Fact(DisplayName = "RefreshLatestProcess_pauses_for_middle_log_human_input_before_retained_excerpt")]
     public void RefreshLatestProcessPausesForMiddleLogHumanInputBeforeRetainedExcerpt()
 {
@@ -321,6 +385,15 @@ public sealed class VerificationAndProcessLogTests
         Environment.NewLine +
         new string('N', 2_000) +
         Environment.NewLine +
+        "WORKER_RESULT:" + Environment.NewLine +
+        "files: none" + Environment.NewLine +
+        "commands: inspected log" + Environment.NewLine +
+        "tests: deferred - awaiting operator input" + Environment.NewLine +
+        "blockers: exact-blocker - branch selection required" + Environment.NewLine +
+        "model_fit: OpenAI/gpt-5.6-sol - adequate" + Environment.NewLine +
+        "skills: none" + Environment.NewLine +
+        "confidence: high" + Environment.NewLine +
+        "END_WORKER_RESULT" + Environment.NewLine +
         new string('T', VerificationTextBounds.PreviewTailChars);
     File.WriteAllText(stdoutPath, stdout);
     File.WriteAllText(stderrPath, string.Empty);

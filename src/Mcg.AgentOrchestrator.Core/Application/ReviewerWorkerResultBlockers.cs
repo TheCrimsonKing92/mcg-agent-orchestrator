@@ -799,22 +799,15 @@ public static class WorkerResultBlockers
 
     private static IEnumerable<string> EnumerateEvidenceLines(TaskVerificationRecord verification)
     {
+        // A dispatch's stdout is the worker-authored response. Stderr can contain the
+        // launcher prompt and upstream WORKER_RESULT blocks, so it is never an
+        // authoritative source for the completed round's result.
         foreach (var line in SplitRetainedLines(verification.StandardOutput))
         {
             yield return line;
         }
 
-        foreach (var line in SplitRetainedLines(verification.StandardError))
-        {
-            yield return line;
-        }
-
         foreach (var line in ReadArtifactLines(verification.StandardOutputPath))
-        {
-            yield return line;
-        }
-
-        foreach (var line in ReadArtifactLines(verification.StandardErrorPath))
         {
             yield return line;
         }

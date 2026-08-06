@@ -25,7 +25,9 @@ public sealed class HumanInputRequest
         string? questionFingerprint = null,
         string? blockerFingerprint = null,
         int suppressionCount = 0,
-        HumanInputRequestId? supersededByRequestId = null)
+        HumanInputRequestId? supersededByRequestId = null,
+        int suppressionAnswerRevision = 0,
+        long suppressionRevision = 0)
     {
         Id = id;
         GoalId = goalId;
@@ -51,6 +53,8 @@ public sealed class HumanInputRequest
         BlockerFingerprint = string.IsNullOrWhiteSpace(blockerFingerprint) ? null : blockerFingerprint.Trim();
         SuppressionCount = Math.Max(0, suppressionCount);
         SupersededByRequestId = supersededByRequestId;
+        SuppressionAnswerRevision = Math.Max(0, suppressionAnswerRevision);
+        SuppressionRevision = Math.Max(0, suppressionRevision);
     }
 
     public HumanInputRequestId Id { get; }
@@ -97,6 +101,10 @@ public sealed class HumanInputRequest
 
     public int SuppressionCount { get; private set; }
 
+    public int SuppressionAnswerRevision { get; private set; }
+
+    public long SuppressionRevision { get; private set; }
+
     public HumanInputRequestId? SupersededByRequestId { get; private set; }
 
     public bool IsCompleted { get; private set; }
@@ -138,6 +146,7 @@ public sealed class HumanInputRequest
             answeredAt,
             origin));
         WasDismissed = false;
+        ResetSuppressionCountForAnswerRevision();
         foreach (var deliverableId in gatedDeliverableIds ?? [])
         {
             var normalized = deliverableId.Trim();
@@ -188,10 +197,48 @@ public sealed class HumanInputRequest
         _answerHistory[currentIndex] = current with { SupersededByAnswerId = answerId };
         var replacement = new HumanInputAnswerRecord(answerId, answer.Trim(), answeredAt, origin);
         _answerHistory.Add(replacement);
+        ResetSuppressionCountForAnswerRevision();
         return replacement;
     }
 
-    internal void IncrementSuppressionCount() => SuppressionCount++;
+    internal void IncrementSuppressionCount()
+    {
+        AlignSuppressionAnswerRevision();
+        SuppressionCount++;
+        SuppressionRevision++;
+    }
+
+    internal void ResetSuppressionCount()
+    {
+        AlignSuppressionAnswerRevision();
+        if (SuppressionCount == 0)
+        {
+            return;
+        }
+
+        SuppressionCount = 0;
+        SuppressionRevision++;
+    }
+
+    private void ResetSuppressionCountForAnswerRevision()
+    {
+        SuppressionCount = 0;
+        SuppressionAnswerRevision = _answerHistory.Count;
+        SuppressionRevision = 0;
+    }
+
+    private void AlignSuppressionAnswerRevision()
+    {
+        var answerRevision = _answerHistory.Count;
+        if (SuppressionAnswerRevision == answerRevision)
+        {
+            return;
+        }
+
+        SuppressionCount = 0;
+        SuppressionAnswerRevision = answerRevision;
+        SuppressionRevision = 0;
+    }
 
     internal OperatorGateRecord MarkOperatorGateSatisfied(
         string deliverableId,
@@ -248,7 +295,9 @@ public sealed class HumanInputRequest
             SuppressionCount,
             SupersededByRequestId?.Value,
             _operatorGates.Count == 0 ? null : _operatorGates.ToArray(),
-            _answerHistory.Count == 0 ? null : _answerHistory.ToArray());
+            _answerHistory.Count == 0 ? null : _answerHistory.ToArray(),
+            SuppressionAnswerRevision,
+            SuppressionRevision);
     }
 
     internal static HumanInputRequest FromSnapshot(HumanInputRequestSnapshot snapshot)
@@ -269,7 +318,9 @@ public sealed class HumanInputRequest
             snapshot.QuestionFingerprint,
             snapshot.BlockerFingerprint,
             snapshot.SuppressionCount,
-            snapshot.SupersededByRequestId is null ? null : new HumanInputRequestId(snapshot.SupersededByRequestId));
+            snapshot.SupersededByRequestId is null ? null : new HumanInputRequestId(snapshot.SupersededByRequestId),
+            snapshot.SuppressionAnswerRevision,
+            snapshot.SuppressionRevision);
 
         if (snapshot.IsCompleted)
         {

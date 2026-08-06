@@ -1209,7 +1209,10 @@ public sealed class BackgroundDispatchRunner
         }
 
         var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, decisionStandardOutput, decisionStandardError);
-        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, decisionStandardOutput, decisionStandardError);
+        var workerResultPresent = WorkerResultParser.TryParseFields(
+            decisionStandardOutput,
+            out _,
+            out _);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
@@ -1388,8 +1391,9 @@ public sealed class BackgroundDispatchRunner
                 FormatResourceReceipt(goalId, taskId, resourceAccounting));
         }
 
-        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput)
-            ?? AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardError);
+        var humanInputQuestion = workerResultPresent
+            ? AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput)
+            : null;
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
         // snapshot. Kernel classification reparses the snapshot for directives and blockers.
