@@ -1160,6 +1160,17 @@ internal sealed class ConductorBatchLoop
 
                 var fallbackInterval = GetWatchFallbackInterval(kernel, onlyGoalId, watchInterval.Value);
                 var sleepSeconds = (int)fallbackInterval.TotalSeconds;
+                if (CountRecheckableNonTerminalGoals(kernel, onlyGoalId, setAsideGoals) > 0)
+                {
+                    totalBlockedRechecks++;
+                    var now = _utcNow();
+                    if (lastBlockedRecheckHeartbeatAt is null ||
+                        now - lastBlockedRecheckHeartbeatAt.Value >= _blockedRecheckHeartbeatInterval)
+                    {
+                        EmitProgress(FormatBlockedRecheckHeartbeat(sweepResult, totalBlockedRechecks));
+                        lastBlockedRecheckHeartbeatAt = now;
+                    }
+                }
                 if (emitTickSummary)
                 {
                     EmitProgress($"WATCH_SLEEP tick={totalTicks} seconds={sleepSeconds}");
