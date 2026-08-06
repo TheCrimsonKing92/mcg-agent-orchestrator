@@ -406,8 +406,13 @@ public sealed class VerificationAndProcessLogTests
         }
 
         Assert.Equal(0, request.SuppressionCount);
-        Assert.NotEqual(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed);
+        var failure = Assert.Single(goal.Timeline, item =>
+            item.TaskId == task.Id &&
+            item.Kind == ProgressKind.TaskFailed &&
+            item.Message.Contains(request.Id.Value[..8], StringComparison.Ordinal));
+        Assert.Contains("3 observations after answered recovery request", failure.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

@@ -115,6 +115,10 @@ public sealed class AgentTaskRunner
         goal.Append(new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskOutputRecorded, TrimForTimeline(execution.Output), execution.CompletedAt));
 
         var hasCompleteWorkerResult = WorkerResultBlockers.HasCompleteWorkerResult(output);
+        var completedRound = goal.Timeline.Count(evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskOutputRecorded);
+        var workerResultReference =
+            $"api-run:{resolvedModel.ProviderName}/{resolvedModel.ModelName}:completed-at={execution.CompletedAt:O}";
         if (humanInputQuestion is not null)
         {
             var rawQuestion = humanInputQuestion;
@@ -125,7 +129,7 @@ public sealed class AgentTaskRunner
                 humanInputQuestion += $"{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {accompanyingBlocker}";
             }
 
-            _kernel.RequestHumanInputDeduplicated(
+            var requestResult = _kernel.RequestHumanInputDeduplicated(
                 goal.Id,
                 task.Id,
                 humanInputQuestion,
@@ -134,8 +138,26 @@ public sealed class AgentTaskRunner
                     task.Id,
                     task.RequiredRole,
                     rawQuestion,
-                    accompanyingBlocker));
-            return new AgentTaskRunResult(goal, task, execution);
+                    accompanyingBlocker),
+                completedRound: hasCompleteWorkerResult ? completedRound : null,
+                workerResultLogReference: workerResultReference,
+                recordDuplicateSuppression: hasCompleteWorkerResult);
+            if (hasCompleteWorkerResult &&
+                requestResult.WasSuppressedByAnswer &&
+                WorkerResultBlockers.TryGetBlockersStatus(output, out var blockersStatus) &&
+                blockersStatus == WorkerResultBlockers.BlockersStatus.None)
+            {
+                _kernel.RecordHumanInputWorkerResultContradiction(
+                    goal.Id,
+                    task.Id,
+                    requestResult.Request.Id,
+                    completedRound,
+                    workerResultReference);
+            }
+            if (hasCompleteWorkerResult || !requestResult.WasSuppressedByAnswer)
+            {
+                return new AgentTaskRunResult(goal, task, execution);
+            }
         }
 
         if (hasCompleteWorkerResult &&
@@ -153,8 +175,15 @@ public sealed class AgentTaskRunner
                     task.Id,
                     task.RequiredRole,
                     question,
-                    premiseEvidence));
+                    premiseEvidence),
+                completedRound: completedRound,
+                workerResultLogReference: workerResultReference);
             return new AgentTaskRunResult(goal, task, execution);
+        }
+
+        if (hasCompleteWorkerResult)
+        {
+            _kernel.ResetAnsweredHumanInputSuppressionStreaks(goal.Id, task.Id);
         }
 
         if (hasCompleteWorkerResult &&

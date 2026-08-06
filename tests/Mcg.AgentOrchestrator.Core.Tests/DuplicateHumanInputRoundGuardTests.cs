@@ -145,6 +145,77 @@ public sealed class DuplicateHumanInputRoundGuardTests
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
     }
 
+    [Xunit.Fact]
+    public async Task Api_runs_count_consecutive_reraises_with_round_receipts()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var agents = DefaultAgents();
+        var goal = kernel.CreateGoal("Guard duplicate human input in API runs.");
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+        const string question = "Confirm the authoritative retry floor?";
+        var provider = new FakeModelProvider("OpenAI", WorkerResult("none") +
+            $"{Environment.NewLine}HUMAN_INPUT: {question}");
+        var runner = new AgentTaskRunner(kernel, agents, new InMemoryModelProviderRegistry([provider]), clock);
+
+        await runner.RunAsync(goal.Id, task.Id, TestContext.Current.CancellationToken);
+        var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        kernel.SubmitHumanInput(request.Id, "Use five seconds.");
+        for (var round = 2; round <= 4; round++)
+        {
+            kernel.RetryTask(goal.Id, task.Id, $"Replay API round {round}.");
+            clock.Advance();
+            await runner.RunAsync(goal.Id, task.Id, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(3, request.SuppressionCount);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(3, goal.Timeline.Count(evt => evt.Kind == ProgressKind.HumanInputWorkerResultContradiction));
+        var failure = Assert.Single(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains(request.Id.Value[..8], StringComparison.Ordinal));
+        Assert.Contains("round=4", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("worker_result_log=api-run:OpenAI/", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task Clean_api_run_resets_answered_reraise_streak()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var agents = DefaultAgents();
+        var goal = kernel.CreateGoal("Reset duplicate human input streak in API runs.");
+        kernel.ActivateGoal(goal.Id, agents);
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+        const string question = "Confirm the authoritative retry floor?";
+        var blockedRunner = new AgentTaskRunner(
+            kernel,
+            agents,
+            new InMemoryModelProviderRegistry([new FakeModelProvider(
+                "OpenAI",
+                WorkerResult("exact-blocker - operator decision required") + $"{Environment.NewLine}HUMAN_INPUT: {question}")]),
+            clock);
+
+        await blockedRunner.RunAsync(goal.Id, task.Id, TestContext.Current.CancellationToken);
+        var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        kernel.SubmitHumanInput(request.Id, "Use five seconds.");
+        kernel.RetryTask(goal.Id, task.Id, "Replay one answered re-raise.");
+        await blockedRunner.RunAsync(goal.Id, task.Id, TestContext.Current.CancellationToken);
+        Assert.Equal(1, request.SuppressionCount);
+
+        kernel.RetryTask(goal.Id, task.Id, "Run a clean API round.");
+        var cleanRunner = new AgentTaskRunner(
+            kernel,
+            agents,
+            new InMemoryModelProviderRegistry([new FakeModelProvider("OpenAI", WorkerResult("none"))]),
+            clock);
+        await cleanRunner.RunAsync(goal.Id, task.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, request.SuppressionCount);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+    }
+
     private static (FakeClock Clock, AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Task) CreateScenario()
     {
         var clock = new FakeClock();
@@ -166,6 +237,11 @@ public sealed class DuplicateHumanInputRoundGuardTests
         int exitCode = 0,
         string standardError = "")
     {
+        if (task.LastVerification is not null)
+        {
+            kernel.RetryTask(goal.Id, task.Id, $"Replay completed round {task.VerificationHistory.Count + 1}.");
+        }
+
         clock.Advance();
         var round = task.VerificationHistory.Count + 1;
         var command = $"develop-round-{round}";

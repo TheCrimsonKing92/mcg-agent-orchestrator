@@ -1333,7 +1333,7 @@ public sealed partial class AgentOrchestratorKernel
         }
     }
 
-    private void ResetAnsweredHumanInputSuppressionStreaks(GoalId goalId, TaskId taskId)
+    internal void ResetAnsweredHumanInputSuppressionStreaks(GoalId goalId, TaskId taskId)
     {
         lock (_humanInputRequestLock)
         {

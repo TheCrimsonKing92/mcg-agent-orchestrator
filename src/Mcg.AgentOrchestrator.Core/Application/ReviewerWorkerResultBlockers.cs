@@ -381,6 +381,21 @@ public static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryGetBlockersStatus(string workerOutput, out BlockersStatus status)
+    {
+        status = BlockersStatus.Unknown;
+        foreach (var line in EnumerateWorkerResultLines(SplitRetainedLines(workerOutput)))
+        {
+            if (TryFindField(line, "blockers", out var value) &&
+                TryParseBlockersStatus(value, out status))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static bool TryFindBlocker(string workerOutput, out string blocker)
     {
         blocker = string.Empty;

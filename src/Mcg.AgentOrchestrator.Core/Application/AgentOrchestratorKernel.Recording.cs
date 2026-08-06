@@ -140,18 +140,6 @@ public sealed partial class AgentOrchestratorKernel
                 humanInputQuestion += $"{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {accompanyingBlocker}";
             }
 
-            if (WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
-                blockersStatus == WorkerResultBlockers.BlockersStatus.None)
-            {
-                Append(
-                    goal,
-                    taskId,
-                    ProgressKind.HumanInputWorkerResultContradiction,
-                    $"kind=human-input-worker-result-contradiction request_question={HumanInputRequest.BuildQuestionFingerprint(rawQuestion)} " +
-                    $"round={completedRound} worker_result_log={verification.StandardOutputPath ?? "unavailable"} " +
-                    "human_input=emitted blockers=none");
-            }
-
             var requestResult = RequestHumanInputDeduplicated(
                 goal.Id,
                 task.Id,
@@ -162,9 +150,21 @@ public sealed partial class AgentOrchestratorKernel
                     task.RequiredRole,
                     rawQuestion,
                     accompanyingBlocker),
-                completedRound: completedRound,
+                completedRound: verification.WorkerResultPresent ? completedRound : null,
                 workerResultLogReference: verification.StandardOutputPath,
                 recordDuplicateSuppression: verification.WorkerResultPresent);
+            if (verification.WorkerResultPresent &&
+                requestResult.WasSuppressedByAnswer &&
+                WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
+                blockersStatus == WorkerResultBlockers.BlockersStatus.None)
+            {
+                RecordHumanInputWorkerResultContradiction(
+                    goal.Id,
+                    taskId,
+                    requestResult.Request.Id,
+                    completedRound,
+                    verification.StandardOutputPath);
+            }
             if (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer)
             {
                 return;
@@ -797,6 +797,22 @@ public sealed partial class AgentOrchestratorKernel
         {
             RecordDispatchExecutionResult(goalId, taskId, verification, providerFailureKind);
         }
+    }
+
+    internal void RecordHumanInputWorkerResultContradiction(
+        GoalId goalId,
+        TaskId taskId,
+        HumanInputRequestId requestId,
+        int completedRound,
+        string? workerResultLogReference)
+    {
+        Append(
+            GetGoal(goalId),
+            taskId,
+            ProgressKind.HumanInputWorkerResultContradiction,
+            $"kind=human-input-worker-result-contradiction request={requestId.Value[..8]} " +
+            $"round={completedRound} worker_result_log={workerResultLogReference ?? "unavailable"} " +
+            "human_input=emitted blockers=none");
     }
 
     public void RecordTaskProcessGracefullyDetached(

@@ -57,6 +57,7 @@ public sealed record InterruptedDispatchStateRead(
 public sealed class BackgroundDispatchRunner
 {
     private const int ApparatusHoldObservationsBeforeEscalation = 2;
+    private const int AnsweredApparatusHoldObservationsBeforeFailure = 3;
     private const string ApparatusHoldReceiptPrefix = "DispatchApparatusHoldObserved:";
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
     public const string TestRewriteRealWorkerCommandsVariable = "MCG_ORCHESTRATOR_TEST_REWRITE_REAL_WORKER_COMMANDS";
@@ -932,7 +933,7 @@ public sealed class BackgroundDispatchRunner
         }
 
         var fingerprint = $"dispatch-apparatus-hold:{taskId.Value}:{blocker}";
-        kernel.RequestHumanInputDeduplicated(
+        var requestResult = kernel.RequestHumanInputDeduplicated(
             goalId,
             taskId,
             $"Dispatch recovery cannot determine the worker outcome after {observation} observations because blocker '{blocker}' remains. " +
@@ -945,6 +946,28 @@ public sealed class BackgroundDispatchRunner
             questionFingerprint: fingerprint,
             blockerFingerprint: fingerprint,
             recordDuplicateSuppression: false);
+        if (!requestResult.WasSuppressedByAnswer || requestResult.Request.AnsweredAt is null)
+        {
+            return;
+        }
+
+        var answeredObservations = kernel.GetTimeline(goalId).Count(evt =>
+            evt.TaskId == taskId &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.OccurredAt >= requestResult.Request.AnsweredAt &&
+            evt.Message.StartsWith(ApparatusHoldReceiptPrefix, StringComparison.Ordinal) &&
+            evt.Message.Contains($"blocker='{blocker}'", StringComparison.Ordinal));
+        var task = kernel.GetTask(goalId, taskId);
+        if (answeredObservations >= AnsweredApparatusHoldObservationsBeforeFailure &&
+            task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Failed or WorkTaskStatus.Cancelled))
+        {
+            kernel.ReportTaskProgress(
+                goalId,
+                taskId,
+                WorkTaskStatus.Failed,
+                $"Dispatch apparatus remained indeterminate for {answeredObservations} observations after answered recovery request " +
+                $"{requestResult.Request.Id.Value[..8]}; blocker='{blocker}'; evidence='{decision.EvidencePath}'.");
+        }
     }
 
     private bool TryBuildStaleDispatchAutoRequeueOutcome(

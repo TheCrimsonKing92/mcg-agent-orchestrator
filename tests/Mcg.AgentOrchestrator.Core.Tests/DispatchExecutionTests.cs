@@ -1762,6 +1762,7 @@ public sealed class DispatchExecutionTests
         {
             clock.Advance();
             var command = $"inspect-{round}";
+            kernel.RetryTask(goal.Id, task.Id, $"Replay premise-invalid round {round}.");
             kernel.RecordTaskDispatch(
                 goal.Id,
                 task.Id,
