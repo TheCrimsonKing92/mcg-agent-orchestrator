@@ -229,6 +229,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
         {
             DataSource = dbPath,
             Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
             DefaultTimeout = 5
         }.ToString());
         connection.Open();
@@ -267,6 +268,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
             DataSource = _dbPath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
+            Pooling = false,
             DefaultTimeout = 5
         }.ToString());
         connection.Open();

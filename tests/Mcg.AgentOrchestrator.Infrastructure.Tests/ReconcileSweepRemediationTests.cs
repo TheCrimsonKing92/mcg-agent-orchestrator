@@ -259,6 +259,24 @@ public sealed class ReconcileSweepRemediationTests
     }
 
     [Xunit.Fact]
+    public void StoreAndReleasedAcceptanceLeaseDoNotRetainDatabaseFileHandles()
+    {
+        var dbPath = NewDatabasePath();
+        var store = new ReconcileSweepRemediationStore(dbPath);
+
+        using (var lease = store.TryAcquireAcceptanceLease(
+                   "goal-1",
+                   "owner-1",
+                   TimeSpan.FromMinutes(30)))
+        {
+            Xunit.Assert.NotNull(lease);
+        }
+
+        Directory.Delete(Path.GetDirectoryName(dbPath)!, recursive: true);
+        Xunit.Assert.False(Directory.Exists(Path.GetDirectoryName(dbPath)));
+    }
+
+    [Xunit.Fact]
     public void ConfigurationAllowsExplicitEmptyAllowlist()
     {
         var values = new Dictionary<string, string?>
