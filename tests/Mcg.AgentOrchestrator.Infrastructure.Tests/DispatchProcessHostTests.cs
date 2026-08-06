@@ -544,7 +544,12 @@ public sealed class DispatchProcessHostTests
         Directory.CreateDirectory(worktree);
         try
         {
-            var startInfo = new ProcessStartInfo { UseShellExecute = false, WorkingDirectory = worktree };
+            var startInfo = new ProcessStartInfo
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = worktree
+            };
             var parameters = new DispatchProcessHost.DispatchRunParameters(
                 "Write-Output ok",
                 worktree,
