@@ -1449,6 +1449,11 @@ public sealed partial class AgentOrchestratorKernel
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(stableId => stableId, StringComparer.Ordinal)
                 .ToArray();
+            var thresholdAffectedTaskIds = allMatchingRequests
+                .Where(candidate => candidate.SuppressionCount >= DuplicateHumanInputSuppressionThreshold)
+                .Where(candidate => candidate.TaskId is not null)
+                .Select(candidate => candidate.TaskId!)
+                .ToArray();
             var replacement = request.Supersede(replacementAnswer, supersededAt, origin);
             var resolvedRequests = matchingRequests.Where(candidate => !candidate.IsCompleted).ToArray();
             foreach (var related in resolvedRequests)
@@ -1457,10 +1462,9 @@ public sealed partial class AgentOrchestratorKernel
             }
 
             var affectedTasks = resolvedRequests
-                .Concat(allMatchingRequests.Where(candidate =>
-                    candidate.SuppressionCount >= DuplicateHumanInputSuppressionThreshold))
                 .Where(candidate => candidate.TaskId is not null)
                 .Select(candidate => candidate.TaskId!)
+                .Concat(thresholdAffectedTaskIds)
                 .Distinct()
                 .Select(goal.FindTask)
                 .Where(task => task.Status is WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Failed)
