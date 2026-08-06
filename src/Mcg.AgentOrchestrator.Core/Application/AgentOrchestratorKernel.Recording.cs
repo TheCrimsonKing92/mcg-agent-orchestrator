@@ -592,6 +592,7 @@ public sealed partial class AgentOrchestratorKernel
                 state = isCurrentRound
                     ? ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations)
                     : ReviewFindingConvergence.ApplyRound(state, round);
+                state = ApplyHumanInputSupersedeFindingResolutions(goal, state);
             }
             catch (ReviewFindingConvergenceException ex)
             {

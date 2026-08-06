@@ -15,6 +15,7 @@ internal static class CliCommandHelp
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
     public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
+    public const string SupersedeUsage = "Usage: supersede <goal-id> <request-id> <answer> | supersede <goal-id> <request-id> --text-file <path>";
     public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
     public const string AttentionUsage = "Usage: attention show [--all|--include-parked] [--goal] <goal-id-prefix> | attention dismiss <goal-id-prefix> | attention answer [<goal-id-prefix>] <id> <answer> | attention answer [<goal-id-prefix>] <id> --text-file <path>";
     public const string AbandonGoalUsage = "Usage: abandon-goal <goal-id-prefix> <reason> [--confirm-goal-abandon] | abandon-goal <goal-id-prefix> --text-file <path> [--confirm-goal-abandon]";
@@ -137,6 +138,11 @@ internal static class CliCommandHelp
         AnswerUsage,
         "Submit an answer to a human-input request.",
         ["--text-file", "--gate-deliverable", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Supersede = new(
+        SupersedeUsage,
+        "Replace a closed clarification answer while retaining its retracted audit history.",
+        ["--text-file", "--help", "-h"]);
 
     private static readonly CommandHelpEntry GateSatisfied = new(
         GateSatisfiedUsage,
@@ -482,6 +488,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("answer", StringComparison.OrdinalIgnoreCase))
         {
             entry = Answer;
+            return true;
+        }
+
+        if (args[0].Equals("supersede", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Supersede;
             return true;
         }
 

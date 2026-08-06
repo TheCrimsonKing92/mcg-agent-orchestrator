@@ -33,6 +33,16 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return SplitCommand(string.Join(' ', args));
     }
 
+    if (command.Equals("supersede", StringComparison.OrdinalIgnoreCase))
+    {
+        if (args.Any(arg => arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase)) || args.Length < 4)
+        {
+            return args;
+        }
+
+        return [command, args[1], args[2], string.Join(' ', args.Skip(3))];
+    }
+
     if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("park-goal", StringComparison.OrdinalIgnoreCase) ||
         command.Equals("unpark-goal", StringComparison.OrdinalIgnoreCase) ||

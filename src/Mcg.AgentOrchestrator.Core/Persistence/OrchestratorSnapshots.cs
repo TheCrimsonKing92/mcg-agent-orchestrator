@@ -227,7 +227,8 @@ public sealed record HumanInputRequestSnapshot(
     string? BlockerFingerprint = null,
     int SuppressionCount = 0,
     string? SupersededByRequestId = null,
-    IReadOnlyList<OperatorGateRecord>? OperatorGates = null);
+    IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
+    IReadOnlyList<HumanInputAnswerRecord>? AnswerHistory = null);
 
 public static class VerificationTextBounds
 {

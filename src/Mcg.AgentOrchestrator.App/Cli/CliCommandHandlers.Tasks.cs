@@ -549,6 +549,26 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
+        case "supersede":
+            const string supersedeUsage = "supersede <goal-id> <request-id> <answer> | supersede <goal-id> <request-id> --text-file <path>";
+            CliArgumentParser.RequirePartCount(parts, 4, supersedeUsage);
+            var supersedeGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            var supersedeRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(
+                context.Kernel,
+                supersedeGoal.Id,
+                parts[2]);
+            var authoritativeAnswer = context.Kernel.SupersedeHumanInput(
+                supersedeGoal.Id,
+                supersedeRequest.Id,
+                ResolveTextArgument(parts, inlineIndex: 3, supersedeUsage, "--text-file"),
+                HumanInputAnswerOrigin.Operator);
+            context.CurrentGoal = supersedeGoal;
+            Console.WriteLine(
+                $"Superseded clarification {supersedeRequest.Id.Value[..8]}. " +
+                $"Authoritative answer: {authoritativeAnswer.Text}");
+            ConsoleViews.PrintGoal(context.CurrentGoal);
+            return true;
+
         case "gate-satisfied":
             const string gateSatisfiedUsage = "gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
             CliArgumentParser.RequirePartCount(parts, 4, gateSatisfiedUsage);

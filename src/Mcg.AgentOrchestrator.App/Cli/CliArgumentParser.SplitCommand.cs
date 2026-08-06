@@ -95,6 +95,20 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return [.. SplitTargetTextCommandWithFileFlags(command, answerRemainder, "--text-file"), .. gateFlags];
     }
 
+    if (command.Equals("supersede", StringComparison.OrdinalIgnoreCase))
+    {
+        var firstSeparator = remainder.IndexOf(' ');
+        if (firstSeparator < 1)
+        {
+            return [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
+        }
+
+        var goalId = remainder[..firstSeparator];
+        var requestAndAnswer = remainder[(firstSeparator + 1)..].TrimStart();
+        var requestParts = SplitTargetTextCommandWithFileFlags(command, requestAndAnswer, "--text-file");
+        return [command, goalId, .. requestParts.Skip(1)];
+    }
+
     if (command.Equals("attention", StringComparison.OrdinalIgnoreCase))
     {
         if (remainder.StartsWith("answer ", StringComparison.OrdinalIgnoreCase) &&

@@ -7,6 +7,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed class HumanInputRequest
 {
     private readonly List<OperatorGateRecord> _operatorGates = [];
+    private readonly List<HumanInputAnswerRecord> _answerHistory = [];
 
     public HumanInputRequest(
         HumanInputRequestId id,
@@ -82,15 +83,32 @@ public sealed class HumanInputRequest
 
     public string? BlockerFingerprint { get; }
 
+    public string? DerivedBlockerEvidence
+    {
+        get
+        {
+            const string marker = "Accompanying WORKER_RESULT blocker evidence:";
+            var markerIndex = Question.IndexOf(marker, StringComparison.Ordinal);
+            return markerIndex < 0
+                ? null
+                : Question[(markerIndex + marker.Length)..].Trim();
+        }
+    }
+
     public int SuppressionCount { get; private set; }
 
     public HumanInputRequestId? SupersededByRequestId { get; private set; }
 
     public bool IsCompleted { get; private set; }
 
-    public string? Answer { get; private set; }
+    public string? Answer => AuthoritativeAnswer?.Text;
 
-    public DateTimeOffset? AnsweredAt { get; private set; }
+    public DateTimeOffset? AnsweredAt => AuthoritativeAnswer?.AnsweredAt ?? DismissedAt;
+
+    public HumanInputAnswerRecord? AuthoritativeAnswer =>
+        _answerHistory.LastOrDefault(answer => !answer.IsRetracted);
+
+    public IReadOnlyList<HumanInputAnswerRecord> AnswerHistory => _answerHistory;
 
     public IReadOnlyList<OperatorGateRecord> OperatorGates => _operatorGates;
 
@@ -104,7 +122,8 @@ public sealed class HumanInputRequest
     internal void Complete(
         string answer,
         DateTimeOffset answeredAt,
-        IReadOnlyList<string>? gatedDeliverableIds = null)
+        IReadOnlyList<string>? gatedDeliverableIds = null,
+        HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator)
     {
         if (string.IsNullOrWhiteSpace(answer))
         {
@@ -112,8 +131,12 @@ public sealed class HumanInputRequest
         }
 
         IsCompleted = true;
-        Answer = answer.Trim();
-        AnsweredAt = answeredAt;
+        _answerHistory.Clear();
+        _answerHistory.Add(new HumanInputAnswerRecord(
+            $"{Id.Value}:answer:0",
+            answer.Trim(),
+            answeredAt,
+            origin));
         WasDismissed = false;
         foreach (var deliverableId in gatedDeliverableIds ?? [])
         {
@@ -132,9 +155,40 @@ public sealed class HumanInputRequest
     internal void Dismiss(DateTimeOffset dismissedAt)
     {
         IsCompleted = true;
-        Answer = null;
-        AnsweredAt = dismissedAt;
+        _answerHistory.Clear();
+        DismissedAt = dismissedAt;
         WasDismissed = true;
+    }
+
+    private DateTimeOffset? DismissedAt { get; set; }
+
+    internal HumanInputAnswerRecord Supersede(
+        string answer,
+        DateTimeOffset answeredAt,
+        HumanInputAnswerOrigin origin)
+    {
+        if (origin != HumanInputAnswerOrigin.Operator)
+        {
+            throw new UnauthorizedAccessException("Only operator / human-input origin may supersede a clarification answer.");
+        }
+
+        if (!IsCompleted || WasDismissed || AuthoritativeAnswer is null)
+        {
+            throw new InvalidOperationException($"Human input request '{Id}' has no answered clarification to supersede.");
+        }
+
+        if (string.IsNullOrWhiteSpace(answer))
+        {
+            throw new ArgumentException("Value cannot be empty.", nameof(answer));
+        }
+
+        var answerId = $"{Id.Value}:answer:{_answerHistory.Count}";
+        var currentIndex = _answerHistory.FindLastIndex(candidate => !candidate.IsRetracted);
+        var current = _answerHistory[currentIndex];
+        _answerHistory[currentIndex] = current with { SupersededByAnswerId = answerId };
+        var replacement = new HumanInputAnswerRecord(answerId, answer.Trim(), answeredAt, origin);
+        _answerHistory.Add(replacement);
+        return replacement;
     }
 
     internal void IncrementSuppressionCount() => SuppressionCount++;
@@ -193,7 +247,8 @@ public sealed class HumanInputRequest
             BlockerFingerprint,
             SuppressionCount,
             SupersededByRequestId?.Value,
-            _operatorGates.Count == 0 ? null : _operatorGates.ToArray());
+            _operatorGates.Count == 0 ? null : _operatorGates.ToArray(),
+            _answerHistory.Count == 0 ? null : _answerHistory.ToArray());
     }
 
     internal static HumanInputRequest FromSnapshot(HumanInputRequestSnapshot snapshot)
@@ -221,6 +276,12 @@ public sealed class HumanInputRequest
             if (snapshot.WasDismissed)
             {
                 request.Dismiss(snapshot.AnsweredAt ?? snapshot.RequestedAt);
+            }
+            else if (snapshot.AnswerHistory is { Count: > 0 })
+            {
+                request.IsCompleted = true;
+                request.WasDismissed = false;
+                request._answerHistory.AddRange(snapshot.AnswerHistory.OrderBy(answer => answer.AnsweredAt));
             }
             else
             {
@@ -258,6 +319,16 @@ public sealed class HumanInputRequest
 
     private static string BuildFingerprint(string normalizedValue) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedValue))).ToLowerInvariant();
+}
+
+public sealed record HumanInputAnswerRecord(
+    string Id,
+    string Text,
+    DateTimeOffset AnsweredAt,
+    HumanInputAnswerOrigin Origin = HumanInputAnswerOrigin.Operator,
+    string? SupersededByAnswerId = null)
+{
+    public bool IsRetracted => SupersededByAnswerId is not null;
 }
 
 public sealed record OperatorGateRecord(

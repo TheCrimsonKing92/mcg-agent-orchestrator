@@ -28,7 +28,17 @@ internal sealed record HumanInputDto(
     string? Answer,
     DateTimeOffset? AnsweredAt,
     int TotalRequestCount,
-    int OpenRequestCount);
+    int OpenRequestCount,
+    IReadOnlyList<HumanInputAnswerDto> AnswerHistory);
+
+internal sealed record HumanInputAnswerDto(
+    string Id,
+    string Text,
+    DateTimeOffset AnsweredAt,
+    HumanInputAnswerOrigin Origin,
+    bool IsAuthoritative,
+    bool IsRetracted,
+    string? SupersededByAnswerId);
 
 internal sealed record HumanInputWorklistDto(
     string GoalId,

@@ -3,6 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed partial class AgentOrchestratorKernel
 {
     private const int DuplicateHumanInputSuppressionThreshold = 3;
+    public const int DuplicateHumanInputDistinctTaskThreshold = 2;
 
     public Goal CreateGoal(string objective, IReadOnlyList<TaskSpec>? tasks = null)
     {
@@ -1149,8 +1150,60 @@ public sealed partial class AgentOrchestratorKernel
 
             HoldTaskForExistingHumanInput(goal, taskId);
             Append(goal, taskId, ProgressKind.HumanInputRequested, question);
+            AppendContradictoryRecordAdvisoryIfNeeded(goal, request);
             return new HumanInputRequestCreationResult(request, WasReused: false, WasSuppressedByAnswer: false);
         }
+    }
+
+    private void AppendContradictoryRecordAdvisoryIfNeeded(Goal goal, HumanInputRequest request)
+    {
+        var matches = _humanInputRequests.Values
+            .Where(candidate =>
+                candidate.GoalId == goal.Id &&
+                string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
+            .OrderBy(candidate => candidate.RequestedAt)
+            .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+        var distinctTaskIds = matches
+            .Where(candidate => candidate.TaskId is not null)
+            .Select(candidate => candidate.TaskId!)
+            .Distinct()
+            .ToArray();
+        if (distinctTaskIds.Length < DuplicateHumanInputDistinctTaskThreshold)
+        {
+            return;
+        }
+
+        var marker = $"questionFingerprint={request.QuestionFingerprint}";
+        var priorSignal = goal.Timeline
+            .Where(evt =>
+                evt.Kind == ProgressKind.ContradictoryRecordDetected &&
+                evt.Message.Contains(marker, StringComparison.Ordinal))
+            .OrderByDescending(evt => evt.OccurredAt)
+            .FirstOrDefault();
+        if (priorSignal is not null && !matches.Any(candidate => candidate.AnsweredAt > priorSignal.OccurredAt))
+        {
+            return;
+        }
+
+        var roles = distinctTaskIds
+            .Select(taskId => goal.FindTask(taskId).RequiredRole)
+            .Distinct()
+            .OrderBy(role => role)
+            .ToArray();
+        var totalOccurrences = matches.Sum(candidate => 1 + candidate.SuppressionCount);
+        var answeredRequest = matches
+            .Where(candidate => candidate.IsCompleted && !candidate.WasDismissed)
+            .OrderByDescending(candidate => candidate.AnsweredAt)
+            .FirstOrDefault();
+        Append(
+            goal,
+            null,
+            ProgressKind.ContradictoryRecordDetected,
+            $"kind=contradictory-record {marker} distinctTasks={distinctTaskIds.Length} " +
+            $"totalOccurrences={totalOccurrences} tasks={string.Join(',', distinctTaskIds.Select(id => id.Value))} " +
+            $"roles={string.Join(',', roles)} requests={string.Join(',', matches.Select(candidate => candidate.Id.Value))} " +
+            $"alreadyAnsweredRequest={answeredRequest?.Id.Value ?? "none"}");
     }
 
     private void HoldTaskForExistingHumanInput(Goal goal, TaskId? taskId)
@@ -1229,7 +1282,8 @@ public sealed partial class AgentOrchestratorKernel
 
             if (request.IsCompleted)
             {
-                throw new InvalidOperationException($"Human input request '{requestId}' has already been answered.");
+                throw new InvalidOperationException(
+                    $"Human input request '{requestId}' has already been answered — use supersede to correct it.");
             }
 
             var goal = GetGoal(request.GoalId);
@@ -1269,6 +1323,103 @@ public sealed partial class AgentOrchestratorKernel
             Append(goal, request.TaskId, ProgressKind.HumanInputReceived, answer + siblingReceipt);
         }
     }
+
+    public HumanInputAnswerRecord SupersedeHumanInput(
+        GoalId goalId,
+        HumanInputRequestId requestId,
+        string replacementAnswer,
+        HumanInputAnswerOrigin origin)
+    {
+        lock (_humanInputRequestLock)
+        {
+            var goal = GetGoal(goalId);
+            if (!_humanInputRequests.TryGetValue(requestId, out var request) || request.GoalId != goal.Id)
+            {
+                throw new KeyNotFoundException(
+                    $"Human input request '{requestId}' was not found on goal '{goal.Id.Value}'.");
+            }
+
+            var previousAnswer = request.AuthoritativeAnswer
+                ?? throw new InvalidOperationException(
+                    $"Human input request '{requestId}' has no answered clarification to supersede.");
+            var supersededAt = _clock.UtcNow;
+            var matchingRequests = _humanInputRequests.Values
+                .Where(candidate =>
+                    candidate.GoalId == goal.Id &&
+                    candidate.Id != request.Id &&
+                    string.Equals(candidate.QuestionFingerprint, request.QuestionFingerprint, StringComparison.Ordinal))
+                .OrderBy(candidate => candidate.RequestedAt)
+                .ThenBy(candidate => candidate.Id.Value, StringComparer.Ordinal)
+                .ToArray();
+            var allMatchingRequests = matchingRequests.Append(request).ToArray();
+            var retractionTerms = allMatchingRequests
+                .Select(candidate => candidate.DerivedBlockerEvidence)
+                .Append(previousAnswer.Text)
+                .Where(term => !string.IsNullOrWhiteSpace(term))
+                .Select(term => NormalizeRetractionMatch(term!))
+                .Where(term => term.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            var resolvedStableIds = GetReviewFindingState(goal.Id)
+                .Where(finding =>
+                    finding.State == ReviewFindingState.Open &&
+                    retractionTerms.Any(term =>
+                    {
+                        var description = NormalizeRetractionMatch(finding.Description);
+                        return description.Contains(term, StringComparison.Ordinal) ||
+                            term.Contains(description, StringComparison.Ordinal);
+                    }))
+                .Select(finding => finding.StableId)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(stableId => stableId, StringComparer.Ordinal)
+                .ToArray();
+            var replacement = request.Supersede(replacementAnswer, supersededAt, origin);
+            var resolvedRequests = matchingRequests.Where(candidate => !candidate.IsCompleted).ToArray();
+            foreach (var related in resolvedRequests)
+            {
+                related.CompleteAsSuperseded(replacement.Text, supersededAt, request.Id);
+            }
+
+            var affectedTasks = resolvedRequests
+                .Concat(allMatchingRequests.Where(candidate =>
+                    candidate.SuppressionCount >= DuplicateHumanInputSuppressionThreshold))
+                .Where(candidate => candidate.TaskId is not null)
+                .Select(candidate => candidate.TaskId!)
+                .Distinct()
+                .Select(goal.FindTask)
+                .Where(task => task.Status is WorkTaskStatus.WaitingForHuman or WorkTaskStatus.Failed)
+                .ToArray();
+            foreach (var task in affectedTasks)
+            {
+                if (!_humanInputRequests.Values.Any(candidate =>
+                        candidate.GoalId == goal.Id &&
+                        candidate.TaskId == task.Id &&
+                        !candidate.IsCompleted))
+                {
+                    RestoreTaskAfterHumanInput(goal, task);
+                }
+            }
+
+            RefreshGoalStatus(goal);
+            var clearedBlockerCount = allMatchingRequests
+                .Select(candidate => candidate.BlockerFingerprint)
+                .Where(fingerprint => !string.IsNullOrWhiteSpace(fingerprint))
+                .Distinct(StringComparer.Ordinal)
+                .Count();
+            Append(
+                goal,
+                request.TaskId,
+                ProgressKind.HumanInputSuperseded,
+                $"kind=human-input-superseded request={request.Id.Value} replacedAnswer={previousAnswer.Id} " +
+                $"authoritativeAnswer={replacement.Id} clearedFindings={clearedBlockerCount} " +
+                $"resolvedStableIds={(resolvedStableIds.Length == 0 ? "none" : string.Join(',', resolvedStableIds))} " +
+                $"resolvedRequests={resolvedRequests.Length} unblockedTasks={affectedTasks.Length}");
+            return replacement;
+        }
+    }
+
+    private static string NormalizeRetractionMatch(string value) =>
+        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToLowerInvariant();
 
     public void MarkOperatorGateSatisfied(
         HumanInputRequestId requestId,
