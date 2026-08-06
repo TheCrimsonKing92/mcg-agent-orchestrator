@@ -776,6 +776,50 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     }
 
     [Xunit.Fact]
+    public async Task TickMerge_supersede_reset_beats_stale_answered_suppression_count()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve a newer suppression reset", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        const string fingerprint = "unchanged-blocker";
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: fingerprint).Request;
+        kernel.SubmitHumanInput(request.Id, "Authorized.");
+        kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, "Expand scope?", blockerFingerprint: fingerprint);
+        kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, "Expand scope?", blockerFingerprint: fingerprint);
+        await repo.SaveAsync(kernel);
+
+        var staleKernel = await repo.LoadAsync();
+        var staleBaseline = staleKernel.ExportSnapshot();
+        var operatorKernel = await repo.LoadAsync();
+        operatorKernel.SupersedeHumanInput(goal.Id, request.Id, "Authorized with correction.", HumanInputAnswerOrigin.Operator);
+        await repo.SaveAsync(operatorKernel);
+
+        staleKernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Expand scope?",
+            blockerFingerprint: fingerprint);
+        var staleCurrent = staleKernel.ExportSnapshot();
+        await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(
+                staleBaseline.Goals.Single(),
+                staleCurrent.Goals.Single(),
+                staleCurrent.HumanInputRequests)]);
+
+        var restored = await repo.LoadAsync();
+        var restoredRequest = restored.GetHumanInputRequest(request.Id);
+        Assert.Equal("Authorized with correction.", restoredRequest.Answer);
+        Assert.Equal(0, restoredRequest.SuppressionCount);
+        Assert.Equal(2, restoredRequest.SuppressionAnswerRevision);
+    }
+
+    [Xunit.Fact]
     public async Task TickMerge_persists_answered_suppression_count_and_threshold_failure()
     {
         var repo = new SqliteOrchestratorStateRepository(TempDb());
@@ -821,7 +865,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     }
 
     [Xunit.Fact]
-    public async Task TickMerge_stale_open_request_preserves_answer_and_max_count()
+    public async Task TickMerge_stale_open_request_preserves_answer_without_reviving_pre_answer_count()
     {
         var repo = new SqliteOrchestratorStateRepository(TempDb());
         var kernel = new AgentOrchestratorKernel();
@@ -857,7 +901,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var restoredRequest = restored.GetHumanInputRequest(request.Id);
         Assert.True(restoredRequest.IsCompleted);
         Assert.Equal("Authorized.", restoredRequest.Answer);
-        Assert.Equal(1, restoredRequest.SuppressionCount);
+        Assert.Equal(0, restoredRequest.SuppressionCount);
+        Assert.Equal(1, restoredRequest.SuppressionAnswerRevision);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_upsert_updates_existing_row")]

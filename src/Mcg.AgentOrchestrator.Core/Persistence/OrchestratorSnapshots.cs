@@ -229,7 +229,9 @@ public sealed record HumanInputRequestSnapshot(
     int SuppressionCount = 0,
     string? SupersededByRequestId = null,
     IReadOnlyList<OperatorGateRecord>? OperatorGates = null,
-    IReadOnlyList<HumanInputAnswerRecord>? AnswerHistory = null);
+    IReadOnlyList<HumanInputAnswerRecord>? AnswerHistory = null,
+    int SuppressionAnswerRevision = 0,
+    long SuppressionRevision = 0);
 
 public static class VerificationTextBounds
 {

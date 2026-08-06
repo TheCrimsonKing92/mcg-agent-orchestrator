@@ -114,13 +114,23 @@ public sealed partial class AgentOrchestratorKernel
             task,
             AttachAuthoritativeReviewFindingContext(task, verification));
         task.RecordVerification(verification);
+        var completedRound = task.VerificationHistory.Count;
 
         var status = verification.Succeeded ? "passed" : "failed";
         Append(goal, taskId, ProgressKind.TaskVerificationRecorded, $"Dispatch execution {status} ({verification.ExitCode}): {verification.Command}");
 
+        if (!verification.WorkerResultPresent)
+        {
+            Append(
+                goal,
+                taskId,
+                ProgressKind.HumanInputRoundEvaluationInconclusive,
+                $"kind=human-input-round-evaluation-inconclusive round={completedRound} " +
+                $"worker_result_log={verification.StandardOutputPath ?? "unavailable"} reason=missing-or-unparseable-worker-result");
+        }
+
         var humanInputQuestion = verification.HumanInputQuestion
-            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput)
-            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardError);
+            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput);
         if (humanInputQuestion is not null)
         {
             var rawQuestion = humanInputQuestion;
@@ -130,7 +140,7 @@ public sealed partial class AgentOrchestratorKernel
                 humanInputQuestion += $"{Environment.NewLine}Accompanying WORKER_RESULT blocker evidence: {accompanyingBlocker}";
             }
 
-            RequestHumanInputDeduplicated(
+            var requestResult = RequestHumanInputDeduplicated(
                 goal.Id,
                 task.Id,
                 humanInputQuestion,
@@ -139,8 +149,26 @@ public sealed partial class AgentOrchestratorKernel
                     task.Id,
                     task.RequiredRole,
                     rawQuestion,
-                    accompanyingBlocker));
-            return;
+                    accompanyingBlocker),
+                completedRound: verification.WorkerResultPresent ? completedRound : null,
+                workerResultLogReference: verification.StandardOutputPath,
+                recordDuplicateSuppression: verification.WorkerResultPresent);
+            if (verification.WorkerResultPresent &&
+                requestResult.WasSuppressedByAnswer &&
+                WorkerResultBlockers.TryGetBlockersStatus(verification, out var blockersStatus) &&
+                blockersStatus == WorkerResultBlockers.BlockersStatus.None)
+            {
+                RecordHumanInputWorkerResultContradiction(
+                    goal.Id,
+                    taskId,
+                    requestResult.Request.Id,
+                    completedRound,
+                    verification.StandardOutputPath);
+            }
+            if (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer)
+            {
+                return;
+            }
         }
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
@@ -160,8 +188,15 @@ public sealed partial class AgentOrchestratorKernel
                     task.Id,
                     task.RequiredRole,
                     question,
-                    premiseEvidence));
+                    premiseEvidence),
+                completedRound: completedRound,
+                workerResultLogReference: verification.StandardOutputPath);
             return;
+        }
+
+        if (verification.WorkerResultPresent)
+        {
+            ResetAnsweredHumanInputSuppressionStreaks(goal.Id, task.Id);
         }
 
         if (outcome.Kind == DispatchOutcomeKind.VerificationInconclusive)
@@ -762,6 +797,22 @@ public sealed partial class AgentOrchestratorKernel
         {
             RecordDispatchExecutionResult(goalId, taskId, verification, providerFailureKind);
         }
+    }
+
+    internal void RecordHumanInputWorkerResultContradiction(
+        GoalId goalId,
+        TaskId taskId,
+        HumanInputRequestId requestId,
+        int completedRound,
+        string? workerResultLogReference)
+    {
+        Append(
+            GetGoal(goalId),
+            taskId,
+            ProgressKind.HumanInputWorkerResultContradiction,
+            $"kind=human-input-worker-result-contradiction request={requestId.Value[..8]} " +
+            $"round={completedRound} worker_result_log={workerResultLogReference ?? "unavailable"} " +
+            "human_input=emitted blockers=none");
     }
 
     public void RecordTaskProcessGracefullyDetached(

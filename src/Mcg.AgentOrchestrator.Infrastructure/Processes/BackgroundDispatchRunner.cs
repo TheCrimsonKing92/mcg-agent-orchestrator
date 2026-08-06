@@ -57,6 +57,7 @@ public sealed record InterruptedDispatchStateRead(
 public sealed class BackgroundDispatchRunner
 {
     private const int ApparatusHoldObservationsBeforeEscalation = 2;
+    private const int AnsweredApparatusHoldObservationsBeforeFailure = 3;
     private const string ApparatusHoldReceiptPrefix = "DispatchApparatusHoldObserved:";
     public const string DisableDispatchStartVariable = "MCG_ORCHESTRATOR_DISABLE_DISPATCH_START";
     public const string TestRewriteRealWorkerCommandsVariable = "MCG_ORCHESTRATOR_TEST_REWRITE_REAL_WORKER_COMMANDS";
@@ -932,7 +933,7 @@ public sealed class BackgroundDispatchRunner
         }
 
         var fingerprint = $"dispatch-apparatus-hold:{taskId.Value}:{blocker}";
-        kernel.RequestHumanInputDeduplicated(
+        var requestResult = kernel.RequestHumanInputDeduplicated(
             goalId,
             taskId,
             $"Dispatch recovery cannot determine the worker outcome after {observation} observations because blocker '{blocker}' remains. " +
@@ -943,7 +944,30 @@ public sealed class BackgroundDispatchRunner
             isAnswerRequired: true,
             isExternallyBlocked: false,
             questionFingerprint: fingerprint,
-            blockerFingerprint: fingerprint);
+            blockerFingerprint: fingerprint,
+            recordDuplicateSuppression: false);
+        if (!requestResult.WasSuppressedByAnswer || requestResult.Request.AnsweredAt is null)
+        {
+            return;
+        }
+
+        var answeredObservations = kernel.GetTimeline(goalId).Count(evt =>
+            evt.TaskId == taskId &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.OccurredAt >= requestResult.Request.AnsweredAt &&
+            evt.Message.StartsWith(ApparatusHoldReceiptPrefix, StringComparison.Ordinal) &&
+            evt.Message.Contains($"blocker='{blocker}'", StringComparison.Ordinal));
+        var task = kernel.GetTask(goalId, taskId);
+        if (answeredObservations >= AnsweredApparatusHoldObservationsBeforeFailure &&
+            task.Status is not (WorkTaskStatus.Completed or WorkTaskStatus.Failed or WorkTaskStatus.Cancelled))
+        {
+            kernel.ReportTaskProgress(
+                goalId,
+                taskId,
+                WorkTaskStatus.Failed,
+                $"Dispatch apparatus remained indeterminate for {answeredObservations} observations after answered recovery request " +
+                $"{requestResult.Request.Id.Value[..8]}; blocker='{blocker}'; evidence='{decision.EvidencePath}'.");
+        }
     }
 
     private bool TryBuildStaleDispatchAutoRequeueOutcome(
@@ -1052,7 +1076,7 @@ public sealed class BackgroundDispatchRunner
         var stderrFileBytes = SafeFileLength(processRecord.StandardErrorPath);
         var stdout = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
         var stderr = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
-        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout, stderr);
+        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout);
         var taskOutputCommitted = HasTaskOutputCommittedForDispatch(kernel.GetGoal(goalId), taskId, task.LastDispatch);
         GoalWorktreeDispatchEvidence? worktreeEvidence = null;
         var worktreeEvidenceAvailable = false;
@@ -1209,7 +1233,9 @@ public sealed class BackgroundDispatchRunner
         }
 
         var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, decisionStandardOutput, decisionStandardError);
-        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, decisionStandardOutput, decisionStandardError);
+        var workerResultPresent = HasWorkerResultArtifact(
+            processRecord.WorkingDirectory,
+            decisionStandardOutput);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
@@ -1388,8 +1414,7 @@ public sealed class BackgroundDispatchRunner
                 FormatResourceReceipt(goalId, taskId, resourceAccounting));
         }
 
-        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput)
-            ?? AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardError);
+        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput);
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
         // snapshot. Kernel classification reparses the snapshot for directives and blockers.
@@ -1702,12 +1727,9 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static bool HasWorkerResultArtifact(string workingDirectory, string standardOutput, string standardError)
+    private static bool HasWorkerResultArtifact(string workingDirectory, string standardOutput)
     {
-        if (WorkerResultParser.TryParseFields(
-                $"{standardOutput}\n{standardError}",
-                out _,
-                out _))
+        if (WorkerResultParser.TryParseFields(standardOutput, out _, out _))
         {
             return true;
         }

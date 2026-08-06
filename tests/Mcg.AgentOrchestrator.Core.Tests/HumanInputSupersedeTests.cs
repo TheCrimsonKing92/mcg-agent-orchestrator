@@ -202,6 +202,54 @@ public sealed class HumanInputSupersedeTests
     }
 
     [Xunit.Fact]
+    public void Supersede_resets_answered_duplicate_suppression_streak()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var task = new TaskSpec(TaskId.New(), "Implement.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Reset duplicate streak.", [task]);
+        const string fingerprint = "same-current-round-blocker";
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Which value?",
+            blockerFingerprint: fingerprint).Request;
+        kernel.SubmitHumanInput(request.Id, "A");
+        kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, "Which value?", blockerFingerprint: fingerprint);
+        kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, "Which value?", blockerFingerprint: fingerprint);
+        Assert.Equal(2, request.SuppressionCount);
+
+        kernel.SupersedeHumanInput(goal.Id, request.Id, "B", HumanInputAnswerOrigin.Operator);
+
+        Assert.Equal(0, request.SuppressionCount);
+        Assert.Equal(2, request.SuppressionAnswerRevision);
+    }
+
+    [Xunit.Fact]
+    public void Supersede_restores_task_failed_at_answered_duplicate_threshold()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var task = new TaskSpec(TaskId.New(), "Implement.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Restore duplicate-threshold failure.", [task]);
+        const string fingerprint = "same-current-round-blocker";
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Which value?",
+            blockerFingerprint: fingerprint).Request;
+        kernel.SubmitHumanInput(request.Id, "A");
+        kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, "Which value?", blockerFingerprint: fingerprint);
+        kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, "Which value?", blockerFingerprint: fingerprint);
+        kernel.RequestHumanInputDeduplicated(goal.Id, task.Id, "Which value?", blockerFingerprint: fingerprint);
+        Assert.Equal(3, request.SuppressionCount);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+
+        kernel.SupersedeHumanInput(goal.Id, request.Id, "B", HumanInputAnswerOrigin.Operator);
+
+        Assert.Equal(0, request.SuppressionCount);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    }
+
+    [Xunit.Fact]
     public void DuplicateHumanInput_EmitsOneAdvisoryAcrossDistinctTasks_Only()
     {
         var kernel = new AgentOrchestratorKernel(new FakeClock());

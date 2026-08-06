@@ -381,6 +381,21 @@ public static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryGetBlockersStatus(string workerOutput, out BlockersStatus status)
+    {
+        status = BlockersStatus.Unknown;
+        foreach (var line in EnumerateWorkerResultLines(SplitRetainedLines(workerOutput)))
+        {
+            if (TryFindField(line, "blockers", out var value) &&
+                TryParseBlockersStatus(value, out status))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static bool TryFindBlocker(string workerOutput, out string blocker)
     {
         blocker = string.Empty;
@@ -799,22 +814,15 @@ public static class WorkerResultBlockers
 
     private static IEnumerable<string> EnumerateEvidenceLines(TaskVerificationRecord verification)
     {
+        // A dispatch's stdout is the worker-authored response. Stderr can contain the
+        // launcher prompt and upstream WORKER_RESULT blocks, so it is never an
+        // authoritative source for the completed round's result.
         foreach (var line in SplitRetainedLines(verification.StandardOutput))
         {
             yield return line;
         }
 
-        foreach (var line in SplitRetainedLines(verification.StandardError))
-        {
-            yield return line;
-        }
-
         foreach (var line in ReadArtifactLines(verification.StandardOutputPath))
-        {
-            yield return line;
-        }
-
-        foreach (var line in ReadArtifactLines(verification.StandardErrorPath))
         {
             yield return line;
         }

@@ -301,6 +301,158 @@ public sealed class VerificationAndProcessLogTests
         "WORKER_RESULT must still be detected when the block opens inside the head-preview window");
 }
 
+    [Xunit.Fact(DisplayName = "RefreshLatestProcess_ignores_prompt_human_input_and_upstream_blocker_in_stderr")]
+    public void RefreshLatestProcessIgnoresPromptHumanInputAndUpstreamBlockerInStderr()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Use only current worker output", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        const string question = "Confirm the authoritative retry floor?";
+        const string upstreamBlocker = "exact-blocker - operator decision required";
+        var request = kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            question,
+            questionFingerprint: HumanInputRequest.BuildQuestionFingerprint(question),
+            blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                task.Id,
+                task.RequiredRole,
+                question,
+                upstreamBlocker)).Request;
+        kernel.SubmitHumanInput(request.Id, "Use five seconds.");
+        var stdoutPath = Path.Combine(root, "out.log");
+        var stderrPath = Path.Combine(root, "err.log");
+        var exitPath = Path.Combine(root, "exit.txt");
+        File.WriteAllText(stdoutPath, $$"""
+            WORKER_RESULT:
+            files: none
+            commands: focused review
+            tests: pass - focused review passed
+            blockers: none
+            model_fit: OpenAI/gpt-5.6-sol - adequate
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """);
+        File.WriteAllText(stderrPath, $$"""
+            Prompt context from an upstream role:
+            WORKER_RESULT:
+            files: none
+            commands: none
+            tests: deferred - awaiting operator
+            blockers: {{upstreamBlocker}}
+            model_fit: OpenAI/gpt-5.6-sol - adequate
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            HUMAN_INPUT: {{question}}
+            """);
+        File.WriteAllText(exitPath, "0");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null));
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.True(task.LastVerification!.WorkerResultPresent);
+        Assert.Null(task.LastVerification.HumanInputQuestion);
+        Assert.Equal(0, request.SuppressionCount);
+        Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed);
+    }
+
+    [Xunit.Fact]
+    public void Tick_driven_apparatus_holds_do_not_increment_answered_suppression_streak()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Recover an indeterminate dispatch", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Keep recovery observations out of the duplicate-input guard", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var process = new TaskProcessRecord(
+            999999,
+            "fake-cmd",
+            root,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "exit.txt"),
+            DateTimeOffset.UtcNow,
+            null,
+            null);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        var decision = new DispatchRecoveryDecision(
+            DispatchRecoveryAction.Hold,
+            "hold",
+            process.ExitCodePath,
+            "exit artifact unreadable",
+            "exit-artifact-invalid");
+        var outcome = new DispatchRefreshOutcome(process, null, RecoveryDecision: decision);
+
+        for (var observation = 0; observation < 3; observation++)
+        {
+            BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+        }
+
+        var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        kernel.SubmitHumanInput(request.Id, "Artifact repaired.");
+        for (var observation = 0; observation < 3; observation++)
+        {
+            BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+        }
+
+        Assert.Equal(0, request.SuppressionCount);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed);
+        var failure = Assert.Single(goal.Timeline, item =>
+            item.TaskId == task.Id &&
+            item.Kind == ProgressKind.TaskFailed &&
+            item.Message.Contains(request.Id.Value[..8], StringComparison.Ordinal));
+        Assert.Contains("3 observations after answered recovery request", failure.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void RefreshLatestProcess_recognizes_worker_result_file_without_stderr_result()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Recognize worker result artifact", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var stdoutPath = Path.Combine(root, "out.log");
+        var stderrPath = Path.Combine(root, "err.log");
+        var exitPath = Path.Combine(root, "exit.txt");
+        File.WriteAllText(stdoutPath, "Worker wrote the structured result to its result artifact.");
+        File.WriteAllText(stderrPath, "Prompt context only; no worker result here.");
+        File.WriteAllText(exitPath, "0");
+        File.WriteAllText(Path.Combine(root, "WORKER_RESULT.md"), """
+            WORKER_RESULT:
+            files: none
+            commands: focused review
+            tests: pass - focused review passed
+            commit: none
+            blockers: none
+            model_fit: OpenAI/gpt-5.6-sol - adequate
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null));
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.True(task.LastVerification!.WorkerResultPresent);
+    }
+
     [Xunit.Fact(DisplayName = "RefreshLatestProcess_pauses_for_middle_log_human_input_before_retained_excerpt")]
     public void RefreshLatestProcessPausesForMiddleLogHumanInputBeforeRetainedExcerpt()
 {
@@ -335,6 +487,7 @@ public sealed class VerificationAndProcessLogTests
     var request = kernel.GetPendingHumanInput(goal.Id).Single();
     Assert.Equal(WorkTaskStatus.WaitingForHuman, reviewTask.Status);
     Assert.Equal("Which branch should I modify?", request.Question);
+    Assert.False(reviewTask.LastVerification!.WorkerResultPresent);
     Assert.True(reviewTask.LastVerification!.StandardOutput.Length <= VerificationTextBounds.MaxRetainedChars);
     Assert.DoesNotContain("HUMAN_INPUT:", reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
 }

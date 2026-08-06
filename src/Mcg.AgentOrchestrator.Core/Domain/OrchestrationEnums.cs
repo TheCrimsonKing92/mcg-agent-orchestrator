@@ -104,7 +104,9 @@ public enum ProgressKind
     OperatorTaskNote = 29,
     OperatorGateSatisfied = 30,
     HumanInputSuperseded = 31,
-    ContradictoryRecordDetected = 32
+    ContradictoryRecordDetected = 32,
+    HumanInputRoundEvaluationInconclusive = 33,
+    HumanInputWorkerResultContradiction = 34
 }
 
 public enum HumanInputAnswerOrigin

@@ -40,7 +40,8 @@ public sealed class GoalLifecycleEventWriterTests
                     0,
                     "WORKER_RESULT: files: none commands: none tests: pass commit: none blockers: none model_fit: test skills: none confidence: high END_WORKER_RESULT",
                     "",
-                    DateTimeOffset.UtcNow));
+                    DateTimeOffset.UtcNow,
+                    WorkerResultPresent: true));
             kernel.CompleteGoal(goal.Id, "verified");
             writer.AppendGoalLanded(goal.Id, LandingExecutor.IntegrationBranchName, GoalWorktrees.BranchName(goal.Id));
             kernel.RequestHumanInput(goal.Id, task.Id, "Need operator decision.");
