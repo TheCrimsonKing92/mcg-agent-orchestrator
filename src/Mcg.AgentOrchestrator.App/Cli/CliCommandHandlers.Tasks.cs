@@ -554,14 +554,11 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
             CliArgumentParser.RequirePartCount(parts, 4, supersedeUsage);
             var supersedeGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
             var supersedeText = ResolveTextArgument(parts, inlineIndex: 3, supersedeUsage, "--text-file");
-            var matchingHumanInputs = context.Kernel.HumanInputRequests
-                .Where(request =>
-                    request.GoalId == supersedeGoal.Id &&
-                    request.Id.Value.StartsWith(parts[2], StringComparison.OrdinalIgnoreCase))
-                .ToArray();
+            var matchesHumanInput = context.Kernel.HumanInputRequests
+                .Any(request => request.Id.Value.StartsWith(parts[2], StringComparison.OrdinalIgnoreCase));
             string authoritativeText;
             string supersededId;
-            if (matchingHumanInputs.Length > 0)
+            if (matchesHumanInput)
             {
                 var supersedeRequest = OrchestratorEntityResolver.ResolveHumanInputRequest(
                     context.Kernel,
