@@ -865,7 +865,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     }
 
     [Xunit.Fact]
-    public async Task TickMerge_stale_open_request_preserves_answer_and_max_count()
+    public async Task TickMerge_stale_open_request_preserves_answer_without_reviving_pre_answer_count()
     {
         var repo = new SqliteOrchestratorStateRepository(TempDb());
         var kernel = new AgentOrchestratorKernel();
@@ -901,7 +901,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var restoredRequest = restored.GetHumanInputRequest(request.Id);
         Assert.True(restoredRequest.IsCompleted);
         Assert.Equal("Authorized.", restoredRequest.Answer);
-        Assert.Equal(1, restoredRequest.SuppressionCount);
+        Assert.Equal(0, restoredRequest.SuppressionCount);
+        Assert.Equal(1, restoredRequest.SuppressionAnswerRevision);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_human_input_upsert_updates_existing_row")]

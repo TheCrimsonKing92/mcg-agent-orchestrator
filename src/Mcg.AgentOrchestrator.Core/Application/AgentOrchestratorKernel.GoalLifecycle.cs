@@ -1084,7 +1084,8 @@ public sealed partial class AgentOrchestratorKernel
         string? questionFingerprint = null,
         string? blockerFingerprint = null,
         int? completedRound = null,
-        string? workerResultLogReference = null)
+        string? workerResultLogReference = null,
+        bool recordDuplicateSuppression = true)
     {
         var goal = GetGoal(goalId);
         if (taskId is not null)
@@ -1109,19 +1110,24 @@ public sealed partial class AgentOrchestratorKernel
             var open = matches.FirstOrDefault(candidate => !candidate.IsCompleted);
             if (open is not null)
             {
-                if (completedRound is not null)
+                if (recordDuplicateSuppression && completedRound is not null)
                 {
                     ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, exceptRequestId: null);
                 }
-                open.IncrementSuppressionCount();
+
                 HoldTaskForExistingHumanInput(goal, taskId);
-                AppendDuplicateHumanInputSuppressed(
-                    goal,
-                    taskId,
-                    open,
-                    answered: false,
-                    completedRound,
-                    workerResultLogReference);
+                if (recordDuplicateSuppression)
+                {
+                    open.IncrementSuppressionCount();
+                    AppendDuplicateHumanInputSuppressed(
+                        goal,
+                        taskId,
+                        open,
+                        answered: false,
+                        completedRound,
+                        workerResultLogReference);
+                }
+
                 return new HumanInputRequestCreationResult(open, WasReused: true, WasSuppressedByAnswer: false);
             }
 
@@ -1135,6 +1141,11 @@ public sealed partial class AgentOrchestratorKernel
                     string.Equals(candidate.BlockerFingerprint, blockerFingerprint, StringComparison.Ordinal));
                 if (answered is not null)
                 {
+                    if (!recordDuplicateSuppression)
+                    {
+                        return new HumanInputRequestCreationResult(answered, WasReused: false, WasSuppressedByAnswer: true);
+                    }
+
                     if (completedRound is not null)
                     {
                         ResetAnsweredHumanInputSuppressionStreaks(goalId, taskId, answered.Id);

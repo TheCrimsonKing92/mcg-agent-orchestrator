@@ -457,14 +457,14 @@ public sealed class DispatchExecutionTests
         new string('N', 2_000) +
         "\n" +
         new string('Z', VerificationTextBounds.PreviewTailChars);
-    var verification = new TaskVerificationRecord(
+        var verification = new TaskVerificationRecord(
         "agent run",
         "C:\\repo",
         0,
         output,
         string.Empty,
         clock.UtcNow,
-        WorkerResultPresent: true,
+        WorkerResultPresent: false,
         HumanInputQuestion: AgentOutputDirectives.TryParseHumanInputRequest(output));
 
     kernel.RecordDispatchExecutionResult(goal.Id, task.Id, verification);
@@ -1756,6 +1756,38 @@ public sealed class DispatchExecutionTests
         Assert.Single(task.VerificationHistory);
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.TaskId == task.Id && (evt.Kind is ProgressKind.TaskFailed or ProgressKind.TaskCompleted));
+
+        kernel.SubmitHumanInput(request.Id, "The removed API is authoritative.");
+        for (var round = 2; round <= 4; round++)
+        {
+            clock.Advance();
+            var command = $"inspect-{round}";
+            kernel.RecordTaskDispatch(
+                goal.Id,
+                task.Id,
+                new TaskDispatchRecord(role.ToString(), command, "C:\\repo", clock.UtcNow));
+            kernel.RecordDispatchExecutionResult(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord(
+                    command,
+                    "C:\\repo",
+                    0,
+                    stdout,
+                    "",
+                    clock.UtcNow,
+                    StandardOutputPath: $"C:\\logs\\premise-{round}.out.log",
+                    WorkerResultPresent: true));
+        }
+
+        Assert.Equal(3, request.SuppressionCount);
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        var thresholdFailure = Assert.Single(goal.Timeline.Where(evt =>
+            evt.TaskId == task.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains(request.Id.Value[..8], StringComparison.Ordinal)));
+        Assert.Contains("round=4", thresholdFailure.Message, StringComparison.Ordinal);
+        Assert.Contains("premise-4.out.log", thresholdFailure.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_powershell_wrapped_subscription_usage_limit")]

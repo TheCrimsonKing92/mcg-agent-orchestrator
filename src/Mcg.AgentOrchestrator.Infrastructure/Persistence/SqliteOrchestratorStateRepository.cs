@@ -701,12 +701,9 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 < 0 => existing,
                 _ => request.SuppressionCount > existing.SuppressionCount ? request : existing
             };
-            var suppressionCount = existing.IsCompleted && !request.IsCompleted
-                ? Math.Max(existing.SuppressionCount, request.SuppressionCount)
-                : suppressionWinner.SuppressionCount;
             merged[request.Id] = winner with
             {
-                SuppressionCount = suppressionCount,
+                SuppressionCount = suppressionWinner.SuppressionCount,
                 SuppressionAnswerRevision = suppressionWinner.SuppressionAnswerRevision,
                 SuppressionRevision = suppressionWinner.SuppressionRevision
             };

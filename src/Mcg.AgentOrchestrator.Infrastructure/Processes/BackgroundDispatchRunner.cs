@@ -943,7 +943,8 @@ public sealed class BackgroundDispatchRunner
             isAnswerRequired: true,
             isExternallyBlocked: false,
             questionFingerprint: fingerprint,
-            blockerFingerprint: fingerprint);
+            blockerFingerprint: fingerprint,
+            recordDuplicateSuppression: false);
     }
 
     private bool TryBuildStaleDispatchAutoRequeueOutcome(
@@ -1052,7 +1053,7 @@ public sealed class BackgroundDispatchRunner
         var stderrFileBytes = SafeFileLength(processRecord.StandardErrorPath);
         var stdout = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
         var stderr = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
-        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout, stderr);
+        var workerResultPresent = HasWorkerResultArtifact(processRecord.WorkingDirectory, stdout);
         var taskOutputCommitted = HasTaskOutputCommittedForDispatch(kernel.GetGoal(goalId), taskId, task.LastDispatch);
         GoalWorktreeDispatchEvidence? worktreeEvidence = null;
         var worktreeEvidenceAvailable = false;
@@ -1209,10 +1210,9 @@ public sealed class BackgroundDispatchRunner
         }
 
         var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, decisionStandardOutput, decisionStandardError);
-        var workerResultPresent = WorkerResultParser.TryParseFields(
-            decisionStandardOutput,
-            out _,
-            out _);
+        var workerResultPresent = HasWorkerResultArtifact(
+            processRecord.WorkingDirectory,
+            decisionStandardOutput);
         var hasCommittedChanges = false;
         var orchestratorCommitted = false;
         var completedWorktreeInspection = RequiresFileChangeEvidence(task)
@@ -1391,9 +1391,7 @@ public sealed class BackgroundDispatchRunner
                 FormatResourceReceipt(goalId, taskId, resourceAccounting));
         }
 
-        var humanInputQuestion = workerResultPresent
-            ? AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput)
-            : null;
+        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput);
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
         // snapshot. Kernel classification reparses the snapshot for directives and blockers.
@@ -1706,12 +1704,9 @@ public sealed class BackgroundDispatchRunner
         }
     }
 
-    private static bool HasWorkerResultArtifact(string workingDirectory, string standardOutput, string standardError)
+    private static bool HasWorkerResultArtifact(string workingDirectory, string standardOutput)
     {
-        if (WorkerResultParser.TryParseFields(
-                $"{standardOutput}\n{standardError}",
-                out _,
-                out _))
+        if (WorkerResultParser.TryParseFields(standardOutput, out _, out _))
         {
             return true;
         }

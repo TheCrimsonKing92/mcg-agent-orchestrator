@@ -129,10 +129,8 @@ public sealed partial class AgentOrchestratorKernel
                 $"worker_result_log={verification.StandardOutputPath ?? "unavailable"} reason=missing-or-unparseable-worker-result");
         }
 
-        var humanInputQuestion = verification.WorkerResultPresent
-            ? verification.HumanInputQuestion
-                ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput)
-            : null;
+        var humanInputQuestion = verification.HumanInputQuestion
+            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput);
         if (humanInputQuestion is not null)
         {
             var rawQuestion = humanInputQuestion;
@@ -154,7 +152,7 @@ public sealed partial class AgentOrchestratorKernel
                     "human_input=emitted blockers=none");
             }
 
-            RequestHumanInputDeduplicated(
+            var requestResult = RequestHumanInputDeduplicated(
                 goal.Id,
                 task.Id,
                 humanInputQuestion,
@@ -165,13 +163,12 @@ public sealed partial class AgentOrchestratorKernel
                     rawQuestion,
                     accompanyingBlocker),
                 completedRound: completedRound,
-                workerResultLogReference: verification.StandardOutputPath);
-            return;
-        }
-
-        if (verification.WorkerResultPresent)
-        {
-            ResetAnsweredHumanInputSuppressionStreaks(goal.Id, task.Id);
+                workerResultLogReference: verification.StandardOutputPath,
+                recordDuplicateSuppression: verification.WorkerResultPresent);
+            if (verification.WorkerResultPresent || !requestResult.WasSuppressedByAnswer)
+            {
+                return;
+            }
         }
 
         var effectiveProviderFailureKind = verification.ProviderFailureKind;
@@ -191,8 +188,15 @@ public sealed partial class AgentOrchestratorKernel
                     task.Id,
                     task.RequiredRole,
                     question,
-                    premiseEvidence));
+                    premiseEvidence),
+                completedRound: completedRound,
+                workerResultLogReference: verification.StandardOutputPath);
             return;
+        }
+
+        if (verification.WorkerResultPresent)
+        {
+            ResetAnsweredHumanInputSuppressionStreaks(goal.Id, task.Id);
         }
 
         if (outcome.Kind == DispatchOutcomeKind.VerificationInconclusive)

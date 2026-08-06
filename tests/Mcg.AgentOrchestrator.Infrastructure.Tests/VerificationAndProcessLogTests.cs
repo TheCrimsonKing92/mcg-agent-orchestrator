@@ -365,6 +365,89 @@ public sealed class VerificationAndProcessLogTests
         Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed);
     }
 
+    [Xunit.Fact]
+    public void Tick_driven_apparatus_holds_do_not_increment_answered_suppression_streak()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Recover an indeterminate dispatch", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Keep recovery observations out of the duplicate-input guard", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var process = new TaskProcessRecord(
+            999999,
+            "fake-cmd",
+            root,
+            Path.Combine(root, "out.log"),
+            Path.Combine(root, "err.log"),
+            Path.Combine(root, "exit.txt"),
+            DateTimeOffset.UtcNow,
+            null,
+            null);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+        var decision = new DispatchRecoveryDecision(
+            DispatchRecoveryAction.Hold,
+            "hold",
+            process.ExitCodePath,
+            "exit artifact unreadable",
+            "exit-artifact-invalid");
+        var outcome = new DispatchRefreshOutcome(process, null, RecoveryDecision: decision);
+
+        for (var observation = 0; observation < 3; observation++)
+        {
+            BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+        }
+
+        var request = Assert.Single(kernel.GetPendingHumanInput(goal.Id));
+        kernel.SubmitHumanInput(request.Id, "Artifact repaired.");
+        for (var observation = 0; observation < 3; observation++)
+        {
+            BackgroundDispatchRunner.ApplyRefreshOutcome(kernel, goal.Id, task.Id, outcome);
+        }
+
+        Assert.Equal(0, request.SuppressionCount);
+        Assert.NotEqual(WorkTaskStatus.Failed, task.Status);
+        Assert.DoesNotContain(goal.Timeline, item => item.Kind == ProgressKind.DuplicateHumanInputSuppressed);
+    }
+
+    [Xunit.Fact]
+    public void RefreshLatestProcess_recognizes_worker_result_file_without_stderr_result()
+    {
+        var root = CreateTempDirectory();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Review worker output", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Recognize worker result artifact", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var stdoutPath = Path.Combine(root, "out.log");
+        var stderrPath = Path.Combine(root, "err.log");
+        var exitPath = Path.Combine(root, "exit.txt");
+        File.WriteAllText(stdoutPath, "Worker wrote the structured result to its result artifact.");
+        File.WriteAllText(stderrPath, "Prompt context only; no worker result here.");
+        File.WriteAllText(exitPath, "0");
+        File.WriteAllText(Path.Combine(root, "WORKER_RESULT.md"), """
+            WORKER_RESULT:
+            files: none
+            commands: focused review
+            tests: pass - focused review passed
+            commit: none
+            blockers: none
+            model_fit: OpenAI/gpt-5.6-sol - adequate
+            skills: none
+            confidence: high
+            END_WORKER_RESULT
+            """);
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "fake-cmd", root, DateTimeOffset.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(999999, "fake-cmd", root, stdoutPath, stderrPath, exitPath, DateTimeOffset.UtcNow, null, null));
+
+        var runner = new BackgroundDispatchRunner(isStillRunning: _ => false);
+        runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.True(task.LastVerification!.WorkerResultPresent);
+    }
+
     [Xunit.Fact(DisplayName = "RefreshLatestProcess_pauses_for_middle_log_human_input_before_retained_excerpt")]
     public void RefreshLatestProcessPausesForMiddleLogHumanInputBeforeRetainedExcerpt()
 {
@@ -385,15 +468,6 @@ public sealed class VerificationAndProcessLogTests
         Environment.NewLine +
         new string('N', 2_000) +
         Environment.NewLine +
-        "WORKER_RESULT:" + Environment.NewLine +
-        "files: none" + Environment.NewLine +
-        "commands: inspected log" + Environment.NewLine +
-        "tests: deferred - awaiting operator input" + Environment.NewLine +
-        "blockers: exact-blocker - branch selection required" + Environment.NewLine +
-        "model_fit: OpenAI/gpt-5.6-sol - adequate" + Environment.NewLine +
-        "skills: none" + Environment.NewLine +
-        "confidence: high" + Environment.NewLine +
-        "END_WORKER_RESULT" + Environment.NewLine +
         new string('T', VerificationTextBounds.PreviewTailChars);
     File.WriteAllText(stdoutPath, stdout);
     File.WriteAllText(stderrPath, string.Empty);
@@ -408,6 +482,7 @@ public sealed class VerificationAndProcessLogTests
     var request = kernel.GetPendingHumanInput(goal.Id).Single();
     Assert.Equal(WorkTaskStatus.WaitingForHuman, reviewTask.Status);
     Assert.Equal("Which branch should I modify?", request.Question);
+    Assert.False(reviewTask.LastVerification!.WorkerResultPresent);
     Assert.True(reviewTask.LastVerification!.StandardOutput.Length <= VerificationTextBounds.MaxRetainedChars);
     Assert.DoesNotContain("HUMAN_INPUT:", reviewTask.LastVerification.StandardOutput, StringComparison.Ordinal);
 }
