@@ -157,8 +157,16 @@ public static class DispatchProcessHost
         Action<string>? protectWorkspaceBoundary = null,
         Action<string>? protectGitMetadata = null)
     {
-        if (!parameters.SandboxLowIntegrity || !OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsWindows())
         {
+            return new WorkerSandboxPreparationResult(false, false);
+        }
+
+        var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
+        if (!parameters.SandboxLowIntegrity)
+        {
+            ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
+            ExcludeSandboxFromGit(parameters.WorkingDirectory);
             return new WorkerSandboxPreparationResult(false, false);
         }
 
@@ -194,7 +202,6 @@ public static class DispatchProcessHost
         // guarantee. The worker only EDITS the worktree; the orchestrator (medium) commits those edits
         // afterwards (BackgroundDispatchRunner.TryCommitWorktreeEdits). This also removes the slow,
         // broad per-dispatch icacls /T walk over the whole .git that labeling the common dir required.
-        var sandboxRoot = Path.Combine(parameters.WorkingDirectory, ".mcg-sandbox");
         var preparation = Track("prepare-roots", () => parameters.SandboxWorktreeWritable
             ? preparer.Prepare(parameters.WorkingDirectory, sandboxRoot)
             : preparer.PrepareSandboxRootOnly(parameters.WorkingDirectory, sandboxRoot));
@@ -244,10 +251,9 @@ public static class DispatchProcessHost
             // provider-specific home/config directories. The sandbox root is labeled before child paths are
             // materialized so they inherit Low without a second recursive icacls traversal.
             var tempDir = Path.Combine(sandboxRoot, "temp");
-            var powershellDir = Path.Combine(sandboxRoot, "powershell");
             var sandboxBin = CreateSandboxBinDirectory(sandboxRoot);
             Directory.CreateDirectory(tempDir);
-            Directory.CreateDirectory(powershellDir);
+            ConfigurePowerShellModuleAnalysisCache(startInfo.Environment, sandboxRoot);
             WriteWorkerCommandShims(sandboxBin, startInfo.Environment["PATH"]);
 
             SeedProviderEnvironment(startInfo, parameters.Provider, sandboxRoot, parameters.StderrPath);
@@ -262,7 +268,6 @@ public static class DispatchProcessHost
             // PowerShell otherwise derives this cache from inherited profile locations. Keep only
             // its disposable module-analysis cache inside the ignored worker sandbox; relocating
             // LOCALAPPDATA/APPDATA breaks unrelated per-user tool and PowerShell resolution.
-            startInfo.Environment["PSModuleAnalysisCachePath"] = Path.Combine(powershellDir, "ModuleAnalysisCache");
             startInfo.Environment["PATH"] = BuildLowIntegrityPath(startInfo.Environment["PATH"], WorkerShell.Executable, sandboxBin);
             WriteLowIntegritySetupArtifact(sandboxRoot, parameters.WorkingDirectory, effectivePreparation);
 
@@ -278,6 +283,15 @@ public static class DispatchProcessHost
         });
 
         return effectivePreparation;
+    }
+
+    private static void ConfigurePowerShellModuleAnalysisCache(
+        IDictionary<string, string?> environment,
+        string sandboxRoot)
+    {
+        var powershellDirectory = Path.Combine(sandboxRoot, "powershell");
+        Directory.CreateDirectory(powershellDirectory);
+        environment["PSModuleAnalysisCachePath"] = Path.Combine(powershellDirectory, "ModuleAnalysisCache");
     }
 
     internal static void SeedProviderEnvironment(

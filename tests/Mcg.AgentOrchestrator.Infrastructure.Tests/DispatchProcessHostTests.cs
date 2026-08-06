@@ -531,6 +531,45 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_redirects_PowerShell_cache_when_OS_sandbox_is_disabled")]
+    public void ApplyWorkerSandboxRedirectsPowerShellCacheWhenOsSandboxIsDisabled()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-off-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        Directory.CreateDirectory(worktree);
+        try
+        {
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, WorkingDirectory = worktree };
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output ok",
+                worktree,
+                Path.Combine(root, "out.log"),
+                Path.Combine(root, "err.log"),
+                Path.Combine(root, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                SandboxLowIntegrity: false);
+
+            var result = DispatchProcessHost.ApplyWorkerSandbox(startInfo, parameters);
+
+            var expectedCache = Path.Combine(worktree, ".mcg-sandbox", "powershell", "ModuleAnalysisCache");
+            Assert.False(result.WorktreeRecursiveRelabel);
+            Assert.False(result.SandboxRecursiveRelabel);
+            Assert.Equal(expectedCache, startInfo.Environment["PSModuleAnalysisCachePath"]);
+            Assert.True(Directory.Exists(Path.GetDirectoryName(expectedCache)!));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_scopes_codex_home_to_codex_provider")]
     public void ApplyWorkerSandboxScopesCodexHomeToCodexProvider()
     {

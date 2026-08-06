@@ -145,6 +145,36 @@ public sealed class GitCliTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GitCli_IsWorktreeDirty_ignores_pwsh7_hashed_module_caches_only")]
+    public void GitCliIsWorktreeDirtyIgnoresPwsh7HashedModuleCachesOnly()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var cacheDirectory = Path.Combine(repo, "Microsoft", "PowerShell");
+            Directory.CreateDirectory(cacheDirectory);
+            foreach (var cacheKey in new[] { "0AC089E4", "25C2BDE3", "3E0AA4F8", "5FCCE3F0", "903B99E5" })
+            {
+                File.WriteAllText(Path.Combine(cacheDirectory, $"ModuleAnalysisCache-{cacheKey}"), "cache");
+            }
+
+            var cacheOnly = GitCli.InspectWorktreeStatus(repo);
+
+            Assert.True(cacheOnly.Succeeded);
+            Assert.False(cacheOnly.IsDirty);
+            File.WriteAllText(Path.Combine(cacheDirectory, "ModuleAnalysisCache-source"), "real work");
+
+            var withLookalike = GitCli.InspectWorktreeStatus(repo);
+
+            Assert.True(withLookalike.IsDirty);
+            Assert.Equal(["Microsoft/PowerShell/ModuleAnalysisCache-source"], withLookalike.CommitWorthyPaths);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GitCli_IsWorktreeDirty_does_not_hide_PowerShell_cache_siblings")]
     public void GitCliIsWorktreeDirtyDoesNotHidePowerShellCacheSiblings()
     {

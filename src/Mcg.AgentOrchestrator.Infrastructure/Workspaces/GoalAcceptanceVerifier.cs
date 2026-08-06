@@ -6064,6 +6064,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 profileRoot[profileRootPath.Length..].TrimStart(Path.DirectorySeparatorChar);
             environment["APPDATA"] = appData;
             environment["LOCALAPPDATA"] = localAppData;
+            var powershellDirectory = Path.Combine(profileRoot, "powershell");
+            Directory.CreateDirectory(powershellDirectory);
+            environment["PSModuleAnalysisCachePath"] = Path.Combine(powershellDirectory, "ModuleAnalysisCache");
         }
 
         environment["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = Path.GetFullPath(repositoryRoot);
@@ -6092,6 +6095,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         name.Equals("HOMEPATH", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("APPDATA", StringComparison.OrdinalIgnoreCase) ||
         name.Equals("LOCALAPPDATA", StringComparison.OrdinalIgnoreCase) ||
+        name.Equals("PSModuleAnalysisCachePath", StringComparison.OrdinalIgnoreCase) ||
         // The four deterministic git identity variables this function sets. They are DECLARED here rather
         // than inherited: the allow-list is what the hermetic environment is permitted to contain, so every
         // variable ConfigureHermeticVerificationEnvironment writes must be nameable here or the gate's own

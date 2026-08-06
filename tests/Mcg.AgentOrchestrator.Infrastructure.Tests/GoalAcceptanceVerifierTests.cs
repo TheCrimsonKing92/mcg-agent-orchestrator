@@ -61,6 +61,12 @@ public sealed class HermeticVerificationEnvironmentTests
             Path.Combine(Path.GetTempPath(), "mcg-hvp"),
             environment["USERPROFILE"]);
         Assert.Equal(environment["USERPROFILE"], environment["DOTNET_CLI_HOME"]);
+        if (OperatingSystem.IsWindows())
+        {
+            var expectedCache = Path.Combine(environment["USERPROFILE"]!, "powershell", "ModuleAnalysisCache");
+            Assert.Equal(expectedCache, environment["PSModuleAnalysisCachePath"]);
+            Assert.True(Directory.Exists(Path.GetDirectoryName(expectedCache)!));
+        }
         Assert.All(environment.Keys, name => Assert.True(
             GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name),
             $"Unexpected verification environment variable survived: {name}"));

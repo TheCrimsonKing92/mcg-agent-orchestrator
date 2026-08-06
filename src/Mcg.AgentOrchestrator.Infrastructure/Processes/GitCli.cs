@@ -187,7 +187,7 @@ internal static class GitCli
         }
 
         return normalized.Equals(".qwen/settings.json", StringComparison.OrdinalIgnoreCase) ||
-            normalized.Equals("Microsoft/Windows/PowerShell/ModuleAnalysisCache", StringComparison.OrdinalIgnoreCase) ||
+            IsPowerShellModuleAnalysisCachePath(normalized) ||
             normalized.Equals(".orchestrator-handoff.md", StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals(WorkerSandboxPreparer.MarkerFileName, StringComparison.OrdinalIgnoreCase) ||
             normalized.Equals(WorkerSandboxPreparer.ReceiptFileName, StringComparison.OrdinalIgnoreCase) ||
@@ -206,6 +206,25 @@ internal static class GitCli
             normalized.StartsWith("playwright-report/", StringComparison.OrdinalIgnoreCase) ||
             normalized.Contains("/playwright-report/", StringComparison.OrdinalIgnoreCase) ||
             normalized.EndsWith(".log", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPowerShellModuleAnalysisCachePath(string normalizedPath)
+    {
+        if (normalizedPath.Equals(
+            "Microsoft/Windows/PowerShell/ModuleAnalysisCache",
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        const string powerShell7Prefix = "Microsoft/PowerShell/ModuleAnalysisCache-";
+        if (!normalizedPath.StartsWith(powerShell7Prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var cacheKey = normalizedPath[powerShell7Prefix.Length..];
+        return cacheKey.Length == 8 && cacheKey.All(Uri.IsHexDigit);
     }
 
     private static bool IsIsolationLeaseArtifactPath(string normalizedPath)

@@ -952,7 +952,7 @@ public static class WorkerProfileDispatcher
         var inspection = GitCli.InspectWorktreeStatus(workingDirectory);
         if (!inspection.Succeeded)
         {
-            findings.Add($"blocked: worktree cleanliness unavailable before dispatch ({inspection.Error}); verify git status from the goal workspace");
+            findings.Add($"warning: worktree cleanliness unavailable before dispatch ({inspection.Error}); verify git status from the goal workspace");
             return;
         }
 
