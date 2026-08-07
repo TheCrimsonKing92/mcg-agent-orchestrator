@@ -853,6 +853,7 @@ internal sealed class ConductorBatchLoop
             var tickEscalated = 0;
             var tickRetried = 0;
             var tickDone = 0;
+            var dispatchRecordWriteSkippedGoals = new HashSet<string>(StringComparer.Ordinal);
             var parallelLandingResults = RunParallelAcceptanceBatch(
                 eligible,
                 kernel,
@@ -1062,7 +1063,9 @@ internal sealed class ConductorBatchLoop
                         setAsideGoals,
                         selfClearedSetAsideEntries,
                         dispatchRecordWriteSkips,
+                        dispatchRecordWriteSkippedGoals,
                         tickLines,
+                        ref tickHeld,
                         ref tickEscalated,
                         FinishGoalWalk,
                         out result))
@@ -1110,7 +1113,9 @@ internal sealed class ConductorBatchLoop
                             setAsideGoals,
                             selfClearedSetAsideEntries,
                             dispatchRecordWriteSkips,
+                            dispatchRecordWriteSkippedGoals,
                             tickLines,
+                            ref tickHeld,
                             ref tickEscalated,
                             FinishGoalWalk,
                             out result))
@@ -1265,7 +1270,11 @@ internal sealed class ConductorBatchLoop
             {
                 if (watchInterval is null)
                 {
-                    if (CountRecheckableNonTerminalGoals(kernel, onlyGoalId, setAsideGoals) > 0)
+                    if (CountRecheckableNonTerminalGoals(
+                            kernel,
+                            onlyGoalId,
+                            setAsideGoals,
+                            transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals) > 0)
                     {
                         onTick?.Invoke(tickSummary);
                         continue;
@@ -1283,10 +1292,15 @@ internal sealed class ConductorBatchLoop
                 var recheckableBlockedGoals = CountRecheckableNonTerminalGoals(
                     kernel,
                     onlyGoalId,
-                    setAsideGoals);
+                    setAsideGoals,
+                    transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals);
                 var fallbackInterval = ConsumeWatchInterval(watchInterval.Value, recheckableBlockedGoals);
                 var sleepSeconds = (int)fallbackInterval.TotalSeconds;
-                if (CountRecheckableNonTerminalGoals(kernel, onlyGoalId, setAsideGoals) > 0)
+                if (CountRecheckableNonTerminalGoals(
+                        kernel,
+                        onlyGoalId,
+                        setAsideGoals,
+                        transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals) > 0)
                 {
                     totalBlockedRechecks++;
                     var now = _utcNow();
@@ -1386,7 +1400,9 @@ internal sealed class ConductorBatchLoop
         Dictionary<string, BatchSetAsideEntry> setAsideGoals,
         Dictionary<string, BatchSetAsideEntry> selfClearedSetAsideEntries,
         Dictionary<string, int> dispatchRecordWriteSkips,
+        HashSet<string> dispatchRecordWriteSkippedGoals,
         List<string> tickLines,
+        ref int tickHeld,
         ref int tickEscalated,
         Action<string> finishGoalWalk,
         out ConductorAdvanceResult result)
@@ -1427,6 +1443,8 @@ internal sealed class ConductorBatchLoop
 
             if (skips < DispatchRecordContentionSkipLimit)
             {
+                dispatchRecordWriteSkippedGoals.Add(goal.Id.Value);
+                tickHeld++;
                 finishGoalWalk($"dispatch-record-{disposition}");
                 result = null!;
                 return false;
@@ -3716,12 +3734,14 @@ internal sealed class ConductorBatchLoop
         AgentOrchestratorKernel kernel,
         string? onlyGoalId,
         IReadOnlyDictionary<string, BatchSetAsideEntry> setAsideGoals,
-        BatchSetAsideCondition? condition = null) =>
+        BatchSetAsideCondition? condition = null,
+        IReadOnlySet<string>? transientRecheckableGoalIds = null) =>
         kernel.Goals.Count(goal =>
             (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
             !IsTerminalGoal(goal) &&
-            setAsideGoals.TryGetValue(goal.Id.Value, out var entry) &&
-            (!condition.HasValue || entry.Condition == condition.Value));
+            ((setAsideGoals.TryGetValue(goal.Id.Value, out var entry) &&
+                (!condition.HasValue || entry.Condition == condition.Value)) ||
+             (!condition.HasValue && transientRecheckableGoalIds?.Contains(goal.Id.Value) == true)));
 
     private static bool IsPreWalkExcludedGoal(Goal goal) =>
         goal.Status == GoalStatus.Parked || IsPreWalkExcludedTerminalGoal(goal);

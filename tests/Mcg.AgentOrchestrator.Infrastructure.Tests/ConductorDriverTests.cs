@@ -601,6 +601,12 @@ public sealed class ConductorDriverTests
 
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var (kernel, goal) = SimpleGoal("Real dispatch checkpoint rollback");
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Dispatch checkpoint rollback fixture is already refined.",
+            ["The ready task reaches the real dispatch checkpoint."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
         GoalWorktrees.Ensure(root, goal.Id);
         var before = JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id));
         var persistAttempts = 0;

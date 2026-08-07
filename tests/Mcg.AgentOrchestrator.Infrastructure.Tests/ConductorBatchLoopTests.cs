@@ -5851,7 +5851,7 @@ public sealed class ConductorBatchLoopTests
                     (_, _) =>
                     {
                         persistAttempts++;
-                        if (persistAttempts is 1 or 3)
+                        if (persistAttempts is 1 or 2)
                             throw TypedSqliteBusy(sqliteErrorCode);
                     },
                     kernel,
@@ -5889,7 +5889,8 @@ public sealed class ConductorBatchLoopTests
             .Where(line => line.StartsWith("DISPATCH_RECORD_WRITE_CONTENTION ", StringComparison.Ordinal))
             .ToArray();
         Assert.Equal(2, contentionLines.Length);
-        Assert.All(contentionLines, line => Assert.Contains("skip=1/5", line, StringComparison.Ordinal));
+        Assert.Contains("skip=1/5", contentionLines[0], StringComparison.Ordinal);
+        Assert.Contains("skip=2/5", contentionLines[1], StringComparison.Ordinal);
         Assert.All(contentionLines, line => Assert.DoesNotContain("DISPATCH_RECORD_WRITE_FAILED", line, StringComparison.Ordinal));
     }
 
@@ -5996,8 +5997,8 @@ public sealed class ConductorBatchLoopTests
             line.Contains("dispatch-record-write-contention-limit", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_unrecoverable_pre_process_dispatch_record_write_is_bounded_per_goal")]
-    public void BatchLoopUnrecoverablePreProcessDispatchRecordWriteIsBoundedPerGoal()
+    [Xunit.Fact(DisplayName = "BatchLoop_unrecoverable_pre_process_dispatch_record_write_stops_loop")]
+    public void BatchLoopUnrecoverablePreProcessDispatchRecordWriteStopsLoop()
     {
         var (kernel, goal) = SimpleGoal("unrecoverable dispatch record failure");
         var task = goal.Tasks.Single();
@@ -6013,15 +6014,18 @@ public sealed class ConductorBatchLoopTests
                 return DispatchStartOutcome.Started();
             });
 
-        var summary = new ConductorBatchLoop().Run(
-            kernel,
-            driver,
-            ConductorAutonomyPolicy.Conservative,
-            NoStopPath(),
-            maxIterations: ConductorBatchLoop.DispatchRecordContentionSkipLimit + 1);
+        var ex = Assert.Throws<DispatchRecordWriteException>(() =>
+            new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: ConductorBatchLoop.DispatchRecordContentionSkipLimit + 1));
 
-        Assert.Equal(1, summary.Escalated);
-        Assert.Contains(kernel.GetGoal(goal.Id).Timeline, entry =>
+        Assert.Equal(DispatchRecordWriteFailureCause.Unrecoverable, ex.Cause);
+        Assert.True(ex.IsFatal);
+        Assert.Contains("DISPATCH_RECORD_WRITE_FAILED", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(kernel.GetGoal(goal.Id).Timeline, entry =>
             entry.Message.Contains("dispatch-record-write-unrecoverable-limit", StringComparison.Ordinal));
     }
 
