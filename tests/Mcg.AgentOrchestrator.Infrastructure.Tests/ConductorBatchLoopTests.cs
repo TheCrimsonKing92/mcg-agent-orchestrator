@@ -9469,9 +9469,15 @@ public sealed class ConductorBatchLoopTests
         var attempts = new Dictionary<GoalId, int>();
         var reapedGoalIds = new List<GoalId>();
         var healthyLanded = false;
+        var healthyRecorded = false;
+        var healthyCleanedUp = false;
         var driver = MakeDriver(
-            getFacts: goal => goal.Id == healthyGoal.Id && healthyLanded
-                ? new GoalLifecycleFacts(IsMerged: true, IsRecorded: true, IsCleanedUp: true)
+            getFacts: goal => goal.Id == healthyGoal.Id
+                ? new GoalLifecycleFacts(
+                    WorkspaceExists: true,
+                    IsMerged: healthyLanded,
+                    IsRecorded: healthyRecorded,
+                    IsCleanedUp: healthyCleanedUp)
                 : new GoalLifecycleFacts(WorkspaceExists: true),
             runAcceptance: goal =>
             {
@@ -9499,6 +9505,21 @@ public sealed class ConductorBatchLoopTests
                     "integration",
                     true,
                     "Landed");
+            },
+            record: goal =>
+            {
+                if (goal.Id == healthyGoal.Id)
+                    healthyRecorded = true;
+            },
+            cleanup: goal =>
+            {
+                if (goal.Id == healthyGoal.Id)
+                {
+                    healthyCleanedUp = true;
+                    kernel.CompleteGoal(goal.Id, "Healthy neighbor completed normally.");
+                }
+
+                return new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null);
             });
 
         BatchLoopSummary? summary = null;
@@ -9519,8 +9540,11 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, attempts[healthyGoal.Id]);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(0, summary.Retried);
-        Assert.Equal(1, summary.Advanced);
-        Assert.Equal(1, summary.Done);
+        Assert.Equal(3, summary.Advanced);
+        Assert.True(healthyLanded);
+        Assert.True(healthyRecorded);
+        Assert.True(healthyCleanedUp);
+        Assert.Equal(GoalStatus.Completed, kernel.GetGoal(healthyGoal.Id).Status);
         Assert.Equal([faultyGoal.Id], reapedGoalIds);
         Assert.Contains(
             $"GOAL goal={faultyGoal.Id.Value[..8]} result=escalated reason=Access to retry path denied.",
