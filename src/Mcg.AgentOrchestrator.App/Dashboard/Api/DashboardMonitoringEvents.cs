@@ -13,6 +13,7 @@ internal static class DashboardMonitoringEvents
     public const string SnapshotEventName = "goal.snapshot";
     public const string MonitorErrorEventName = "monitor.error";
     public const string KeepAliveEventName = "monitor.keepalive";
+    public static readonly TimeSpan KeepAliveInterval = TimeSpan.FromSeconds(1);
     public const string TaskStatusEventName = "task.status";
     public const string ConductorTickEventName = "conductor.tick";
     public const string ConductorProgressEventName = "conductor.progress";
@@ -81,7 +82,12 @@ internal static class DashboardMonitoringEvents
 
     public static async Task WriteKeepAliveAsync(Stream stream, CancellationToken cancellationToken)
     {
-        await stream.WriteAsync(Encoding.UTF8.GetBytes($": {KeepAliveEventName} {DateTimeOffset.UtcNow:O}\n\n"), cancellationToken);
+        await WriteServerSentEventAsync(
+            stream,
+            KeepAliveEventName,
+            new { Timestamp = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture) },
+            id: null,
+            cancellationToken);
     }
 
     public static IReadOnlyList<ConductorTickEvent> BuildConductorTickEvents(IEnumerable<RunEventRecord> records)

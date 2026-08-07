@@ -315,6 +315,11 @@ internal static class GoalMonitoringSubscriptionCommand
 
     public static void PrintServerSentEvent(ServerSentEvent serverEvent, TextWriter output)
     {
+        if (serverEvent.Event.Equals(DashboardMonitoringEvents.KeepAliveEventName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         if (serverEvent.Event.Equals("goal.snapshot", StringComparison.OrdinalIgnoreCase))
         {
             var snapshot = JsonSerializer.Deserialize<GoalMonitoringSnapshotDto>(serverEvent.Data, DashboardJson.Options());

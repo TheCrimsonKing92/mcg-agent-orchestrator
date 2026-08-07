@@ -80,6 +80,28 @@ public sealed class DashboardRenderingTests
     Assert.True(sse.Contains("GOAL goal=abc12345 result=done state=Complete", StringComparison.Ordinal));
 }
 
+    [Xunit.Fact(DisplayName = "DashboardMonitoringEvents_emits_dispatchable_named_keepalive")]
+    public async Task DashboardMonitoringEventsEmitsDispatchableNamedKeepalive()
+    {
+        using var stream = new MemoryStream();
+
+        await DashboardMonitoringEvents.WriteKeepAliveAsync(stream, CancellationToken.None);
+
+        var frame = Encoding.UTF8.GetString(stream.ToArray());
+        Assert.StartsWith($"event: {DashboardMonitoringEvents.KeepAliveEventName}\n", frame, StringComparison.Ordinal);
+        Assert.False(frame.Split('\n').Any(line => line.StartsWith(':')));
+        Assert.EndsWith("\n\n", frame, StringComparison.Ordinal);
+
+        var data = string.Concat(
+            frame.Split('\n')
+                .Where(line => line.StartsWith("data: ", StringComparison.Ordinal))
+                .Select(line => line["data: ".Length..]));
+        Assert.False(string.IsNullOrWhiteSpace(data));
+        using var payload = JsonDocument.Parse(data);
+        var timestamp = payload.RootElement.GetProperty("Timestamp").GetString();
+        Assert.True(DateTimeOffset.TryParseExact(timestamp, "O", null, System.Globalization.DateTimeStyles.RoundtripKind, out _));
+    }
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_and_work_summary_surface_operator_intent_audit_outcome")]
     public async Task DashboardRendererAndWorkSummarySurfaceOperatorIntentAuditOutcome()
     {
@@ -1968,6 +1990,12 @@ public sealed class DashboardRenderingTests
     Assert.Contains("applyLiveSnapshot", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("providerCapacity", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("source.addEventListener('goal.snapshot', handleSnapshotEvent)", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("source.addEventListener('timeline', refreshFromStream)", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("source.addEventListener('monitor.keepalive', markMonitorEvent)", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.DoesNotContain("source.addEventListener('monitor.keepalive', refreshFromStream)", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains($"const monitorKeepAliveIntervalMs = {(long)DashboardMonitoringEvents.KeepAliveInterval.TotalMilliseconds};", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("const monitorStaleThresholdMs = Math.max(15000, monitorKeepAliveIntervalMs * 3);", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
+    Assert.Contains("Date.now() - lastMonitorEventAt > monitorStaleThresholdMs", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("startMonitorStaleTimer", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("Live monitor stale; timed refresh remains active.", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
     Assert.Contains("window.__dashboardReady = true", DashboardAssets.OperatorControlsScript, StringComparison.Ordinal);
