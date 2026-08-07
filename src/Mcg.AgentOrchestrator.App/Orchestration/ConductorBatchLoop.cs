@@ -20,6 +20,7 @@ internal sealed class ConductorBatchLoop
     internal const int WatchStopPollIntervalSeconds = 5;
     internal const int QuietSummaryEveryTicks = 20;
     internal const int DefaultMaxBusyWriteAttempts = 1;
+    internal const int DispatchRecordContentionSkipLimit = 5;
     internal const int DefaultGracefulDetachCheckpointAttempts = 3;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
@@ -147,6 +148,7 @@ internal sealed class ConductorBatchLoop
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
         var previousRetryDiagnostics = CurrentRetryDiagnostics.Value;
         var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
+        var previousDispatchRecordWriteSucceededSink = driver.DispatchRecordWriteSucceededSink;
         var previousLandingMutationBlocker = driver.LandingMutationBlocker;
         var canaryTasks = new List<Task<PostLandingCanaryDisposition>>();
         var canaryTasksGate = new object();
@@ -155,9 +157,15 @@ internal sealed class ConductorBatchLoop
         var totalTicks = 0;
         var blockedRecheckCycles = 0;
         var totalBlockedRechecks = 0;
+        var dispatchRecordContentionSkips = new Dictionary<string, int>(StringComparer.Ordinal);
         DateTimeOffset? lastBlockedRecheckHeartbeatAt = null;
         string? stopReason = null;
         ConductorLifecycleSession? lifecycleSession = null;
+        driver.DispatchRecordWriteSucceededSink = goalId =>
+        {
+            dispatchRecordContentionSkips.Remove(goalId.Value);
+            previousDispatchRecordWriteSucceededSink?.Invoke(goalId);
+        };
         driver.LandingMutationBlocker = () =>
         {
             var existingBlock = previousLandingMutationBlocker?.Invoke();
@@ -1053,6 +1061,8 @@ internal sealed class ConductorBatchLoop
                         reapedGoals,
                         setAsideGoals,
                         selfClearedSetAsideEntries,
+                        dispatchRecordContentionSkips,
+                        tickLines,
                         ref tickEscalated,
                         FinishGoalWalk,
                         out result))
@@ -1099,6 +1109,8 @@ internal sealed class ConductorBatchLoop
                             reapedGoals,
                             setAsideGoals,
                             selfClearedSetAsideEntries,
+                            dispatchRecordContentionSkips,
+                            tickLines,
                             ref tickEscalated,
                             FinishGoalWalk,
                             out result))
@@ -1349,6 +1361,7 @@ internal sealed class ConductorBatchLoop
             lifecycleSession?.Stop("unintended-exit", totalTicks);
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
+            driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
             driver.LandingMutationBlocker = previousLandingMutationBlocker;
             foreach (var line in CurrentRetryDiagnostics.Value?.CompleteAll() ?? [])
                 EmitProgress(line);
@@ -1372,6 +1385,8 @@ internal sealed class ConductorBatchLoop
         HashSet<string> reapedGoals,
         Dictionary<string, BatchSetAsideEntry> setAsideGoals,
         Dictionary<string, BatchSetAsideEntry> selfClearedSetAsideEntries,
+        Dictionary<string, int> dispatchRecordContentionSkips,
+        List<string> tickLines,
         ref int tickEscalated,
         Action<string> finishGoalWalk,
         out ConductorAdvanceResult result)
@@ -1388,11 +1403,53 @@ internal sealed class ConductorBatchLoop
             result = advanceResult;
             return true;
         }
-        catch (Exception ex)
+        catch (DispatchRecordWriteException ex)
         {
-            if (ConductorDriver.IsCriticalDispatchRecordWriteFailure(ex))
+            if (ex.IsFatal)
                 throw;
 
+            if (ex.Cause == DispatchRecordWriteFailureCause.Contention)
+            {
+                dispatchRecordContentionSkips.TryGetValue(goal.Id.Value, out var priorSkips);
+                var skips = priorSkips + 1;
+                dispatchRecordContentionSkips[goal.Id.Value] = skips;
+                var code = ex.SqliteErrorCode?.ToString() ?? "unavailable";
+                EmitProgress(
+                    $"DISPATCH_RECORD_WRITE_CONTENTION tick={totalTicks} kind={ex.Kind} goal={label} task={ShortGoalId(ex.TaskId.Value)} sqliteCode={code} skip={skips}/{DispatchRecordContentionSkipLimit}",
+                    tickLines);
+
+                if (skips < DispatchRecordContentionSkipLimit)
+                {
+                    finishGoalWalk("dispatch-record-contention");
+                    result = null!;
+                    return false;
+                }
+
+                var reason = $"dispatch-record-write-contention-limit count={skips}/{DispatchRecordContentionSkipLimit} sqliteCode={code}";
+                changedGoalLines.Add($"GOAL goal={label} result=escalated reason={reason}");
+                lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
+                changedGoalIds.Add(goal.Id);
+                kernel.ClearGoalHold(goal.Id);
+                kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {reason}");
+                escalatedGoals.Add(goal.Id.Value);
+                ReapGoalOnce(kernel, kernel.GetGoal(goal.Id), reapedGoals);
+                SetAside(kernel, driver, kernel.GetGoal(goal.Id), BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
+                tickEscalated++;
+                finishGoalWalk("dispatch-record-contention-limit");
+                result = null!;
+                return false;
+            }
+
+            EmitProgress(
+                $"DISPATCH_RECORD_WRITE_UNCLASSIFIED tick={totalTicks} kind={ex.Kind} goal={label} task={ShortGoalId(ex.TaskId.Value)} " +
+                $"checkpoint={ex.CheckpointPhase} exception={ex.InnerException?.GetType().FullName ?? "unavailable"} error={Sanitize(ex.InnerException?.Message ?? ex.Message)}",
+                tickLines);
+            finishGoalWalk("dispatch-record-write-unclassified");
+            result = null!;
+            return false;
+        }
+        catch (Exception ex)
+        {
             var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
             changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
             lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
@@ -1638,19 +1695,46 @@ internal sealed class ConductorBatchLoop
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>> persistGoalTick,
         AgentOrchestratorKernel kernel,
         GoalId goalId,
-        TaskId taskId)
+        TaskId taskId,
+        DispatchRecordCheckpointPhase checkpointPhase = DispatchRecordCheckpointPhase.BeforeProcessStart)
     {
         var tickLines = new List<string>();
-        if (!TryPersistWithBusyContainment(
-            () => persistGoalTick(kernel, [goalId]),
-            tick: 0,
-            goals: ShortGoalId(goalId.Value),
-            kind: "dispatch-start",
-            tickLines,
-            busyWriteDelay: null))
+        PersistWriteAttemptResult persistResult;
+        try
         {
-            ThrowCriticalPersistFailure("dispatch-start", ShortGoalId(goalId.Value), taskId);
+            persistResult = TryPersistWithBusyContainmentResult(
+                () => persistGoalTick(kernel, [goalId]),
+                tick: 0,
+                goals: ShortGoalId(goalId.Value),
+                kind: "dispatch-start",
+                tickLines,
+                busyWriteDelay: null);
         }
+        catch (Exception ex)
+        {
+            var failure = DispatchRecordWriteException.From(
+                ex,
+                checkpointPhase,
+                "dispatch-start",
+                goalId,
+                taskId);
+            if (failure.IsFatal)
+                EmitProgress(failure.Message);
+            throw failure;
+        }
+
+        if (persistResult.Succeeded)
+            return;
+
+        var contentionFailure = DispatchRecordWriteException.From(
+            persistResult.ContentionFailure!,
+            checkpointPhase,
+            "dispatch-start",
+            goalId,
+            taskId);
+        if (contentionFailure.IsFatal)
+            EmitProgress(contentionFailure.Message);
+        throw contentionFailure;
     }
 
     private void CompletePersistedOperatorIntents(
@@ -1836,6 +1920,23 @@ internal sealed class ConductorBatchLoop
         List<string>? tickLines,
         Action<TimeSpan>? busyWriteDelay,
         int? diagnosticAttempt = null)
+        => TryPersistWithBusyContainmentResult(
+            persist,
+            tick,
+            goals,
+            kind,
+            tickLines,
+            busyWriteDelay,
+            diagnosticAttempt).Succeeded;
+
+    private static PersistWriteAttemptResult TryPersistWithBusyContainmentResult(
+        Action persist,
+        int tick,
+        string goals,
+        string kind,
+        List<string>? tickLines,
+        Action<TimeSpan>? busyWriteDelay,
+        int? diagnosticAttempt = null)
     {
         var delay = TimeSpan.FromMilliseconds(50);
         for (var attempt = 1; attempt <= DefaultMaxBusyWriteAttempts; attempt++)
@@ -1843,7 +1944,7 @@ internal sealed class ConductorBatchLoop
             try
             {
                 persist();
-                return true;
+                return PersistWriteAttemptResult.Success;
             }
             catch (Exception ex) when (IsTransientSqliteLock(ex))
             {
@@ -1863,7 +1964,7 @@ internal sealed class ConductorBatchLoop
                         kind,
                         $"TICK_WRITE_DEGRADED tick={tick} kind={kind} goal={goals} attempt={reportedAttempt} likelyHolder=concurrent-per-command-host error={Sanitize(ex.Message)}",
                         tickLines);
-                    return false;
+                    return new PersistWriteAttemptResult(false, ex);
                 }
 
                 if (busyWriteDelay is null)
@@ -1874,7 +1975,7 @@ internal sealed class ConductorBatchLoop
             }
         }
 
-        return false;
+        return new PersistWriteAttemptResult(false, null);
     }
 
     private static string ResolveGoalContext(AgentOrchestratorKernel kernel, string? onlyGoalId)
@@ -1925,10 +2026,12 @@ internal sealed class ConductorBatchLoop
             return true;
         }
 
-        return ex.Message.Contains("SQLite Error 5", StringComparison.OrdinalIgnoreCase)
-            || ex.Message.Contains("SQLite Error 6", StringComparison.OrdinalIgnoreCase)
-            || ex.Message.Contains("database is locked", StringComparison.OrdinalIgnoreCase)
-            || ex.Message.Contains("database table is locked", StringComparison.OrdinalIgnoreCase);
+        return false;
+    }
+
+    private readonly record struct PersistWriteAttemptResult(bool Succeeded, Exception? ContentionFailure)
+    {
+        internal static PersistWriteAttemptResult Success => new(true, null);
     }
 
     private static bool TryGetSqliteErrorCode(Exception ex, out int sqliteErrorCode)

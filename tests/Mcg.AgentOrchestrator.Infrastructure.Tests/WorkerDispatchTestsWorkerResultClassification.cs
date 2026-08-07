@@ -223,7 +223,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
                 goal.Id,
                 task.Id,
                 Path.Combine(root, "logs"),
-                (checkpointKernel, checkpointGoalId, checkpointTaskId) =>
+                (checkpointKernel, checkpointGoalId, checkpointTaskId, _) =>
                 {
                     checkpointCount++;
                     if (checkpointCount == 2)

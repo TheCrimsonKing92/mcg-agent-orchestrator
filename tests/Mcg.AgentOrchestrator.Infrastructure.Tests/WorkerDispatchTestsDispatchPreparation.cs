@@ -329,7 +329,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 goal,
                 [agent],
                 DispatchTestProfiles(),
-                checkpointBeforeWorkerStart: (_, checkpointGoalId, checkpointTaskId) =>
+                checkpointBeforeWorkerStart: (_, checkpointGoalId, checkpointTaskId, _) =>
                 {
                     checkpointCalls++;
                     Assert.Equal(goal.Id, checkpointGoalId);

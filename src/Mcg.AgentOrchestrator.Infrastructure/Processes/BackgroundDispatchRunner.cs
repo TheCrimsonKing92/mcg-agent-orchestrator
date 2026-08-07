@@ -8,6 +8,12 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+public enum DispatchRecordCheckpointPhase
+{
+    BeforeProcessStart,
+    ProcessMayHaveStarted
+}
+
 public sealed record DispatchRefreshOutcome(
     TaskProcessRecord ProcessRecord,
     TaskVerificationRecord? Verification,
@@ -204,7 +210,7 @@ public sealed class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         string logRoot,
-        Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null)
+        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null)
     {
         var result = TryStartLatestDispatch(kernel, goalId, taskId, logRoot, checkpointBeforeWorkerStart);
         if (result.RecoveryAction is { } action)
@@ -226,7 +232,7 @@ public sealed class BackgroundDispatchRunner
         GoalId goalId,
         TaskId taskId,
         string logRoot,
-        Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null,
+        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
         Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null)
     {
         var task = kernel.GetTask(goalId, taskId);
@@ -394,7 +400,7 @@ public sealed class BackgroundDispatchRunner
         // Only persist automatic recovery preparation after the live state guard admits it. A
         // checkpoint before this read can merge the stale tick-owned task status over an operator
         // cancellation and make the subsequent read falsely appear non-terminal.
-        checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId);
+        checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.BeforeProcessStart);
 
         ProcessSpawnGuard.ClearInheritableStateDatabaseHandles();
         var process = _startProcess(startInfo)
@@ -403,7 +409,7 @@ public sealed class BackgroundDispatchRunner
         {
             process.Dispose();
             kernel.ReportTaskProgress(goalId, taskId, WorkTaskStatus.Failed, registrationFailure);
-            checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId);
+            checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.ProcessMayHaveStarted);
             return DispatchProcessStartResult.Failed(registrationFailure);
         }
 
@@ -423,7 +429,7 @@ public sealed class BackgroundDispatchRunner
         kernel.RecordTaskProcessStarted(goalId, taskId, record);
         try
         {
-            checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId);
+            checkpointBeforeWorkerStart?.Invoke(kernel, goalId, taskId, DispatchRecordCheckpointPhase.ProcessMayHaveStarted);
         }
         catch
         {

@@ -109,6 +109,7 @@ internal sealed class ConductorDriver
 
     internal Action<string>? PhaseTimingSink { get; set; }
     internal Action<ConductorLandingReceipt>? SuccessfulLandingSink { get; set; }
+    internal Action<GoalId>? DispatchRecordWriteSucceededSink { get; set; }
     internal Func<string?>? LandingMutationBlocker { get; set; }
 
     public ConductorDriver(
@@ -197,6 +198,8 @@ internal sealed class ConductorDriver
         _dispatchAndStart = (goal, policy) =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch", "Starting subscription dispatch.");
+            var goalSnapshotBeforeDispatch = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+            var criticalCheckpointPersisted = false;
             SubscriptionStartResult result;
             try
             {
@@ -210,18 +213,27 @@ internal sealed class ConductorDriver
                     approveHighRiskOwnership: policy.AllowsAutonomousHighRiskOwnership,
                     checkpointBeforeWorkerStart: persistCriticalDispatchStart is null
                         ? null
-                        : (checkpointKernel, goalId, taskId) =>
+                        : (checkpointKernel, goalId, taskId, checkpointPhase) =>
+                        {
                             ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
                                 persistCriticalDispatchStart,
                                 checkpointKernel,
                                 goalId,
-                                taskId),
+                                taskId,
+                                checkpointPhase);
+                            criticalCheckpointPersisted = true;
+                            DispatchRecordWriteSucceededSink?.Invoke(goalId);
+                        },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState);
+            }
+            catch (DispatchRecordWriteException ex)
+            {
+                if (!ex.ProcessMayHaveStarted && !criticalCheckpointPersisted)
+                    kernel.ReplaceGoalWithSnapshot(goalSnapshotBeforeDispatch);
+                throw;
             }
             catch (Exception ex)
             {
-                if (IsCriticalDispatchRecordWriteFailure(ex))
-                    throw;
 
                 var exceptionReason = $"Subscription dispatch start failed: {ex.Message}";
                 GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", exceptionReason);
@@ -256,18 +268,24 @@ internal sealed class ConductorDriver
                     goal,
                     checkpointBeforeWorkerStart: persistCriticalDispatchStart is null
                         ? null
-                        : (checkpointKernel, goalId, taskId) =>
+                        : (checkpointKernel, goalId, taskId, checkpointPhase) =>
+                        {
                             ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
                                 persistCriticalDispatchStart,
                                 checkpointKernel,
                                 goalId,
-                                taskId),
+                                taskId,
+                                checkpointPhase);
+                            DispatchRecordWriteSucceededSink?.Invoke(goalId);
+                        },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState);
+            }
+            catch (DispatchRecordWriteException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
-                if (IsCriticalDispatchRecordWriteFailure(ex))
-                    throw;
 
                 var exceptionReason = $"Recorded dispatch start failed: {ex.Message}";
                 GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", exceptionReason);
@@ -926,9 +944,6 @@ internal sealed class ConductorDriver
             ? DispatchStartOutcome.EmptyBatch(reason)
             : DispatchStartOutcome.SpawnFailed(reason);
     }
-
-    internal static bool IsCriticalDispatchRecordWriteFailure(Exception ex) =>
-        ex.Message.Contains("DISPATCH_RECORD_WRITE_FAILED", StringComparison.Ordinal);
 
     internal static DispatchStartOutcome ClassifyRecordedDispatchStartForConductor(ProcessBatchExecutionResult result)
     {
@@ -2310,11 +2325,6 @@ internal sealed class ConductorDriver
 
         if (outcome.Category == DispatchStartOutcomeCategory.SpawnFailed)
         {
-            if (outcome.Reason?.Contains("DISPATCH_RECORD_WRITE_FAILED", StringComparison.Ordinal) == true)
-            {
-                return Escalate(goal, goalPrefix, policy, fromState, outcome.Reason);
-            }
-
             var firstFailure = outcome;
             var remediationClock = Stopwatch.StartNew();
             var remediationResult = RunDispatchRemediation();

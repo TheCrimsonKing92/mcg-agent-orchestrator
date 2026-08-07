@@ -272,7 +272,7 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     WorkerProfileCatalog profiles,
     IModelProviderRegistry? providers = null,
     bool approveHighRiskOwnership = false,
-    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null,
+    Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
     Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
 {
     GoalRefinementGate.EnsureRefined(
@@ -299,7 +299,11 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         checkpointBeforeWorkerStart is not null &&
         batch.Dispatches.Count > 0)
     {
-        checkpointBeforeWorkerStart(kernel, goal.Id, batch.Dispatches[0].Task.Id);
+        checkpointBeforeWorkerStart(
+            kernel,
+            goal.Id,
+            batch.Dispatches[0].Task.Id,
+            DispatchRecordCheckpointPhase.BeforeProcessStart);
     }
 
     var processes = StartDispatches(
@@ -603,7 +607,7 @@ public static ProcessBatchExecutionResult StartDispatches(
     WorkerProfileCatalog? profiles = null,
     IModelProviderRegistry? providers = null,
     bool refreshBeforeStart = true,
-    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null,
+    Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
     Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
 {
     return StartDispatches(
@@ -628,7 +632,7 @@ private static ProcessBatchExecutionResult StartDispatches(
     IReadOnlyList<AgentDefinition>? agents = null,
     WorkerProfileCatalog? profiles = null,
     IModelProviderRegistry? providers = null,
-    Action<AgentOrchestratorKernel, GoalId, TaskId>? checkpointBeforeWorkerStart = null,
+    Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
     Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
 {
     var runner = new BackgroundDispatchRunner();

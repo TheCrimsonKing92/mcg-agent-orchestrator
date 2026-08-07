@@ -7,6 +7,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 /// <summary>
 /// Unit tests for ConductorBatchLoop covering: loop scheduling (cap, hold/advance),
@@ -59,7 +60,7 @@ public sealed class ConductorBatchLoopTests
     }
 
     private static Exception SqliteBusy() =>
-        new InvalidOperationException("SQLite Error 5: 'database is locked'.");
+        new SqliteException("SQLite Error 5: 'database is locked'.", 5);
 
     private static GoalWorktreeRebaseResult DefaultRebaseSuccess() =>
         new(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null);
@@ -5796,10 +5797,242 @@ public sealed class ConductorBatchLoopTests
 
         var reloaded = await repo.LoadAsync();
         var reloadedTask = reloaded.GetTask(goalId, taskId);
-        Assert.Contains("DISPATCH_RECORD_WRITE_FAILED", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("DISPATCH_RECORD_WRITE_CONTENTION", ex.Message, StringComparison.Ordinal);
         Assert.Equal(ConductorBatchLoop.DefaultMaxBusyWriteAttempts, attempts);
         Assert.True(reloadedTask.LastDispatch is null);
         Assert.True(reloadedTask.LastProcess is null);
+    }
+
+    [Xunit.Theory(DisplayName = "DispatchRecordWrite_classifier_maps_only_busy_and_locked_to_contention")]
+    [Xunit.InlineData(5, "Contention")]
+    [Xunit.InlineData(6, "Contention")]
+    public void DispatchRecordWriteClassifierMapsOnlyBusyAndLockedToContention(
+        int sqliteErrorCode,
+        string expected)
+    {
+        Assert.Equal(expected, DispatchRecordWriteException.ClassifySqliteErrorCode(sqliteErrorCode).ToString());
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchRecordWrite_classifier_maps_all_other_primary_and_unknown_codes_to_unrecoverable")]
+    public void DispatchRecordWriteClassifierMapsAllOtherPrimaryAndUnknownCodesToUnrecoverable()
+    {
+        var otherCodes = Enumerable.Range(0, 29)
+            .Concat([100, 101, 999])
+            .Where(code => code is not 5 and not 6);
+
+        Assert.All(otherCodes, code => Assert.Equal(
+            DispatchRecordWriteFailureCause.Unrecoverable,
+            DispatchRecordWriteException.ClassifySqliteErrorCode(code)));
+    }
+
+    [Xunit.Theory(DisplayName = "BatchLoop_dispatch_record_contention_skips_then_dispatches_on_next_tick")]
+    [Xunit.InlineData(5)]
+    [Xunit.InlineData(6)]
+    public void BatchLoopDispatchRecordContentionSkipsThenDispatchesOnNextTick(int sqliteErrorCode)
+    {
+        var (kernel, goal) = SimpleGoal("dispatch record contention recovers");
+        var before = JsonSerializer.Serialize(kernel.ExportSnapshot().Goals.Single());
+        var persistAttempts = 0;
+        var spawns = 0;
+        var observedTicks = new List<(int Tick, int Spawns, string Snapshot)>();
+        var tickSummaries = new List<BatchTickSummary>();
+        var processId = Environment.ProcessId;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: currentGoal =>
+            {
+                var task = currentGoal.Tasks.Single();
+                ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
+                    (_, _) =>
+                    {
+                        persistAttempts++;
+                        if (persistAttempts == 1)
+                            throw new SqliteException($"injected sqlite {sqliteErrorCode}", sqliteErrorCode);
+                    },
+                    kernel,
+                    currentGoal.Id,
+                    task.Id);
+                spawns++;
+                return DispatchStartOutcome.Started();
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            onTick: tick =>
+            {
+                tickSummaries.Add(tick);
+                observedTicks.Add((
+                    tick.Tick,
+                    spawns,
+                    JsonSerializer.Serialize(kernel.ExportSnapshot().Goals.Single())));
+            });
+
+        Assert.Equal(processId, Environment.ProcessId);
+        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(0, summary.Escalated);
+        Assert.Equal(1, spawns);
+        Assert.Equal([1, 2], observedTicks.Select(item => item.Tick).ToArray());
+        Assert.Equal(0, observedTicks[0].Spawns);
+        Assert.Equal(before, observedTicks[0].Snapshot);
+        Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+        var contentionLine = Assert.Single(tickSummaries
+            .SelectMany(tick => tick.ProgressLines ?? [])
+            .Where(line => line.StartsWith("DISPATCH_RECORD_WRITE_CONTENTION ", StringComparison.Ordinal)));
+        Assert.Contains("skip=1/5", contentionLine, StringComparison.Ordinal);
+        Assert.DoesNotContain("DISPATCH_RECORD_WRITE_FAILED", contentionLine, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_dispatch_record_contention_message_with_fatal_token_does_not_stop_loop")]
+    public void BatchLoopDispatchRecordContentionMessageWithFatalTokenDoesNotStopLoop()
+    {
+        var (kernel, goal) = SimpleGoal("typed cause outranks message");
+        var task = goal.Tasks.Single();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => throw new DispatchRecordWriteException(
+                DispatchRecordWriteFailureCause.Contention,
+                DispatchRecordCheckpointPhase.BeforeProcessStart,
+                "dispatch-start",
+                goal.Id,
+                task.Id,
+                5,
+                new SqliteException("busy", 5),
+                "quoted diagnostic DISPATCH_RECORD_WRITE_FAILED must not control flow"));
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(0, summary.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_unclassified_pre_process_dispatch_record_write_is_visible_and_skipped")]
+    public void BatchLoopUnclassifiedPreProcessDispatchRecordWriteIsVisibleAndSkipped()
+    {
+        var (kernel, goal) = SimpleGoal("unclassified dispatch record failure");
+        var task = goal.Tasks.Single();
+        var ticks = new List<BatchTickSummary>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ => throw DispatchRecordWriteException.From(
+                new InvalidOperationException("opaque persistence adapter failure"),
+                DispatchRecordCheckpointPhase.BeforeProcessStart,
+                "dispatch-start",
+                goal.Id,
+                task.Id));
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            onTick: ticks.Add);
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(0, summary.Escalated);
+        var line = Assert.Single(ticks.SelectMany(tick => tick.ProgressLines ?? [])
+            .Where(progress => progress.StartsWith("DISPATCH_RECORD_WRITE_UNCLASSIFIED ", StringComparison.Ordinal)));
+        Assert.Contains("System.InvalidOperationException", line, StringComparison.Ordinal);
+        Assert.Contains("opaque_persistence_adapter_failure", line, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_dispatch_record_contention_escalates_goal_at_visible_bound_without_stopping_loop")]
+    public void BatchLoopDispatchRecordContentionEscalatesGoalAtVisibleBoundWithoutStoppingLoop()
+    {
+        var (kernel, goal) = SimpleGoal("bounded dispatch record contention");
+        var task = goal.Tasks.Single();
+        var ticks = new List<BatchTickSummary>();
+        var attempts = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ =>
+            {
+                attempts++;
+                throw new DispatchRecordWriteException(
+                    DispatchRecordWriteFailureCause.Contention,
+                    DispatchRecordCheckpointPhase.BeforeProcessStart,
+                    "dispatch-start",
+                    goal.Id,
+                    task.Id,
+                    5,
+                    new SqliteException("busy", 5));
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: ConductorBatchLoop.DispatchRecordContentionSkipLimit + 1,
+            onTick: ticks.Add);
+
+        Assert.Equal(ConductorBatchLoop.DispatchRecordContentionSkipLimit, attempts);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
+        var contentionLines = ticks.SelectMany(tick => tick.ProgressLines ?? [])
+            .Where(line => line.StartsWith("DISPATCH_RECORD_WRITE_CONTENTION ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(ConductorBatchLoop.DispatchRecordContentionSkipLimit, contentionLines.Length);
+        Assert.Contains("skip=5/5", contentionLines[^1], StringComparison.Ordinal);
+        Assert.Contains(ticks.SelectMany(tick => tick.ProgressLines ?? []), line =>
+            line.Contains("dispatch-record-write-contention-limit", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_unrecoverable_dispatch_record_write_stops_loop")]
+    public void BatchLoopUnrecoverableDispatchRecordWriteStopsLoop()
+    {
+        var (kernel, goal) = SimpleGoal("unrecoverable dispatch record failure");
+        var task = goal.Tasks.Single();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ =>
+            {
+                ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
+                    (_, _) => throw new SqliteException("readonly", 8),
+                    kernel,
+                    goal.Id,
+                    task.Id);
+                return DispatchStartOutcome.Started();
+            });
+
+        var ex = Assert.Throws<DispatchRecordWriteException>(() => new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2));
+
+        Assert.Equal(DispatchRecordWriteFailureCause.Unrecoverable, ex.Cause);
+        Assert.Contains("DISPATCH_RECORD_WRITE_FAILED", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchRecordWrite_post_process_contention_is_fatal")]
+    public void DispatchRecordWritePostProcessContentionIsFatal()
+    {
+        var (kernel, goal) = SimpleGoal("post process contention");
+        var task = goal.Tasks.Single();
+
+        var ex = Assert.Throws<DispatchRecordWriteException>(() =>
+            ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
+                (_, _) => throw SqliteBusy(),
+                kernel,
+                goal.Id,
+                task.Id,
+                DispatchRecordCheckpointPhase.ProcessMayHaveStarted));
+
+        Assert.Equal(DispatchRecordWriteFailureCause.Contention, ex.Cause);
+        Assert.True(ex.ProcessMayHaveStarted);
+        Assert.True(ex.IsFatal);
+        Assert.Contains("DISPATCH_RECORD_WRITE_FAILED", ex.Message, StringComparison.Ordinal);
     }
 
     // ── Auto-retry: transient acceptance flake recovers on retry ─────────
@@ -9795,7 +10028,7 @@ public sealed class ConductorBatchLoopTests
                 StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_CriticalRetryAdvanceThrowStillTerminatesLoop")]
+    [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_TypedCriticalRetryAdvanceThrowStillTerminatesLoop")]
     public void BatchLoop_FaultIsolation_CriticalRetryAdvanceThrowStillTerminatesLoop()
     {
         var (kernel, goal) = SimpleGoal("critical retry fault goal");
@@ -9803,7 +10036,14 @@ public sealed class ConductorBatchLoopTests
 
         var attempts = 0;
         var reapedGoalIds = new List<GoalId>();
-        var expected = new InvalidOperationException("DISPATCH_RECORD_WRITE_FAILED retry advance persistence failed");
+        var expected = new DispatchRecordWriteException(
+            DispatchRecordWriteFailureCause.Unrecoverable,
+            DispatchRecordCheckpointPhase.BeforeProcessStart,
+            "dispatch-start",
+            goal.Id,
+            goal.Tasks.Single().Id,
+            8,
+            new SqliteException("retry advance persistence failed", 8));
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             runAcceptance: _ =>
@@ -9815,7 +10055,7 @@ public sealed class ConductorBatchLoopTests
                 throw expected;
             });
 
-        var actual = Assert.Throws<InvalidOperationException>(() =>
+        var actual = Assert.Throws<DispatchRecordWriteException>(() =>
             new ConductorBatchLoop(
                 reapGoalRunningDispatches: (_, reapedGoal) => reapedGoalIds.Add(reapedGoal.Id)).Run(
                     kernel,
