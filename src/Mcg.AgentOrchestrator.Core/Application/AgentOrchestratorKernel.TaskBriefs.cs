@@ -1368,7 +1368,9 @@ public sealed partial class AgentOrchestratorKernel
                evt.Kind is (
                    ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
                    ProgressKind.ReviewerEvidenceRequestReceived or
-                   ProgressKind.ReviewerEvidenceRunRecorded) ||
+                   ProgressKind.ReviewerEvidenceRunRecorded or
+                   ProgressKind.FindingEvidenceRequestRecorded or
+                   ProgressKind.FindingEvidenceRunRecorded) ||
                (evt.Kind is ProgressKind.TaskNote or ProgressKind.OperatorTaskNote &&
                    IsAccumulatedRetryFeedbackTaskNote(evt.Message));
     }

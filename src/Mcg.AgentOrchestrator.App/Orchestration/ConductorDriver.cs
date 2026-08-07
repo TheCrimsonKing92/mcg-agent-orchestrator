@@ -24,21 +24,14 @@ internal sealed class ConductorDriver
     private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
     private const string CleanBaselineRedCorrelationKeyPrefix = "clean-baseline-red:";
 
-    // Reviewer evidence-on-demand is bounded per review round to break request loops while still
-    // letting a reviewer legitimately request focused receipts for more than one changed area
-    // (multi-file infra goals commonly need 2-3 suites). The guard previously allowed exactly one
-    // request across the whole reviewer phase, which escalated a legitimate second suite as a
-    // "repeat" (the mechanical evidence re-dispatch retries the reviewer task itself, so it never
-    // advances the round boundary). Requests beyond this bound escalate normally.
-    // Prefix of the message the conductor writes when it mechanically re-dispatches the reviewer
-    // task to attach evidence-on-demand receipts within the SAME round. Retries carrying this prefix
-    // must NOT advance the evidence-round boundary (otherwise the per-round bound would never apply);
-    // any other reviewer retry (operator recover, fresh review) begins a new evidence round.
-    private const string ReviewerEvidenceRetryMessagePrefix = "reviewer evidence-on-demand:";
+    // Finding evidence retries deliver a Conductor-owned receipt or typed refusal to the role that
+    // requested it. Reviewer round accounting treats that mechanical delivery as part of the same
+    // round; requests from other roles use the same role-neutral marker without being relabelled.
+    private const string FindingEvidenceRetryMessagePrefix = "finding evidence-on-demand:";
     private const int MaxReviewFindingContractRepairsPerRound = 2;
     private const string ReviewContractRepairRetryMessagePrefix = "review-finding contract-repair:";
     private static readonly string[] MechanicalReviewerRetryMessagePrefixes =
-        [ReviewerEvidenceRetryMessagePrefix, ReviewContractRepairRetryMessagePrefix];
+        [FindingEvidenceRetryMessagePrefix, ReviewContractRepairRetryMessagePrefix];
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -65,8 +58,8 @@ internal sealed class ConductorDriver
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
     private readonly Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec> _retryTask;
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
-    private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRequestReceived;
-    private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRunRecorded;
+    private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRequest;
+    private readonly Action<GoalId, TaskId, string> _recordFindingEvidenceRun;
     private readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
@@ -490,7 +483,7 @@ internal sealed class ConductorDriver
                     Checks: []);
             }
 
-            GoalOperationJournal.Begin(dir, goal, "conductor:reviewer-evidence", $"Running focused reviewer evidence: {request}");
+            GoalOperationJournal.Begin(dir, goal, "conductor:finding-evidence", $"Running focused finding evidence: {request}");
             var result = acceptanceVerifier.RunFocusedEvidenceAsync(
                     worktreePath,
                     goal.Id,
@@ -501,11 +494,11 @@ internal sealed class ConductorDriver
                 .GetResult();
             if (result.Accepted && result.Passed)
             {
-                GoalOperationJournal.Completed(dir, goal, "conductor:reviewer-evidence", result.Summary);
+                GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
             }
             else
             {
-                GoalOperationJournal.Failed(dir, goal, "conductor:reviewer-evidence", result.Summary);
+                GoalOperationJournal.Failed(dir, goal, "conductor:finding-evidence", result.Summary);
             }
 
             return result;
@@ -518,10 +511,10 @@ internal sealed class ConductorDriver
         {
             kernel.RecordTaskNote(goalId, taskId, message);
         };
-        _recordReviewerEvidenceRequestReceived = (goalId, taskId, message) =>
-            kernel.RecordReviewerEvidenceRequestReceived(goalId, taskId, message);
-        _recordReviewerEvidenceRunRecorded = (goalId, taskId, message) =>
-            kernel.RecordReviewerEvidenceRunRecorded(goalId, taskId, message);
+        _recordFindingEvidenceRequest = (goalId, taskId, message) =>
+            kernel.RecordFindingEvidenceRequest(goalId, taskId, message);
+        _recordFindingEvidenceRun = (goalId, taskId, message) =>
+            kernel.RecordFindingEvidenceRun(goalId, taskId, message);
         _recordFindingEvidenceOutcome = (goalId, taskId, stableId, outcome, receipt) =>
         {
             kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
@@ -801,7 +794,9 @@ internal sealed class ConductorDriver
         Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null,
         ConductorParallelAcceptanceAttemptCoordinator? focusedEvidenceAttemptCoordinator = null,
         Func<Goal, LandingEscalationRecheckResult>? recheckPreLandingRebaseConflict = null,
-        Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null)
+        Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
+        Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
+        Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -843,8 +838,8 @@ internal sealed class ConductorDriver
                 ? ((goalId, taskId, message, _) => retryTask(goalId, taskId, message))
                 : ((_, _, _, _) => throw new InvalidOperationException("Retry delegate was not configured.")));
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
-        _recordReviewerEvidenceRequestReceived = recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
-        _recordReviewerEvidenceRunRecorded = recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
+        _recordFindingEvidenceRequest = recordFindingEvidenceRequest ?? recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
+        _recordFindingEvidenceRun = recordFindingEvidenceRun ?? recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
         _recordFindingEvidenceOutcome = recordFindingEvidenceOutcome ?? ((_, _, _, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
@@ -1601,15 +1596,15 @@ internal sealed class ConductorDriver
             _recordFindingEvidenceOutcome(
                 goal.Id, requestingTask.Id, finding.StableId,
                 new FindingEvidenceOutcome(Honoured: true, ReceiptId: receiptId), receipt);
-            _recordReviewerEvidenceRequestReceived(
+            _recordFindingEvidenceRequest(
                 goal.Id, requestingTask.Id,
                 $"finding-evidence disposition=honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
                 $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason=honoured");
+            _recordFindingEvidenceRun(
+                goal.Id, requestingTask.Id,
+                $"finding-evidence role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; finding_id={finding.StableId}; " +
+                $"candidate_sha={candidateSha}; receipt_id={receiptId}; reason=honoured; {FormatFocusedEvidenceResult(evidence)}");
         }
-        _recordReviewerEvidenceRunRecorded(
-            goal.Id, requestingTask.Id,
-            $"source=finding-requested; role={requestingTask.RequiredRole}; candidate_sha={candidateSha}; " +
-            $"receipt_id={receiptId}; {FormatFocusedEvidenceResult(evidence)}");
         decision = groups.Take(policy.MaxFocusedEvidenceRunsPerRound).Skip(1).Any()
             ? VerifyingFindingAutoRetryDecision.Hold(
                 "Focused evidence completed; another distinct request from the same finding round remains pending.")
@@ -1628,7 +1623,7 @@ internal sealed class ConductorDriver
         _recordFindingEvidenceOutcome(
             goalId, requestingTask.Id, finding.StableId,
             new FindingEvidenceOutcome(Honoured: false, Reason: reason, Detail: detail), null);
-        _recordReviewerEvidenceRequestReceived(
+        _recordFindingEvidenceRequest(
             goalId, requestingTask.Id,
             $"finding-evidence disposition=not-honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
             $"finding_id={finding.StableId}; candidate_sha=unavailable; receipt_id=none; " +
@@ -1638,7 +1633,7 @@ internal sealed class ConductorDriver
     private static VerifyingFindingAutoRetryDecision BuildFindingEvidenceDeliveryRetry(TaskSpec task, string summary) =>
         VerifyingFindingAutoRetryDecision.Retry(
             task,
-            $"{ReviewerEvidenceRetryMessagePrefix} role={task.RequiredRole}; task={task.Id.Value[..8]}; {summary} " +
+            $"{FindingEvidenceRetryMessagePrefix} role={task.RequiredRole}; task={task.Id.Value[..8]}; {summary} " +
             "Review the finding-bound outcome in this round's context.",
             null,
             RetryRoundKind.Mechanical);
