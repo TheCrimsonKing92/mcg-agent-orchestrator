@@ -68,6 +68,12 @@ internal static class SpecRefinerPlanner
         RULE: if refinerConfidence == low AND blastRadius == high, set disposition to "ask" (leave choice empty).
         Otherwise decide and record choice + rationale.
 
+        CLARIFICATION BATCHING:
+        - Before producing output, enumerate every material fork that can be identified from the OBJECTIVE alone. Do not stop after finding the first ask fork.
+        - Return all such forks in this response so every ask fork can be raised in the same operator round.
+        - When resolved clarifications are supplied, raise a newly identified follow-up only when it genuinely depends on a supplied answer. Apply this discriminator: could the question have been asked before that answer existed? If yes, it belonged in the earlier batch and must not be deferred.
+        - Never suppress an unresolved ambiguity merely to avoid a later clarification round.
+
         OUTPUT ONLY a fenced JSON object (```json ... ```) with these fields:
         - "behavioralContract": string — one paragraph: WHAT the system does, observable from the outside
         - "acceptanceCriteria": string array — concrete, testable outcomes

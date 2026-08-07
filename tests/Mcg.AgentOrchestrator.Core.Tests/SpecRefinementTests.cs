@@ -100,6 +100,8 @@ public sealed class SpecRefinementTests
             OperatorOwnedAcceptanceCriteria = ["Operator criterion"]
         };
         kernel.SetGoalRefinedSpec(goal.Id, spec);
+        kernel.RecordGoalClarificationRound(goal.Id);
+        kernel.RecordGoalClarificationRound(goal.Id);
 
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
         var restoredGoal = restored.GetGoal(goal.Id);
@@ -117,6 +119,7 @@ public sealed class SpecRefinementTests
         Assert.Equal("Criterion A", rs.OpenQuestions[0].Criterion);
         Assert.Equal("high", rs.OpenQuestions[0].BlastRadius);
         Assert.Equal(["Operator criterion"], rs.OperatorOwnedAcceptanceCriteria);
+        Assert.Equal(2, restoredGoal.ClarificationRoundCount);
     }
 
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_null_RefinedSpec")]

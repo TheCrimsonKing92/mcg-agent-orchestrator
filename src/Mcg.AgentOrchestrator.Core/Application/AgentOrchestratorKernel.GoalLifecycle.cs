@@ -1810,6 +1810,11 @@ public sealed partial class AgentOrchestratorKernel
         GetGoal(goalId).SetRefinedSpec(spec);
     }
 
+    public void RecordGoalClarificationRound(GoalId goalId)
+    {
+        GetGoal(goalId).RecordClarificationRound();
+    }
+
     public void SetGoalDependency(GoalId dependentId, GoalId dependencyId)
     {
         if (dependentId == dependencyId)

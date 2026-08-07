@@ -21,7 +21,8 @@ public sealed record GoalSnapshot(
     DateTimeOffset? TerminatedAt = null,
     int AutomaticAcceptanceRetryCount = 0,
     int OperatorAcceptanceRegateCount = 0,
-    GoalHoldSnapshot? CurrentHold = null);
+    GoalHoldSnapshot? CurrentHold = null,
+    int ClarificationRoundCount = 0);
 
 public sealed record GoalHoldSnapshot(
     string Identity,

@@ -103,6 +103,7 @@ internal sealed class GoalRefinementService
             .ToList();
 
         var openQuestions = new List<RefinedSpecOpenQuestion>();
+        var raisedClarificationRound = false;
         var surfacedTopicKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var surfacedNormalizedQuestionKeys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var question in existingOpenQuestions)
@@ -140,6 +141,7 @@ internal sealed class GoalRefinementService
                     includeObjectiveInNextClarification ? goal.Objective : null),
                 correlationKey,
                 cancellationToken);
+            raisedClarificationRound = true;
             includeObjectiveInNextClarification = false;
             openQuestions.Add(new RefinedSpecOpenQuestion(
                 correlationKey,
@@ -246,6 +248,7 @@ internal sealed class GoalRefinementService
                             includeObjectiveInNextClarification ? goal.Objective : null),
                         correlationKey,
                         cancellationToken);
+                    raisedClarificationRound = true;
                     includeObjectiveInNextClarification = false;
                     openQuestions.Add(new RefinedSpecOpenQuestion(
                         correlationKey,
@@ -273,6 +276,8 @@ internal sealed class GoalRefinementService
         };
 
         kernel.SetGoalRefinedSpec(goalId, spec);
+        if (raisedClarificationRound)
+            kernel.RecordGoalClarificationRound(goalId);
 
         return spec.HasOpenQuestions
             ? RefinementResult.AwaitingClarification(spec)
@@ -686,6 +691,7 @@ internal sealed class GoalRefinementService
         CancellationToken cancellationToken = default)
     {
         var goal = kernel.GetGoal(goalId);
+        var raisedClarificationRound = false;
         var includeObjectiveInNextClarification = !(await _collaboration.ListAsync(goalId.Value, cancellationToken))
             .Any(item =>
                 item.Type == CollaborationItemType.Clarification &&
@@ -709,6 +715,7 @@ internal sealed class GoalRefinementService
                         includeObjectiveInNextClarification ? goal.Objective : null),
                     question.Id,
                     cancellationToken);
+                raisedClarificationRound = true;
                 includeObjectiveInNextClarification = false;
             }
 
@@ -721,6 +728,8 @@ internal sealed class GoalRefinementService
                     .ToList()
             };
             kernel.SetGoalRefinedSpec(goalId, rejected);
+            if (raisedClarificationRound)
+                kernel.RecordGoalClarificationRound(goalId);
             kernel.RecordGoalPolicyDecision(
                 goalId,
                 $"Rejected feasibility clarification answer for '{question.Id}': expected re-scope, OPERATOR-OWNED, or supply-reproducing-scenario syntax; clarification remains open.");
@@ -771,6 +780,7 @@ internal sealed class GoalRefinementService
                         includeObjectiveInNextClarification ? goal.Objective : null),
                     correlationKey,
                     cancellationToken);
+                raisedClarificationRound = true;
                 includeObjectiveInNextClarification = false;
                 questions.Add(new RefinedSpecOpenQuestion(
                     correlationKey,
@@ -822,6 +832,7 @@ internal sealed class GoalRefinementService
                         includeObjectiveInNextClarification ? goal.Objective : null),
                     released.Id,
                     cancellationToken);
+                raisedClarificationRound = true;
                 includeObjectiveInNextClarification = false;
             }
         }
@@ -840,6 +851,8 @@ internal sealed class GoalRefinementService
             OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria
         };
         kernel.SetGoalRefinedSpec(goalId, updated);
+        if (raisedClarificationRound)
+            kernel.RecordGoalClarificationRound(goalId);
         return updated;
     }
 
