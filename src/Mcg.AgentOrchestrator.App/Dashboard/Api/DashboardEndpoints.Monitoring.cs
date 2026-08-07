@@ -29,7 +29,7 @@ internal static partial class DashboardEndpoints
             runEvents,
             ParseMonitoringSinceEventId(context.Request),
             once: false,
-            TimeSpan.FromSeconds(1),
+            DashboardMonitoringEvents.KeepAliveInterval,
             context.RequestAborted);
     }
 

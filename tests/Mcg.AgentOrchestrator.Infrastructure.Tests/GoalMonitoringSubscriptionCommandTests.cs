@@ -442,6 +442,18 @@ public sealed class GoalMonitoringSubscriptionCommandTests
         Xunit.Assert.Contains("Created", evt.Data);
     }
 
+    [Xunit.Fact(DisplayName = "Monitor_goal_does_not_print_keepalive_events")]
+    public void MonitorGoalDoesNotPrintKeepaliveEvents()
+    {
+        using var output = new StringWriter();
+
+        GoalMonitoringSubscriptionCommand.PrintServerSentEvent(
+            new ServerSentEvent(null, DashboardMonitoringEvents.KeepAliveEventName, "{\"Timestamp\":\"2026-08-07T00:00:00.0000000+00:00\"}"),
+            output);
+
+        Assert.Equal(string.Empty, output.ToString());
+    }
+
     [Xunit.Fact(DisplayName = "Monitor_goal_local_once_emits_snapshot_before_incremental_events")]
     public async Task MonitorGoalLocalOnceEmitsSnapshotBeforeIncrementalEvents()
     {
