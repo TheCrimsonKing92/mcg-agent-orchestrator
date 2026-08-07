@@ -3064,6 +3064,7 @@ internal sealed class ConductorBatchLoop
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot => "blocked-build-slot",
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock => "blocked-build-lock",
             ConductorParallelAcceptanceAttemptOutcome.LaunchFailed => "launch-failed",
+            ConductorParallelAcceptanceAttemptOutcome.Faulted => "faulted",
             ConductorParallelAcceptanceAttemptOutcome.Reconciled => "reconciled",
             _ => "unknown"
         };

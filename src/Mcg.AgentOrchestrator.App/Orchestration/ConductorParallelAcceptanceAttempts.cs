@@ -960,7 +960,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         try
         {
             WriteResult(attempt.ResultPath, ToArtifact(run));
-            var outcome = OutcomeFor(run);
+            var outcome = OutcomeFor(run, attempt.Kind);
             TryWriteExit(attempt.ExitCodePath, outcome == ConductorParallelAcceptanceAttemptOutcome.Passed ? 0 : 1);
             TryPersistTerminal(attempt, current => current with
             {
@@ -992,7 +992,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             CompleteWithoutResult(
                 attempt,
-                ConductorParallelAcceptanceAttemptOutcome.Faulted,
+                FaultOutcomeFor(attempt.Kind),
                 ex.Message);
             TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
         }
@@ -1334,7 +1334,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 BranchHeadSha = run.Candidate.BranchHeadSha,
                 MainHeadSha = run.Candidate.MainHeadSha,
                 Outcome = current.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running
-                    ? OutcomeFor(run)
+                    ? OutcomeFor(run, current.Kind)
                     : current.Outcome,
                 CompletedAt = current.CompletedAt ?? _utcNow(),
                 LastHeartbeatAt = _utcNow(),
@@ -1977,7 +1977,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private static GoalLifecycleState ParseState(string? value) =>
         Enum.TryParse<GoalLifecycleState>(value, out var state) ? state : GoalLifecycleState.Verified;
 
-    private static ConductorParallelAcceptanceAttemptOutcome OutcomeFor(ConductorParallelAcceptanceRunResult run)
+    private static ConductorParallelAcceptanceAttemptOutcome OutcomeFor(
+        ConductorParallelAcceptanceRunResult run,
+        string dispatchKind)
     {
         if (run.Exception is DotnetBuildSlotsBusyException)
         {
@@ -1996,7 +1998,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (run.Exception is not null)
         {
-            return ConductorParallelAcceptanceAttemptOutcome.Faulted;
+            return FaultOutcomeFor(dispatchKind);
         }
 
         if (run.EarlyResult is not null)
@@ -2018,6 +2020,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             : ConductorParallelAcceptanceAttemptOutcome.Failed;
     }
 
+    private static ConductorParallelAcceptanceAttemptOutcome FaultOutcomeFor(string dispatchKind) =>
+        string.Equals(dispatchKind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal)
+            ? ConductorParallelAcceptanceAttemptOutcome.Faulted
+            : ConductorParallelAcceptanceAttemptOutcome.Failed;
+
     private static bool IsTerminalWithoutRunOutcome(ConductorParallelAcceptanceAttemptOutcome outcome) =>
         outcome is ConductorParallelAcceptanceAttemptOutcome.StaleCandidate
             or ConductorParallelAcceptanceAttemptOutcome.ProcessDied
@@ -2025,8 +2032,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             or ConductorParallelAcceptanceAttemptOutcome.Cancelled
             or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot
             or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock
-            or ConductorParallelAcceptanceAttemptOutcome.LaunchFailed
-            or ConductorParallelAcceptanceAttemptOutcome.Faulted;
+            or ConductorParallelAcceptanceAttemptOutcome.LaunchFailed;
 
     private static bool IsReconciled(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.ReconciledAt.HasValue ||

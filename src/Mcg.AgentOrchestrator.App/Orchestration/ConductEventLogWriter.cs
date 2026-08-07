@@ -22,6 +22,7 @@ internal sealed class ConductEventLogWriter
     private readonly Func<DateTimeOffset> _utcNow;
     private readonly Action? _beforeRequiredEventDrain;
     private readonly Action? _beforeAppendCommit;
+    private readonly string _requiredEventMutexName;
     private readonly object _lock = new();
 
     public ConductEventLogWriter(
@@ -36,6 +37,7 @@ internal sealed class ConductEventLogWriter
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
         _beforeRequiredEventDrain = beforeRequiredEventDrain;
         _beforeAppendCommit = beforeAppendCommit;
+        _requiredEventMutexName = RequiredEventMutexName(path);
         MigrateLegacyPendingEvents();
     }
 
@@ -46,14 +48,15 @@ internal sealed class ConductEventLogWriter
         lock (_lock)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_path) ?? ".");
-            lock (RequiredEventDrainGate)
+            _beforeRequiredEventDrain?.Invoke();
+            WithRequiredEventGate(() =>
             {
-                DrainRequiredEvents();
+                DrainRequiredEventsUnderGate();
                 _beforeAppendCommit?.Invoke();
                 RotateIfNeeded();
 
                 File.AppendAllText(_path, Serialize(eventKind, goalId, detail, timestamp));
-            }
+            });
         }
     }
 
@@ -61,19 +64,22 @@ internal sealed class ConductEventLogWriter
     {
         lock (_lock)
         {
-            var directory = Path.GetDirectoryName(_path) ?? ".";
-            Directory.CreateDirectory(directory);
-            var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
-            Directory.CreateDirectory(pendingDirectory);
-            var pendingPath = Path.Combine(
-                pendingDirectory,
-                $"{Path.GetFileName(_path)}.pending-{Guid.NewGuid():N}.jsonl");
-            File.WriteAllText(pendingPath, Serialize(eventKind, goalId, detail, timestamp));
-
             try
             {
-                DrainRequiredEvents();
-                return !File.Exists(pendingPath);
+                _beforeRequiredEventDrain?.Invoke();
+                return WithRequiredEventGate(() =>
+                {
+                    var directory = Path.GetDirectoryName(_path) ?? ".";
+                    Directory.CreateDirectory(directory);
+                    var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+                    Directory.CreateDirectory(pendingDirectory);
+                    var pendingPath = Path.Combine(
+                        pendingDirectory,
+                        $"{Path.GetFileName(_path)}.pending-{Guid.NewGuid():N}.jsonl");
+                    File.WriteAllText(pendingPath, Serialize(eventKind, goalId, detail, timestamp));
+                    DrainRequiredEventsUnderGate();
+                    return !File.Exists(pendingPath);
+                });
             }
             catch (IOException)
             {
@@ -91,23 +97,27 @@ internal sealed class ConductEventLogWriter
         ArgumentNullException.ThrowIfNull(record);
         lock (_lock)
         {
-            var directory = Path.GetDirectoryName(_path) ?? ".";
-            Directory.CreateDirectory(directory);
-            var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
-            Directory.CreateDirectory(pendingDirectory);
-            var eventHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(record.EventId)));
-            var pendingPath = Path.Combine(
-                pendingDirectory,
-                $"{Path.GetFileName(_path)}.pending-{eventHash}.jsonl");
-            if (!File.Exists(pendingPath) && !RequiredEventAlreadyRecorded(record.EventId))
-            {
-                File.WriteAllText(pendingPath, JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine);
-            }
-
             try
             {
-                DrainRequiredEvents();
-                return !File.Exists(pendingPath);
+                _beforeRequiredEventDrain?.Invoke();
+                return WithRequiredEventGate(() =>
+                {
+                    var directory = Path.GetDirectoryName(_path) ?? ".";
+                    Directory.CreateDirectory(directory);
+                    var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+                    Directory.CreateDirectory(pendingDirectory);
+                    var eventHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(record.EventId)));
+                    var pendingPath = Path.Combine(
+                        pendingDirectory,
+                        $"{Path.GetFileName(_path)}.pending-{eventHash}.jsonl");
+                    if (!File.Exists(pendingPath) && !RequiredEventAlreadyRecorded(record.EventId))
+                    {
+                        File.WriteAllText(pendingPath, JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine);
+                    }
+
+                    DrainRequiredEventsUnderGate();
+                    return !File.Exists(pendingPath);
+                });
             }
             catch (IOException)
             {
@@ -130,34 +140,78 @@ internal sealed class ConductEventLogWriter
         return JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine;
     }
 
-    private void DrainRequiredEvents()
+    private void DrainRequiredEventsUnderGate()
     {
-        _beforeRequiredEventDrain?.Invoke();
+        var directory = Path.GetDirectoryName(_path) ?? ".";
+        var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+        if (!Directory.Exists(pendingDirectory))
+        {
+            return;
+        }
+
+        var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
+        foreach (var pendingPath in Directory.GetFiles(pendingDirectory, pattern).Order(StringComparer.Ordinal))
+        {
+            var payload = File.ReadAllText(pendingPath);
+            var eventId = TryReadEventId(payload);
+            if (eventId is not null && RequiredEventAlreadyRecorded(eventId))
+            {
+                File.Delete(pendingPath);
+                continue;
+            }
+
+            RotateIfNeeded();
+            File.AppendAllText(_path, payload);
+            File.Delete(pendingPath);
+        }
+    }
+
+    private void WithRequiredEventGate(Action action) =>
+        WithRequiredEventGate(() =>
+        {
+            action();
+            return true;
+        });
+
+    private T WithRequiredEventGate<T>(Func<T> action)
+    {
         lock (RequiredEventDrainGate)
         {
-            var directory = Path.GetDirectoryName(_path) ?? ".";
-            var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
-            if (!Directory.Exists(pendingDirectory))
+            using var crossProcessGate = new Mutex(initiallyOwned: false, _requiredEventMutexName);
+            var ownsGate = false;
+            try
             {
-                return;
-            }
-
-            var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
-            foreach (var pendingPath in Directory.GetFiles(pendingDirectory, pattern).Order(StringComparer.Ordinal))
-            {
-                var payload = File.ReadAllText(pendingPath);
-                var eventId = TryReadEventId(payload);
-                if (eventId is not null && RequiredEventAlreadyRecorded(eventId))
+                try
                 {
-                    File.Delete(pendingPath);
-                    continue;
+                    ownsGate = crossProcessGate.WaitOne();
+                }
+                catch (AbandonedMutexException)
+                {
+                    ownsGate = true;
                 }
 
-                RotateIfNeeded();
-                File.AppendAllText(_path, payload);
-                File.Delete(pendingPath);
+                return action();
+            }
+            finally
+            {
+                if (ownsGate)
+                {
+                    crossProcessGate.ReleaseMutex();
+                }
             }
         }
+    }
+
+    internal static string RequiredEventMutexName(string path)
+    {
+        var normalizedPath = Path.GetFullPath(path);
+        if (OperatingSystem.IsWindows())
+        {
+            normalizedPath = normalizedPath.ToUpperInvariant();
+        }
+
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedPath)));
+        return $"Mcg.AgentOrchestrator.ConductEventLog.{hash}";
     }
 
     private bool RequiredEventAlreadyRecorded(string eventId)
@@ -215,7 +269,7 @@ internal sealed class ConductEventLogWriter
 
         try
         {
-            lock (RequiredEventDrainGate)
+            WithRequiredEventGate(() =>
             {
                 var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
                 var legacyPaths = Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly);
@@ -230,7 +284,7 @@ internal sealed class ConductEventLogWriter
                 {
                     File.Move(legacyPath, Path.Combine(pendingDirectory, Path.GetFileName(legacyPath)));
                 }
-            }
+            });
         }
         catch (IOException)
         {

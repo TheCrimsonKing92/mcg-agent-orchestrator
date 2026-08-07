@@ -8934,6 +8934,54 @@ public sealed class ConductorBatchLoopTests
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
+    [Xunit.Fact(Timeout = 30_000, DisplayName = "ConductEvents_required_lifecycle_staging_honors_cross_process_gate")]
+    public async Task ConductEventsRequiredLifecycleStagingHonorsCrossProcessGate()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-cross-process-required");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        using var beforeDrain = new ManualResetEventSlim();
+        using var crossProcessGate = new Mutex(
+            initiallyOwned: false,
+            ConductEventLogWriter.RequiredEventMutexName(logPath));
+        Assert.True(crossProcessGate.WaitOne(TimeSpan.FromSeconds(5)));
+
+        var writer = new ConductEventLogWriter(logPath, beforeRequiredEventDrain: beforeDrain.Set);
+        var record = new ConductEvidenceLifecycleEvent(
+            DateTimeOffset.UtcNow,
+            "EVIDENCE_END",
+            "goal-cross-process",
+            "goal-cross-process",
+            "attempt-cross-process",
+            1,
+            "evidence:attempt-cross-process:end",
+            DurationSeconds: 1d,
+            Outcome: "passed",
+            TestsExecuted: 1);
+        var append = Task.Run(() => writer.AppendRequired(record));
+
+        try
+        {
+            Assert.True(
+                beforeDrain.Wait(TimeSpan.FromSeconds(5)),
+                "The writer did not reach the required-event gate.");
+            var pendingDirectory = Path.Combine(
+                Path.GetDirectoryName(logPath)!,
+                ConductEventLogWriter.PendingEventsDirectoryName);
+            Assert.False(
+                Directory.Exists(pendingDirectory) && Directory.EnumerateFiles(pendingDirectory).Any(),
+                "Lifecycle staging must not touch its deterministic pending path while another process owns the stream gate.");
+        }
+        finally
+        {
+            crossProcessGate.ReleaseMutex();
+        }
+
+        Assert.True(await append);
+        var written = Assert.Single(File.ReadAllLines(logPath));
+        using var document = JsonDocument.Parse(written);
+        Assert.Equal(record.EventId, document.RootElement.GetProperty("event_id").GetString());
+    }
+
     [Xunit.Fact(DisplayName = "ConductEvents_parallel_append_and_required_write_serialize_forced_rotation")]
     public async Task ConductEventsParallelAppendAndRequiredWriteSerializeForcedRotation()
     {
