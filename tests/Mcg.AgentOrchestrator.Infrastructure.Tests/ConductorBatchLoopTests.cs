@@ -9522,20 +9522,17 @@ public sealed class ConductorBatchLoopTests
                 return new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null);
             });
 
-        BatchLoopSummary? summary = null;
-        var output = AsyncLocalConsoleRouter.Capture(() =>
-        {
-            summary = new ConductorBatchLoop(
-                reapGoalRunningDispatches: (_, goal) => reapedGoalIds.Add(goal.Id)).Run(
-                    kernel,
-                    driver,
-                    ConductorAutonomyPolicy.Conservative,
-                    NoStopPath(),
-                    maxIterations: 3,
-                    maxVerifyRetries: 2);
-        });
+        var ticks = new List<BatchTickSummary>();
+        var summary = new ConductorBatchLoop(
+            reapGoalRunningDispatches: (_, goal) => reapedGoalIds.Add(goal.Id)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 3,
+                maxVerifyRetries: 2,
+                onTick: ticks.Add);
 
-        Assert.NotNull(summary);
         Assert.Equal(2, attempts[faultyGoal.Id]);
         Assert.Equal(1, attempts[healthyGoal.Id]);
         Assert.Equal(1, summary.Escalated);
@@ -9546,10 +9543,10 @@ public sealed class ConductorBatchLoopTests
         Assert.True(healthyCleanedUp);
         Assert.Equal(GoalStatus.Completed, kernel.GetGoal(healthyGoal.Id).Status);
         Assert.Equal([faultyGoal.Id], reapedGoalIds);
-        Assert.Contains(
-            $"GOAL goal={faultyGoal.Id.Value[..8]} result=escalated reason=Access to retry path denied.",
-            output,
-            StringComparison.Ordinal);
+        Assert.Contains(ticks.SelectMany(tick => tick.ProgressLines ?? []), line =>
+            line.StartsWith(
+                $"GOAL goal={faultyGoal.Id.Value[..8]} result=escalated reason=Access to retry path denied.",
+                StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_CriticalRetryAdvanceThrowStillTerminatesLoop")]
