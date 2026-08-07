@@ -400,7 +400,19 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string workingDirectory,
         CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo(fileName)
+        var captureToFiles = OperatingSystem.IsWindows();
+        var capturePrefix = Path.Combine(
+            Path.GetTempPath(),
+            $"mcg-post-landing-canary-{Guid.NewGuid():N}");
+        var stdoutPath = capturePrefix + ".out";
+        var stderrPath = capturePrefix + ".err";
+        var startInfo = captureToFiles
+            ? GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+                [fileName, .. arguments],
+                workingDirectory,
+                stdoutPath,
+                stderrPath)
+            : new ProcessStartInfo(fileName)
         {
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
@@ -409,29 +421,46 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        foreach (var argument in arguments)
+        if (!captureToFiles)
         {
-            startInfo.ArgumentList.Add(argument);
+            foreach (var argument in arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
         }
 
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
         using var process = WorkerProcessJobs.StartRegisteredOrThrow(
             startInfo,
             $"post-landing-canary:{workingDirectory}");
-        process.StandardInput.Close();
+        if (!captureToFiles)
+        {
+            process.StandardInput.Close();
+        }
+
         try
         {
             // Do not cancel pipe drains before the killed process tree closes its handles.
             // Completion of this method is the coordinator's termination confirmation.
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
+            var stdoutTask = captureToFiles
+                ? Task.FromResult(string.Empty)
+                : process.StandardOutput.ReadToEndAsync();
+            var stderrTask = captureToFiles
+                ? Task.FromResult(string.Empty)
+                : process.StandardError.ReadToEndAsync();
             try
             {
                 await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
                 return new PostLandingCanaryProcessResult(
                     process.ExitCode,
-                    await stdoutTask.ConfigureAwait(false),
-                    await stderrTask.ConfigureAwait(false));
+                    captureToFiles
+                        ? await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stdoutPath, false)
+                            .ConfigureAwait(false)
+                        : await stdoutTask.ConfigureAwait(false),
+                    captureToFiles
+                        ? await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stderrPath, false)
+                            .ConfigureAwait(false)
+                        : await stderrTask.ConfigureAwait(false));
             }
             catch (OperationCanceledException)
             {
@@ -456,6 +485,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         finally
         {
             WorkerProcessJobs.Release(process.Id);
+            try { File.Delete(stdoutPath); } catch { }
+            try { File.Delete(stderrPath); } catch { }
         }
     }
 
