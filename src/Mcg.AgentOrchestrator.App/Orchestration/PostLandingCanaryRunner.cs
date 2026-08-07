@@ -236,7 +236,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         await EnsureSucceededAsync(
             "create isolated landing worktree",
             "git",
-            ["-C", _repositoryRoot, "worktree", "add", "--detach", "--quiet", worktreeRoot, landingSha],
+            ["-c", "core.longpaths=true", "-C", _repositoryRoot, "worktree", "add", "--detach", "--quiet", worktreeRoot, landingSha],
             _repositoryRoot,
             cancellationToken).ConfigureAwait(false);
         return worktreeRoot;
@@ -247,7 +247,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         await EnsureSucceededAsync(
             "remove isolated landing worktree",
             "git",
-            ["-C", _repositoryRoot, "worktree", "remove", "--force", worktreeRoot],
+            ["-c", "core.longpaths=true", "-C", _repositoryRoot, "worktree", "remove", "--force", worktreeRoot],
             _repositoryRoot,
             CancellationToken.None).ConfigureAwait(false);
     }
