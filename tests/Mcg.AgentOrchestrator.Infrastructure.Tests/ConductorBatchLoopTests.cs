@@ -174,7 +174,194 @@ public sealed class ConductorBatchLoopTests
                 journalMode: "wal"));
 
         Assert.Contains("LOOP_START policy=Conservative", output, StringComparison.Ordinal);
+        Assert.Contains("policySource=preset", output, StringComparison.Ordinal);
         Assert.Contains("journalMode=wal", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Conductor_policy_resolution_uses_file_default_and_explicit_preset_precedence")]
+    public void ConductorPolicyResolutionUsesFileDefaultAndExplicitPresetPrecedence()
+    {
+        var root = CreateTempDirectory("mcg-conductor-policy-resolution");
+        try
+        {
+            var absent = CliCommandHandlers.ResolveConductorPolicy(null, root);
+            Assert.Same(ConductorAutonomyPolicy.Default, absent.Policy);
+            Assert.Equal("default", absent.Source);
+
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var policyPath = Path.Combine(orchestratorDirectory, "conductor-policy.json");
+            var configured = ConductorAutonomyPolicy.Conservative with
+            {
+                Name = "OperatorTuned",
+                MaxConcurrentPaidWorkers = 8
+            };
+            File.WriteAllText(policyPath, configured.ToJson());
+
+            var fromFile = CliCommandHandlers.ResolveConductorPolicy(null, root);
+            Assert.Equal(8, fromFile.Policy.MaxConcurrentPaidWorkers);
+            Assert.Equal($"file:{Path.GetFullPath(policyPath)}", fromFile.Source);
+            Assert.Contains(fromFile.Warnings, warning =>
+                warning.Contains("above the highest preset value 5", StringComparison.Ordinal));
+
+            var explicitPreset = CliCommandHandlers.ResolveConductorPolicy("Permissive", root);
+            Assert.Same(ConductorAutonomyPolicy.Permissive, explicitPreset.Policy);
+            Assert.Equal("preset", explicitPreset.Source);
+
+            var unknown = Assert.Throws<InvalidOperationException>(() =>
+                CliCommandHandlers.ResolveConductorPolicy("UnknownName", root));
+            Assert.Equal(
+                "Unknown conductor policy 'UnknownName'. Valid: Conservative, Permissive, Manual",
+                unknown.Message);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Conductor_policy_resolution_fails_for_malformed_effective_file_but_preset_warns_and_wins")]
+    public void ConductorPolicyResolutionFailsForMalformedEffectiveFileButPresetWarnsAndWins()
+    {
+        var root = CreateTempDirectory("mcg-conductor-policy-malformed");
+        try
+        {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var policyPath = Path.GetFullPath(Path.Combine(orchestratorDirectory, "conductor-policy.json"));
+            File.WriteAllText(policyPath, "{ not-json");
+
+            var failure = Assert.Throws<FormatException>(() =>
+                CliCommandHandlers.ResolveConductorPolicy(null, root));
+            Assert.Contains(policyPath, failure.Message, StringComparison.Ordinal);
+
+            var explicitPreset = CliCommandHandlers.ResolveConductorPolicy("Permissive", root);
+            Assert.Same(ConductorAutonomyPolicy.Permissive, explicitPreset.Policy);
+            Assert.Contains(explicitPreset.Warnings, warning =>
+                warning.Contains(policyPath, StringComparison.Ordinal) &&
+                warning.Contains("not valid JSON", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_reloads_file_policy_at_tick_boundary_and_applies_new_worker_cap")]
+    public void BatchLoopReloadsFilePolicyAtTickBoundaryAndAppliesNewWorkerCap()
+    {
+        var root = CreateTempDirectory("mcg-conductor-policy-reload");
+        try
+        {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var policyPath = Path.Combine(orchestratorDirectory, "conductor-policy.json");
+            var initialPolicy = ConductorAutonomyPolicy.Conservative with
+            {
+                Name = "Reloadable",
+                MaxConcurrentPaidWorkers = 1
+            };
+            File.WriteAllText(policyPath, initialPolicy.ToJson());
+            var initialResolution = CliCommandHandlers.ResolveConductorPolicy(null, root);
+            var (kernel, _) = SimpleGoal();
+            var dispatches = 0;
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getRunningCount: () => 1,
+                dispatchAndStart: _ =>
+                {
+                    dispatches++;
+                    return DispatchStartOutcome.Started();
+                });
+            var sleeps = 0;
+
+            var output = CaptureConsole(() => new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                initialResolution.Policy,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ =>
+                {
+                    sleeps++;
+                    File.WriteAllText(policyPath, (initialPolicy with { MaxConcurrentPaidWorkers = 2 }).ToJson());
+                    return false;
+                },
+                policySource: initialResolution.Source,
+                reloadPolicy: () => CliCommandHandlers.ResolveConductorPolicy(null, root)));
+
+            Assert.Equal(1, sleeps);
+            Assert.Equal(1, dispatches);
+            Assert.Contains("At worker cap (1/1)", output, StringComparison.Ordinal);
+            Assert.Contains("POLICY_RELOAD tick=2", output, StringComparison.Ordinal);
+            Assert.Contains("oldMaxConcurrentPaidWorkers=1", output, StringComparison.Ordinal);
+            Assert.Contains("newMaxConcurrentPaidWorkers=2", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_keeps_current_policy_when_midflight_reload_is_malformed")]
+    public void BatchLoopKeepsCurrentPolicyWhenMidflightReloadIsMalformed()
+    {
+        var root = CreateTempDirectory("mcg-conductor-policy-reload-malformed");
+        try
+        {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var policyPath = Path.GetFullPath(Path.Combine(orchestratorDirectory, "conductor-policy.json"));
+            var initialPolicy = ConductorAutonomyPolicy.Conservative with
+            {
+                Name = "Reloadable",
+                MaxConcurrentPaidWorkers = 1
+            };
+            File.WriteAllText(policyPath, initialPolicy.ToJson());
+            var initialResolution = CliCommandHandlers.ResolveConductorPolicy(null, root);
+            var (kernel, _) = SimpleGoal();
+            var dispatches = 0;
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                getRunningCount: () => 1,
+                dispatchAndStart: _ =>
+                {
+                    dispatches++;
+                    return DispatchStartOutcome.Started();
+                });
+            var sleeps = 0;
+
+            var output = CaptureConsole(() => new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                initialResolution.Policy,
+                NoStopPath(),
+                maxIterations: 3,
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ =>
+                {
+                    sleeps++;
+                    File.WriteAllText(
+                        policyPath,
+                        sleeps == 1
+                            ? "{ not-json"
+                            : (initialPolicy with { MaxConcurrentPaidWorkers = 2 }).ToJson());
+                    return false;
+                },
+                policySource: initialResolution.Source,
+                reloadPolicy: () => CliCommandHandlers.ResolveConductorPolicy(null, root)));
+
+            Assert.Equal(2, sleeps);
+            Assert.Equal(1, dispatches);
+            Assert.Contains("POLICY_RELOAD_FAILED tick=2", output, StringComparison.Ordinal);
+            Assert.Contains(policyPath.Replace(' ', '_'), output, StringComparison.Ordinal);
+            Assert.Contains("POLICY_RELOAD tick=3", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_default_self_relaunch_activation_does_not_schedule_or_execute")]

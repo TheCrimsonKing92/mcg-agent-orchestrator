@@ -258,7 +258,10 @@ public sealed record ConductorAutonomyPolicy(
         {
             var root = doc.RootElement;
 
-            var name = RequireString(root, "name", src) ?? "custom";
+            var name = RequireString(root, "name", src);
+            if (string.IsNullOrWhiteSpace(name))
+                throw new FormatException(
+                    $"conductor-policy.json{src}: name is required and must be a non-empty string.");
             var maxWorkers = RequireInt(root, "maxConcurrentPaidWorkers", src);
             var maxBudget = RequireDecimal(root, "maxTotalBudget", src);
             var maxCriterionRetries = root.TryGetProperty("maxCriterionRetries", out _)
@@ -363,13 +366,28 @@ public sealed record ConductorAutonomyPolicy(
 
     // Loads from .orchestrator/conductor-policy.json under rootDirectory.
     // Returns Conservative (default) when the file does not exist.
-    // Throws FormatException with the file path in the message on parse or validation failure.
+    // Throws with the file path in the message when an existing file cannot be read, parsed, or validated.
     public static ConductorAutonomyPolicy LoadFromOrchestratorDirectory(string rootDirectory)
     {
-        var path = Path.Combine(rootDirectory, ".orchestrator", "conductor-policy.json");
-        if (!File.Exists(path))
+        var path = Path.GetFullPath(Path.Combine(rootDirectory, ".orchestrator", "conductor-policy.json"));
+        string json;
+        try
+        {
+            json = File.ReadAllText(path, Encoding.UTF8);
+        }
+        catch (FileNotFoundException)
+        {
             return Conservative;
-        var json = File.ReadAllText(path, Encoding.UTF8);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return Conservative;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"Unable to read conductor policy file '{path}': {ex.Message}", ex);
+        }
+
         return ParseJson(json, path);
     }
 
