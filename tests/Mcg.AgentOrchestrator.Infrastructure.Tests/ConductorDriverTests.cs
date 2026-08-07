@@ -897,7 +897,7 @@ public sealed class ConductorDriverTests
             taskId,
             "codex-cli",
             "dirty-worktree",
-            ["blocked: worktree has 1 uncommitted change(s) before dispatch"]);
+            ["blocked: worktree has 1 uncommitted change(s) before dispatch; paths=[src/dirty.cs]"]);
 
         var reason = ConductorDriver.DescribeEmptyBatch(plan, [diagnostic]);
 
@@ -906,6 +906,7 @@ public sealed class ConductorDriverTests
         Assert.Contains("codex-cli", reason, StringComparison.Ordinal);
         Assert.Contains("dirty-worktree", reason, StringComparison.Ordinal);
         Assert.Contains("worktree has 1 uncommitted change", reason, StringComparison.Ordinal);
+        Assert.Contains("src/dirty.cs", reason, StringComparison.Ordinal);
         Assert.DoesNotContain("no assigned or ready tasks", reason, StringComparison.OrdinalIgnoreCase);
     }
 

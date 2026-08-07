@@ -1280,6 +1280,61 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             evt.Message.Contains("StaleDispatchAutoRequeued", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_dirty_worktree_recovery_reports_paths_without_false_lifecycle_desync")]
+    public void CliDirtyWorktreeRecoveryReportsPathsWithoutFalseLifecycleDesync()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        EnsureGitRepository(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement blocked file work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Diagnose dirty dispatch wedge", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var dirtyPath = Path.Combine(worktree, "src", "nested", "dirty.cs");
+        Directory.CreateDirectory(Path.GetDirectoryName(dirtyPath)!);
+        File.WriteAllText(dirtyPath, "// preserve me");
+
+        var reportOutput = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["goal-recovery", goal.Id.Value[..8]],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+        var recoverOutput = CaptureConsole(() =>
+        {
+            var changed = CliCommandDispatcher.ExecuteCommand(
+                ["recover", goal.Id.Value[..8], "diagnose without mutating files"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        Xunit.Assert.Contains("Commit-worthy paths", reportOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains("src/nested/dirty.cs", reportOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains("dirty worktree blocks Developer/Tester dispatch", recoverOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains("src/nested/dirty.cs", recoverOutput, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("lifecycle/task desync", recoverOutput, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.True(File.Exists(dirtyPath));
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Xunit.Assert.Null(task.LastDispatch);
+        Xunit.Assert.Null(task.LastProcess);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_reassign_agent_updates_task_to_exact_agent_id")]
     public void CliReassignAgentUpdatesTaskToExactAgentId()

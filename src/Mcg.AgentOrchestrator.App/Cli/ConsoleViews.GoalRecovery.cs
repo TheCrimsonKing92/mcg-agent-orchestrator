@@ -12,6 +12,22 @@ public static void PrintGoalRecoveryReport(GoalRecoveryReport report)
     Console.WriteLine(report.WorktreeExists
         ? $"Worktree: {report.WorktreePath} dirty={report.WorktreeDirty?.ToString() ?? "unknown"} diff={report.HasBranchDiff}"
         : "Worktree: missing");
+    if (report.WorktreeDirtyPaths.Count > 0)
+    {
+        Console.WriteLine("  Commit-worthy paths:");
+        foreach (var path in report.WorktreeDirtyPaths.Take(5))
+        {
+            Console.WriteLine($"    {path}");
+        }
+        if (report.WorktreeDirtyPaths.Count > 5)
+        {
+            Console.WriteLine($"    +{report.WorktreeDirtyPaths.Count - 5} more");
+        }
+    }
+    if (!string.IsNullOrWhiteSpace(report.WorktreeStatusError))
+    {
+        Console.WriteLine($"  Worktree status unavailable: {report.WorktreeStatusError}");
+    }
     Console.WriteLine("Build lease: " +
         $"{report.BuildLease.LeaseId} " +
         $"root={(report.BuildLease.RootExists ? "present" : "missing")} " +

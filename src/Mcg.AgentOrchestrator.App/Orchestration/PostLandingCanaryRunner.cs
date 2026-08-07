@@ -288,8 +288,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
         return new PostLandingCanaryRepositoryState(
             head.Stdout.Trim(),
-            status.Stdout
-                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            GitCli.ParseCommitWorthyStatusPaths(status.Stdout));
     }
 
     private async Task<bool> IsAncestorAsync(

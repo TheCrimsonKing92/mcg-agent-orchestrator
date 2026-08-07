@@ -122,6 +122,81 @@ public sealed class GitCliTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GitCli_IsWorktreeDirty_ignores_exact_legacy_PowerShell_module_cache")]
+    public void GitCliIsWorktreeDirtyIgnoresExactLegacyPowerShellModuleCache()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var cachePath = Path.Combine(repo, "Microsoft", "Windows", "PowerShell", "ModuleAnalysisCache");
+            Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+            File.WriteAllText(cachePath, "cache");
+
+            var inspection = GitCli.InspectWorktreeStatus(repo);
+
+            Assert.True(inspection.Succeeded);
+            Assert.False(inspection.IsDirty);
+            Assert.Empty(inspection.CommitWorthyPaths);
+            Assert.False(GitCli.IsWorktreeDirty(repo));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GitCli_IsWorktreeDirty_ignores_pwsh7_hashed_module_caches_only")]
+    public void GitCliIsWorktreeDirtyIgnoresPwsh7HashedModuleCachesOnly()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var cacheDirectory = Path.Combine(repo, "Microsoft", "PowerShell");
+            Directory.CreateDirectory(cacheDirectory);
+            foreach (var cacheKey in new[] { "0AC089E4", "25C2BDE3", "3E0AA4F8", "5FCCE3F0", "903B99E5" })
+            {
+                File.WriteAllText(Path.Combine(cacheDirectory, $"ModuleAnalysisCache-{cacheKey}"), "cache");
+            }
+
+            var cacheOnly = GitCli.InspectWorktreeStatus(repo);
+
+            Assert.True(cacheOnly.Succeeded);
+            Assert.False(cacheOnly.IsDirty);
+            File.WriteAllText(Path.Combine(cacheDirectory, "ModuleAnalysisCache-source"), "real work");
+
+            var withLookalike = GitCli.InspectWorktreeStatus(repo);
+
+            Assert.True(withLookalike.IsDirty);
+            Assert.Equal(["Microsoft/PowerShell/ModuleAnalysisCache-source"], withLookalike.CommitWorthyPaths);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GitCli_IsWorktreeDirty_does_not_hide_PowerShell_cache_siblings")]
+    public void GitCliIsWorktreeDirtyDoesNotHidePowerShellCacheSiblings()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var siblingPath = Path.Combine(repo, "Microsoft", "Windows", "PowerShell", "ModuleAnalysisCache.source");
+            Directory.CreateDirectory(Path.GetDirectoryName(siblingPath)!);
+            File.WriteAllText(siblingPath, "source");
+
+            var inspection = GitCli.InspectWorktreeStatus(repo);
+
+            Assert.True(inspection.Succeeded);
+            Assert.True(inspection.IsDirty);
+            Assert.Equal(["Microsoft/Windows/PowerShell/ModuleAnalysisCache.source"], inspection.CommitWorthyPaths);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GitCli_IsWorktreeDirty_returns_true_when_staged_change_present")]
     public void GitCliIsWorktreeDirtyReturnsTrueWhenStagedChangePresent()
     {

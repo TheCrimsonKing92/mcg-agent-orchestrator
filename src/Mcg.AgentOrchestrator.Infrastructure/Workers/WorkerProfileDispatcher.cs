@@ -14,8 +14,21 @@ public sealed record ReadyBlockedDiagnostic(
     string Reason,
     IReadOnlyList<string>? Details = null)
 {
-    public string ToLine() =>
-        $"READY_BLOCKED goal={GoalPrefix} task={TaskNumber} provider={Provider} reason={Reason}";
+    public string ToLine()
+    {
+        var details = Details?
+            .Where(detail => !string.IsNullOrWhiteSpace(detail))
+            .Take(5)
+            .Select(detail =>
+            {
+                const int maxDetailLength = 256;
+                var sanitized = detail.Replace(' ', '_').Replace('\t', '_').Replace('\r', '_').Replace('\n', '_');
+                return sanitized.Length > maxDetailLength ? sanitized[..maxDetailLength] : sanitized;
+            })
+            .ToArray() ?? [];
+        return $"READY_BLOCKED goal={GoalPrefix} task={TaskNumber} provider={Provider} reason={Reason}" +
+            (details.Length == 0 ? string.Empty : $" details={string.Join('|', details)}");
+    }
 }
 
 public sealed record WorkerProfileReadyBatchResult(
@@ -936,22 +949,26 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        var statusResult = GitCli.Run(workingDirectory, "status", "--porcelain");
-        if (statusResult.ExitCode != 0)
+        var inspection = GitCli.InspectWorktreeStatus(workingDirectory);
+        if (!inspection.Succeeded)
         {
-            findings.Add("worktree: cleanliness unavailable before dispatch; verify git status from the goal workspace if this is unexpected");
+            findings.Add($"warning: worktree cleanliness unavailable before dispatch ({inspection.Error}); verify git status from the goal workspace");
             return;
         }
 
-        var filteredStatusOutput = GitCli.FilterCommitWorthyStatus(statusResult.Output);
-        if (string.IsNullOrWhiteSpace(filteredStatusOutput))
+        if (!inspection.IsDirty)
         {
             findings.Add("ok: worktree clean before dispatch");
             return;
         }
 
-        var changedLineCount = filteredStatusOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Length;
-        findings.Add($"blocked: worktree has {changedLineCount} uncommitted change(s) before dispatch; commit, stash, or clean the goal workspace first");
+        const int pathLimit = 5;
+        var displayedPaths = inspection.CommitWorthyPaths.Take(pathLimit).ToArray();
+        var omittedCount = inspection.CommitWorthyPaths.Count - displayedPaths.Length;
+        var omitted = omittedCount > 0 ? $", +{omittedCount} more" : string.Empty;
+        findings.Add(
+            $"blocked: worktree has {inspection.CommitWorthyPaths.Count} uncommitted change(s) before dispatch; " +
+            $"paths=[{string.Join(", ", displayedPaths)}{omitted}]; commit, stash, or clean the goal workspace first");
     }
 
     private static void ThrowIfPreflightBlocked(WorkerSubscriptionPreflightResult preflight)
@@ -1198,6 +1215,8 @@ public static class WorkerProfileDispatcher
             return ArtifactTooLargeErrorCode;
         if (blockedFindings.Any(finding => finding.Contains("uncommitted change", StringComparison.OrdinalIgnoreCase)))
             return "dirty-worktree";
+        if (blockedFindings.Any(finding => finding.Contains("cleanliness unavailable", StringComparison.OrdinalIgnoreCase)))
+            return "worktree-status-unavailable";
         if (blockedFindings.Any(finding => finding.Contains("worker profile", StringComparison.OrdinalIgnoreCase)))
             return "worker-profile";
         if (blockedFindings.Any(finding => finding.Contains("capability", StringComparison.OrdinalIgnoreCase) ||

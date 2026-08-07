@@ -494,6 +494,7 @@ public sealed class DispatchProcessHostTests
             };
             startInfo.ArgumentList.Add("Write-Output ok");
             var childPathBefore = startInfo.Environment["PATH"];
+            var childLocalAppDataBefore = startInfo.Environment["LOCALAPPDATA"];
             var parameters = new DispatchProcessHost.DispatchRunParameters(
                 "Write-Output ok",
                 worktree,
@@ -513,12 +514,60 @@ public sealed class DispatchProcessHostTests
                 protectWorkspaceBoundary: _ => { });
 
             var sandboxBin = Path.Combine(worktree, ".mcg-sandbox", "bin");
+            var powershellCache = Path.Combine(worktree, ".mcg-sandbox", "powershell", "ModuleAnalysisCache");
             Assert.True(Directory.Exists(sandboxBin));
+            Assert.True(Directory.Exists(Path.GetDirectoryName(powershellCache)!));
+            Assert.Equal(powershellCache, startInfo.Environment["PSModuleAnalysisCachePath"]);
+            Assert.Equal(childLocalAppDataBefore, startInfo.Environment["LOCALAPPDATA"]);
             Assert.True(File.Exists(Path.Combine(sandboxBin, "git.cmd")));
             Assert.True(File.Exists(Path.Combine(sandboxBin, "dotnet.cmd")));
             Assert.NotNull(childPathBefore);
             Assert.True(startInfo.Environment["PATH"].StartsWith(sandboxBin, StringComparison.OrdinalIgnoreCase));
             Assert.Equal(hostPathBefore, Environment.GetEnvironmentVariable("PATH"));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_redirects_PowerShell_cache_when_OS_sandbox_is_disabled")]
+    public void ApplyWorkerSandboxRedirectsPowerShellCacheWhenOsSandboxIsDisabled()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-apply-sandbox-off-test", Guid.NewGuid().ToString("n"));
+        var worktree = Path.Combine(root, "worktree");
+        Directory.CreateDirectory(worktree);
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = worktree
+            };
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output ok",
+                worktree,
+                Path.Combine(root, "out.log"),
+                Path.Combine(root, "err.log"),
+                Path.Combine(root, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                SandboxLowIntegrity: false);
+
+            var result = DispatchProcessHost.ApplyWorkerSandbox(startInfo, parameters);
+
+            var expectedCache = Path.Combine(worktree, ".mcg-sandbox", "powershell", "ModuleAnalysisCache");
+            Assert.False(result.WorktreeRecursiveRelabel);
+            Assert.False(result.SandboxRecursiveRelabel);
+            Assert.Equal(expectedCache, startInfo.Environment["PSModuleAnalysisCachePath"]);
+            Assert.True(Directory.Exists(Path.GetDirectoryName(expectedCache)!));
         }
         finally
         {

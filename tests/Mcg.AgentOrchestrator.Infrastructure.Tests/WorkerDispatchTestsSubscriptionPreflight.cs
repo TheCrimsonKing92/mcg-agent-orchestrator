@@ -1549,7 +1549,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         dispatchedAt));
 
     Assert.False(preflight.Allowed);
-    Assert.True(preflight.Findings.Any(finding => finding.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal)));
+    Assert.True(preflight.Findings.Any(finding =>
+        finding.Contains("worktree has 1 uncommitted change", StringComparison.Ordinal) &&
+        finding.Contains("dirty.txt", StringComparison.Ordinal)));
     Assert.True(preflight.Findings.Any(finding => finding.Contains("build environment: goal lease not yet created", StringComparison.Ordinal)));
     Assert.True(preflight.Findings.Any(finding => finding.Contains(Path.Combine("goals", goal.Id.Value[..8], "artifacts"), StringComparison.OrdinalIgnoreCase)));
     Assert.Contains("worktree has 1 uncommitted change", ex.Message, StringComparison.Ordinal);
@@ -1583,6 +1585,38 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     Assert.Contains("ok: worktree clean before dispatch", preflight.Findings);
     Assert.DoesNotContain(preflight.Findings, finding => finding.Contains("uncommitted change", StringComparison.Ordinal));
     Assert.Equal($"?? {WorkerSandboxPreparer.ReceiptFileName}", ReadGit(worktree, ["status", "--short"]));
+}
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_exact_legacy_PowerShell_cache_but_blocks_sibling")]
+    public void WorkerProfileDispatcherPreflightAllowsExactLegacyPowerShellCacheButBlocksSibling()
+{
+    var root = CreateSeededDispatchRepository();
+    var dispatchedAt = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Implement with isolated PowerShell cache");
+    var agents = AgentCatalog.Default().Agents;
+    kernel.ActivateGoal(goal.Id, agents);
+    CompleteResearcherAndPlannerArtifacts(kernel, goal);
+    var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var cachePath = Path.Combine(worktree, "Microsoft", "Windows", "PowerShell", "ModuleAnalysisCache");
+    Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+    File.WriteAllText(cachePath, "cache");
+
+    var cacheOnly = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt);
+
+    Assert.True(cacheOnly.Allowed);
+    File.WriteAllText(cachePath + ".source", "real work");
+
+    var withSibling = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt);
+
+    Assert.False(withSibling.Allowed);
+    Assert.Contains(withSibling.Findings, finding =>
+        finding.Contains("Microsoft/Windows/PowerShell/ModuleAnalysisCache.source", StringComparison.Ordinal));
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastProcess);
 }
 
 }

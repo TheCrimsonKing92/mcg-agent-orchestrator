@@ -21,7 +21,8 @@ internal sealed record ReadyBlockedDiagnosticDto(
     string TaskId,
     string Provider,
     string Reason,
-    string Line);
+    string Line,
+    IReadOnlyList<string>? Details = null);
 
 internal sealed record ProcessBatchPlanDto(
     ProcessBatchActionKind Action,
