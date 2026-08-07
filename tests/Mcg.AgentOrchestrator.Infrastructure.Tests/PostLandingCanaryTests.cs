@@ -1051,7 +1051,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             Path.GetTempPath(),
             "mcg-canary-binary-tests",
             Guid.NewGuid().ToString("N"));
-        var dirtySentinel = Path.Combine(root, $"post-landing-canary-dirty-{Guid.NewGuid():N}.tmp");
+        var dirtySentinel = Path.Combine(root, $"post-landing-canary-dirty-{Guid.NewGuid():N}.sentinel");
         try
         {
             File.WriteAllText(dirtySentinel, "operator-owned uncommitted content");
