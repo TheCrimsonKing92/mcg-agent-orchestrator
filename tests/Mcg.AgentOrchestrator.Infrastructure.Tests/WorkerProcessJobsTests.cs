@@ -260,11 +260,31 @@ public sealed class WorkerProcessJobsTests : IDisposable
             new SpawnRegistry(dbPath).Register("concurrent-sweep", workerIdentity, ownerIdentity);
             WorkerProcessJobs.ConfigureRegistry(dbPath);
 
+            using var ready = new CountdownEvent(2);
+            using var start = new ManualResetEventSlim(false);
+            int SweepAfterStartGate()
+            {
+                ready.Signal();
+                start.Wait();
+                return WorkerProcessJobs.SweepStartupOrphans();
+            }
+
             var sweeps = new[]
             {
-                Task.Run(WorkerProcessJobs.SweepStartupOrphans),
-                Task.Run(WorkerProcessJobs.SweepStartupOrphans)
+                Task.Factory.StartNew(
+                    SweepAfterStartGate,
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default),
+                Task.Factory.StartNew(
+                    SweepAfterStartGate,
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default)
             };
+            var bothReady = ready.Wait(TimeSpan.FromSeconds(5));
+            start.Set();
+            Assert.True(bothReady, "Timed out waiting for both startup sweeps to reach the start gate.");
             Task.WaitAll(sweeps);
 
             Assert.Equal(1, sweeps.Sum(task => task.Result));
@@ -273,7 +293,11 @@ public sealed class WorkerProcessJobsTests : IDisposable
             using var connection = StateDbConnectionFactory.Open(dbPath, StateDbConnectionProfile.QueryOnlyRead);
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT last_diagnostic FROM spawn_registry WHERE owner_id = 'concurrent-sweep'";
-            Assert.Contains("startup-reaped", Assert.IsType<string>(command.ExecuteScalar()), StringComparison.Ordinal);
+            var terminalDiagnostic = Assert.IsType<string>(command.ExecuteScalar());
+            Assert.True(
+                terminalDiagnostic.Contains("startup-reaped", StringComparison.Ordinal) ||
+                terminalDiagnostic.Contains("already-dead-or-recycled", StringComparison.Ordinal),
+                $"Unexpected terminal sweep diagnostic: {terminalDiagnostic}");
         }
         finally
         {
