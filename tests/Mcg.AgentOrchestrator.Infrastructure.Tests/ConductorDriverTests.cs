@@ -2176,6 +2176,24 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_Failed_task_escalation_surfaces_latest_TaskFailed_reason")]
+    public void ConductorDriverFailedTaskEscalationSurfacesLatestTaskFailedReason()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        kernel.ReportTaskProgress(
+            goal.Id,
+            task.Id,
+            WorkTaskStatus.Failed,
+            "Reviewer WORKER_RESULT criteria attestation invalid: missing criterion_index 0.");
+        var driver = MakeDriver(getFacts: _ => GoalLifecycleFacts.None);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Contains("TaskFailed: Reviewer WORKER_RESULT criteria attestation invalid", escalated.Reason, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_auto_review_retry_convergence_brief_deduplicates_multi_round_findings")]
     public void ConductorDriverAutoReviewRetryConvergenceBriefDeduplicatesMultiRoundFindings()
     {

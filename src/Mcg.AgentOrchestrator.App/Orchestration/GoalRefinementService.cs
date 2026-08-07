@@ -91,7 +91,7 @@ internal sealed class GoalRefinementService
                     : $"Answered by operator; topic already resolved (topic: {resolved.TopicKey}).");
         }
 
-        var acceptanceCriteria = output.AcceptanceCriteria.ToList();
+        var acceptanceCriteria = ResolveAcceptanceCriteria(goal.Objective, output.AcceptanceCriteria);
         var operatorOwnedCriteria = goal.RefinedSpec?.OperatorOwnedAcceptanceCriteria.ToList() ?? [];
         var scenarioBackedCriteria = ApplyFeasibilityResolutions(
             acceptanceCriteria,
@@ -617,13 +617,26 @@ internal sealed class GoalRefinementService
         }
     }
 
-    private static RefinedSpec BuildFallbackSpec(string objective) =>
-        new(
+    private static RefinedSpec BuildFallbackSpec(string objective)
+    {
+        var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(objective);
+        return new RefinedSpec(
             $"Implement: {objective}",
-            [$"The objective is achieved: {objective}"],
+            declaredCriteria.Count > 0 ? declaredCriteria : [$"The objective is achieved: {objective}"],
             VerificationClass.TestVerifiable,
             [],
             []);
+    }
+
+    private static List<string> ResolveAcceptanceCriteria(
+        string objective,
+        IReadOnlyList<string> refinedCriteria)
+    {
+        var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(objective);
+        return declaredCriteria.Count > 0
+            ? [.. declaredCriteria]
+            : [.. refinedCriteria];
+    }
 
     private static string BuildCorrelationKey(GoalId goalId, string topicKey)
     {

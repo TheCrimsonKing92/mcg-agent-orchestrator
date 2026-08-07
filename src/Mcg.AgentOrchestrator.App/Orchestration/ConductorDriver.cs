@@ -1154,7 +1154,7 @@ internal sealed class ConductorDriver
                   or GoalLifecycleState.AwaitingHumanInput)
         {
             return Escalate(goal, goalPrefix, policy, state,
-                $"Goal is in {state} state; operator action required");
+                BuildTerminalEscalationReason(goal, state));
         }
 
         // TransitionMap[Merged] is the base for ExecuteLanding's risk gate (at Verified state),
@@ -1891,6 +1891,16 @@ internal sealed class ConductorDriver
         }
 
         return $"{task.RequiredRole.ToString().ToLowerInvariant()} task {task.Id.Value[..8]} verification output";
+    }
+
+    private static string BuildTerminalEscalationReason(Goal goal, GoalLifecycleState state)
+    {
+        var latestTaskFailure = state == GoalLifecycleState.Failed
+            ? goal.Timeline.LastOrDefault(item => item.Kind == ProgressKind.TaskFailed)
+            : null;
+        return latestTaskFailure is null
+            ? $"Goal is in {state} state; operator action required"
+            : $"Goal is in {state} state; TaskFailed: {TrimForConductorMessage(latestTaskFailure.Message)}; operator action required";
     }
 
     private static string TrimForConductorMessage(string value)
