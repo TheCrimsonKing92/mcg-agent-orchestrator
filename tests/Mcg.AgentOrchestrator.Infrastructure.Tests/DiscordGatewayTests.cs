@@ -558,6 +558,90 @@ public sealed class DiscordGatewayTests
         Assert.True(api.SentMessages[0].Content.Contains("truncated to fit"));
     }
 
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_six_clarifications_render_objective_and_questions_once")]
+    public async Task DiscordCollaborationViewSixClarificationsRenderObjectiveAndQuestionsOnce()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        const string objective = "Integrate the settlement API without losing operator-visible choices.";
+        var questions = Enumerable.Range(1, 6)
+            .Select(index => $"Question {index}: choose settlement behavior {index}?")
+            .ToArray();
+        for (var i = 0; i < questions.Length; i++)
+        {
+            await store.RaiseAsync(
+                CollaborationItemType.Clarification,
+                "goal-six-clarifications",
+                $"settlement behavior {i + 1}",
+                $"Goal objective: {objective}\n\nQuestion: {questions[i]}\nAnswer options:\n- Preserve\n- Replace\nFork kind: external-contract",
+                $"spec-clarification:goal-six-clarifications:settlement-{i + 1}");
+        }
+
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await view.ReconcileAsync();
+
+        var content = api.SentMessages.Single().Content;
+        Assert.Equal(1, content.Split(objective, StringSplitOptions.None).Length - 1);
+        foreach (var question in questions)
+            Assert.Equal(1, content.Split(question, StringSplitOptions.None).Length - 1);
+        Assert.True(content.Length <= DiscordCollaborationViewService.DiscordMessageLimit);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_fair_share_preserves_late_clarification_options")]
+    public async Task DiscordCollaborationViewFairSharePreservesLateClarificationOptions()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        for (var i = 1; i <= 8; i++)
+        {
+            var detail = i == 1 ? "Short ask?" : $"Question {i} " + new string((char)('a' + i), 420);
+            await store.RaiseAsync(
+                CollaborationItemType.Clarification,
+                "goal-fair-share",
+                $"topic {i}",
+                $"Question: {detail}\nAnswer options:\n- Alpha {i}\n- Beta {i}\nFork kind: scope",
+                $"spec-clarification:goal-fair-share:topic-{i}");
+        }
+
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await view.ReconcileAsync();
+
+        var content = api.SentMessages.Single().Content;
+        var lastItem = content[content.IndexOf("8. **[Clarification]** topic 8", StringComparison.Ordinal)..];
+        Assert.Contains("Answer options:", lastItem, StringComparison.Ordinal);
+        Assert.Contains("Alpha 8", lastItem, StringComparison.Ordinal);
+        Assert.Contains("Beta 8", lastItem, StringComparison.Ordinal);
+        Assert.DoesNotContain("Short ask?\n> …", content, StringComparison.Ordinal);
+        Assert.True(content.Length <= DiscordCollaborationViewService.DiscordMessageLimit);
+    }
+
+    [Xunit.Fact(DisplayName = "DiscordCollaborationView_overflow_names_omitted_clarifications_once")]
+    public async Task DiscordCollaborationViewOverflowNamesOmittedClarificationsOnce()
+    {
+        var root = CreateTempDirectory();
+        var store = new CollaborationItemStore(Path.Combine(root, "items.db"));
+        var api = new FakeDiscordForumApi();
+        for (var i = 1; i <= 24; i++)
+        {
+            await store.RaiseAsync(
+                CollaborationItemType.Clarification,
+                "goal-many-clarifications",
+                $"topic {i}",
+                $"Question: Question {i} {new string('q', 200)}\nAnswer options:\n- Yes\n- No\nFork kind: scope",
+                $"spec-clarification:goal-many-clarifications:topic-{i}");
+        }
+
+        var view = new DiscordCollaborationViewService(store, api, 42UL, root, ["user1"]);
+        await view.ReconcileAsync();
+
+        var content = api.SentMessages.Single().Content;
+        Assert.Equal(1, content.Split("more clarifications not shown", StringSplitOptions.None).Length - 1);
+        Assert.EndsWith($"`attention show goal-man`", content, StringComparison.Ordinal);
+        Assert.True(content.Length <= DiscordCollaborationViewService.DiscordMessageLimit);
+    }
+
     [Xunit.Fact(DisplayName = "DiscordCollaborationView_resolving_last_item_clears_the_goal_message_no_spam")]
     public async Task DiscordCollaborationViewResolvingLastItemClearsTheGoalMessage()
     {
