@@ -133,7 +133,7 @@ public sealed class WorkerDispatchJobAccountingTests : IDisposable
                 goal.Id,
                 task.Id,
                 logs,
-                checkpointBeforeWorkerStart: (_, _, _) => throw new InvalidOperationException("stop before worker start")));
+                checkpointBeforeWorkerStart: (_, _, _, _) => throw new InvalidOperationException("stop before worker start")));
 
         Assert.Contains("stop before worker start", ex.Message, StringComparison.Ordinal);
         var dispatch = task.LastDispatch!;

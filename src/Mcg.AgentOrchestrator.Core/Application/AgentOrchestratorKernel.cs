@@ -105,6 +105,15 @@ public sealed partial class AgentOrchestratorKernel
         SweepParkedGoalHumanWaits();
     }
 
+    public GoalSnapshot ExportGoalSnapshot(GoalId goalId) => GetGoal(goalId).ToSnapshot();
+
+    public void ReplaceGoalWithSnapshot(GoalSnapshot snapshot)
+    {
+        var goal = Goal.FromSnapshot(snapshot);
+        _goals[goal.Id] = goal;
+        _knownDependencyGoalStatuses[goal.Id] = goal.Status.ToString();
+    }
+
     // Additive merge: ingest goals (and their human-input requests) from the snapshot that this kernel
     // does NOT already track, leaving every already-tracked goal's live in-flight state untouched. This
     // is the dynamic-goal-pickup primitive — a long-lived kernel (the daemon's continuous conductor

@@ -155,7 +155,7 @@ public sealed class InterruptedDispatchRequeueTests
                 goal.Id,
                 task.Id,
                 logRoot,
-                checkpointBeforeWorkerStart: (_, _, _) => checkpointCount++,
+                checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCount++,
                 readCurrentState: (_, _) =>
                     new InterruptedDispatchStateRead(GoalStatus.Active, WorkTaskStatus.Cancelled));
 
@@ -174,7 +174,7 @@ public sealed class InterruptedDispatchRequeueTests
                     goal.Id,
                     task.Id,
                     logRoot,
-                    checkpointBeforeWorkerStart: (_, _, _) => checkpointCount++,
+                    checkpointBeforeWorkerStart: (_, _, _, _) => checkpointCount++,
                     readCurrentState: (_, _) =>
                         new InterruptedDispatchStateRead(GoalStatus.Active, WorkTaskStatus.Cancelled)));
             Assert.Contains("status is Cancelled", retry.Message, StringComparison.Ordinal);
