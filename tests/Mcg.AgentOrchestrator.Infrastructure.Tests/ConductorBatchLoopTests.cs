@@ -10385,8 +10385,28 @@ public sealed class ConductorBatchLoopTests
                 var kernel = AgentOrchestratorKernel.FromSnapshot(seedKernel.ExportSnapshot());
                 var now = new DateTimeOffset(2026, 8, 7, 14, 0, 0, TimeSpan.Zero);
                 var logPath = Path.Combine(root, $"attempt-{ordinal}", ConductEventLogWriter.CurrentFileName);
-                var reason =
-                    $"PRE_REVIEW_FOCUSED_EVIDENCE_RUNNING: attempt {ordinal}, 9m41s elapsed (attempt=shared-{ordinal})";
+                var attemptId = $"shared-{ordinal}";
+                var reason = new ConductorParallelAcceptanceAttemptCoordinator(
+                    Path.Combine(root, $"attempt-{ordinal}", "attempts"))
+                    .DescribeFocusedEvidenceHold(new ConductorParallelAcceptanceAttempt(
+                        attemptId,
+                        goal.Id.Value,
+                        goal.Id.Value[..8],
+                        0,
+                        null,
+                        null,
+                        now,
+                        now,
+                        Environment.ProcessId,
+                        ConductorParallelAcceptanceAttemptOutcome.Running,
+                        Path.Combine(root, $"{attemptId}.out.log"),
+                        Path.Combine(root, $"{attemptId}.err.log"),
+                        Path.Combine(root, $"{attemptId}.exit.txt"),
+                        Path.Combine(root, $"{attemptId}.heartbeat.json"),
+                        Path.Combine(root, $"{attemptId}.result.json"),
+                        Path.Combine(root, $"{attemptId}.attempt.json"),
+                        Kind: ConductorParallelAcceptanceAttemptCoordinator.PreReviewEvidenceDispatchKind,
+                        Ordinal: ordinal));
 
                 new ConductorBatchLoop(
                     conductEventLogWriter: new ConductEventLogWriter(logPath, utcNow: () => now),

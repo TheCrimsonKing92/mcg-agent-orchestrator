@@ -46,11 +46,13 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                 ConductorAutonomyPolicy.Permissive,
                 "run focused tests",
                 PassingEvidence);
-            _ = replacementCoordinator.EvaluateFocusedEvidence(
+            replacementCoordinator.RunAttemptForTests(
+                first.Attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                "run focused tests",
-                PassingEvidence);
+                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                    attemptCandidate,
+                    PassingEvidence(attemptCandidate.Goal, "run focused tests", null, CancellationToken.None)));
 
             var events = ReadEvents(logPath);
             var firstStart = Assert.Single(events.Where(item =>
@@ -80,6 +82,122 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             Assert.Equal(JsonValueKind.Number, end.item.GetProperty("duration_s").ValueKind);
             Assert.Equal("unknown", end.item.GetProperty("tests_executed").GetString());
             Assert.Equal(2, replacement.Attempt.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(nameof(ConductorEvidenceAttemptOutcome.Failed), "failed")]
+    [InlineData(nameof(ConductorEvidenceAttemptOutcome.Faulted), "faulted")]
+    [InlineData(nameof(ConductorEvidenceAttemptOutcome.Cancelled), "cancelled")]
+    [InlineData(nameof(ConductorEvidenceAttemptOutcome.LaunchFailed), "launch_failed")]
+    [InlineData(nameof(ConductorEvidenceAttemptOutcome.BlockedBuildSlot), "blocked_build_slot")]
+    [InlineData(nameof(ConductorEvidenceAttemptOutcome.BlockedBuildLock), "blocked_build_lock")]
+    [InlineData(nameof(ConductorEvidenceAttemptOutcome.CorruptArtifacts), "corrupt_artifacts")]
+    public void TerminalOutcome_EmitsExactTypedTaxonomyValue(
+        string expectedOutcomeName,
+        string expectedToken)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var expectedOutcome = Enum.Parse<ConductorEvidenceAttemptOutcome>(expectedOutcomeName);
+            var logPath = Path.Combine(root, "conduct-events.log");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal($"Record {expectedToken} evidence outcome");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"),
+                launchOwnedProcess: expectedOutcome == ConductorEvidenceAttemptOutcome.LaunchFailed
+                    ? _ => throw new InvalidOperationException("launch failed")
+                    : _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7110),
+                acquireStableSlotLease: expectedOutcome == ConductorEvidenceAttemptOutcome.CorruptArtifacts
+                    ? (_, _) => throw new IOException("receipt write failed")
+                    : (_, _) => null,
+                conductEventLogWriter: new ConductEventLogWriter(logPath));
+
+            var decision = coordinator.EvaluateFocusedEvidence(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence);
+            if (expectedOutcome != ConductorEvidenceAttemptOutcome.LaunchFailed)
+            {
+                coordinator.RunAttemptForTests(
+                    decision.Attempt,
+                    candidate,
+                    ConductorAutonomyPolicy.Permissive,
+                    (_, _, _, _) => RunResultForOutcome(expectedOutcome, candidate));
+            }
+
+            var end = Assert.Single(ReadEvents(logPath).Where(item =>
+                item.GetProperty("eventKind").GetString() == "EVIDENCE_END" &&
+                item.GetProperty("attempt").GetString() == decision.Attempt.AttemptId));
+            Assert.Equal(expectedToken, end.GetProperty("outcome").GetString());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, "run focused tests", "candidate_changed")]
+    [InlineData(false, "run different focused tests", "focused_request_changed")]
+    public void ReplacingCompletedAttempt_EmitsTypedMismatchCause(
+        bool changeCandidate,
+        string replacementRequest,
+        string expectedCause)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var attemptRoot = Path.Combine(root, "attempts");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Record focused evidence replacement cause");
+            var firstCandidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-1", "main-1");
+            var firstCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7111),
+                acquireStableSlotLease: (_, _) => null);
+            var first = firstCoordinator.EvaluateFocusedEvidence(
+                firstCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence);
+            firstCoordinator.RunAttemptForTests(
+                first.Attempt,
+                firstCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
+                    attemptCandidate,
+                    PassingEvidence(attemptCandidate.Goal, "run focused tests", null, CancellationToken.None)));
+
+            var replacementCandidate = changeCandidate
+                ? ConductorParallelAcceptanceCandidate.Create(goal, 0, [], "branch-2", "main-1")
+                : firstCandidate;
+            var logPath = Path.Combine(root, "conduct-events.log");
+            var replacementCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7112),
+                acquireStableSlotLease: (_, _) => null,
+                conductEventLogWriter: new ConductEventLogWriter(logPath));
+            var replacement = replacementCoordinator.EvaluateFocusedEvidence(
+                replacementCandidate,
+                ConductorAutonomyPolicy.Permissive,
+                replacementRequest,
+                PassingEvidence);
+
+            var end = Assert.Single(ReadEvents(logPath).Where(item =>
+                item.GetProperty("eventKind").GetString() == "EVIDENCE_END" &&
+                item.GetProperty("attempt").GetString() == first.Attempt.AttemptId));
+            Assert.Equal("superseded", end.GetProperty("outcome").GetString());
+            Assert.Equal(expectedCause, end.GetProperty("cause").GetString());
+            Assert.Equal(replacement.Attempt.AttemptId, end.GetProperty("superseded_by").GetString());
         }
         finally
         {
@@ -304,6 +422,32 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         DotnetBuildEnvironmentLease? __,
         CancellationToken ___) =>
         new(request, Accepted: true, Passed: true, Summary: "passed", Checks: []);
+
+    private static ConductorParallelAcceptanceRunResult RunResultForOutcome(
+        ConductorEvidenceAttemptOutcome outcome,
+        ConductorParallelAcceptanceCandidate candidate) =>
+        outcome switch
+        {
+            ConductorEvidenceAttemptOutcome.Failed => ConductorParallelAcceptanceRunResult.Focused(
+                candidate,
+                new FocusedEvidenceRunResult("run focused tests", Accepted: true, Passed: false, "failed", [])),
+            ConductorEvidenceAttemptOutcome.Faulted => ConductorParallelAcceptanceRunResult.Fault(
+                candidate,
+                new InvalidOperationException("evidence faulted")),
+            ConductorEvidenceAttemptOutcome.Cancelled => ConductorParallelAcceptanceRunResult.Fault(
+                candidate,
+                new OperationCanceledException("evidence cancelled")),
+            ConductorEvidenceAttemptOutcome.BlockedBuildSlot => ConductorParallelAcceptanceRunResult.Fault(
+                candidate,
+                new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy("evidence", []))),
+            ConductorEvidenceAttemptOutcome.BlockedBuildLock => ConductorParallelAcceptanceRunResult.Fault(
+                candidate,
+                new BuildLockBlockedException(new BuildLockAttribution("locked.dll", [], "test"))),
+            ConductorEvidenceAttemptOutcome.CorruptArtifacts => ConductorParallelAcceptanceRunResult.Focused(
+                candidate,
+                new FocusedEvidenceRunResult("run focused tests", Accepted: true, Passed: true, "unused", [])),
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Outcome requires a dedicated lifecycle test.")
+        };
 
     private static List<JsonElement> ReadEvents(string path) =>
         File.ReadLines(path)

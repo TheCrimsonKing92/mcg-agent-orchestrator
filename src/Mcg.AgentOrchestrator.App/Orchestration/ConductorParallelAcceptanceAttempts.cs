@@ -394,8 +394,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             if (!MatchesCandidate(current, candidate, dispatchKind, focusedEvidenceRequest))
             {
-                MarkStale(current);
-                return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest);
+                return ReplaceStaleAttempt(
+                    current,
+                    candidate,
+                    policy,
+                    runAcceptance,
+                    dispatchKind,
+                    focusedEvidenceRequest);
             }
 
             return ConductorParallelAcceptanceAttemptDecision.TerminalWithoutRun(current);
@@ -408,8 +413,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             {
                 if (!MatchesCandidate(terminal.Attempt, candidate, dispatchKind, focusedEvidenceRequest))
                 {
-                    MarkStale(terminal.Attempt);
-                    return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest);
+                    return ReplaceStaleAttempt(
+                        terminal.Attempt,
+                        candidate,
+                        policy,
+                        runAcceptance,
+                        dispatchKind,
+                        focusedEvidenceRequest);
                 }
 
                 return terminal;
@@ -419,8 +429,13 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             {
                 if (!MatchesCandidate(terminal.Attempt, candidate, dispatchKind, focusedEvidenceRequest))
                 {
-                    MarkStale(terminal.Attempt);
-                    return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest);
+                    return ReplaceStaleAttempt(
+                        terminal.Attempt,
+                        candidate,
+                        policy,
+                        runAcceptance,
+                        dispatchKind,
+                        focusedEvidenceRequest);
                 }
 
                 return terminal;
@@ -443,6 +458,47 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             dispatchKind,
             StringComparison.Ordinal) &&
         string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal);
+
+    private ConductorParallelAcceptanceAttemptDecision ReplaceStaleAttempt(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        ConductorAutonomyPolicy policy,
+        ConductorParallelAcceptanceRunAcceptance runAcceptance,
+        string dispatchKind,
+        string? focusedEvidenceRequest)
+    {
+        var cause = SupersessionCauseFor(attempt, candidate, dispatchKind, focusedEvidenceRequest);
+        MarkStale(attempt, cause);
+        if (!string.Equals(dispatchKind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal))
+        {
+            return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest);
+        }
+
+        var successor = CreateAttempt(candidate, policy, dispatchKind, focusedEvidenceRequest);
+        CompleteSupersession(attempt, successor);
+        return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest, successor);
+    }
+
+    private static ConductorEvidenceSupersessionCause SupersessionCauseFor(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceCandidate candidate,
+        string dispatchKind,
+        string? focusedEvidenceRequest)
+    {
+        if (!string.Equals(attempt.CandidateKey, candidate.CandidateKey, StringComparison.Ordinal))
+        {
+            return ConductorEvidenceSupersessionCause.CandidateChanged;
+        }
+
+        if (!string.Equals(attempt.FocusedEvidenceRequest, focusedEvidenceRequest, StringComparison.Ordinal))
+        {
+            return ConductorEvidenceSupersessionCause.FocusedRequestChanged;
+        }
+
+        return !string.Equals(attempt.Kind, dispatchKind, StringComparison.Ordinal)
+            ? ConductorEvidenceSupersessionCause.GoalMovedOn
+            : ConductorEvidenceSupersessionCause.CoordinatorReplacement;
+    }
 
     internal void MarkReconciled(ConductorParallelAcceptanceAttempt attempt)
     {
@@ -735,7 +791,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? executionDirectory,
                 executionDirectory,
-                tryRunPreSlot: driver.RunParallelLandingAcceptancePreSlot);
+                tryRunPreSlot: driver.RunParallelLandingAcceptancePreSlot,
+                conductEventLogWriter: string.IsNullOrWhiteSpace(attempt.ConductEventLogPath)
+                    ? null
+                    : new ConductEventLogWriter(attempt.ConductEventLogPath));
             var activeAttempt = coordinator.TryPersistOwnerProcess(attempt, Environment.ProcessId);
             if (activeAttempt.Outcome != ConductorParallelAcceptanceAttemptOutcome.Running)
             {
@@ -1170,18 +1229,19 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private bool MarkStale(
         ConductorParallelAcceptanceAttempt attempt,
+        ConductorEvidenceSupersessionCause supersessionCause,
         string detail = "candidate branch/main SHA moved before reconciliation")
     {
         lock (MetadataWriteGate)
         {
-            return MarkStaleUnderLock(attempt, detail);
+            return MarkStaleUnderLock(attempt, detail, supersessionCause);
         }
     }
 
     private bool MarkStaleUnderLock(
         ConductorParallelAcceptanceAttempt attempt,
         string detail,
-        ConductorEvidenceSupersessionCause? supersessionCause = null)
+        ConductorEvidenceSupersessionCause supersessionCause)
     {
         var current = TryReadAttemptFile(attempt.MetadataPath);
         if (current is null ||
