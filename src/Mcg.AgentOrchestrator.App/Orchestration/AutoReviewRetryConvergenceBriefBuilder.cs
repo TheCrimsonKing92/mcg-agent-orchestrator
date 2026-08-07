@@ -17,7 +17,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         "The following findings are accepted — do not rewrite these sections; close ONLY the residual findings listed below.";
 
     private static readonly Regex WhitespacePattern = new(@"\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex ExplicitFocusedTestClassPattern = new(
+    private static readonly Regex ExplicitFocusedClassNameRegex = new(
         @"(?:FullyQualifiedName~|tests[/\\][A-Za-z0-9_.-]+[/\\])(?<class>[A-Z][A-Za-z0-9_]*(?:Tests|Test))(?:\.cs)?\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
@@ -218,7 +218,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         var classes = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var finding in findings)
         {
-            foreach (Match match in ExplicitFocusedTestClassPattern.Matches(finding))
+            foreach (Match match in ExplicitFocusedClassNameRegex.Matches(finding))
             {
                 classes.Add(match.Groups["class"].Value);
             }

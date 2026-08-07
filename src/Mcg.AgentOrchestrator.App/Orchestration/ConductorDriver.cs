@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
@@ -28,16 +30,11 @@ internal sealed class ConductorDriver
     // request across the whole reviewer phase, which escalated a legitimate second suite as a
     // "repeat" (the mechanical evidence re-dispatch retries the reviewer task itself, so it never
     // advances the round boundary). Requests beyond this bound escalate normally.
-    private const int MaxReviewerEvidenceRequestsPerRound = 3;
-    private const int MaxConductorEvidenceSubstitutionsPerRound = 2;
-    private const int MaxConductorDerivedEvidenceTargets = 4;
-
     // Prefix of the message the conductor writes when it mechanically re-dispatches the reviewer
     // task to attach evidence-on-demand receipts within the SAME round. Retries carrying this prefix
     // must NOT advance the evidence-round boundary (otherwise the per-round bound would never apply);
     // any other reviewer retry (operator recover, fresh review) begins a new evidence round.
     private const string ReviewerEvidenceRetryMessagePrefix = "reviewer evidence-on-demand:";
-    private const string ReviewerEvidenceSubstitutionMessagePrefix = "reviewer evidence substitution:";
     private const int MaxReviewFindingContractRepairsPerRound = 2;
     private const string ReviewContractRepairRetryMessagePrefix = "review-finding contract-repair:";
     private static readonly string[] MechanicalReviewerRetryMessagePrefixes =
@@ -45,11 +42,8 @@ internal sealed class ConductorDriver
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex KnownTestProjectPattern = new(
-        @"(?<![A-Za-z0-9_.])(?<alias>Core\.Tests|Infrastructure\.Tests)(?![A-Za-z0-9_.])",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-    private static readonly Regex TestClassPattern = new(
-        @"\b[A-Za-z_][A-Za-z0-9_]*Tests\b",
+    private static readonly Regex EvidenceClassNamePattern = new(
+        @"^[A-Za-z_][A-Za-z0-9_.+`]*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex CandidateShaPattern = new(
         @"^[0-9a-f]{7,64}$",
@@ -65,6 +59,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
+    private readonly bool _focusedEvidenceRunnerConfigured;
     private readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
@@ -72,6 +67,7 @@ internal sealed class ConductorDriver
     private readonly Action<GoalId, TaskId, string> _recordTaskNote;
     private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRequestReceived;
     private readonly Action<GoalId, TaskId, string> _recordReviewerEvidenceRunRecorded;
+    private readonly Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?> _recordFindingEvidenceOutcome;
     private readonly Func<GoalId, TaskId, IReadOnlyList<string>, int> _recordCriterionRetryFeedback;
     private readonly Action<GoalId, TaskId> _clearCriterionRetryFeedback;
     private readonly Action<
@@ -514,6 +510,7 @@ internal sealed class ConductorDriver
 
             return result;
         };
+        _focusedEvidenceRunnerConfigured = true;
 
         _retryTask = (goalId, taskId, message, retryRoundKind) =>
             kernel.RetryTask(goalId, taskId, message, retryRoundKind: retryRoundKind);
@@ -525,6 +522,10 @@ internal sealed class ConductorDriver
             kernel.RecordReviewerEvidenceRequestReceived(goalId, taskId, message);
         _recordReviewerEvidenceRunRecorded = (goalId, taskId, message) =>
             kernel.RecordReviewerEvidenceRunRecorded(goalId, taskId, message);
+        _recordFindingEvidenceOutcome = (goalId, taskId, stableId, outcome, receipt) =>
+        {
+            kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt);
+        };
         _recordPreReviewEvidence = (goalId, taskId, receipt) =>
             kernel.RecordPreReviewEvidence(goalId, taskId, receipt);
         _recordPreReviewMappingEscalationSuppressed = (goalId, taskId, candidateSha, suppressedCount) =>
@@ -799,7 +800,8 @@ internal sealed class ConductorDriver
         Action<GoalId, TaskId, PreReviewEvidenceReceipt>? recordPreReviewEvidence = null,
         Action<GoalId, TaskId, string, int>? recordPreReviewMappingEscalationSuppressed = null,
         ConductorParallelAcceptanceAttemptCoordinator? focusedEvidenceAttemptCoordinator = null,
-        Func<Goal, LandingEscalationRecheckResult>? recheckPreLandingRebaseConflict = null)
+        Func<Goal, LandingEscalationRecheckResult>? recheckPreLandingRebaseConflict = null,
+        Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -825,6 +827,7 @@ internal sealed class ConductorDriver
                 Summary: "focused evidence runner was not configured",
                 Checks: []))
             : ((goal, request, _, _) => runFocusedEvidence(goal, request));
+        _focusedEvidenceRunnerConfigured = runFocusedEvidence is not null;
         _getPreReviewEvidenceContext = getPreReviewEvidenceContext ??
             (_ => new PreReviewEvidenceContext(
                 CandidateSha: "test-constructor-candidate",
@@ -842,6 +845,7 @@ internal sealed class ConductorDriver
         _recordTaskNote = recordTaskNote ?? ((_, _, _) => { });
         _recordReviewerEvidenceRequestReceived = recordReviewerEvidenceRequestReceived ?? ((_, _, _) => { });
         _recordReviewerEvidenceRunRecorded = recordReviewerEvidenceRunRecorded ?? ((_, _, _) => { });
+        _recordFindingEvidenceOutcome = recordFindingEvidenceOutcome ?? ((_, _, _, _, _) => { });
         _recordCriterionRetryFeedback = recordCriterionRetryFeedback ?? ((_, _, _) => throw new InvalidOperationException("Criterion retry feedback delegate was not configured."));
         _clearCriterionRetryFeedback = clearCriterionRetryFeedback ?? ((_, _) => { });
         _recordAcceptanceFailure = recordAcceptanceFailureWithAttribution
@@ -1264,6 +1268,14 @@ internal sealed class ConductorDriver
         out VerifyingFindingAutoRetryDecision decision)
     {
         decision = VerifyingFindingAutoRetryDecision.None;
+        foreach (var requestingTask in goal.Tasks.Where(task => task.LastVerification is not null))
+        {
+            if (TryBuildFindingEvidenceRequest(goal, requestingTask, policy, out decision))
+            {
+                return true;
+            }
+        }
+
         var trigger = goal.Tasks
             .Select(task => BuildVerifyingFindingTrigger(goal, task))
             .FirstOrDefault(candidate => candidate is not null);
@@ -1277,76 +1289,6 @@ internal sealed class ConductorDriver
         if (triggeringTask.RequiredRole == AgentRole.Reviewer)
         {
             RecordSuppressedAutoReviewRetryFindings(goal, triggeringTask, trigger.SuppressedFindings);
-        }
-
-        if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
-            WorkerResultBlockers.TryFindEvidenceRequest(triggeringTask.LastVerification, out var evidenceRequest))
-        {
-            var priorEvidenceRequests = CountReviewerEvidenceRequestsInCurrentRound(goal, triggeringTask);
-            if (priorEvidenceRequests >= MaxReviewerEvidenceRequestsPerRound)
-            {
-                decision = VerifyingFindingAutoRetryDecision.Escalate(
-                    $"Reviewer exceeded the evidence-on-demand limit ({MaxReviewerEvidenceRequestsPerRound} focused runs) in the same review round for task {triggeringTask.Id.Value[..8]}; " +
-                    $"normal escalation required. Request: {TrimForConductorMessage(evidenceRequest)}. Full reviewer output: {outputArtifact}");
-                return true;
-            }
-
-            if (!TryReconcileFocusedEvidenceAttempt(
-                    goal,
-                    policy,
-                    evidenceRequest,
-                    _getPreReviewEvidenceContext(goal).CandidateSha,
-                    "reviewer-issued",
-                    out var evidence,
-                    out decision))
-            {
-                return true;
-            }
-
-            // This event is also the per-round cap receipt. Record it only after reconciliation so
-            // polling a running background attempt cannot consume the budget more than once.
-            _recordReviewerEvidenceRequestReceived(
-                goal.Id,
-                triggeringTask.Id,
-                $"Reviewer evidence request received: source=reviewer-issued; request={evidenceRequest}. Full reviewer output: {outputArtifact}");
-            var evidenceMessage = FormatFocusedEvidenceResult(evidence);
-            _recordReviewerEvidenceRunRecorded(
-                goal.Id,
-                triggeringTask.Id,
-                $"source=reviewer-issued; {evidenceMessage}");
-
-            if (!evidence.Accepted)
-            {
-                decision = VerifyingFindingAutoRetryDecision.Escalate(
-                    $"Reviewer evidence request rejected for task {triggeringTask.Id.Value[..8]}; normal escalation required. " +
-                    $"{evidenceMessage}. Full reviewer output: {outputArtifact}");
-                return true;
-            }
-
-            var evidenceRetryMessage =
-                $"{ReviewerEvidenceRetryMessagePrefix} avoided_developer_reopen=1; source=reviewer-issued; " +
-                $"Reviewer task {triggeringTask.Id.Value[..8]} requested focused test evidence; " +
-                $"conductor ran it without reopening upstream Developer/Tester work. {evidenceMessage}. " +
-                $"Re-review the same round using these receipts.";
-            decision = VerifyingFindingAutoRetryDecision.Retry(
-                triggeringTask,
-                evidenceRetryMessage,
-                null,
-                RetryRoundKind.Mechanical);
-            return true;
-        }
-
-        string? conductorEvidenceFallbackReason = null;
-        if (triggeringTask.RequiredRole == AgentRole.Reviewer &&
-            TryBuildConductorEvidenceSubstitution(
-                goal,
-                triggeringTask,
-                policy,
-                out var substitutionDecision,
-                out conductorEvidenceFallbackReason))
-        {
-            decision = substitutionDecision;
-            return true;
         }
 
         ReviewRetryRoute? reviewerRoute = null;
@@ -1365,13 +1307,6 @@ internal sealed class ConductorDriver
             }
 
             reviewerRoute = ResolveReviewerRetryRoute(goal, triggeringTask, trigger.Finding);
-            if (conductorEvidenceFallbackReason is not null)
-            {
-                reviewerRoute = reviewerRoute with
-                {
-                    Reason = $"{reviewerRoute.Reason}; conductor evidence substitution fallback: {conductorEvidenceFallbackReason}"
-                };
-            }
             if (reviewerRoute.EscalateToOperator)
             {
                 decision = VerifyingFindingAutoRetryDecision.Escalate(
@@ -1544,157 +1479,240 @@ internal sealed class ConductorDriver
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
 
-    private static int CountReviewerEvidenceRequestsInCurrentRound(Goal goal, TaskSpec reviewerTask)
-    {
-        var currentRoundStartedAt = GetCurrentReviewerRoundStart(goal, reviewerTask);
-        return goal.Timeline.Count(evt =>
-            evt.TaskId == reviewerTask.Id &&
-            evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
-            evt.OccurredAt >= currentRoundStartedAt &&
-            !evt.Message.StartsWith(ReviewerEvidenceSubstitutionMessagePrefix, StringComparison.Ordinal));
-    }
-
-    private bool TryBuildConductorEvidenceSubstitution(
+    private bool TryBuildFindingEvidenceRequest(
         Goal goal,
-        TaskSpec reviewerTask,
+        TaskSpec requestingTask,
         ConductorAutonomyPolicy policy,
-        out VerifyingFindingAutoRetryDecision decision,
-        out string? developerFallbackReason)
+        out VerifyingFindingAutoRetryDecision decision)
     {
         decision = VerifyingFindingAutoRetryDecision.None;
-        developerFallbackReason = null;
-        if (!WorkerResultBlockers.TryFindReviewFindingRound(
-                reviewerTask.LastVerification,
-                out var round,
-                out _))
+        if (!WorkerResultBlockers.TryFindReviewFindingRound(requestingTask.LastVerification, out var round, out _))
         {
             return false;
         }
 
-        var blockers = round.Findings
-            .Where(finding =>
-                finding.State == ReviewFindingState.Open &&
-                finding.Severity == FindingSeverity.Blocking)
+        var mergedById = (requestingTask.LastVerification?.MergedReviewFindings ?? [])
+            .ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
+        var requestingFindings = round.Findings
+            .Where(finding => finding.EvidenceRequest is not null)
+            .Where(finding => !mergedById.TryGetValue(finding.StableId, out var merged) || merged.EvidenceOutcome is null)
             .ToArray();
-        if (blockers.Length == 0)
+        if (requestingFindings.Length == 0)
         {
             return false;
         }
 
-        var nonEvidenceCategories = blockers
-            .Where(finding => finding.Category is not (FindingCategory.TestEvidence or FindingCategory.TestCoverage))
-            .Select(finding => FindingCategoryJsonConverter.ToWireValue(finding.Category))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (nonEvidenceCategories.Length > 0)
+        var groups = new List<(string Identity, string Request, FindingEvidenceRequest TypedRequest, List<ReviewFinding> Findings)>();
+        foreach (var finding in requestingFindings)
         {
-            if (blockers.Any(finding =>
-                    finding.Category is FindingCategory.TestEvidence or FindingCategory.TestCoverage or FindingCategory.Unspecified))
+            if (!TryNormalizeFindingEvidenceRequest(
+                    finding.EvidenceRequest!, out var typedRequest, out var request,
+                    out var refusalReason, out var refusalDetail))
             {
-                _recordReviewerEvidenceRequestReceived(
-                    goal.Id,
-                    reviewerTask.Id,
-                    $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-category; evidence_request=absent; " +
-                    $"category={string.Join(',', nonEvidenceCategories)}; reason=every-open-blocker-must-be-known-evidence");
+                RecordNotHonoured(goal.Id, requestingTask, finding, refusalReason, refusalDetail);
+                continue;
             }
-            return false;
+
+            var identity = BuildFindingEvidenceIdentity(typedRequest);
+            var groupIndex = groups.FindIndex(group => string.Equals(group.Identity, identity, StringComparison.Ordinal));
+            if (groupIndex < 0)
+            {
+                groups.Add((identity, request, typedRequest, [finding]));
+            }
+            else
+            {
+                groups[groupIndex].Findings.Add(finding);
+            }
         }
 
-        if (!TryDeriveFocusedEvidenceRequest(blockers, out var request))
+        foreach (var cappedGroup in groups.Skip(policy.MaxFocusedEvidenceRunsPerRound))
+        foreach (var finding in cappedGroup.Findings)
         {
-            _recordReviewerEvidenceRequestReceived(
-                goal.Id,
-                reviewerTask.Id,
-                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-unparseable; evidence_request=absent; " +
-                "reason=no-validated-test-project-and-class-pairs");
-            developerFallbackReason = "no-validated-test-project-and-class-pairs";
-            return false;
+            RecordNotHonoured(
+                goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.PerRoundCap,
+                $"Distinct evidence request exceeded the configured per-round cap of {policy.MaxFocusedEvidenceRunsPerRound}.");
+        }
+
+        var runnable = groups.Take(policy.MaxFocusedEvidenceRunsPerRound).FirstOrDefault();
+        if (runnable.Findings is null)
+        {
+            decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "All evidence requests were refused with typed outcomes.");
+            return true;
         }
 
         var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
         if (candidateSha is null || !CandidateShaPattern.IsMatch(candidateSha))
         {
-            _recordReviewerEvidenceRequestReceived(
-                goal.Id,
-                reviewerTask.Id,
-                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-unparseable; evidence_request=absent; " +
-                "reason=candidate-sha-unavailable");
-            developerFallbackReason = "candidate-sha-unavailable";
-            return false;
-        }
-
-        if (HasConductorDerivedReceipt(goal, reviewerTask, candidateSha, request))
-        {
-            _recordReviewerEvidenceRequestReceived(
-                goal.Id,
-                reviewerTask.Id,
-                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-evidence-already-present; " +
-                $"candidate_sha={candidateSha}; request='{request}'; reason=evidence-already-present");
-            developerFallbackReason = "evidence-already-present";
-            return false;
-        }
-
-        var priorSubstitutions = CountConductorEvidenceSubstitutionsInCurrentRound(goal, reviewerTask);
-        if (priorSubstitutions >= MaxConductorEvidenceSubstitutionsPerRound)
-        {
-            _recordReviewerEvidenceRequestReceived(
-                goal.Id,
-                reviewerTask.Id,
-                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-cap; candidate_sha={candidateSha}; " +
-                $"request='{request}'; reason=substitution-cap-exceeded; " +
-                $"attempt={priorSubstitutions + 1}/{MaxConductorEvidenceSubstitutionsPerRound}");
-            developerFallbackReason = "substitution-cap-exceeded";
-            return false;
-        }
-
-        if (!TryReconcileFocusedEvidenceAttempt(
-                goal,
-                policy,
-                request,
-                candidateSha,
-                "conductor-derived",
-                out var evidence,
-                out decision))
-        {
+            foreach (var group in groups.Take(policy.MaxFocusedEvidenceRunsPerRound))
+            foreach (var finding in group.Findings)
+            {
+                RecordNotHonoured(
+                    goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.CandidateShaMissing,
+                    "No validated candidate SHA was available for the requested evidence run.");
+            }
+            decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "Evidence requests could not run because the candidate SHA was unavailable.");
             return true;
         }
 
-        // This event is also the per-round cap receipt. Record it only after reconciliation so
-        // polling a running background attempt cannot consume the budget more than once.
-        _recordReviewerEvidenceRequestReceived(
-            goal.Id,
-            reviewerTask.Id,
-            $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=substituted; source=conductor-derived; " +
-            $"candidate_sha={candidateSha}; request='{request}'; " +
-            $"attempt={priorSubstitutions + 1}/{MaxConductorEvidenceSubstitutionsPerRound}");
-        var evidenceMessage = FormatFocusedEvidenceResult(evidence);
-        _recordReviewerEvidenceRunRecorded(
-            goal.Id,
-            reviewerTask.Id,
-            $"source=conductor-derived; candidate_sha={candidateSha}; {evidenceMessage}");
+        if (!_focusedEvidenceRunnerConfigured)
+        {
+            foreach (var group in groups.Take(policy.MaxFocusedEvidenceRunsPerRound))
+            foreach (var finding in group.Findings)
+            {
+                RecordNotHonoured(
+                    goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.ExecutorUnavailable,
+                    "No focused evidence executor was configured.");
+            }
+            decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "Evidence requests could not run because the executor was unavailable.");
+            return true;
+        }
+
+        if (!TryReconcileFocusedEvidenceAttempt(
+                goal, policy, runnable.Request, candidateSha, "finding-requested", out var evidence, out decision))
+        {
+            if (decision.ShouldEscalate)
+            {
+                foreach (var finding in runnable.Findings)
+                {
+                    RecordNotHonoured(
+                        goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed, decision.Message);
+                }
+                decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "The focused evidence executor failed; a typed refusal was attached.");
+            }
+            return true;
+        }
+
         if (!evidence.Accepted)
         {
+            foreach (var finding in runnable.Findings)
+            {
+                RecordNotHonoured(
+                    goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed, evidence.Summary);
+            }
+            decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "The focused evidence executor did not accept the request.");
+            return true;
+        }
+
+        var receiptId = CreateFindingEvidenceReceiptId(candidateSha, runnable.Identity);
+        var receipt = new FindingEvidenceReceipt(
+            receiptId, candidateSha, runnable.TypedRequest, evidence.Accepted, evidence.Passed, evidence.Summary);
+        foreach (var finding in runnable.Findings)
+        {
+            _recordFindingEvidenceOutcome(
+                goal.Id, requestingTask.Id, finding.StableId,
+                new FindingEvidenceOutcome(Honoured: true, ReceiptId: receiptId), receipt);
             _recordReviewerEvidenceRequestReceived(
-                goal.Id,
-                reviewerTask.Id,
-                $"{ReviewerEvidenceSubstitutionMessagePrefix} outcome=fell-back-run-rejected; " +
-                $"candidate_sha={candidateSha}; request='{request}'; reason=evidence-run-not-accepted");
-            developerFallbackReason = "evidence-run-not-accepted";
+                goal.Id, requestingTask.Id,
+                $"finding-evidence disposition=honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
+                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason=honoured");
+        }
+        _recordReviewerEvidenceRunRecorded(
+            goal.Id, requestingTask.Id,
+            $"source=finding-requested; role={requestingTask.RequiredRole}; candidate_sha={candidateSha}; " +
+            $"receipt_id={receiptId}; {FormatFocusedEvidenceResult(evidence)}");
+        decision = groups.Take(policy.MaxFocusedEvidenceRunsPerRound).Skip(1).Any()
+            ? VerifyingFindingAutoRetryDecision.Hold(
+                "Focused evidence completed; another distinct request from the same finding round remains pending.")
+            : BuildFindingEvidenceDeliveryRetry(
+                requestingTask, "Focused evidence completed and its receipt was attached to the requesting finding.");
+        return true;
+    }
+
+    private void RecordNotHonoured(
+        GoalId goalId,
+        TaskSpec requestingTask,
+        ReviewFinding finding,
+        FindingEvidenceNotHonouredReason reason,
+        string detail)
+    {
+        _recordFindingEvidenceOutcome(
+            goalId, requestingTask.Id, finding.StableId,
+            new FindingEvidenceOutcome(Honoured: false, Reason: reason, Detail: detail), null);
+        _recordReviewerEvidenceRequestReceived(
+            goalId, requestingTask.Id,
+            $"finding-evidence disposition=not-honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
+            $"finding_id={finding.StableId}; candidate_sha=unavailable; receipt_id=none; " +
+            $"reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)}; detail={TrimForConductorMessage(detail)}");
+    }
+
+    private static VerifyingFindingAutoRetryDecision BuildFindingEvidenceDeliveryRetry(TaskSpec task, string summary) =>
+        VerifyingFindingAutoRetryDecision.Retry(
+            task,
+            $"{ReviewerEvidenceRetryMessagePrefix} role={task.RequiredRole}; task={task.Id.Value[..8]}; {summary} " +
+            "Review the finding-bound outcome in this round's context.",
+            null,
+            RetryRoundKind.Mechanical);
+
+    private static bool TryNormalizeFindingEvidenceRequest(
+        FindingEvidenceRequest request,
+        out FindingEvidenceRequest normalized,
+        out string executorRequest,
+        out FindingEvidenceNotHonouredReason refusalReason,
+        out string refusalDetail)
+    {
+        normalized = new FindingEvidenceRequest([]);
+        executorRequest = string.Empty;
+        refusalReason = FindingEvidenceNotHonouredReason.UnparseableSelection;
+        refusalDetail = "Evidence request must contain at least one project/class selection.";
+        if (request.Selections is not { Count: > 0 })
+        {
             return false;
         }
 
-        var retryMessage =
-            $"{ReviewerEvidenceRetryMessagePrefix} avoided_developer_reopen=1; source=conductor-derived; " +
-            $"Reviewer task {reviewerTask.Id.Value[..8]} omitted an evidence request; conductor derived and ran it " +
-            $"without reopening upstream Developer/Tester work. {evidenceMessage}. " +
-            "Re-review the same round using these receipts.";
-        decision = VerifyingFindingAutoRetryDecision.Retry(
-            reviewerTask,
-            retryMessage,
-            null,
-            RetryRoundKind.Mechanical);
+        var selections = new List<FindingEvidenceSelection>();
+        foreach (var selection in request.Selections)
+        {
+            if (selection is null)
+            {
+                refusalDetail = "Evidence selections cannot contain null entries.";
+                return false;
+            }
+            var project = selection.TestProject?.Trim();
+            var testClass = selection.TestClass?.Trim();
+            if (string.IsNullOrWhiteSpace(project) ||
+                string.IsNullOrWhiteSpace(testClass) ||
+                !EvidenceClassNamePattern.IsMatch(testClass))
+            {
+                refusalDetail = "Every evidence selection requires a valid test_project and test_class.";
+                return false;
+            }
+
+            var canonicalProject = project.Equals("Core.Tests", StringComparison.OrdinalIgnoreCase)
+                ? "Core.Tests"
+                : project.Equals("Infrastructure.Tests", StringComparison.OrdinalIgnoreCase)
+                    ? "Infrastructure.Tests"
+                    : null;
+            if (canonicalProject is null)
+            {
+                refusalReason = FindingEvidenceNotHonouredReason.UnsupportedProject;
+                refusalDetail = $"Focused evidence does not support test project '{project}'.";
+                return false;
+            }
+
+            selections.Add(new FindingEvidenceSelection(canonicalProject, testClass));
+        }
+
+        var distinct = selections
+            .Distinct()
+            .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
+            .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
+            .ToArray();
+        normalized = new FindingEvidenceRequest(distinct);
+        executorRequest = string.Join(
+            "; ",
+            distinct
+                .GroupBy(selection => selection.TestProject, StringComparer.Ordinal)
+                .Select(group => $"{group.Key}: {string.Join(',', group.Select(selection => selection.TestClass))}"));
         return true;
     }
+
+    private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
+        string.Join("|", request.Selections.Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
+
+    private static string CreateFindingEvidenceReceiptId(string candidateSha, string identity) =>
+        "finding-evidence-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes($"{candidateSha}:{identity}")))
+            .ToLowerInvariant()[..24];
 
     private bool TryReconcileFocusedEvidenceAttempt(
         Goal goal,
@@ -1758,91 +1776,6 @@ internal sealed class ConductorDriver
                 (attemptDecision.Attempt.Detail ?? "no result artifact was produced"),
             Checks: []);
         return true;
-    }
-
-    private static bool TryDeriveFocusedEvidenceRequest(
-        IReadOnlyList<ReviewFinding> blockers,
-        out string request)
-    {
-        request = string.Empty;
-        var text = string.Join(" ", blockers.Select(finding => finding.Description));
-        var projectMatches = KnownTestProjectPattern.Matches(text);
-        if (projectMatches.Count == 0)
-        {
-            return false;
-        }
-
-        var targets = new List<(string Alias, List<string> Classes)>();
-        foreach (Match projectMatch in projectMatches)
-        {
-            var alias = projectMatch.Groups["alias"].Value.Equals("Core.Tests", StringComparison.OrdinalIgnoreCase)
-                ? "Core.Tests"
-                : "Infrastructure.Tests";
-            var segmentStart = projectMatch.Index + projectMatch.Length;
-            var nextMatch = projectMatch.NextMatch();
-            var segmentLength = (nextMatch.Success ? nextMatch.Index : text.Length) - segmentStart;
-            var classes = TestClassPattern
-                .Matches(text.Substring(segmentStart, segmentLength))
-                .Select(match => match.Value)
-                .Where(className => !className.Equals("Tests", StringComparison.Ordinal))
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            if (classes.Length == 0)
-            {
-                continue;
-            }
-
-            var existing = targets.FirstOrDefault(target => target.Alias == alias);
-            if (existing.Classes is null)
-            {
-                targets.Add((alias, [.. classes]));
-            }
-            else
-            {
-                foreach (var className in classes)
-                {
-                    if (!existing.Classes.Contains(className, StringComparer.Ordinal))
-                    {
-                        existing.Classes.Add(className);
-                    }
-                }
-            }
-        }
-
-        if (targets.Count == 0 ||
-            targets.Sum(target => target.Classes.Count) > MaxConductorDerivedEvidenceTargets)
-        {
-            return false;
-        }
-
-        request = string.Join(
-            "; ",
-            targets.Select(target => $"{target.Alias}: {string.Join(',', target.Classes)}"));
-        return true;
-    }
-
-    private static bool HasConductorDerivedReceipt(
-        Goal goal,
-        TaskSpec reviewerTask,
-        string candidateSha,
-        string request) =>
-        goal.Timeline.Any(evt =>
-            evt.TaskId == reviewerTask.Id &&
-            evt.Kind == ProgressKind.ReviewerEvidenceRunRecorded &&
-            evt.Message.Contains("source=conductor-derived", StringComparison.Ordinal) &&
-            evt.Message.Contains($"candidate_sha={candidateSha}", StringComparison.OrdinalIgnoreCase) &&
-            evt.Message.Contains($"request='{request}'", StringComparison.Ordinal) &&
-            evt.Message.Contains("accepted=True", StringComparison.Ordinal));
-
-    private static int CountConductorEvidenceSubstitutionsInCurrentRound(Goal goal, TaskSpec reviewerTask)
-    {
-        var currentRoundStartedAt = GetCurrentReviewerRoundStart(goal, reviewerTask);
-        return goal.Timeline.Count(evt =>
-            evt.TaskId == reviewerTask.Id &&
-            evt.Kind == ProgressKind.ReviewerEvidenceRequestReceived &&
-            evt.OccurredAt >= currentRoundStartedAt &&
-            evt.Message.StartsWith(ReviewerEvidenceSubstitutionMessagePrefix, StringComparison.Ordinal) &&
-            evt.Message.Contains("outcome=substituted", StringComparison.Ordinal));
     }
 
     private static int CountReviewerContractRepairsInCurrentRound(Goal goal, TaskSpec reviewerTask)

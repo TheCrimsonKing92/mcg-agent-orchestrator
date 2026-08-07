@@ -63,13 +63,15 @@ public static class AgentOutputDirectives
         {
             lines.Add("citations: <repository files, docs, or evidence sources used>");
         }
-        else if (role == AgentRole.Reviewer)
+        else if (role is AgentRole.Reviewer or AgentRole.Tester)
         {
-            lines.Add("evidence-request: <optional; ProjectAlias: FullyQualifiedName~TestClass or ProjectAlias: TestClass1,TestClass2>");
-            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,category:spec-compliance|spec-defect|correctness|test-evidence|test-coverage|code-quality|operator-owned,location:{file,region,hunk?},description}; severity is required; category defaults to unspecified; [] when none>");
+            lines.Add("findings: <one-line JSON array of {stable_id,state:open|resolved,severity:blocking|advisory,category:spec-compliance|spec-defect|correctness|test-evidence|test-coverage|code-quality|operator-owned,location:{file,region,hunk?},description,evidence_request?:{selections:[{test_project,test_class}]}}; severity is required; evidence_request is optional on any category; [] when none>");
             lines.Add("touched_anchors: <one-line JSON array of {file,region,hunk?} for prior finding anchors touched by this round's diff; [] when none>");
-            lines.Add("criteria_verdicts: <one-line JSON array of {criterion_index,verdict:met|not-met|not-verifiable,evidence}; [] when the goal has no refined acceptance criteria>");
-            lines.Add("verdict: <pass|needs-work|fail>");
+            if (role == AgentRole.Reviewer)
+            {
+                lines.Add("criteria_verdicts: <one-line JSON array of {criterion_index,verdict:met|not-met|not-verifiable,evidence}; [] when the goal has no refined acceptance criteria>");
+                lines.Add("verdict: <pass|needs-work|fail>");
+            }
         }
 
         lines.AddRange(

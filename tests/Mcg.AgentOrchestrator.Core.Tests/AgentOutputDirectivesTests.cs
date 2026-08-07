@@ -10,8 +10,11 @@ public sealed class AgentOutputDirectivesTests
             AgentOutputDirectives.WorkerResultTemplateLines,
             line => line.Contains("premise-invalid - fact and evidence", StringComparison.Ordinal));
         Assert.Contains(
-            "evidence-request: <optional; ProjectAlias: FullyQualifiedName~TestClass or ProjectAlias: TestClass1,TestClass2>",
-            AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer));
+            AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
+            line => line.Contains("evidence_request?:{selections:[{test_project,test_class}]}", StringComparison.Ordinal));
+        Assert.Contains(
+            AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Tester),
+            line => line.Contains("evidence_request?:{selections:[{test_project,test_class}]}", StringComparison.Ordinal));
         Assert.Contains(
             AgentOutputDirectives.WorkerResultTemplateLinesForRole(AgentRole.Reviewer),
             line =>

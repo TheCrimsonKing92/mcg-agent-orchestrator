@@ -132,28 +132,6 @@ public static class WorkerResultBlockers
         IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections) =>
         ReviewFindings.IsWaived(finding, criteriaCorrections);
 
-    public static bool TryFindEvidenceRequest(TaskVerificationRecord? verification, out string request)
-    {
-        request = string.Empty;
-        if (verification is null)
-        {
-            return false;
-        }
-
-        foreach (var line in EnumerateWorkerResultLines(verification))
-        {
-            if (TryFindField(line, "evidence-request", out var value) &&
-                !string.IsNullOrWhiteSpace(value) &&
-                !IsNoBlockerValue(value))
-            {
-                request = value;
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     public static bool TryFindReviewFindingRound(
         TaskVerificationRecord? verification,
         out ReviewFindingRound round,
@@ -194,6 +172,11 @@ public static class WorkerResultBlockers
 
         round = reportedRound with
         {
+            // Outcomes are Conductor-owned. A worker may request evidence but cannot forge a
+            // receipt, refusal reason, or execution result in its WORKER_RESULT JSON.
+            Findings = reportedRound.Findings
+                .Select(finding => finding with { EvidenceOutcome = null })
+                .ToArray(),
             // Reviewer-authored touched_anchors remains a required, validated receipt, but is not
             // authoritative for regression reopening. Only dispatch-preparation's round diff may
             // prove that a resolved structural anchor was touched.

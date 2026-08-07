@@ -209,6 +209,19 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec RecordFindingEvidenceOutcome(
+        GoalId goalId,
+        TaskId taskId,
+        string stableId,
+        FindingEvidenceOutcome outcome,
+        FindingEvidenceReceipt? receipt = null)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.RecordFindingEvidenceOutcome(stableId, outcome, receipt);
+        return task;
+    }
+
     public TaskSpec RecordPreReviewEvidence(
         GoalId goalId,
         TaskId reviewerTaskId,
