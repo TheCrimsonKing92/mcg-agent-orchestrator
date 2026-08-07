@@ -339,7 +339,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(CollaborationItemStatus.Raised, collab.Items[0].Status);
         Xunit.Assert.NotNull(collab.Items[0].CorrelationKey);
         Xunit.Assert.StartsWith(GoalRefinementService.CorrelationKeyPrefix, collab.Items[0].CorrelationKey);
-        Xunit.Assert.Equal("external contract", collab.Items[0].Subject);
+        Xunit.Assert.Equal("external-contract", collab.Items[0].Subject);
         Xunit.Assert.DoesNotContain("Which API version to target?", collab.Items[0].Subject, StringComparison.Ordinal);
         Xunit.Assert.InRange(collab.Items[0].Subject.Length, 1, 80);
         Xunit.Assert.Contains("Question: Which API version to target?", collab.Items[0].Body, StringComparison.Ordinal);
