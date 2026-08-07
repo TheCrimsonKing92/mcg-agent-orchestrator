@@ -155,4 +155,29 @@ public sealed class AcceptanceCriteriaParserTests
         Assert.Equal("grep-present", single.Type);
         Assert.Equal("ILegacyService", single.Pattern);
     }
+
+    [Xunit.Fact(DisplayName = "AcceptanceCriteriaParser_preserves_numbered_declared_criteria_and_continuations")]
+    public void AcceptanceCriteriaParserPreservesNumberedDeclaredCriteriaAndContinuations()
+    {
+        var text = """
+            ## Acceptance
+            1. A reviewer superset is accepted,
+               and the goal proceeds.
+            2) Extra attestations retain their evidence.
+            3. The failure reason reaches conductor output.
+
+            ## Scope
+            Keep changes narrow.
+            """;
+
+        var criteria = AcceptanceCriteriaParser.ParseDeclared(text);
+
+        Assert.Equal(
+            [
+                "A reviewer superset is accepted, and the goal proceeds.",
+                "Extra attestations retain their evidence.",
+                "The failure reason reaches conductor output."
+            ],
+            criteria);
+    }
 }

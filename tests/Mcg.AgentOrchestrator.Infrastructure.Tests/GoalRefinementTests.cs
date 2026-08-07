@@ -36,16 +36,26 @@ public sealed class GoalRefinementTests
                 new ModelProfile("missing-provider", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
         ]));
         var kernel = new AgentOrchestratorKernel();
+        var objective = """
+            Implement a rough feature objective.
+
+            ## Acceptance
+            1. First declared outcome is preserved.
+            2. Second declared outcome is preserved.
+            3. Third declared outcome is preserved.
+            4. Fourth declared outcome is preserved.
+            """;
 
         var goal = GoalLifecycleCommands.CreateAndActivateGoal(
             kernel,
             AgentCatalog.Default().Agents,
-            "Implement a rough feature objective",
+            objective,
             workspace,
             providers);
 
         Xunit.Assert.NotNull(goal.RefinedSpec);
         Xunit.Assert.Contains("Implement:", goal.RefinedSpec!.BehavioralContract);
+        Xunit.Assert.Equal(4, goal.RefinedSpec.AcceptanceCriteria.Count);
         var planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var brief = kernel.BuildTaskBrief(goal.Id, planner.Id).Content;
         Xunit.Assert.Contains("Refined Spec", brief);
@@ -638,6 +648,44 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal("GET", output.Decisions[0].Choice);
         Xunit.Assert.Single(output.Forks);
         Xunit.Assert.Equal("observable-behavior", output.Forks[0].Kind);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_unions_declared_and_refined_acceptance_items_without_duplicates")]
+    public async Task GoalRefinementServiceUnionsDeclaredAndRefinedAcceptanceItemsWithoutDuplicates()
+    {
+        var objective = """
+            Implement the reviewer validation change.
+
+            ## Acceptance
+            1. A reviewer superset is accepted.
+            2. Extra attestations are recorded as informational.
+            3. Every declared criterion is registered.
+            4. The conductor reports the task failure reason.
+            """;
+        var response = """
+            ```json
+            {
+              "behavioralContract": "Reviewer validation accepts diligent supersets.",
+              "acceptanceCriteria": ["A REVIEWER SUPERSET IS ACCEPTED.", "The clarified operator choice is verified."],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            ```
+            """;
+        var (service, kernel, goalId, _) = BuildScenario(responseJson: response, objective: objective);
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(
+            [
+                "A reviewer superset is accepted.",
+                "Extra attestations are recorded as informational.",
+                "Every declared criterion is registered.",
+                "The conductor reports the task failure reason.",
+                "The clarified operator choice is verified."
+            ],
+            result.Spec.AcceptanceCriteria);
     }
 
     [Xunit.Fact(DisplayName = "SpecRefinerPlanner_Parse_RealWorldDependent_verificationClass_parsed")]
@@ -1469,7 +1517,8 @@ public sealed class GoalRefinementTests
         string responseJson = "{}",
         SpecRefinerPrecedentStore? precedentStore = null,
         WorkerProfileCatalog? workerProfiles = null,
-        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null)
+        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
+        string objective = "Integrate the billing system")
     {
         var provider = new FakeSmokeProvider(text: responseJson, providerName: "fake-refiner");
         var registry = new InMemoryModelProviderRegistry([provider]);
@@ -1494,7 +1543,7 @@ public sealed class GoalRefinementTests
             workerProfiles,
             subscriptionCompleterFactory);
         var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("Integrate the billing system");
+        var goal = kernel.CreateGoal(objective);
 
         return (service, kernel, goal.Id, collab);
     }

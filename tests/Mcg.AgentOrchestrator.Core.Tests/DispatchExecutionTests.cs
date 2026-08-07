@@ -1267,6 +1267,47 @@ public sealed class DispatchExecutionTests
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_accepts_and_records_extra_criteria_attestations")]
+    public void RecordDispatchExecutionResultReviewerPassAcceptsAndRecordsExtraCriteriaAttestations()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Accept diligent reviewer attestations", [reviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Review the registered acceptance criterion",
+            ["registered criterion"],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review", "C:\\repo", clock.UtcNow));
+        var passingSuperset = StructuredReviewerResult(
+            "pass",
+            "[]",
+            "none",
+            """[{"criterion_index":0,"verdict":"met","evidence":"tests/Registered.trx"},{"criterion_index":1,"verdict":"met","evidence":"tests/ExtraOne.trx"},{"criterion_index":2,"verdict":"met","evidence":"tests/ExtraTwo.trx"}]""");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0, passingSuperset, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Equal(GoalStatus.Verified, goal.Status);
+        Assert.DoesNotContain(goal.Timeline, item =>
+            item.TaskId == reviewer.Id && item.Kind == ProgressKind.TaskFailed);
+        Assert.Contains(goal.Timeline, item =>
+            item.TaskId == reviewer.Id &&
+            item.Kind == ProgressKind.TaskNote &&
+            item.Message.Contains("criterion_index=1", StringComparison.Ordinal) &&
+            item.Message.Contains("tests/ExtraOne.trx", StringComparison.Ordinal));
+        Assert.Contains(goal.Timeline, item =>
+            item.TaskId == reviewer.Id &&
+            item.Kind == ProgressKind.TaskNote &&
+            item.Message.Contains("criterion_index=2", StringComparison.Ordinal) &&
+            item.Message.Contains("tests/ExtraTwo.trx", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_merge_preserves_rounds_with_equal_timestamps")]
     public void RecordDispatchExecutionResultReviewerMergePreservesRoundsWithEqualTimestamps()
     {

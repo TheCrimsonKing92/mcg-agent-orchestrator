@@ -18,12 +18,26 @@ public static class AcceptanceCriteriaParser
 
     public static IReadOnlyList<AcceptanceCriterion> Parse(string objectiveText)
     {
+        var results = new List<AcceptanceCriterion>();
+        foreach (var criterionText in ParseDeclared(objectiveText))
+        {
+            var criterion = TryClassify(criterionText);
+            if (criterion is not null)
+                results.Add(criterion);
+        }
+
+        return results;
+    }
+
+    public static IReadOnlyList<string> ParseDeclared(string objectiveText)
+    {
         var lines = objectiveText.ReplaceLineEndings("\n").Split('\n');
         var start = FindAcceptanceSection(lines);
         if (start < 0)
             return [];
 
-        var results = new List<AcceptanceCriterion>();
+        var results = new List<string>();
+        string? current = null;
         for (var i = start; i < lines.Length; i++)
         {
             var line = lines[i];
@@ -31,16 +45,30 @@ public static class AcceptanceCriteriaParser
                 break;
 
             var trimmed = line.Trim();
-            if (string.IsNullOrWhiteSpace(trimmed) || !IsBulletLine(trimmed))
+            if (TryStripListPrefix(trimmed, out var criterionText))
+            {
+                AddCurrent();
+                current = criterionText;
                 continue;
+            }
 
-            var bulletText = StripBulletPrefix(trimmed);
-            var criterion = TryClassify(bulletText);
-            if (criterion is not null)
-                results.Add(criterion);
+            if (current is not null &&
+                !string.IsNullOrWhiteSpace(trimmed) &&
+                char.IsWhiteSpace(line[0]))
+            {
+                current = $"{current} {trimmed}";
+            }
         }
 
+        AddCurrent();
         return results;
+
+        void AddCurrent()
+        {
+            if (!string.IsNullOrWhiteSpace(current))
+                results.Add(current);
+            current = null;
+        }
     }
 
     private static int FindAcceptanceSection(string[] lines)
@@ -64,13 +92,32 @@ public static class AcceptanceCriteriaParser
                !t.StartsWith("###", StringComparison.Ordinal);
     }
 
-    private static bool IsBulletLine(string trimmedLine) =>
-        trimmedLine.StartsWith("- ", StringComparison.Ordinal) ||
-        trimmedLine.StartsWith("* ", StringComparison.Ordinal) ||
-        trimmedLine.StartsWith("• ", StringComparison.Ordinal);
+    private static bool TryStripListPrefix(string trimmedLine, out string criterionText)
+    {
+        criterionText = string.Empty;
+        if (trimmedLine.StartsWith("- ", StringComparison.Ordinal) ||
+            trimmedLine.StartsWith("* ", StringComparison.Ordinal) ||
+            trimmedLine.StartsWith("• ", StringComparison.Ordinal))
+        {
+            criterionText = trimmedLine[2..].TrimStart();
+            return criterionText.Length > 0;
+        }
 
-    private static string StripBulletPrefix(string trimmedLine) =>
-        trimmedLine[2..].TrimStart();
+        var digitCount = 0;
+        while (digitCount < trimmedLine.Length && char.IsDigit(trimmedLine[digitCount]))
+            digitCount++;
+
+        if (digitCount == 0 ||
+            digitCount + 1 >= trimmedLine.Length ||
+            trimmedLine[digitCount] is not ('.' or ')') ||
+            !char.IsWhiteSpace(trimmedLine[digitCount + 1]))
+        {
+            return false;
+        }
+
+        criterionText = trimmedLine[(digitCount + 1)..].TrimStart();
+        return criterionText.Length > 0;
+    }
 
     private static AcceptanceCriterion? TryClassify(string bulletText)
     {

@@ -377,7 +377,10 @@ public sealed partial class AgentOrchestratorKernel
                 return true;
             }
 
-            var actualIndices = criterionVerdicts
+            var registeredVerdicts = criterionVerdicts
+                .Where(item => item.CriterionIndex < refinedSpec.AcceptanceCriteria.Count)
+                .ToArray();
+            var actualIndices = registeredVerdicts
                 .Select(item => item.CriterionIndex)
                 .OrderBy(index => index)
                 .ToArray();
@@ -389,9 +392,20 @@ public sealed partial class AgentOrchestratorKernel
                     task.Id,
                     WorkTaskStatus.Failed,
                     "Reviewer WORKER_RESULT criteria attestation invalid: " +
-                    $"expected exactly criterion_index {string.Join(", ", expectedIndices)}; " +
-                    $"received {string.Join(", ", actualIndices)}.");
+                    $"expected every registered criterion_index {string.Join(", ", expectedIndices)} exactly once; " +
+                    $"received registered indices {string.Join(", ", actualIndices)}.");
                 return true;
+            }
+
+            foreach (var extra in criterionVerdicts.Where(item =>
+                         item.CriterionIndex >= refinedSpec.AcceptanceCriteria.Count))
+            {
+                Append(
+                    goal,
+                    task.Id,
+                    ProgressKind.TaskNote,
+                    $"Reviewer informational extra criterion attestation recorded: " +
+                    $"criterion_index={extra.CriterionIndex}; verdict={extra.Verdict}; evidence={extra.Evidence}");
             }
         }
 
