@@ -10373,6 +10373,62 @@ public sealed class ConductorBatchLoopTests
     }
 
     [Xunit.Fact]
+    public void GoalStall_FocusedEvidenceFirstAndFourthAttemptsHaveDistinctBlockerText()
+    {
+        var root = CreateTempDirectory("mcg-focused-evidence-stall-ordinal");
+        var (seedKernel, goal) = SimpleGoal("distinguish focused evidence restart ordinals");
+
+        try
+        {
+            ConductEventRecord RunUntilStalled(int ordinal)
+            {
+                var kernel = AgentOrchestratorKernel.FromSnapshot(seedKernel.ExportSnapshot());
+                var now = new DateTimeOffset(2026, 8, 7, 14, 0, 0, TimeSpan.Zero);
+                var logPath = Path.Combine(root, $"attempt-{ordinal}", ConductEventLogWriter.CurrentFileName);
+                var reason =
+                    $"PRE_REVIEW_FOCUSED_EVIDENCE_RUNNING: attempt {ordinal}, 9m41s elapsed (attempt=shared-{ordinal})";
+
+                new ConductorBatchLoop(
+                    conductEventLogWriter: new ConductEventLogWriter(logPath, utcNow: () => now),
+                    utcNow: () => now).Run(
+                        kernel,
+                        MakeDriver(
+                            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                            dispatchAndStart: _ => DispatchStartOutcome.EmptyBatch(reason)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 2,
+                        watchInterval: TimeSpan.FromSeconds(1),
+                        sleepFunc: _ =>
+                        {
+                            now = now.AddMinutes(11);
+                            return false;
+                        },
+                        goalStallThreshold: TimeSpan.FromMinutes(10));
+
+                return Assert.Single(File.ReadAllLines(logPath)
+                    .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                        line,
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                    .Where(record => record.EventKind == "goal-stalled"));
+            }
+
+            var first = RunUntilStalled(1);
+            var fourth = RunUntilStalled(4);
+
+            Assert.Equal(goal.Id.Value[..8], first.GoalId);
+            Assert.Equal(first.GoalId, fourth.GoalId);
+            Assert.Contains("attempt_1", first.Detail, StringComparison.Ordinal);
+            Assert.Contains("attempt_4", fourth.Detail, StringComparison.Ordinal);
+            Assert.NotEqual(first.Detail, fourth.Detail);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact]
     public void GoalStall_EventStreamFailure_DoesNotStopLoop()
     {
         var root = CreateTempDirectory("mcg-goal-stall-event-failure");

@@ -190,6 +190,114 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         }
     }
 
+    [Fact]
+    public void DeadOwnerWithoutTerminalArtifacts_RecordsTypedUnknownOutcome()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var clock = new ManualTimeProvider(new DateTimeOffset(2026, 8, 7, 13, 0, 0, TimeSpan.Zero));
+            var logPath = Path.Combine(root, "conduct-events.log");
+            var writer = new ConductEventLogWriter(logPath);
+            var attemptRoot = Path.Combine(root, "attempts");
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Record an indeterminate focused evidence outcome");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
+            var startingCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7104),
+                acquireStableSlotLease: (_, _) => null,
+                conductEventLogWriter: writer,
+                timeProvider: clock);
+
+            var started = startingCoordinator.EvaluateFocusedEvidence(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence);
+            clock.Advance(TimeSpan.FromSeconds(5));
+
+            var recoveringCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                attemptRoot,
+                isProcessAlive: _ => false,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7105),
+                recentHeartbeatGrace: TimeSpan.Zero,
+                acquireStableSlotLease: (_, _) => null,
+                conductEventLogWriter: writer,
+                timeProvider: clock);
+            var terminal = recoveringCoordinator.EvaluateFocusedEvidence(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                PassingEvidence);
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun, terminal.Kind);
+            var end = Assert.Single(ReadEvents(logPath).Where(item =>
+                item.GetProperty("eventKind").GetString() == "EVIDENCE_END" &&
+                item.GetProperty("attempt").GetString() == started.Attempt.AttemptId));
+            Assert.Equal("unknown", end.GetProperty("outcome").GetString());
+            Assert.Equal("unknown", end.GetProperty("tests_executed").GetString());
+            Assert.Equal(JsonValueKind.Number, end.GetProperty("duration_s").ValueKind);
+            Assert.True(end.GetProperty("duration_s").GetDouble() > 0);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CompletedRun_SumsPassedAndFailedAcrossDistinctTrxReceipts()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var logPath = Path.Combine(root, "conduct-events.log");
+            var firstTrxPath = Path.Combine(root, "first.trx");
+            var secondTrxPath = Path.Combine(root, "second.trx");
+            File.WriteAllText(firstTrxPath, TrxCounters(passed: 2, failed: 1, notExecuted: 4));
+            File.WriteAllText(secondTrxPath, TrxCounters(passed: 3, failed: 2, notExecuted: 5));
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Aggregate focused evidence test receipts");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"),
+                runInline: true,
+                acquireStableSlotLease: (_, _) => null,
+                conductEventLogWriter: new ConductEventLogWriter(logPath));
+
+            var completed = coordinator.EvaluateFocusedEvidence(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                "run focused tests",
+                (_, request, _, _) => new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: true,
+                    Passed: true,
+                    Summary: "passed",
+                    Checks:
+                    [
+                        new AcceptanceCheckResult(
+                            "multi-receipt count",
+                            Passed: true,
+                            ExitCode: 0,
+                            OutputTail: null,
+                            TestResultPaths: [firstTrxPath, secondTrxPath, firstTrxPath])
+                    ]));
+
+            Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Completed, completed.Kind);
+            var end = Assert.Single(ReadEvents(logPath).Where(item =>
+                item.GetProperty("eventKind").GetString() == "EVIDENCE_END"));
+            Assert.Equal(JsonValueKind.Number, end.GetProperty("tests_executed").ValueKind);
+            Assert.Equal(8, end.GetProperty("tests_executed").GetInt64());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static FocusedEvidenceRunResult PassingEvidence(
         Goal _,
         string request,
@@ -201,6 +309,11 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
         File.ReadLines(path)
             .Select(line => JsonDocument.Parse(line).RootElement.Clone())
             .ToList();
+
+    private static string TrxCounters(int passed, int failed, int notExecuted) =>
+        $"<TestRun><ResultSummary><Counters total=\"{passed + failed + notExecuted}\" " +
+        $"executed=\"{passed + failed}\" passed=\"{passed}\" failed=\"{failed}\" " +
+        $"notExecuted=\"{notExecuted}\" /></ResultSummary></TestRun>";
 
     private static string CreateTempDirectory()
     {
