@@ -17,14 +17,19 @@ public sealed record WorkerProcessJobAccounting(
 public static class WorkerProcessJobs
 {
     private const string ProtectedPidVariable = "MCG_ORCHESTRATOR_PROTECTED_PID";
+    private const int IdentityReadAttempts = 3;
+    private const int IdentityReadDelayMilliseconds = 15;
     private static readonly ConcurrentDictionary<int, RegisteredJob> Jobs = new();
     private static SpawnRegistry? Registry;
+    private static string? RegistryDbPath;
 
     internal static Func<int, bool> TryKillPidTree { get; set; } = DefaultTryKillPidTree;
 
     public static void ConfigureRegistry(string dbPath)
     {
-        Registry = new SpawnRegistry(dbPath);
+        var registry = new SpawnRegistry(dbPath);
+        RegistryDbPath = dbPath;
+        Registry = registry;
     }
 
     public static int SweepStartupOrphans()
@@ -259,8 +264,8 @@ public static class WorkerProcessJobs
         return TryRegisterCore(
             process,
             ownerId,
-            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
-            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
+            ReadIdentityOnce,
+            ReadIdentityOnce,
             out registrationFailure);
     }
 
@@ -301,8 +306,8 @@ public static class WorkerProcessJobs
             if (!TryRegisterCore(
                     launch.Process,
                     ownerId,
-                    static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
-                    static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
+                    ReadIdentityOnce,
+                    ReadIdentityOnce,
                     out var registrationFailure,
                     launch.Group,
                     launch.Resume))
@@ -350,6 +355,24 @@ public static class WorkerProcessJobs
         return TryRegisterCore(process, ownerId, readVictimIdentity, readOwnerIdentity, out _);
     }
 
+    internal static bool TryRegister(
+        Process process,
+        string? ownerId,
+        Func<Process, SpawnProcessIdentity?> readVictimIdentity,
+        Func<Process, SpawnProcessIdentity?> readOwnerIdentity,
+        Action<int> identityReadDelay,
+        out string registrationDiagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(identityReadDelay);
+        return TryRegisterCore(
+            process,
+            ownerId,
+            readVictimIdentity,
+            readOwnerIdentity,
+            out registrationDiagnostic,
+            identityReadDelay: identityReadDelay);
+    }
+
     internal static bool TryRegisterWithAttachmentForTests(
         Process process,
         string? ownerId,
@@ -360,8 +383,8 @@ public static class WorkerProcessJobs
         return TryRegisterCore(
             process,
             ownerId,
-            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
-            static candidate => SpawnProcessIdentityReader.ReadForRegistration(candidate).Identity,
+            ReadIdentityOnce,
+            ReadIdentityOnce,
             out registrationFailure,
             attachProcess: attachProcess);
     }
@@ -396,7 +419,8 @@ public static class WorkerProcessJobs
         OwnedProcessGroup? preAttachedGroup = null,
         Action? resumeProcess = null,
         Func<Process, OwnedProcessGroup>? attachProcess = null,
-        Action<SpawnRegistry, int, string>? markResumeFailureReleased = null)
+        Action<SpawnRegistry, int, string>? markResumeFailureReleased = null,
+        Action<int>? identityReadDelay = null)
     {
         ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(readVictimIdentity);
@@ -435,34 +459,43 @@ public static class WorkerProcessJobs
             group ??= (attachProcess ?? OwnedProcessGroup.Attach)(process);
             SpawnProcessIdentity? victimIdentity = null;
             SpawnProcessIdentity? ownerIdentity = null;
+            var durableRegistrationAvailable = registry is not null;
             if (registry is not null)
             {
                 failureStage = "victim-identity-read";
-                victimIdentity = readVictimIdentity(process);
+                victimIdentity = TryReadIdentity(
+                    process,
+                    readVictimIdentity,
+                    identityReadDelay,
+                    out var victimReadEvidence);
                 if (victimIdentity is null)
                 {
-                    registrationFailure = BuildRegistrationFailure(
+                    registrationFailure = BuildRegistrationDegradation(
                         process.Id,
                         failureStage,
-                        "attached-process-tree-termination-requested");
-                    ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
-                    group = null;
-                    return false;
+                        victimReadEvidence);
+                    durableRegistrationAvailable = false;
                 }
 
-                failureStage = "owner-identity-read";
-                using var ownerProcess = Process.GetCurrentProcess();
-                ownerIdentity = readOwnerIdentity(ownerProcess);
-                if (ownerIdentity is null)
+                if (durableRegistrationAvailable)
                 {
-                    registrationFailure = BuildRegistrationFailure(
-                        process.Id,
-                        failureStage,
-                        "attached-process-tree-termination-requested");
-                    ReadAccountingAndDispose(group, kill: true, captureAccounting: false, out _);
-                    group = null;
-                    return false;
+                    failureStage = "owner-identity-read";
+                    using var ownerProcess = Process.GetCurrentProcess();
+                    ownerIdentity = TryReadIdentity(
+                        ownerProcess,
+                        readOwnerIdentity,
+                        identityReadDelay,
+                        out var ownerReadEvidence);
+                    if (ownerIdentity is null)
+                    {
+                        registrationFailure = BuildRegistrationDegradation(
+                            process.Id,
+                            failureStage,
+                            ownerReadEvidence);
+                        durableRegistrationAvailable = false;
+                    }
                 }
+
             }
 
             failureStage = "job-publication";
@@ -475,8 +508,15 @@ public static class WorkerProcessJobs
             {
                 group = null;
                 duplicate = null;
-                if (registry is null || RegisterDurable(registry, victimIdentity!, ownerIdentity!, ownerId))
+                if (registry is null ||
+                    !durableRegistrationAvailable ||
+                    RegisterDurable(registry, victimIdentity!, ownerIdentity!, ownerId))
                 {
+                    if (!durableRegistrationAvailable)
+                    {
+                        RecordRegistrationDegradation(registrationFailure);
+                    }
+
                     if (resumeProcess is not null)
                     {
                         failureStage = "process-resume";
@@ -598,6 +638,94 @@ public static class WorkerProcessJobs
 
     private static string BuildRegistrationFailure(int processId, string stage, string cleanup) =>
         $"worker-process-registration-failed: pid={processId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; stage={stage}; cleanup={cleanup}";
+
+    private static string BuildRegistrationDegradation(int processId, string stage, string readEvidence) =>
+        $"worker-process-registration-degraded: pid={processId.ToString(System.Globalization.CultureInfo.InvariantCulture)}; stage={stage}; {readEvidence}; outcome=durable-registration-skipped-process-preserved";
+
+    private static void RecordRegistrationDegradation(string diagnostic)
+    {
+        try
+        {
+            Console.WriteLine(diagnostic);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WorkerProcessJobs] Failed to emit registration degradation: {ex.GetType().Name}: {ex.Message}");
+        }
+
+        var dbPath = RegistryDbPath;
+        if (string.IsNullOrWhiteSpace(dbPath))
+        {
+            return;
+        }
+
+        try
+        {
+            new SqliteRunEventStore(
+                dbPath,
+                ensureSchema: false,
+                busyTimeoutMilliseconds: 0,
+                maxBusyRetries: 1)
+                .AppendAsync(new RunEventAppend(
+                    RunEventTypes.ConductorSupervision,
+                    GoalId: null,
+                    Operation: "WORKER_PROCESS_REGISTRATION_DEGRADED",
+                    Status: "degraded",
+                    Detail: diagnostic,
+                    PayloadJson: null))
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[WorkerProcessJobs] Failed to persist registration degradation: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private static SpawnProcessIdentity? ReadIdentityOnce(Process process) =>
+        SpawnProcessIdentityReader.TryRead(process, out var identity) ? identity : null;
+
+    private static SpawnProcessIdentity? TryReadIdentity(
+        Process process,
+        Func<Process, SpawnProcessIdentity?> readIdentity,
+        Action<int>? delay,
+        out string evidence)
+    {
+        string reason = "reason=identity-unavailable";
+        for (var attempt = 1; attempt <= IdentityReadAttempts; attempt++)
+        {
+            try
+            {
+                var identity = readIdentity(process);
+                if (identity is not null)
+                {
+                    evidence = $"attempts={attempt.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                    return identity;
+                }
+
+                reason = "reason=identity-unavailable";
+            }
+            catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException or UnauthorizedAccessException)
+            {
+                reason = $"reason=reader-exception; {BuildExceptionEvidence(ex)}";
+            }
+
+            if (attempt < IdentityReadAttempts)
+            {
+                if (delay is null)
+                {
+                    Thread.Sleep(IdentityReadDelayMilliseconds);
+                }
+                else
+                {
+                    delay(IdentityReadDelayMilliseconds);
+                }
+            }
+        }
+
+        evidence = $"attempts={IdentityReadAttempts.ToString(System.Globalization.CultureInfo.InvariantCulture)}; {reason}";
+        return null;
+    }
 
     internal static string BuildExceptionEvidence(Exception exception)
     {
@@ -1002,7 +1130,11 @@ public static class WorkerProcessJobs
     internal static IReadOnlyList<SpawnRegistryEntry> ListActiveRegistryEntriesForTests() =>
         Registry?.ListActive() ?? [];
 
-    internal static void ClearRegistryForTests() => Registry = null;
+    internal static void ClearRegistryForTests()
+    {
+        Registry = null;
+        RegistryDbPath = null;
+    }
 
     public static IReadOnlyList<int> ListLiveDescendantProcessIds(int ancestorProcessId)
     {
