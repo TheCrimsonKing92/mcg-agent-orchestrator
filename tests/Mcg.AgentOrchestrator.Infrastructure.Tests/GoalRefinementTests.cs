@@ -373,7 +373,25 @@ public sealed class GoalRefinementTests
         Xunit.Assert.True(
             DiscordInteractionHandler.BuildAnswerCustomId(clarification.CorrelationKey!).Length <= 100,
             "The persisted correlation key must remain safe for a Discord answer custom id.");
-        Xunit.Assert.Equal("stranded edits preservation mechanism", clarification.Subject);
+        Xunit.Assert.Equal(persistedTopicKey, clarification.Subject);
+        Xunit.Assert.DoesNotContain("How are stranded edits preserved?", clarification.Subject, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void LongTopicKeysWithSharedPrefixesRemainDistinct()
+    {
+        var first = GoalRefinementService.NormalizeTopicKey(
+            "shared-topic-prefix-that-exceeds-the-limit-alpha",
+            null,
+            "first");
+        var second = GoalRefinementService.NormalizeTopicKey(
+            "shared-topic-prefix-that-exceeds-the-limit-beta",
+            null,
+            "second");
+
+        Xunit.Assert.InRange(first.Length, 1, 35);
+        Xunit.Assert.InRange(second.Length, 1, 35);
+        Xunit.Assert.NotEqual(first, second);
     }
 
     [Xunit.Fact(DisplayName = "GoalRefinementGate_summarizes_pending_clarifications_without_repeating_questions")]
@@ -1149,7 +1167,15 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal("Open", question.Status);
         Xunit.Assert.Equal("makespan-measurement-method", question.TopicKey);
         Xunit.Assert.Equal(2, collab.Items.Count);
-        Xunit.Assert.Contains(collab.Items, item => item.CorrelationKey == question.Id);
+        var released = Xunit.Assert.Single(collab.Items.Where(item => item.CorrelationKey == question.Id));
+        Xunit.Assert.Equal("makespan-measurement-method", released.Subject);
+        Xunit.Assert.DoesNotContain(question.Question, released.Subject, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Question: {question.Question}", released.Body, StringComparison.Ordinal);
+        Xunit.Assert.Equal(
+            1,
+            collab.Items.Count(item =>
+                !CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                item.Body.Contains("Goal objective:", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact]
@@ -1224,6 +1250,11 @@ public sealed class GoalRefinementTests
         var question = Xunit.Assert.Single(spec.OpenQuestions);
         Xunit.Assert.Equal(replacement, question.Criterion);
         Xunit.Assert.Equal(2, collab.Items.Count);
+        Xunit.Assert.Equal(
+            1,
+            collab.Items.Count(item =>
+                !CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                item.Body.Contains("Goal objective:", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact]

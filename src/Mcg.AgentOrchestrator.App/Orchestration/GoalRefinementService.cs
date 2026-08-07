@@ -632,7 +632,7 @@ internal sealed class GoalRefinementService
     }
 
     private static string BuildClarificationSubject(string topicKey) =>
-        string.Join(' ', topicKey.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        NormalizeTopicKey(topicKey, null, topicKey);
 
     private static string BuildClarificationBody(SpecRefinementFork fork, string? objective) => $"""
         Question: {fork.Question}
@@ -671,6 +671,13 @@ internal sealed class GoalRefinementService
         string answer,
         CancellationToken cancellationToken = default)
     {
+        var goal = kernel.GetGoal(goalId);
+        var includeObjectiveInNextClarification = !(await _collaboration.ListAsync(goalId.Value, cancellationToken))
+            .Any(item =>
+                item.Type == CollaborationItemType.Clarification &&
+                !CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                item.Body.Contains("Goal objective:", StringComparison.OrdinalIgnoreCase));
+
         if (string.IsNullOrWhiteSpace(question.Criterion) ||
             !AcceptanceCriterionFeasibility.TryParseDisposition(answer, out var disposition))
         {
@@ -683,9 +690,12 @@ internal sealed class GoalRefinementService
                     CollaborationItemType.Clarification,
                     goalId.Value,
                     BuildClarificationSubject(unresolvedFinding.TopicKey),
-                    BuildFeasibilityClarificationBody(unresolvedFinding, kernel.GetGoal(goalId).Objective),
+                    BuildFeasibilityClarificationBody(
+                        unresolvedFinding,
+                        includeObjectiveInNextClarification ? goal.Objective : null),
                     question.Id,
                     cancellationToken);
+                includeObjectiveInNextClarification = false;
             }
 
             var rejected = spec with
@@ -742,9 +752,12 @@ internal sealed class GoalRefinementService
                     CollaborationItemType.Clarification,
                     goalId.Value,
                     BuildClarificationSubject(replacementFinding.TopicKey),
-                    BuildFeasibilityClarificationBody(replacementFinding, kernel.GetGoal(goalId).Objective),
+                    BuildFeasibilityClarificationBody(
+                        replacementFinding,
+                        includeObjectiveInNextClarification ? goal.Objective : null),
                     correlationKey,
                     cancellationToken);
+                includeObjectiveInNextClarification = false;
                 questions.Add(new RefinedSpecOpenQuestion(
                     correlationKey,
                     questionText,
@@ -789,10 +802,13 @@ internal sealed class GoalRefinementService
                 await _collaboration.RaiseAsync(
                     CollaborationItemType.Clarification,
                     goalId.Value,
-                    $"Spec clarification needed: {released.Question}",
-                    BuildReleasedClarificationBody(kernel.GetGoal(goalId).Objective, released),
+                    BuildClarificationSubject(ResolveQuestionTopicKey(released)),
+                    BuildReleasedClarificationBody(
+                        released,
+                        includeObjectiveInNextClarification ? goal.Objective : null),
                     released.Id,
                     cancellationToken);
+                includeObjectiveInNextClarification = false;
             }
         }
 
@@ -841,7 +857,11 @@ internal sealed class GoalRefinementService
     internal static string NormalizeTopicKey(string? topicKey, string? forkKind, string question)
     {
         var slug = NormalizeTopicKeyForDisplay(topicKey, forkKind, question);
-        return slug.Length <= 35 ? slug : slug[..35].TrimEnd('-');
+        if (slug.Length <= 35)
+            return slug;
+
+        var suffix = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(slug))).ToLowerInvariant()[..8];
+        return $"{slug[..26].TrimEnd('-')}-{suffix}";
     }
 
     private static string NormalizeTopicKeyForDisplay(string? topicKey, string? forkKind, string question)
@@ -1045,17 +1065,15 @@ internal sealed class GoalRefinementService
         string.IsNullOrWhiteSpace(item.Resolution) ? "dismissed by operator" : item.Resolution!;
 
     private static string BuildReleasedClarificationBody(
-        string objective,
-        RefinedSpecOpenQuestion question) => $"""
-        Goal objective: {objective}
-
+        RefinedSpecOpenQuestion question,
+        string? objective) => $"""
         Question: {question.Question}
         Fork kind: {question.ForkKind}
         Topic key: {ResolveQuestionTopicKey(question)}
         Blast radius: {question.BlastRadius ?? "high"}
 
         The criterion's feasibility disposition is resolved. Please answer this previously withheld measurement/assertion clarification.
-        """;
+        """ + BuildGoalObjectiveSuffix(objective);
 
     private static bool IsFeasibilityClarification(CollaborationItem item) =>
         item.Type == CollaborationItemType.Clarification &&
