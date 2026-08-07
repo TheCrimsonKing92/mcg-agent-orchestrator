@@ -9510,7 +9510,7 @@ public sealed class ConductorBatchLoopTests
                     driver,
                     ConductorAutonomyPolicy.Conservative,
                     NoStopPath(),
-                    maxIterations: 2,
+                    maxIterations: 3,
                     maxVerifyRetries: 2);
         });
 
