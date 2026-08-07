@@ -8934,6 +8934,54 @@ public sealed class ConductorBatchLoopTests
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
+    [Xunit.Fact(Timeout = 30_000, DisplayName = "ConductEvents_required_lifecycle_staging_honors_cross_process_gate")]
+    public async Task ConductEventsRequiredLifecycleStagingHonorsCrossProcessGate()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-cross-process-required");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        using var beforeDrain = new ManualResetEventSlim();
+        using var crossProcessGate = new Mutex(
+            initiallyOwned: false,
+            ConductEventLogWriter.RequiredEventMutexName(logPath));
+        Assert.True(crossProcessGate.WaitOne(TimeSpan.FromSeconds(5)));
+
+        var writer = new ConductEventLogWriter(logPath, beforeRequiredEventDrain: beforeDrain.Set);
+        var record = new ConductEvidenceLifecycleEvent(
+            DateTimeOffset.UtcNow,
+            "EVIDENCE_END",
+            "goal-cross-process",
+            "goal-cross-process",
+            "attempt-cross-process",
+            1,
+            "evidence:attempt-cross-process:end",
+            DurationSeconds: 1d,
+            Outcome: "passed",
+            TestsExecuted: 1);
+        var append = Task.Run(() => writer.AppendRequired(record));
+
+        try
+        {
+            Assert.True(
+                beforeDrain.Wait(TimeSpan.FromSeconds(5)),
+                "The writer did not reach the required-event gate.");
+            var pendingDirectory = Path.Combine(
+                Path.GetDirectoryName(logPath)!,
+                ConductEventLogWriter.PendingEventsDirectoryName);
+            Assert.False(
+                Directory.Exists(pendingDirectory) && Directory.EnumerateFiles(pendingDirectory).Any(),
+                "Lifecycle staging must not touch its deterministic pending path while another process owns the stream gate.");
+        }
+        finally
+        {
+            crossProcessGate.ReleaseMutex();
+        }
+
+        Assert.True(await append);
+        var written = Assert.Single(File.ReadAllLines(logPath));
+        using var document = JsonDocument.Parse(written);
+        Assert.Equal(record.EventId, document.RootElement.GetProperty("event_id").GetString());
+    }
+
     [Xunit.Fact(DisplayName = "ConductEvents_parallel_append_and_required_write_serialize_forced_rotation")]
     public async Task ConductEventsParallelAppendAndRequiredWriteSerializeForcedRotation()
     {
@@ -10370,6 +10418,82 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(goal.Id.Value[..8], stalled.GoalId);
         Assert.Contains("repeatedForSeconds=660", stalled.Detail, StringComparison.Ordinal);
         Assert.NotNull(restored.GetGoal(goal.Id).CurrentHold?.StalledAt);
+    }
+
+    [Xunit.Fact]
+    public void GoalStall_FocusedEvidenceFirstAndFourthAttemptsHaveDistinctBlockerText()
+    {
+        var root = CreateTempDirectory("mcg-focused-evidence-stall-ordinal");
+        var (seedKernel, goal) = SimpleGoal("distinguish focused evidence restart ordinals");
+
+        try
+        {
+            ConductEventRecord RunUntilStalled(int ordinal)
+            {
+                var kernel = AgentOrchestratorKernel.FromSnapshot(seedKernel.ExportSnapshot());
+                var now = new DateTimeOffset(2026, 8, 7, 14, 0, 0, TimeSpan.Zero);
+                var logPath = Path.Combine(root, $"attempt-{ordinal}", ConductEventLogWriter.CurrentFileName);
+                var attemptId = $"shared-{ordinal}";
+                var reason = new ConductorParallelAcceptanceAttemptCoordinator(
+                    Path.Combine(root, $"attempt-{ordinal}", "attempts"))
+                    .DescribeFocusedEvidenceHold(new ConductorParallelAcceptanceAttempt(
+                        attemptId,
+                        goal.Id.Value,
+                        goal.Id.Value[..8],
+                        0,
+                        null,
+                        null,
+                        now,
+                        now,
+                        Environment.ProcessId,
+                        ConductorParallelAcceptanceAttemptOutcome.Running,
+                        Path.Combine(root, $"{attemptId}.out.log"),
+                        Path.Combine(root, $"{attemptId}.err.log"),
+                        Path.Combine(root, $"{attemptId}.exit.txt"),
+                        Path.Combine(root, $"{attemptId}.heartbeat.json"),
+                        Path.Combine(root, $"{attemptId}.result.json"),
+                        Path.Combine(root, $"{attemptId}.attempt.json"),
+                        Kind: ConductorParallelAcceptanceAttemptCoordinator.PreReviewEvidenceDispatchKind,
+                        Ordinal: ordinal));
+
+                new ConductorBatchLoop(
+                    conductEventLogWriter: new ConductEventLogWriter(logPath, utcNow: () => now),
+                    utcNow: () => now).Run(
+                        kernel,
+                        MakeDriver(
+                            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                            dispatchAndStart: _ => DispatchStartOutcome.EmptyBatch(reason)),
+                        ConductorAutonomyPolicy.Conservative,
+                        NoStopPath(),
+                        maxIterations: 2,
+                        watchInterval: TimeSpan.FromSeconds(1),
+                        sleepFunc: _ =>
+                        {
+                            now = now.AddMinutes(11);
+                            return false;
+                        },
+                        goalStallThreshold: TimeSpan.FromMinutes(10));
+
+                return Assert.Single(File.ReadAllLines(logPath)
+                    .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                        line,
+                        new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                    .Where(record => record.EventKind == "goal-stalled"));
+            }
+
+            var first = RunUntilStalled(1);
+            var fourth = RunUntilStalled(4);
+
+            Assert.Equal(goal.Id.Value[..8], first.GoalId);
+            Assert.Equal(first.GoalId, fourth.GoalId);
+            Assert.Contains("attempt_1", first.Detail, StringComparison.Ordinal);
+            Assert.Contains("attempt_4", fourth.Detail, StringComparison.Ordinal);
+            Assert.NotEqual(first.Detail, fourth.Detail);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     [Xunit.Fact]

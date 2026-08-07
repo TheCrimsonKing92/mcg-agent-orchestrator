@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.Core.Conductor;
 public abstract record ConductorAdvanceOutcome
 {
     public sealed record Executed(GoalLifecycleState FromState, string Description) : ConductorAdvanceOutcome;
-    public sealed record Held(GoalLifecycleState State, string Reason) : ConductorAdvanceOutcome;
+    public sealed record Held(GoalLifecycleState State, string Reason, string? StableIdentity = null) : ConductorAdvanceOutcome;
     public sealed record Escalated(GoalLifecycleState State, string Reason) : ConductorAdvanceOutcome;
     public sealed record Done(GoalLifecycleState State) : ConductorAdvanceOutcome;
 }

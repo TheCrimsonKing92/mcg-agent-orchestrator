@@ -3288,12 +3288,14 @@ public sealed class ConductorDriverTests
 
             var scheduled = startingDriver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-            Assert.IsType<ConductorAdvanceOutcome.Held>(scheduled.Outcome);
+            var held = Assert.IsType<ConductorAdvanceOutcome.Held>(scheduled.Outcome);
+            var heldAttempt = completionGate.RequiredHandleForTests(goal.Id.Value);
+            Assert.Equal($"pre-review-evidence:{heldAttempt.Attempt.AttemptId}", held.StableIdentity);
             Assert.Equal(0, focusedRuns);
             Assert.Equal(0, dispatches);
             Assert.Equal(1, completionGate.HeldCount);
 
-            completionGate.RequiredHandleForTests(goal.Id.Value).CompleteForTests();
+            heldAttempt.CompleteForTests();
             Assert.Equal(1, focusedRuns);
 
             var restartedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(

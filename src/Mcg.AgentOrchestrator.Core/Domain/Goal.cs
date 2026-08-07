@@ -160,7 +160,8 @@ public sealed class Goal
         string state,
         string blocker,
         DateTimeOffset observedAt,
-        TimeSpan stallThreshold)
+        TimeSpan stallThreshold,
+        string? stableIdentity = null)
     {
         state = RequireText(state, nameof(state));
         blocker = RequireText(blocker, nameof(blocker));
@@ -169,13 +170,14 @@ public sealed class Goal
             throw new ArgumentOutOfRangeException(nameof(stallThreshold));
         }
 
-        var identity = GoalHoldState.BuildIdentity(state, blocker);
+        var identity = GoalHoldState.BuildIdentity(state, blocker, stableIdentity);
         if (CurrentHold is null || !string.Equals(CurrentHold.Identity, identity, StringComparison.Ordinal))
         {
             CurrentHold = new GoalHoldState(identity, state, blocker, observedAt);
             return new GoalHoldObservation(CurrentHold, StateChanged: true, BecameStalled: false);
         }
 
+        CurrentHold = CurrentHold with { Blocker = blocker };
         var repeatedFor = observedAt - CurrentHold.StartedAt;
         if (CurrentHold.StalledAt is null && repeatedFor >= stallThreshold && repeatedFor >= TimeSpan.Zero)
         {
