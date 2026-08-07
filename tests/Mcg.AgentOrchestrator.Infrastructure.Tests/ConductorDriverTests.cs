@@ -611,8 +611,7 @@ public sealed class ConductorDriverTests
         var before = JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id));
         var persistAttempts = 0;
         var successfulCheckpointNotifications = 0;
-        var profiles = WorkerProfileCatalog.Default().Upsert(
-            new WorkerProfile("codex-cli", "Write-Output {promptPath}; Write-Output {sandboxMode}"));
+        var profiles = WorkerProfileCatalog.Default();
         var driver = new ConductorDriver(
             kernel,
             workspace,

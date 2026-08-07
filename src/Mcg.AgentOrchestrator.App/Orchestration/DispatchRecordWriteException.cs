@@ -69,6 +69,9 @@ internal sealed class DispatchRecordWriteException : InvalidOperationException
             ? DispatchRecordWriteFailureCause.Contention
             : DispatchRecordWriteFailureCause.Unrecoverable;
 
+    internal static bool IsSqliteBusyOrLocked(Exception exception) =>
+        TryGetSqliteErrorCode(exception, out var sqliteErrorCode) && sqliteErrorCode is 5 or 6;
+
     internal static bool TryGetSqliteErrorCode(Exception exception, out int sqliteErrorCode)
     {
         var current = exception;
@@ -102,13 +105,10 @@ internal sealed class DispatchRecordWriteException : InvalidOperationException
     {
         var token = checkpointPhase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted ||
             cause == DispatchRecordWriteFailureCause.Unrecoverable
-            ? "DISPATCH_RECORD_WRITE_FAILED"
-            : cause switch
-        {
-            DispatchRecordWriteFailureCause.Contention => "DISPATCH_RECORD_WRITE_CONTENTION",
-            DispatchRecordWriteFailureCause.Unrecoverable => "DISPATCH_RECORD_WRITE_FAILED",
-            null => "DISPATCH_RECORD_WRITE_UNCLASSIFIED"
-        };
+                ? "DISPATCH_RECORD_WRITE_FAILED"
+                : cause == DispatchRecordWriteFailureCause.Contention
+                    ? "DISPATCH_RECORD_WRITE_CONTENTION"
+                    : "DISPATCH_RECORD_WRITE_UNCLASSIFIED";
         var code = sqliteErrorCode?.ToString() ?? "unavailable";
         return $"{token} kind={kind} goal={Short(goalId.Value)} task={Short(taskId.Value)} " +
             $"checkpoint={checkpointPhase} sqliteCode={code} exception={innerException.GetType().FullName} " +

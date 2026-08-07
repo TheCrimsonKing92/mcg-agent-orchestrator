@@ -854,6 +854,7 @@ internal sealed class ConductorBatchLoop
             var tickRetried = 0;
             var tickDone = 0;
             var dispatchRecordWriteSkippedGoals = new HashSet<string>(StringComparer.Ordinal);
+            var dispatchRecordWriteBoundGoalIds = new HashSet<GoalId>();
             var parallelLandingResults = RunParallelAcceptanceBatch(
                 eligible,
                 kernel,
@@ -1064,6 +1065,7 @@ internal sealed class ConductorBatchLoop
                         selfClearedSetAsideEntries,
                         dispatchRecordWriteSkips,
                         dispatchRecordWriteSkippedGoals,
+                        dispatchRecordWriteBoundGoalIds,
                         tickLines,
                         ref tickHeld,
                         ref tickEscalated,
@@ -1114,6 +1116,7 @@ internal sealed class ConductorBatchLoop
                             selfClearedSetAsideEntries,
                             dispatchRecordWriteSkips,
                             dispatchRecordWriteSkippedGoals,
+                            dispatchRecordWriteBoundGoalIds,
                             tickLines,
                             ref tickHeld,
                             ref tickEscalated,
@@ -1235,13 +1238,40 @@ internal sealed class ConductorBatchLoop
             // the goal then re-dispatches the same stage forever and can never advance.
             // When persistGoalTick is supplied, persist only the goals whose disposition changed this tick
             // in one bulk checkpoint. The per-goal loop above is justified because it runs each goal's
-            // state machine; the durable write is intentionally batched.
+            // state machine; the durable write is intentionally batched. A contention-bound escalation is
+            // persisted separately so the same BUSY/LOCKED condition remains a per-goal degradation instead
+            // of being promoted back into a loop-fatal end-of-tick write.
             if (persistGoalTick is not null)
             {
-                if (changedGoalIds.Count > 0)
+                var criticalGoalIds = changedGoalIds
+                    .Except(dispatchRecordWriteBoundGoalIds)
+                    .ToArray();
+                if (criticalGoalIds.Length > 0)
                 {
-                    PersistGoalTickOrThrow(persistGoalTick, kernel, changedGoalIds.ToArray(), totalTicks, tickLines, busyWriteDelay);
-                    CompletePersistedOperatorIntents(changedGoalIds, tickLines);
+                    PersistGoalTickOrThrow(persistGoalTick, kernel, criticalGoalIds, totalTicks, tickLines, busyWriteDelay);
+                    CompletePersistedOperatorIntents(criticalGoalIds, tickLines);
+                }
+
+                if (dispatchRecordWriteBoundGoalIds.Count > 0)
+                {
+                    var boundGoalIds = dispatchRecordWriteBoundGoalIds.ToArray();
+                    if (TryPersistGoalTick(
+                            persistGoalTick,
+                            kernel,
+                            boundGoalIds,
+                            totalTicks,
+                            "dispatch-record-contention-escalation",
+                            tickLines,
+                            busyWriteDelay))
+                    {
+                        CompletePersistedOperatorIntents(boundGoalIds, tickLines);
+                    }
+                    else
+                    {
+                        EmitProgress(
+                            $"DISPATCH_RECORD_ESCALATION_PERSIST_DEFERRED tick={totalTicks} goal={ResolveGoalContext(boundGoalIds, onlyGoalId: null)} reason=sqlite-busy-retry-exhausted",
+                            tickLines);
+                    }
                 }
             }
             else
@@ -1401,6 +1431,7 @@ internal sealed class ConductorBatchLoop
         Dictionary<string, BatchSetAsideEntry> selfClearedSetAsideEntries,
         Dictionary<string, int> dispatchRecordWriteSkips,
         HashSet<string> dispatchRecordWriteSkippedGoals,
+        HashSet<GoalId> dispatchRecordWriteBoundGoalIds,
         List<string> tickLines,
         ref int tickHeld,
         ref int tickEscalated,
@@ -1428,12 +1459,9 @@ internal sealed class ConductorBatchLoop
             var skips = priorSkips + 1;
             dispatchRecordWriteSkips[goal.Id.Value] = skips;
             var code = ex.SqliteErrorCode?.ToString() ?? "unavailable";
-            var (token, disposition) = ex.Cause switch
-            {
-                DispatchRecordWriteFailureCause.Contention => ("DISPATCH_RECORD_WRITE_CONTENTION", "contention"),
-                DispatchRecordWriteFailureCause.Unrecoverable => ("DISPATCH_RECORD_WRITE_UNRECOVERABLE", "unrecoverable"),
-                null => ("DISPATCH_RECORD_WRITE_UNCLASSIFIED", "unclassified")
-            };
+            var (token, disposition) = ex.Cause == DispatchRecordWriteFailureCause.Contention
+                ? ("DISPATCH_RECORD_WRITE_CONTENTION", "contention")
+                : ("DISPATCH_RECORD_WRITE_UNCLASSIFIED", "unclassified");
             var diagnostic = ex.Cause is null
                 ? $" exception={ex.InnerException?.GetType().FullName ?? "unavailable"} error={Sanitize(ex.InnerException?.Message ?? ex.Message)}"
                 : string.Empty;
@@ -1454,6 +1482,7 @@ internal sealed class ConductorBatchLoop
             changedGoalLines.Add($"GOAL goal={label} result=escalated reason={reason}");
             lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
             changedGoalIds.Add(goal.Id);
+            dispatchRecordWriteBoundGoalIds.Add(goal.Id);
             kernel.ClearGoalHold(goal.Id);
             kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop tick {totalTicks}: {reason}");
             escalatedGoals.Add(goal.Id.Value);
@@ -1784,17 +1813,34 @@ internal sealed class ConductorBatchLoop
         Action<TimeSpan>? busyWriteDelay)
     {
         var goals = ResolveGoalContext(changedGoalIds, onlyGoalId: null);
-        if (!TryPersistWithBusyContainment(
-            () => persistGoalTick(kernel, changedGoalIds),
-            tick,
-            goals,
-            "goal",
-            tickLines,
-            busyWriteDelay))
+        if (!TryPersistGoalTick(
+                persistGoalTick,
+                kernel,
+                changedGoalIds,
+                tick,
+                "goal",
+                tickLines,
+                busyWriteDelay))
         {
             ThrowCriticalPersistFailure("goal", goals, taskId: null);
         }
     }
+
+    private static bool TryPersistGoalTick(
+        Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>> persistGoalTick,
+        AgentOrchestratorKernel kernel,
+        IReadOnlyCollection<GoalId> changedGoalIds,
+        int tick,
+        string kind,
+        List<string> tickLines,
+        Action<TimeSpan>? busyWriteDelay) =>
+        TryPersistWithBusyContainment(
+            () => persistGoalTick(kernel, changedGoalIds),
+            tick,
+            ResolveGoalContext(changedGoalIds, onlyGoalId: null),
+            kind,
+            tickLines,
+            busyWriteDelay);
 
     private static void ThrowCriticalPersistFailure(string kind, string goals, TaskId? taskId)
     {
@@ -2026,7 +2072,7 @@ internal sealed class ConductorBatchLoop
 
     private static bool IsTransientSqliteLock(Exception ex, bool allowLegacyMessageClassification = true)
     {
-        if (IsSqliteBusyOrLocked(ex))
+        if (DispatchRecordWriteException.IsSqliteBusyOrLocked(ex))
         {
             return true;
         }
@@ -2041,35 +2087,9 @@ internal sealed class ConductorBatchLoop
             && IsTransientSqliteLock(ex.InnerException, allowLegacyMessageClassification);
     }
 
-    private static bool IsSqliteBusyOrLocked(Exception ex)
-    {
-        var typeName = ex.GetType().FullName;
-        if (string.Equals(typeName, "Microsoft.Data.Sqlite.SqliteException", StringComparison.Ordinal)
-            && TryGetSqliteErrorCode(ex, out var sqliteErrorCode)
-            && sqliteErrorCode is 5 or 6)
-        {
-            return true;
-        }
-
-        return false;
-    }
-
     private readonly record struct PersistWriteAttemptResult(bool Succeeded, Exception? ContentionFailure)
     {
         internal static PersistWriteAttemptResult Success => new(true, null);
-    }
-
-    private static bool TryGetSqliteErrorCode(Exception ex, out int sqliteErrorCode)
-    {
-        sqliteErrorCode = 0;
-        var property = ex.GetType().GetProperty("SqliteErrorCode");
-        if (property?.GetValue(ex) is int value)
-        {
-            sqliteErrorCode = value;
-            return true;
-        }
-
-        return false;
     }
 
     private static bool RecordChangedDisposition(

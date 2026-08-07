@@ -5942,7 +5942,7 @@ public sealed class ConductorBatchLoopTests
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: ConductorBatchLoop.DispatchRecordContentionSkipLimit + 1,
+            maxIterations: ConductorBatchLoop.DispatchRecordContentionSkipLimit,
             onTick: ticks.Add);
 
         Assert.Equal(1, summary.Escalated);
@@ -5962,6 +5962,7 @@ public sealed class ConductorBatchLoopTests
         var task = goal.Tasks.Single();
         var ticks = new List<BatchTickSummary>();
         var attempts = 0;
+        var escalationPersistAttempts = 0;
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             dispatchAndStart: _ =>
@@ -5982,10 +5983,17 @@ public sealed class ConductorBatchLoopTests
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: ConductorBatchLoop.DispatchRecordContentionSkipLimit + 1,
-            onTick: ticks.Add);
+            maxIterations: ConductorBatchLoop.DispatchRecordContentionSkipLimit,
+            onTick: ticks.Add,
+            persistGoalTick: (_, _) =>
+            {
+                escalationPersistAttempts++;
+                throw TypedSqliteBusy();
+            },
+            busyWriteDelay: _ => { });
 
         Assert.Equal(ConductorBatchLoop.DispatchRecordContentionSkipLimit, attempts);
+        Assert.True(escalationPersistAttempts > 0);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
         var contentionLines = ticks.SelectMany(tick => tick.ProgressLines ?? [])
@@ -5995,6 +6003,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("skip=5/5", contentionLines[^1], StringComparison.Ordinal);
         Assert.Contains(ticks.SelectMany(tick => tick.ProgressLines ?? []), line =>
             line.Contains("dispatch-record-write-contention-limit", StringComparison.Ordinal));
+        Assert.Contains(ticks.SelectMany(tick => tick.ProgressLines ?? []), line =>
+            line.StartsWith("DISPATCH_RECORD_ESCALATION_PERSIST_DEFERRED ", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_unrecoverable_pre_process_dispatch_record_write_stops_loop")]

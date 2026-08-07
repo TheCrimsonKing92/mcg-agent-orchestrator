@@ -352,6 +352,28 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
 }
 
+    [Xunit.Fact(DisplayName = "StartDispatches_checkpoint_phase_stays_post_process_after_first_spawn")]
+    public void StartDispatchesCheckpointPhaseStaysPostProcessAfterFirstSpawn()
+    {
+        var processMayHaveStarted = false;
+
+        Assert.Equal(
+            DispatchRecordCheckpointPhase.BeforeProcessStart,
+            GoalManagementCommandService.ResolveBatchCheckpointPhase(
+                ref processMayHaveStarted,
+                DispatchRecordCheckpointPhase.BeforeProcessStart));
+        Assert.Equal(
+            DispatchRecordCheckpointPhase.ProcessMayHaveStarted,
+            GoalManagementCommandService.ResolveBatchCheckpointPhase(
+                ref processMayHaveStarted,
+                DispatchRecordCheckpointPhase.ProcessMayHaveStarted));
+        Assert.Equal(
+            DispatchRecordCheckpointPhase.ProcessMayHaveStarted,
+            GoalManagementCommandService.ResolveBatchCheckpointPhase(
+                ref processMayHaveStarted,
+                DispatchRecordCheckpointPhase.BeforeProcessStart));
+    }
+
     [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_keeps_within_budget_prompt_unchanged")]
     public void WorkerPromptInputBudgetKeepsWithinBudgetPromptUnchanged()
 {

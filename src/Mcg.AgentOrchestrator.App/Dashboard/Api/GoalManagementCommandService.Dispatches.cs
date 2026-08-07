@@ -642,6 +642,9 @@ private static ProcessBatchExecutionResult StartDispatches(
     var recoveryActions = new List<WorkerSandboxPrepRecoverableAction>();
     var startFailures = new List<DispatchProcessStartFailure>();
     var requeueSkippedCount = 0;
+    // Once any dispatch host has been created, every later checkpoint in this goal batch is on the
+    // orphan-sensitive side of the boundary, including the next task's nominal pre-start checkpoint.
+    var processMayHaveStarted = false;
     IReadOnlyList<AgentDefinition>? resolvedAgents = null;
     WorkerProfileCatalog? resolvedProfiles = null;
 
@@ -664,12 +667,23 @@ private static ProcessBatchExecutionResult StartDispatches(
                 providers);
         }
 
+        Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? batchCheckpoint =
+            checkpointBeforeWorkerStart is null
+                ? null
+                : (checkpointKernel, checkpointGoalId, checkpointTaskId, requestedPhase) =>
+                {
+                    checkpointBeforeWorkerStart(
+                        checkpointKernel,
+                        checkpointGoalId,
+                        checkpointTaskId,
+                        ResolveBatchCheckpointPhase(ref processMayHaveStarted, requestedPhase));
+                };
         var startResult = runner.TryStartLatestDispatch(
             kernel,
             goal.Id,
             task.Id,
             logRoot,
-            checkpointBeforeWorkerStart,
+            batchCheckpoint,
             readCurrentInterruptedDispatchState);
         if (startResult.RecoveryAction is { } action)
         {
@@ -693,6 +707,16 @@ private static ProcessBatchExecutionResult StartDispatches(
     }
 
     return new ProcessBatchExecutionResult(plan, started, recoveryActions, requeueSkippedCount, startFailures);
+}
+
+internal static DispatchRecordCheckpointPhase ResolveBatchCheckpointPhase(
+    ref bool processMayHaveStarted,
+    DispatchRecordCheckpointPhase requestedPhase)
+{
+    processMayHaveStarted |= requestedPhase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted;
+    return processMayHaveStarted
+        ? DispatchRecordCheckpointPhase.ProcessMayHaveStarted
+        : DispatchRecordCheckpointPhase.BeforeProcessStart;
 }
 
 public static ProcessBatchExecutionResult RefreshDispatches(
