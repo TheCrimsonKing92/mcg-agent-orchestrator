@@ -830,6 +830,46 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_matching_gate_artifact_produces_typed_acceptance_remedy")]
+    public void TerminalGoalSweepMatchingGateArtifactProducesTypedAcceptanceRemedy()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Typed acceptance remedy", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/typed-remedy.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Verified);
+            var branchHead = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
+            var mainHead = RunGitOutput(root, "rev-parse", "main").Trim();
+            GoalOperationJournal.AcceptanceGatePassed(
+                root,
+                goal,
+                "acceptance",
+                branchHead,
+                mainHead,
+                "terminal gate passed");
+
+            var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, root, goal.Id).Blockers);
+
+            Assert.Equal(TerminalGoalRemedyVerb.Acceptance, blocker.Remedy.Verb);
+            Assert.Equal(goal.Id, blocker.Remedy.GoalId);
+            Assert.Equal(branchHead, blocker.Remedy.GateArtifact?.CandidateBranchSha);
+            Assert.Equal($"acceptance {goal.Id.Value[..8]}", blocker.Command);
+            Assert.Equal(["acceptance", goal.Id.Value], blocker.Remedy.BuildInvocationArguments());
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_conduct_loop_early_exits_print_blocker")]
     public void TerminalGoalSweepConductLoopEarlyExitsPrintBlocker()

@@ -51,6 +51,9 @@ internal sealed class GoalGitFactIndex(
 
     public bool HasGoalBranch(GoalId goalId) => HasGoalBranch(GoalWorktrees.BranchName(goalId));
 
+    public string? TryGetGoalBranchTip(GoalId goalId) =>
+        goalBranchTips.TryGetValue(GoalWorktrees.BranchName(goalId), out var tip) ? tip : null;
+
     public string? MainSha => mainSha;
 
     public GoalBranchFacts BuildGoalBranchFacts(Goal goal)

@@ -15,6 +15,24 @@ internal static partial class CliCommandHandlers
 private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, bool skipVerify = false)
 {
     var goal = context.CurrentGoal!;
+    var owner = $"acceptance:{Environment.ProcessId}:{Guid.NewGuid():N}";
+    var lease = new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath)
+        .TryAcquireAcceptanceLease(goal.Id.Value, owner, TimeSpan.FromMinutes(30));
+    if (lease is null)
+    {
+        Console.WriteLine($"BLOCKER step=acceptance-claim goal={goal.Id.Value[..8]} reason=already-running action=\"Wait for the active acceptance operation to finish.\"");
+        return false;
+    }
+
+    using (lease)
+    {
+        return RunAcceptanceWorkspaceMergeCore(context, skipVerify);
+    }
+}
+
+internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context, bool skipVerify = false)
+{
+    var goal = context.CurrentGoal!;
     if (TryReconcileLandedCleanedAcceptance(context, goal, "acceptance retry", out var reconciledDetail))
     {
         Console.WriteLine(reconciledDetail);
@@ -182,6 +200,9 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
 
             using (stableSlotLease)
             {
+                var enteredVerifying = context.Kernel.BeginGoalAcceptanceVerification(
+                    goal.Id,
+                    "Acceptance entered Verifying while the terminal gate runs.");
                 try
                 {
                     using var progressSink = GoalAcceptanceVerifier.PushGateProgressSink(progress =>
@@ -204,6 +225,15 @@ private static bool RunAcceptanceWorkspaceMerge(CliExecutionContext context, boo
                         $"Acceptance blocked:BUILD_LOCK_BLOCKED for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {FormatBuildLockBlocked(ex.Attribution)}",
                         acceptanceAttemptStartedAt);
                     return false;
+                }
+                finally
+                {
+                    if (enteredVerifying && context.Kernel.GetGoal(goal.Id).Status == GoalStatus.Verifying)
+                    {
+                        context.Kernel.ReconcileGoalAcceptanceVerified(
+                            goal.Id,
+                            "Acceptance terminal gate finished; returned to Verified for deterministic landing.");
+                    }
                 }
             }
             verificationStarted.Stop();

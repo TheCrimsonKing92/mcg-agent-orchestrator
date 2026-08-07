@@ -562,6 +562,88 @@ public sealed class GoalWorktreeTestsRebaseMerge : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "Reconcile_sweep_retries_acceptance_after_untracked_rebase_blocker_is_removed")]
+    public void ReconcileSweepRetriesAcceptanceAfterUntrackedRebaseBlockerIsRemoved()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var goal = CreateCompletedGoal(kernel, "Recover acceptance after dirty rebase", repo);
+            Assert.True(kernel.BeginGoalAcceptanceVerification(goal.Id, "Entered Verifying before the terminal gate."));
+            Assert.True(kernel.ReconcileGoalAcceptanceVerified(goal.Id, "Terminal gate passed; returned to Verified for landing."));
+            var worktreePath = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktreePath, "feature.txt"), "goal work");
+            RunGit(worktreePath, "add", "-A");
+            RunGit(worktreePath, "commit", "-m", "Goal work");
+            var branchHead = RunGitOutput(repo, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
+            var priorMainHead = RunGitOutput(repo, "rev-parse", "HEAD").Trim();
+            GoalOperationJournal.AcceptanceGatePassed(
+                repo,
+                goal,
+                "acceptance",
+                branchHead,
+                priorMainHead,
+                "terminal gate passed");
+
+            File.WriteAllText(Path.Combine(repo, "main-advance.txt"), "main moved");
+            RunGit(repo, "add", "-A");
+            RunGit(repo, "commit", "-m", "Advance main");
+            var untrackedDirectory = Path.Combine(worktreePath, "Microsoft", "Windows", "PowerShell", "ModuleAnalysisCache");
+            Directory.CreateDirectory(untrackedDirectory);
+            File.WriteAllText(Path.Combine(untrackedDirectory, "cache.bin"), "untracked");
+            var context = CreateAcceptanceContext(kernel, repo, goal);
+
+            var firstOutput = CaptureConsole(() => CliCommandHandlers.Execute(["acceptance"], context));
+
+            Assert.Contains("Workspace rebase:", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("merge blocked", firstOutput, StringComparison.Ordinal);
+            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.False(File.Exists(Path.Combine(repo, "feature.txt")));
+
+            Directory.Delete(Path.Combine(worktreePath, "Microsoft"), recursive: true);
+            var timelineCountBeforeRemedy = goal.Timeline.Count;
+            var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, repo, goal.Id).Blockers);
+            var executionOutput = string.Empty;
+            var coordinator = new ReconcileSweepRemediationCoordinator(
+                new ReconcileSweepRemediationStore(OrchestratorWorkspace.ForDirectory(repo).SqliteStatePath),
+                ReconcileSweepOptions.Default,
+                _ =>
+                {
+                    var succeeded = false;
+                    executionOutput = CaptureConsole(() =>
+                        succeeded = CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context));
+                    return new TerminalGoalRemedyExecutionResult(succeeded ? 0 : 1, executionOutput);
+                },
+                remedy => RunGitOutput(repo, "rev-parse", GoalWorktrees.BranchName(remedy.GoalId)).Trim());
+
+            var outcome = coordinator.Process(new TerminalGoalSweepResult([
+                new TerminalGoalSweepGoalResult(goal.Id, goal.Id.Value[..8], [], [blocker])
+            ]));
+
+            Assert.True(outcome.RemedySucceeded);
+            Assert.Contains(outcome.Events, line => line.StartsWith("SWEEP_REMEDY_ATTEMPT", StringComparison.Ordinal));
+            Assert.Contains(outcome.Events, line => line.StartsWith("SWEEP_REMEDY_RESULT", StringComparison.Ordinal) && line.Contains("exit=0", StringComparison.Ordinal));
+            Assert.True(File.Exists(Path.Combine(repo, "feature.txt")));
+            Assert.Empty(TerminalGoalSweep.Diagnose(kernel, repo, goal.Id).Blockers);
+            Assert.Contains(
+                goal.Timeline.Skip(timelineCountBeforeRemedy),
+                entry => entry.Message.Contains("Verifying", StringComparison.OrdinalIgnoreCase));
+            if (Directory.Exists(worktreePath))
+            {
+                Assert.Equal(string.Empty, RunGitOutput(worktreePath, "status", "--short").Trim());
+            }
+            else
+            {
+                Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_verification_timeout_blocks_before_merge_with_diagnostics")]
     public void CliAcceptanceVerificationTimeoutBlocksBeforeMergeWithDiagnostics()
     {

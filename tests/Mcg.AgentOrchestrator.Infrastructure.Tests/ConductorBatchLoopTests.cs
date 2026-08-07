@@ -6102,11 +6102,19 @@ public sealed class ConductorBatchLoopTests
     public void BatchLoopWatchRechecksBlockedGoalUntilMaxDuration()
     {
         var kernel = new AgentOrchestratorKernel();
-        _ = CreateVerifiedSimpleGoal(kernel, "Keep watching landing conflict");
+        var goal = CreateVerifiedSimpleGoal(kernel, "Keep watching landing conflict");
         var now = DateTimeOffset.Parse("2026-08-04T00:00:00Z");
         var rebaseChecks = 0;
         var conflictChecks = 0;
         var sleeps = 0;
+        var eventLogPath = Path.Combine(CreateTempDirectory("mcg-blocked-recheck-heartbeat"), "conduct-events.log");
+        var blocker = new TerminalGoalSweepBlocker(
+            "completed-branch-unmerged",
+            "verified branch remains unmerged",
+            $"acceptance {goal.Id.Value[..8]}");
+        var sweepResult = new TerminalGoalSweepResult([
+            new TerminalGoalSweepGoalResult(goal.Id, goal.Id.Value[..8], [], [blocker])
+        ]);
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             rebaseOntoMain: _ =>
@@ -6130,7 +6138,11 @@ public sealed class ConductorBatchLoopTests
             },
             runAcceptance: _ => true);
 
-        var summary = new ConductorBatchLoop(utcNow: () => now).Run(
+        var summary = new ConductorBatchLoop(
+            measuredSweep: _ => sweepResult,
+            conductEventLogWriter: new ConductEventLogWriter(eventLogPath),
+            utcNow: () => now,
+            blockedRecheckHeartbeatInterval: TimeSpan.FromSeconds(1)).Run(
             kernel,
             driver,
             ConductorAutonomyPolicy.Conservative,
@@ -6146,10 +6158,22 @@ public sealed class ConductorBatchLoopTests
 
         Assert.Equal("max-duration", summary.StopReason);
         Assert.Equal(1, summary.Ticks);
+        Assert.Equal(3, summary.Rechecks);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, rebaseChecks);
         Assert.Equal(2, conflictChecks);
         Assert.Equal(3, sleeps);
+        var records = File.ReadAllLines(eventLogPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+        Assert.Contains(records, record =>
+            record.EventKind == "blocked-recheck-heartbeat" &&
+            record.Detail.Contains("rechecks=1", StringComparison.Ordinal) &&
+            record.Detail.Contains($"{goal.Id.Value[..8]}:completed-branch-unmerged", StringComparison.Ordinal));
+        Assert.Contains(records, record =>
+            record.EventKind == "loop-stop" &&
+            record.Detail.Contains("rechecks=3", StringComparison.Ordinal));
+        Assert.DoesNotContain(records, record => record.Detail.StartsWith("BLOCKED_RECHECK_SLEEP", StringComparison.Ordinal));
     }
 
     [Xunit.Fact]

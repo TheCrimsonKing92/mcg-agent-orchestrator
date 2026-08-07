@@ -1156,6 +1156,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // finishes but its result is never recorded — and a stop/restart re-dispatches the same
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 var terminalSweepCache = new TerminalGoalSweepCache();
+                var reconcileSweepOptions = ReconcileSweepConfiguration.Load(AppContext.BaseDirectory);
+                var reconcileSweepCoordinator = new ReconcileSweepRemediationCoordinator(
+                    new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath),
+                    reconcileSweepOptions,
+                    remedy => ConductorBatchLoop.ExecuteReconcileSweepAcceptanceRemedy(
+                        context.Kernel,
+                        loopDriver,
+                        remedy,
+                        loopPolicy),
+                    remedy => GoalGitFactIndex.Build(context.Workspace.ExecutionDirectory)
+                        .TryGetGoalBranchTip(remedy.GoalId));
                 var loopReaper = new BackgroundDispatchRunner();
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
@@ -1242,7 +1253,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     }
 
                     var terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory, cache: terminalSweepCache);
-                    ConsoleViews.PrintTerminalGoalSweep(terminalSweep);
+                    var remediation = reconcileSweepCoordinator.Process(terminalSweep);
+                    if (remediation.RemedySucceeded)
+                    {
+                        terminalSweep = TerminalGoalSweep.Run(loopKernel, context.Workspace.ExecutionDirectory, cache: terminalSweepCache);
+                    }
+                    terminalSweep = terminalSweep with { ProgressEvents = remediation.Events };
+                    ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
                     GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
                     RunEventMaintenanceCadence.TryRunIfDue(
@@ -1292,7 +1309,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     postLandingCanary: postLandingCanary,
                     evictedGoalStatusLookup: resolveEvictedGoalStatus,
                     lifecycleRecorder: new ConductorLifecycleRecorder(
-                        new SqliteRunEventStore(context.Workspace.RunEventStorePath))).Run(
+                        new SqliteRunEventStore(context.Workspace.RunEventStorePath)),
+                    blockedRecheckHeartbeatInterval: reconcileSweepOptions.HeartbeatInterval).Run(
                     context.Kernel, loopDriver, loopPolicy, stopFilePath, loopMaxIter,
                     watchInterval: watchInterval, onTick: onTick, wakeSignal: loopWakeSignal, maxDuration: maxDuration,
                     persistTick: context.PersistCheckpoint, keepAliveWhenIdle: loopDaemon,

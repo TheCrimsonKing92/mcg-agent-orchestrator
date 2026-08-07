@@ -500,6 +500,26 @@ internal static class GoalOperationJournal
             .FirstOrDefault();
     }
 
+    public static GoalOperationJournalEntry? NewestPassedGateForBranch(
+        GoalOperationJournalSummary journal,
+        string? branchHeadSha)
+    {
+        if (string.IsNullOrWhiteSpace(branchHeadSha))
+        {
+            return null;
+        }
+
+        return journal.Entries
+            .Select((entry, index) => (Entry: entry, Index: index))
+            .Where(item =>
+                string.Equals(item.Entry.AcceptanceOutcome, "gate-passed", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(item.Entry.BranchHeadSha?.Trim(), branchHeadSha.Trim(), StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(item => item.Entry.At)
+            .ThenByDescending(item => item.Index)
+            .Select(item => item.Entry)
+            .FirstOrDefault();
+    }
+
     public static IReadOnlyList<GoalOperationJournalEntry> AcceptanceOutcomesForCandidate(
         GoalOperationJournalSummary journal,
         string? branchHeadSha,
