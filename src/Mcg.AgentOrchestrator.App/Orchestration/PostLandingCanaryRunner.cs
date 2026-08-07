@@ -39,7 +39,7 @@ internal static class PostLandingCanaryRepositoryInvariant
             return new PostLandingCanaryRepositoryVerdict(
                 Green: false,
                 PreconditionFailure: true,
-                $"Post-landing canary repository precondition failed; main was dirty before the run. {state}");
+                $"Post-landing canary repository precondition failed; its isolated checkout was dirty before the run. {state}");
         }
 
         if (!currentIsDescendantOfBaseline || currentDirtyPaths.Count > 0)
@@ -47,13 +47,13 @@ internal static class PostLandingCanaryRepositoryInvariant
             return new PostLandingCanaryRepositoryVerdict(
                 Green: false,
                 PreconditionFailure: false,
-                $"Post-landing canary dirtied or rewrote main. {state}");
+                $"Post-landing canary dirtied or rewrote its isolated checkout. {state}");
         }
 
         return new PostLandingCanaryRepositoryVerdict(
             Green: true,
             PreconditionFailure: false,
-            $"Post-landing canary left main clean and at or ahead of its baseline. {state}");
+            $"Post-landing canary left its isolated checkout clean and at or ahead of its baseline. {state}");
     }
 
     private static string FormatPaths(IReadOnlyList<string> paths) =>
@@ -98,89 +98,117 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         PostLandingCanaryRequest request,
         CancellationToken cancellationToken)
     {
-        var baseline = await ReadRepositoryStateAsync(cancellationToken).ConfigureAwait(false);
-        if (!await IsAncestorAsync(request.LandingSha, baseline.HeadSha, cancellationToken).ConfigureAwait(false))
-        {
-            throw new InvalidOperationException(
-                $"Post-landing canary expected main to be at or ahead of {request.LandingSha}, " +
-                $"but found {baseline.HeadSha}.");
-        }
-
-        var precondition = PostLandingCanaryRepositoryInvariant.Evaluate(
-            baseline.HeadSha,
-            baseline.HeadSha,
-            baseline.DirtyPaths,
-            baseline.DirtyPaths,
-            currentIsDescendantOfBaseline: true);
-        if (!precondition.Green)
-        {
-            throw CreateRepositoryFailureException(precondition);
-        }
-
-        using var fixture = PostLandingCanaryFixture.Materialize(_repositoryRoot, request.LandingSha);
-        await InitializeFixtureRepositoryAsync(fixture.RootPath, cancellationToken).ConfigureAwait(false);
-        var appDllPath = await ResolveOrBuildMainBinaryAsync(baseline.HeadSha, cancellationToken)
+        var canaryRepositoryRoot = await CreateIsolatedWorktreeAsync(request.LandingSha, cancellationToken)
             .ConfigureAwait(false);
-        var process = await RunProcessAsync(
-            _dotnetPath,
-            [
-                appDllPath,
-                PostLandingCanaryCommand.SubcommandName,
-                fixture.RootPath
-            ],
-            _repositoryRoot,
-            cancellationToken).ConfigureAwait(false);
-
-        var current = await ReadRepositoryStateAsync(cancellationToken).ConfigureAwait(false);
-        var currentIsDescendant = await IsAncestorAsync(
-            baseline.HeadSha,
-            current.HeadSha,
-            cancellationToken).ConfigureAwait(false);
-        var repositoryVerdict = PostLandingCanaryRepositoryInvariant.Evaluate(
-            baseline.HeadSha,
-            current.HeadSha,
-            baseline.DirtyPaths,
-            current.DirtyPaths,
-            currentIsDescendant);
-        if (!repositoryVerdict.Green)
-        {
-            throw CreateRepositoryFailureException(repositoryVerdict);
-        }
-
-        var probeLine = process.Stdout
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .LastOrDefault(line => line.StartsWith(PostLandingCanaryCommand.ResultPrefix, StringComparison.Ordinal));
-        if (probeLine is null)
-        {
-            throw new PostLandingCanaryEvaluationException(
-                $"canary subprocess returned exit {process.ExitCode} without a result contract: {Tail(process.Stderr)}");
-        }
-
-        PostLandingCanaryProbeResult? probe;
+        Exception? runFailure = null;
         try
         {
-            probe = JsonSerializer.Deserialize<PostLandingCanaryProbeResult>(
-                probeLine[PostLandingCanaryCommand.ResultPrefix.Length..],
-                JsonOptions);
-        }
-        catch (JsonException ex)
-        {
-            throw new PostLandingCanaryEvaluationException(
-                $"canary subprocess result contract was invalid: {ex.Message}");
-        }
+            var baseline = await ReadRepositoryStateAsync(canaryRepositoryRoot, cancellationToken)
+                .ConfigureAwait(false);
+            if (!baseline.HeadSha.Equals(request.LandingSha, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new PostLandingCanaryPreconditionException(
+                    $"Post-landing canary isolated worktree expected {request.LandingSha}, " +
+                    $"but found {baseline.HeadSha}.");
+            }
 
-        if (probe is null)
-        {
-            throw new PostLandingCanaryEvaluationException(
-                "canary subprocess returned an empty result contract");
-        }
+            var precondition = PostLandingCanaryRepositoryInvariant.Evaluate(
+                baseline.HeadSha,
+                baseline.HeadSha,
+                baseline.DirtyPaths,
+                baseline.DirtyPaths,
+                currentIsDescendantOfBaseline: true);
+            if (!precondition.Green)
+            {
+                throw CreateRepositoryFailureException(precondition);
+            }
 
-        return probe.Green
-            ? PostLandingCanaryOutcome.Passed(probe.ExecutedTestCount, probe.Detail)
-            : PostLandingCanaryOutcome.Failed(
-                probe.FailureReason ?? PostLandingCanaryFailureReason.InfrastructureError,
-                probe.Detail,
-                probe.ExecutedTestCount);
+            using var fixture = PostLandingCanaryFixture.Materialize(canaryRepositoryRoot, request.LandingSha);
+            await InitializeFixtureRepositoryAsync(fixture.RootPath, cancellationToken).ConfigureAwait(false);
+            var appDllPath = await ResolveOrBuildMainBinaryAsync(
+                    canaryRepositoryRoot,
+                    baseline.HeadSha,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var process = await RunProcessAsync(
+                _dotnetPath,
+                [
+                    appDllPath,
+                    PostLandingCanaryCommand.SubcommandName,
+                    fixture.RootPath
+                ],
+                canaryRepositoryRoot,
+                cancellationToken).ConfigureAwait(false);
+
+            var current = await ReadRepositoryStateAsync(canaryRepositoryRoot, cancellationToken)
+                .ConfigureAwait(false);
+            var currentIsDescendant = await IsAncestorAsync(
+                canaryRepositoryRoot,
+                baseline.HeadSha,
+                current.HeadSha,
+                cancellationToken).ConfigureAwait(false);
+            var repositoryVerdict = PostLandingCanaryRepositoryInvariant.Evaluate(
+                baseline.HeadSha,
+                current.HeadSha,
+                baseline.DirtyPaths,
+                current.DirtyPaths,
+                currentIsDescendant);
+            if (!repositoryVerdict.Green)
+            {
+                throw CreateRepositoryFailureException(repositoryVerdict);
+            }
+
+            var probeLine = process.Stdout
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .LastOrDefault(line => line.StartsWith(PostLandingCanaryCommand.ResultPrefix, StringComparison.Ordinal));
+            if (probeLine is null)
+            {
+                throw new PostLandingCanaryEvaluationException(
+                    $"canary subprocess returned exit {process.ExitCode} without a result contract: {Tail(process.Stderr)}");
+            }
+
+            PostLandingCanaryProbeResult? probe;
+            try
+            {
+                probe = JsonSerializer.Deserialize<PostLandingCanaryProbeResult>(
+                    probeLine[PostLandingCanaryCommand.ResultPrefix.Length..],
+                    JsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                throw new PostLandingCanaryEvaluationException(
+                    $"canary subprocess result contract was invalid: {ex.Message}");
+            }
+
+            if (probe is null)
+            {
+                throw new PostLandingCanaryEvaluationException(
+                    "canary subprocess returned an empty result contract");
+            }
+
+            return probe.Green
+                ? PostLandingCanaryOutcome.Passed(probe.ExecutedTestCount, probe.Detail)
+                : PostLandingCanaryOutcome.Failed(
+                    probe.FailureReason ?? PostLandingCanaryFailureReason.InfrastructureError,
+                    probe.Detail,
+                    probe.ExecutedTestCount);
+        }
+        catch (Exception ex)
+        {
+            runFailure = ex;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                await RemoveIsolatedWorktreeAsync(canaryRepositoryRoot).ConfigureAwait(false);
+            }
+            catch when (runFailure is not null)
+            {
+                // Preserve the primary canary failure; stale temporary worktrees are pruned by git maintenance.
+            }
+        }
     }
 
     internal static Exception CreateRepositoryFailureException(PostLandingCanaryRepositoryVerdict verdict)
@@ -191,8 +219,37 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         }
 
         return verdict.PreconditionFailure
-            ? new InvalidOperationException(verdict.Detail)
+            ? new PostLandingCanaryPreconditionException(verdict.Detail)
             : new PostLandingCanaryEvaluationException(verdict.Detail);
+    }
+
+    private async Task<string> CreateIsolatedWorktreeAsync(
+        string landingSha,
+        CancellationToken cancellationToken)
+    {
+        var worktreeRoot = Path.Combine(
+            Path.GetTempPath(),
+            "mcg-post-landing-canary-worktrees",
+            landingSha[..Math.Min(12, landingSha.Length)],
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.GetDirectoryName(worktreeRoot)!);
+        await EnsureSucceededAsync(
+            "create isolated landing worktree",
+            "git",
+            ["-C", _repositoryRoot, "worktree", "add", "--detach", "--quiet", worktreeRoot, landingSha],
+            _repositoryRoot,
+            cancellationToken).ConfigureAwait(false);
+        return worktreeRoot;
+    }
+
+    private async Task RemoveIsolatedWorktreeAsync(string worktreeRoot)
+    {
+        await EnsureSucceededAsync(
+            "remove isolated landing worktree",
+            "git",
+            ["-C", _repositoryRoot, "worktree", "remove", "--force", worktreeRoot],
+            _repositoryRoot,
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task InitializeFixtureRepositoryAsync(string fixtureRoot, CancellationToken cancellationToken)
@@ -222,7 +279,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     }
 
     private async Task<string> ResolveOrBuildMainBinaryAsync(
-        string baselineSha,
+        string sourceRoot,
+        string sourceSha,
         CancellationToken cancellationToken)
     {
         var repositoryKey = Convert.ToHexString(
@@ -230,12 +288,12 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         var outputDirectory = Path.Combine(
             _buildCacheRoot,
             repositoryKey,
-            baselineSha);
+            sourceSha);
         var appDllPath = Path.Combine(outputDirectory, "Mcg.AgentOrchestrator.App.dll");
         var markerPath = appDllPath + ".git-head";
         if (File.Exists(appDllPath) &&
             File.Exists(markerPath) &&
-            File.ReadAllText(markerPath).Trim().Equals(baselineSha, StringComparison.OrdinalIgnoreCase))
+            File.ReadAllText(markerPath).Trim().Equals(sourceSha, StringComparison.OrdinalIgnoreCase))
         {
             return appDllPath;
         }
@@ -246,7 +304,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             _dotnetPath,
             [
                 "build",
-                Path.Combine(_repositoryRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
+                Path.Combine(sourceRoot, "src", "Mcg.AgentOrchestrator.App", "Mcg.AgentOrchestrator.App.csproj"),
                 "--nologo",
                 "--output",
                 outputDirectory,
@@ -254,36 +312,37 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 "quiet",
                 "-clp:ErrorsOnly"
             ],
-            _repositoryRoot,
+            sourceRoot,
             cancellationToken,
             evaluatedArtifactFailure: true).ConfigureAwait(false);
-        File.WriteAllText(markerPath, baselineSha + Environment.NewLine);
+        File.WriteAllText(markerPath, sourceSha + Environment.NewLine);
         return appDllPath;
     }
 
     private async Task<PostLandingCanaryRepositoryState> ReadRepositoryStateAsync(
+        string repositoryRoot,
         CancellationToken cancellationToken)
     {
         var head = await RunProcessAsync(
             "git",
-            ["-C", _repositoryRoot, "rev-parse", "HEAD"],
-            _repositoryRoot,
+            ["-C", repositoryRoot, "rev-parse", "HEAD"],
+            repositoryRoot,
             cancellationToken).ConfigureAwait(false);
         if (head.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"Post-landing canary could not resolve main HEAD (exit {head.ExitCode}): {Tail(head.Stderr)}");
+                $"Post-landing canary could not resolve isolated checkout HEAD (exit {head.ExitCode}): {Tail(head.Stderr)}");
         }
 
         var status = await RunProcessAsync(
             "git",
-            ["-C", _repositoryRoot, "status", "--porcelain", "--untracked-files=all"],
-            _repositoryRoot,
+            ["-C", repositoryRoot, "status", "--porcelain", "--untracked-files=all"],
+            repositoryRoot,
             cancellationToken).ConfigureAwait(false);
         if (status.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"Post-landing canary could not inspect main's working tree (exit {status.ExitCode}): {Tail(status.Stderr)}");
+                $"Post-landing canary could not inspect its isolated working tree (exit {status.ExitCode}): {Tail(status.Stderr)}");
         }
 
         return new PostLandingCanaryRepositoryState(
@@ -292,14 +351,15 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     }
 
     private async Task<bool> IsAncestorAsync(
+        string repositoryRoot,
         string expectedAncestor,
         string currentSha,
         CancellationToken cancellationToken)
     {
         var ancestry = await RunProcessAsync(
             "git",
-            ["-C", _repositoryRoot, "merge-base", "--is-ancestor", expectedAncestor, currentSha],
-            _repositoryRoot,
+            ["-C", repositoryRoot, "merge-base", "--is-ancestor", expectedAncestor, currentSha],
+            repositoryRoot,
             cancellationToken).ConfigureAwait(false);
         if (ancestry.ExitCode is 0 or 1)
         {
@@ -355,9 +415,10 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         }
 
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
-        using var process = ProcessTreeGuiSuppression.Start(startInfo);
+        using var process = WorkerProcessJobs.StartRegisteredOrThrow(
+            startInfo,
+            $"post-landing-canary:{workingDirectory}");
         process.StandardInput.Close();
-        WorkerProcessJobs.RegisterOrThrow(process, $"post-landing-canary:{workingDirectory}");
         try
         {
             // Do not cancel pipe drains before the killed process tree closes its handles.

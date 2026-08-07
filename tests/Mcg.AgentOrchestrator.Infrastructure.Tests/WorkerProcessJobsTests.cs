@@ -1606,7 +1606,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             [Path.Combine("src", "Mcg.AgentOrchestrator.Infrastructure", "Workspaces", "GoalAcceptanceVerifier.cs")] =
                 "WorkerProcessJobs.StartRegisteredOrThrow(",
             [Path.Combine("src", "Mcg.AgentOrchestrator.App", "Orchestration", "PostLandingCanaryRunner.cs")] =
-                "WorkerProcessJobs.RegisterOrThrow("
+                "WorkerProcessJobs.StartRegisteredOrThrow("
         };
 
         foreach (var (relativePath, expectedCall) in checkedCallers)
