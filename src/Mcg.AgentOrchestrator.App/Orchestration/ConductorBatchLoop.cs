@@ -948,79 +948,80 @@ internal sealed class ConductorBatchLoop
                 }
                 else
                 {
-                    try
-                    {
-                        var beforeRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
-                        _refreshGoalDispatchesBeforeAdvance(kernel, goal);
-                        if (_progressiveReviewGlances is not null && watchInterval is not null)
+                    if (!TryAdvanceGoal(
+                        () =>
                         {
-                            var glanceResult = _progressiveReviewGlances.Observe(
-                                kernel,
-                                [goal],
-                                glanceDurationStats,
-                                LiveChangesFor);
-                            foreach (var line in glanceResult.ProgressLines)
+                            var beforeRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
+                            _refreshGoalDispatchesBeforeAdvance(kernel, goal);
+                            if (_progressiveReviewGlances is not null && watchInterval is not null)
                             {
-                                EmitProgress(line, tickLines);
+                                var glanceResult = _progressiveReviewGlances.Observe(
+                                    kernel,
+                                    [goal],
+                                    glanceDurationStats,
+                                    LiveChangesFor);
+                                foreach (var line in glanceResult.ProgressLines)
+                                {
+                                    EmitProgress(line, tickLines);
+                                }
+
+                                if (glanceResult.MutatedTaskState)
+                                {
+                                    changedGoalIds.Add(goal.Id);
+                                }
                             }
 
-                            if (glanceResult.MutatedTaskState)
+                            if (_progressiveReviewSteering is not null && watchInterval is not null)
+                            {
+                                var steerResult = _progressiveReviewSteering.ExecutePending(kernel, goal);
+                                foreach (var line in steerResult.ProgressLines)
+                                {
+                                    EmitProgress(line, tickLines);
+                                }
+
+                                if (steerResult.MutatedTaskState)
+                                {
+                                    changedGoalIds.Add(goal.Id);
+                                    kernel.ClearGoalHold(goal.Id);
+                                    tickHeld++;
+                                    goalProjectionCache.Invalidate(goal.Id);
+                                    FinishGoalWalk("progressive-review-steer");
+                                    return null;
+                                }
+                            }
+
+                            goalProjectionCache.Invalidate(goal.Id);
+                            var afterRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
+                            if (!string.Equals(beforeRefresh, afterRefresh, StringComparison.Ordinal))
                             {
                                 changedGoalIds.Add(goal.Id);
                             }
-                        }
 
-                        if (_progressiveReviewSteering is not null && watchInterval is not null)
-                        {
-                            var steerResult = _progressiveReviewSteering.ExecutePending(kernel, goal);
-                            foreach (var line in steerResult.ProgressLines)
-                            {
-                                EmitProgress(line, tickLines);
-                            }
-
-                            if (steerResult.MutatedTaskState)
-                            {
-                                changedGoalIds.Add(goal.Id);
-                                kernel.ClearGoalHold(goal.Id);
-                                tickHeld++;
-                                goalProjectionCache.Invalidate(goal.Id);
-                                FinishGoalWalk("progressive-review-steer");
-                                continue;
-                            }
-                        }
-
-                        goalProjectionCache.Invalidate(goal.Id);
-                        var afterRefresh = BuildEscalatedGoalStateFingerprint(kernel, driver, goal);
-                        if (!string.Equals(beforeRefresh, afterRefresh, StringComparison.Ordinal))
-                        {
-                            changedGoalIds.Add(goal.Id);
-                        }
-
-                        var engineHealth = _acceptanceEngineCircuit?.Read();
-                        result = IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth)
-                            ? ParallelAcceptanceHeld(
-                                goal,
-                                policy,
-                                BuildAcceptanceEngineHoldReason(engineHealth!))
-                            : driver.AdvanceOnce(goal, policy);
-                    }
-                    catch (Exception ex)
+                            var engineHealth = _acceptanceEngineCircuit?.Read();
+                            return IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth)
+                                ? ParallelAcceptanceHeld(
+                                    goal,
+                                    policy,
+                                    BuildAcceptanceEngineHoldReason(engineHealth!))
+                                : driver.AdvanceOnce(goal, policy);
+                        },
+                        kernel,
+                        driver,
+                        goal,
+                        policy,
+                        totalTicks,
+                        label,
+                        changedGoalLines,
+                        lastGoalDisposition,
+                        changedGoalIds,
+                        escalatedGoals,
+                        reapedGoals,
+                        setAsideGoals,
+                        selfClearedSetAsideEntries,
+                        ref tickEscalated,
+                        FinishGoalWalk,
+                        out result))
                     {
-                        if (ConductorDriver.IsCriticalDispatchRecordWriteFailure(ex))
-                            throw;
-
-                        var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
-                        changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
-                        lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
-                        changedGoalIds.Add(goal.Id);
-                        kernel.ClearGoalHold(goal.Id);
-                        Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
-                        kernel.RecordGoalPolicyDecision(goal.Id, msg);
-                        escalatedGoals.Add(goal.Id.Value);
-                        ReapGoalOnce(kernel, goal, reapedGoals);
-                        SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
-                        tickEscalated++;
-                        FinishGoalWalk("advance-fault");
                         continue;
                     }
                 }
@@ -1030,20 +1031,50 @@ internal sealed class ConductorBatchLoop
                 if (result.WasEscalated && IsTransientVerificationFailure(result))
                 {
                     retryCounts.TryGetValue(goal.Id.Value, out var retries);
+                    var retryAdvanceFaulted = false;
                     while (retries < maxVerifyRetries && result.WasEscalated && IsTransientVerificationFailure(result))
                     {
-                        serialRetryRan = true;
-                        retries++;
-                        retryCounts[goal.Id.Value] = retries;
-                        tickRetried++;
-                        changedGoalLines.Add($"GOAL goal={label} result=retry attempt={retries}/{maxVerifyRetries}");
-                        lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
-                        changedGoalIds.Add(goal.Id);
-                        Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {goal.Id.Value[..8]} acceptance flake (retry {retries}/{maxVerifyRetries})");
-                        kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop auto-retry acceptance verification (attempt {retries}/{maxVerifyRetries})");
-                        result = driver.AdvanceOnce(goal, policy);
-                        goalProjectionCache.Invalidate(goal.Id);
+                        var nextRetry = retries + 1;
+                        if (!TryAdvanceGoal(
+                            () =>
+                            {
+                                var retryResult = driver.AdvanceOnce(goal, policy);
+                                serialRetryRan = true;
+                                retries = nextRetry;
+                                retryCounts[goal.Id.Value] = retries;
+                                tickRetried++;
+                                changedGoalLines.Add($"GOAL goal={label} result=retry attempt={retries}/{maxVerifyRetries}");
+                                lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
+                                changedGoalIds.Add(goal.Id);
+                                Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {goal.Id.Value[..8]} acceptance flake (retry {retries}/{maxVerifyRetries})");
+                                kernel.RecordGoalPolicyDecision(goal.Id, $"Batch loop auto-retry acceptance verification (attempt {retries}/{maxVerifyRetries})");
+                                goalProjectionCache.Invalidate(goal.Id);
+                                return retryResult;
+                            },
+                            kernel,
+                            driver,
+                            goal,
+                            policy,
+                            totalTicks,
+                            label,
+                            changedGoalLines,
+                            lastGoalDisposition,
+                            changedGoalIds,
+                            escalatedGoals,
+                            reapedGoals,
+                            setAsideGoals,
+                            selfClearedSetAsideEntries,
+                            ref tickEscalated,
+                            FinishGoalWalk,
+                            out result))
+                        {
+                            retryAdvanceFaulted = true;
+                            break;
+                        }
                     }
+
+                    if (retryAdvanceFaulted)
+                        continue;
                 }
 
                 if (TryReconcileAwaitingVerificationHold(kernel, goal, result, totalTicks, out var reconciledOutcome))
@@ -1288,6 +1319,59 @@ internal sealed class ConductorBatchLoop
                 EmitProgress(line);
             CurrentRetryDiagnostics.Value = previousRetryDiagnostics;
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
+        }
+    }
+
+    private bool TryAdvanceGoal(
+        Func<ConductorAdvanceResult?> advance,
+        AgentOrchestratorKernel kernel,
+        ConductorDriver driver,
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        int totalTicks,
+        string label,
+        List<string> changedGoalLines,
+        Dictionary<string, string> lastGoalDisposition,
+        HashSet<GoalId> changedGoalIds,
+        HashSet<string> escalatedGoals,
+        HashSet<string> reapedGoals,
+        Dictionary<string, BatchSetAsideEntry> setAsideGoals,
+        Dictionary<string, BatchSetAsideEntry> selfClearedSetAsideEntries,
+        ref int tickEscalated,
+        Action<string> finishGoalWalk,
+        out ConductorAdvanceResult result)
+    {
+        try
+        {
+            var advanceResult = advance();
+            if (advanceResult is null)
+            {
+                result = null!;
+                return false;
+            }
+
+            result = advanceResult;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (ConductorDriver.IsCriticalDispatchRecordWriteFailure(ex))
+                throw;
+
+            var msg = $"Batch loop tick {totalTicks}: fault isolating goal — advance threw: {Sanitize(ex.Message)}";
+            changedGoalLines.Add($"GOAL goal={label} result=escalated reason={Sanitize(ex.Message)}");
+            lastGoalDisposition[goal.Id.Value] = changedGoalLines[^1];
+            changedGoalIds.Add(goal.Id);
+            kernel.ClearGoalHold(goal.Id);
+            Console.WriteLine($"[conduct --loop] Tick {totalTicks}: {label} [{policy.Name}] → escalated (advance threw): {ex.Message}");
+            kernel.RecordGoalPolicyDecision(goal.Id, msg);
+            escalatedGoals.Add(goal.Id.Value);
+            ReapGoalOnce(kernel, goal, reapedGoals);
+            SetAside(kernel, driver, goal, BatchSetAsideCondition.AdvanceFault, setAsideGoals, selfClearedSetAsideEntries);
+            tickEscalated++;
+            finishGoalWalk("advance-fault");
+            result = null!;
+            return false;
         }
     }
 
