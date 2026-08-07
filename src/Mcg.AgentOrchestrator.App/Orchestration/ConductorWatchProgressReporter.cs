@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Processes;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -15,18 +16,24 @@ internal sealed class ConductorWatchProgressReporter
     private readonly Func<string?, string?, DispatchLiveChangeSnapshot> _readChanges;
     private readonly Func<int, bool> _isProcessAlive;
     private readonly Func<DateTimeOffset> _now;
+    private readonly int _loopProcessId;
+    private readonly int _launcherProcessId;
     private readonly Dictionary<string, EmittedSnapshot> _lastEmitted = new(StringComparer.Ordinal);
 
     public ConductorWatchProgressReporter(
         Func<TaskProcessRecord, DateTimeOffset, DispatchHeartbeatStatus>? readHeartbeat = null,
         Func<string?, string?, DispatchLiveChangeSnapshot>? readChanges = null,
         Func<int, bool>? isProcessAlive = null,
-        Func<DateTimeOffset>? now = null)
+        Func<DateTimeOffset>? now = null,
+        int? loopProcessId = null,
+        int? launcherProcessId = null)
     {
         _readHeartbeat = readHeartbeat ?? ((process, observedAt) => ProcessLogReader.ReadHeartbeat(process, observedAt));
         _readChanges = readChanges ?? ((worktreePath, baseCommit) => GoalChangesReader.BuildLiveDispatchSnapshot(worktreePath, baseCommit));
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
         _now = now ?? (() => DateTimeOffset.UtcNow);
+        _loopProcessId = loopProcessId ?? Environment.ProcessId;
+        _launcherProcessId = launcherProcessId ?? ProcessParentIdResolver.TryGetParentProcessId(_loopProcessId);
     }
 
     public IReadOnlyList<string> BuildLines(
@@ -76,6 +83,8 @@ internal sealed class ConductorWatchProgressReporter
         var outputDelta = previous is null
             ? snapshot.OutputBytes
             : Math.Max(0, snapshot.OutputBytes - previous.OutputBytes);
+        var effectiveStallThreshold = ResolveStallThreshold(watchInterval, stallThreshold);
+        var progressState = ResolveProgressState(snapshot.LastProgressAge, outputDelta, effectiveStallThreshold);
         var probeChanges =
             previous is null ||
             outputDelta > 0 ||
@@ -100,12 +109,11 @@ internal sealed class ConductorWatchProgressReporter
 
         if (shouldEmit)
         {
-            lines.Add(FormatProgress(snapshot, outputDelta));
-            lines.Add(FormatHumanProgress(snapshot, stdoutDelta));
+            lines.Add(FormatProgress(snapshot, outputDelta, progressState));
+            lines.Add(FormatHumanProgress(snapshot, stdoutDelta, progressState));
             _lastEmitted[goalKey] = snapshot with { EmittedAt = now };
         }
 
-        var effectiveStallThreshold = ResolveStallThreshold(watchInterval, stallThreshold);
         var warning = BuildWarning(snapshot, effectiveStallThreshold);
         if (warning is not null)
         {
@@ -130,7 +138,7 @@ internal sealed class ConductorWatchProgressReporter
             ? null
             : _readHeartbeat(process, now);
         var liveness = ResolveLiveness(process, heartbeat);
-        var workerPid = ResolveWorkerPid(process, heartbeat);
+        var workerPid = ResolveWorkerPid(process);
         var outputBytes = (heartbeat?.StandardOutputBytes ?? 0) + (heartbeat?.StandardErrorBytes ?? 0);
         var stdoutBytes = heartbeat?.StandardOutputBytes ?? 0;
         var lastProgressAge = heartbeat?.IdleDuration ?? (now - dispatch.DispatchedAt);
@@ -180,47 +188,51 @@ internal sealed class ConductorWatchProgressReporter
         return process.IsRunning ? "NO LIVE WORKER" : "exiting";
     }
 
-    private int? ResolveWorkerPid(TaskProcessRecord? process, DispatchHeartbeatStatus? heartbeat)
+    private int? ResolveWorkerPid(TaskProcessRecord? process)
     {
-        var pids = heartbeat?.OwnedProcessIds is { Count: > 0 }
-            ? heartbeat.OwnedProcessIds
-            : heartbeat?.ChildProcessId is { } childPidForSet
-                ? [childPidForSet]
-                : process?.TrackedProcessIds ?? [];
-        var livePid = pids.FirstOrDefault(_isProcessAlive);
-        if (livePid > 0)
-        {
-            return livePid;
-        }
-
-        if (heartbeat?.ChildProcessId is { } childPid)
-        {
-            return childPid;
-        }
-
-        if (heartbeat?.OwnedProcessIds is { Count: > 0 })
-        {
-            return heartbeat.OwnedProcessIds[0];
-        }
-
-        return process?.ProcessId;
+        var processId = process?.ProcessId;
+        return processId is > 0 &&
+               processId != _loopProcessId &&
+               processId != _launcherProcessId
+            ? processId
+            : null;
     }
 
-    private static string FormatProgress(ConductorWatchProgressSnapshot snapshot, long outputDelta)
+    private static string ResolveProgressState(
+        TimeSpan lastProgressAge,
+        long outputDelta,
+        TimeSpan stallThreshold)
+    {
+        if (lastProgressAge >= stallThreshold)
+        {
+            return "stalled";
+        }
+
+        return outputDelta > 0 ? "working" : "quiet";
+    }
+
+    private static string FormatProgress(
+        ConductorWatchProgressSnapshot snapshot,
+        long outputDelta,
+        string progressState)
     {
         var files = FormatFiles(snapshot.DisplayFiles, snapshot.RemainingFileCount);
         return
             $"WATCH_PROGRESS goal={snapshot.GoalPrefix} role={snapshot.Role} task={snapshot.TaskNumber}/{snapshot.TotalTasks} " +
-            $"elapsed={FormatDuration(snapshot.Elapsed)} liveness=\"{snapshot.Liveness}\" output_delta={outputDelta} " +
+            $"elapsed={FormatDuration(snapshot.Elapsed)} state={progressState} pid={FormatPid(snapshot.WorkerPid)} " +
+            $"liveness=\"{snapshot.Liveness}\" output_delta={outputDelta} " +
             $"last_progress_age={FormatDuration(snapshot.LastProgressAge)} files={snapshot.ChangedFileCount} [{files}]";
     }
 
-    private static string FormatHumanProgress(ConductorWatchProgressSnapshot snapshot, long stdoutDelta)
+    private static string FormatHumanProgress(
+        ConductorWatchProgressSnapshot snapshot,
+        long stdoutDelta,
+        string progressState)
     {
         var files = FormatHumanFiles(snapshot.ChangedFileCount, snapshot.DisplayFiles, snapshot.RemainingFileCount);
         return
             $"[{snapshot.GoalPrefix}] {snapshot.Role} (task {snapshot.TaskNumber}/{snapshot.TotalTasks}) - " +
-            $"running {FormatDuration(snapshot.Elapsed)} - {FormatWorker(snapshot)} - " +
+            $"running {FormatDuration(snapshot.Elapsed)} - {FormatWorker(snapshot, progressState)} - " +
             $"+{FormatBytes(stdoutDelta)} stdout - last progress {FormatDuration(snapshot.LastProgressAge)} ago - {files}";
     }
 
@@ -347,10 +359,10 @@ internal sealed class ConductorWatchProgressReporter
     private static string FormatFileCount(int count) =>
         count == 1 ? "1 file changed" : $"{count} files changed";
 
-    private static string FormatWorker(ConductorWatchProgressSnapshot snapshot) =>
-        snapshot.WorkerPid is { } pid
-            ? $"worker pid {pid} {snapshot.Liveness}"
-            : snapshot.Liveness;
+    private static string FormatWorker(ConductorWatchProgressSnapshot snapshot, string progressState) =>
+        $"state={progressState} - worker pid={FormatPid(snapshot.WorkerPid)} {snapshot.Liveness}";
+
+    private static string FormatPid(int? processId) => processId?.ToString() ?? "unknown";
 
     private static string FormatBytes(long bytes)
     {

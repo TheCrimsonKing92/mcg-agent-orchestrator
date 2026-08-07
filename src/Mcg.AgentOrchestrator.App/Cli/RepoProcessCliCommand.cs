@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
+using Mcg.AgentOrchestrator.App.Processes;
 using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
@@ -137,7 +138,7 @@ internal static class RepoProcessCliCommand
         {
             using (process)
             {
-                raw.Add((process.Id, TryGetParentProcessId(process.Id), process.ProcessName, TryGetExecutablePath(process), TryGetStartTime(process)));
+                raw.Add((process.Id, ProcessParentIdResolver.TryGetParentProcessId(process.Id), process.ProcessName, TryGetExecutablePath(process), TryGetStartTime(process)));
             }
         }
 
@@ -440,76 +441,6 @@ internal static class RepoProcessCliCommand
         catch { return null; }
     }
 
-    private static int TryGetParentProcessId(int processId)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            return TryGetWindowsParentProcessId(processId);
-        }
-
-        if (OperatingSystem.IsLinux())
-        {
-            return TryGetLinuxParentProcessId(processId);
-        }
-
-        return 0;
-    }
-
-    private static int TryGetLinuxParentProcessId(int processId)
-    {
-        try
-        {
-            var stat = File.ReadAllText($"/proc/{processId}/stat");
-            var lastParen = stat.LastIndexOf(')');
-            if (lastParen < 0)
-            {
-                return 0;
-            }
-
-            var fields = stat[(lastParen + 2)..].Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            return fields.Length >= 2 && int.TryParse(fields[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var parentId)
-                ? parentId
-                : 0;
-        }
-        catch
-        {
-            return 0;
-        }
-    }
-
-    private static int TryGetWindowsParentProcessId(int processId)
-    {
-        var snapshot = CreateToolhelp32Snapshot(0x00000002, 0);
-        if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
-        {
-            return 0;
-        }
-
-        try
-        {
-            var entry = new PROCESSENTRY32 { dwSize = (uint)Marshal.SizeOf<PROCESSENTRY32>() };
-            if (!Process32First(snapshot, ref entry))
-            {
-                return 0;
-            }
-
-            do
-            {
-                if (entry.th32ProcessID == (uint)processId)
-                {
-                    return (int)entry.th32ParentProcessID;
-                }
-            }
-            while (Process32Next(snapshot, ref entry));
-        }
-        finally
-        {
-            CloseHandle(snapshot);
-        }
-
-        return 0;
-    }
-
     private sealed record ProcessSnapshot(
         int ProcessId,
         int ParentProcessId,
@@ -665,15 +596,6 @@ internal static class RepoProcessCliCommand
         out IntPtr lpNumberOfBytesRead);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -687,19 +609,4 @@ internal static class RepoProcessCliCommand
         public IntPtr InheritedFromUniqueProcessId;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PROCESSENTRY32
-    {
-        public uint dwSize;
-        public uint cntUsage;
-        public uint th32ProcessID;
-        public IntPtr th32DefaultHeapID;
-        public uint th32ModuleID;
-        public uint cntThreads;
-        public uint th32ParentProcessID;
-        public int pcPriClassBase;
-        public uint dwFlags;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-        public string szExeFile;
-    }
 }
