@@ -1320,6 +1320,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
             SourceBacklogItemId = PickStoreOwned(baseline.SourceBacklogItemId, stored.SourceBacklogItemId, current.SourceBacklogItemId),
             RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
+            ClarificationRoundCount = PickTickOwned(
+                baseline.ClarificationRoundCount,
+                stored.ClarificationRoundCount,
+                current.ClarificationRoundCount),
             LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
             AutomaticAcceptanceRetryCount = PickStoreOwned(
                 baseline.AutomaticAcceptanceRetryCount,

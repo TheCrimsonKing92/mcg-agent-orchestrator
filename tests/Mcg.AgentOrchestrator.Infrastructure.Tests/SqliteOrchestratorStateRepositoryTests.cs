@@ -2061,6 +2061,34 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("Concurrent operator update", restoredGoal.Objective);
     }
 
+    [Xunit.Fact]
+    public async Task TickMergePreservesClarificationRoundCount()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Protect clarification round count");
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single();
+        var tickSnapshot = baseline with { ClarificationRoundCount = 1 };
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) => Task.FromResult((
+                true,
+                stored! with { Objective = "Concurrent operator update" },
+                true)));
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        var restoredGoal = restored.GetGoal(goal.Id);
+        Assert.Equal(1, restoredGoal.ClarificationRoundCount);
+        Assert.Equal("Concurrent operator update", restoredGoal.Objective);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_store_owned_same_field_conflict_keeps_cli_value")]
     public async Task TickMergeStoreOwnedSameFieldConflictKeepsCliValue()
     {

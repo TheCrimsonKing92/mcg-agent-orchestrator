@@ -1761,6 +1761,7 @@ public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSup
         Assert.Equal(2, kernel.GetGoal(goal.Id).ClarificationRoundCount);
         Assert.Contains("Briefs supersede earlier briefs.", provider.Requests[1].Messages.Single().Content);
         Assert.Contains("could the question have been asked before that answer existed", provider.Requests[1].Messages.Single().Content);
+        Assert.Contains("must still be returned now rather than suppressed", provider.Requests[1].Messages.Single().Content);
     }
 
     [Xunit.Fact(DisplayName = "SpecRefiner_answered_clarification_is_resolved_input_and_not_reasked")]

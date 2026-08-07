@@ -71,7 +71,7 @@ internal static class SpecRefinerPlanner
         CLARIFICATION BATCHING:
         - Before producing output, enumerate every material fork that can be identified from the OBJECTIVE alone. Do not stop after finding the first ask fork.
         - Return all such forks in this response so every ask fork can be raised in the same operator round.
-        - When resolved clarifications are supplied, raise a newly identified follow-up only when it genuinely depends on a supplied answer. Apply this discriminator: could the question have been asked before that answer existed? If yes, it belonged in the earlier batch and must not be deferred.
+        - When resolved clarifications are supplied, use this discriminator for each newly identified follow-up: could the question have been asked before that answer existed? If no, it is genuinely answer-dependent and belongs in this later round. If yes, it belonged in the earlier batch, but must still be returned now rather than suppressed.
         - Never suppress an unresolved ambiguity merely to avoid a later clarification round.
 
         OUTPUT ONLY a fenced JSON object (```json ... ```) with these fields:
