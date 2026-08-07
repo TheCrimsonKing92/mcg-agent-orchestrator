@@ -11,6 +11,7 @@ public sealed class AcceptanceGateEngineSettingsTests
 
         Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
+        Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
         Xunit.Assert.Equal(18, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.All(
             settings.InfrastructureTestLanes,

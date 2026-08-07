@@ -4,6 +4,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 internal sealed class WorkerGitContext
 {
+    private readonly Func<string, int, string[], GitCli.GitResult> _reviewerMergeTreeGitRunner;
+
     private const int DiffSummaryMaxChars = 6000;
     internal const int ReviewerChangedFilePromptMaxFiles = 120;
     internal const string ReviewerScopeUnavailableErrorCode = "ERR_REVIEWER_SCOPE_UNAVAILABLE";
@@ -11,6 +13,14 @@ internal sealed class WorkerGitContext
     internal const string ReviewerMergeTreeUnavailableErrorCode = "ERR_REVIEWER_MERGE_TREE_UNAVAILABLE";
     internal const string ReviewerRoundTouchScopeUnavailableErrorCode = "ERR_REVIEWER_ROUND_TOUCH_SCOPE_UNAVAILABLE";
     internal const int DiffSummaryRetrievalMaxChars = DiffSummaryMaxChars;
+
+    internal WorkerGitContext(
+        Func<string, int, string[], GitCli.GitResult>? reviewerMergeTreeGitRunner = null)
+    {
+        _reviewerMergeTreeGitRunner = reviewerMergeTreeGitRunner ??
+            ((workingDirectory, timeoutMilliseconds, arguments) =>
+                GitCli.Run(workingDirectory, timeoutMilliseconds, arguments));
+    }
 
     internal string[] ReadChangedFilesForTestImpact(string workingDirectory)
     {
@@ -187,14 +197,24 @@ internal sealed class WorkerGitContext
                 "Reviewer merge-tree status unavailable because the working directory is not a git workspace.");
         }
 
-        var mergeTreeResult = GitCli.Run(
+        var mergeTreeResult = _reviewerMergeTreeGitRunner(
             workingDirectory,
             5_000,
-            "merge-tree",
-            "--write-tree",
-            "--name-only",
-            baseReference,
-            headReference);
+            [
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                baseReference,
+                headReference
+            ]);
+        if (!mergeTreeResult.ProcessStarted)
+        {
+            throw new ReviewerMergeTreeStatusException(
+                ReviewerMergeTreeUnavailableErrorCode,
+                "Reviewer merge-tree status unavailable because git could not start.",
+                mergeTreeResult.Error,
+                gitProcessStarted: false);
+        }
         if (mergeTreeResult.ExitCode == 0)
         {
             return new ReviewerMergeTreeStatus(IsClean: true, [], 0);
@@ -605,13 +625,19 @@ internal sealed class ReviewerChangedFileScopeException : InvalidOperationExcept
 
 internal sealed class ReviewerMergeTreeStatusException : InvalidOperationException
 {
-    public ReviewerMergeTreeStatusException(string errorCode, string message, string? detail = null)
+    public ReviewerMergeTreeStatusException(
+        string errorCode,
+        string message,
+        string? detail = null,
+        bool gitProcessStarted = true)
         : base(string.IsNullOrWhiteSpace(detail) ? message : $"{message} {detail.Trim()}")
     {
         ErrorCode = errorCode;
+        GitProcessStarted = gitProcessStarted;
     }
 
     public string ErrorCode { get; }
+    public bool GitProcessStarted { get; }
 }
 
 internal sealed class ReviewerRoundTouchScopeException : InvalidOperationException

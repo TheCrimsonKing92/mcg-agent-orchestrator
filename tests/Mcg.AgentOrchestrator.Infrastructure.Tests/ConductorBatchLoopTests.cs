@@ -2667,11 +2667,12 @@ public sealed class ConductorBatchLoopTests
                 new JsonSerializerOptions(JsonSerializerDefaults.Web));
             Assert.NotNull(completedAttempt);
 
-            Assert.Equal(
-                useLegacyStartThenAttach
-                    ? ConductorParallelAcceptanceAttemptOutcome.Failed
-                    : ConductorParallelAcceptanceAttemptOutcome.Passed,
-                completedAttempt!.Outcome);
+            var expectedOutcome = useLegacyStartThenAttach
+                ? ConductorParallelAcceptanceAttemptOutcome.Failed
+                : ConductorParallelAcceptanceAttemptOutcome.Passed;
+            Assert.True(
+                completedAttempt!.Outcome == expectedOutcome,
+                $"Expected {expectedOutcome}, actual {completedAttempt.Outcome}: {completedAttempt.Detail}");
             var markerPath = Path.Combine(worktree, "background-owned-start.marker");
             if (useLegacyStartThenAttach)
             {
@@ -5835,24 +5836,32 @@ public sealed class ConductorBatchLoopTests
             },
             writeEscalation: (_, _, _) => escalations++);
 
-        var summary = new ConductorBatchLoop().Run(
-            kernel,
-            driver,
-            ConductorAutonomyPolicy.Conservative,
-            NoStopPath(),
-            maxIterations: 2,
-            watchInterval: TimeSpan.FromMilliseconds(1),
-            sleepFunc: _ =>
-            {
-                hasOpenClarification = false;
-                return false;
-            });
+        BatchLoopSummary? summary = null;
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ =>
+                {
+                    hasOpenClarification = false;
+                    return false;
+                }));
 
-        Assert.Equal(2, summary.Ticks);
+        Assert.NotNull(summary);
+        Assert.Equal(2, summary!.Ticks);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, summary.Advanced);
         Assert.Equal(1, escalations);
         Assert.Equal(1, workspaceCreates);
+        Assert.Equal(1, CountOccurrences(output, "BLOCKED_RECHECK_INTERVAL_CLAMPED"));
+        Assert.Contains(
+            $"BLOCKED_RECHECK_INTERVAL_CLAMPED goal={goal.Id.Value[..8]} condition=awaitingclarification computedSeconds=0.001 floorSeconds={ConductorBatchLoop.WatchStopPollIntervalSeconds}",
+            output,
+            StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_readmits_store_answered_clarification_without_restart_and_dispatches")]
@@ -6107,6 +6116,7 @@ public sealed class ConductorBatchLoopTests
         var rebaseChecks = 0;
         var conflictChecks = 0;
         var sleeps = 0;
+        var observedSleep = TimeSpan.Zero;
         var eventLogPath = Path.Combine(CreateTempDirectory("mcg-blocked-recheck-heartbeat"), "conduct-events.log");
         var blocker = new TerminalGoalSweepBlocker(
             "completed-branch-unmerged",
@@ -6138,31 +6148,39 @@ public sealed class ConductorBatchLoopTests
             },
             runAcceptance: _ => true);
 
-        var summary = new ConductorBatchLoop(
-            measuredSweep: _ => sweepResult,
-            conductEventLogWriter: new ConductEventLogWriter(eventLogPath),
-            utcNow: () => now,
-            blockedRecheckHeartbeatInterval: TimeSpan.FromSeconds(1)).Run(
-            kernel,
-            driver,
-            ConductorAutonomyPolicy.Conservative,
-            NoStopPath(),
-            watchInterval: TimeSpan.FromSeconds(1),
-            sleepFunc: interval =>
-            {
-                sleeps++;
-                now = now.Add(interval);
-                return false;
-            },
-            maxDuration: TimeSpan.FromSeconds(3));
+        BatchLoopSummary? summary = null;
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            summary = new ConductorBatchLoop(
+                measuredSweep: _ => sweepResult,
+                conductEventLogWriter: new ConductEventLogWriter(eventLogPath),
+                utcNow: () => now,
+                blockedRecheckHeartbeatInterval: TimeSpan.FromSeconds(1)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: interval =>
+                {
+                    sleeps++;
+                    observedSleep = interval;
+                    now = now.Add(interval);
+                    return false;
+                },
+                maxDuration: TimeSpan.FromSeconds(11)));
 
-        Assert.Equal("max-duration", summary.StopReason);
+        Assert.NotNull(summary);
+        Assert.Equal("max-duration", summary!.StopReason);
         Assert.Equal(1, summary.Ticks);
         Assert.Equal(3, summary.Rechecks);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, rebaseChecks);
         Assert.Equal(2, conflictChecks);
         Assert.Equal(3, sleeps);
+        Assert.Equal(TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds), observedSleep);
+        Assert.Contains("BLOCKED_RECHECK_INTERVAL_CLAMPED", output, StringComparison.Ordinal);
+        Assert.Contains("computedSeconds=1", output, StringComparison.Ordinal);
+        Assert.Contains("BLOCKED_RECHECK_SLEEP goals=1 seconds=5", output, StringComparison.Ordinal);
         var records = File.ReadAllLines(eventLogPath)
             .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
             .ToArray();
@@ -6308,7 +6326,7 @@ public sealed class ConductorBatchLoopTests
     }
 
     [Xunit.Fact]
-    public void BatchLoopRebaseRecheckFailureKeepsGoalSetAside()
+    public void BatchLoopGitLaunchFailureTerminatesRecheckWithoutNewGoalState()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Keep failed recheck escalated");
@@ -6329,29 +6347,39 @@ public sealed class ConductorBatchLoopTests
             recheckPreLandingRebaseConflict: _ =>
             {
                 conflictChecks++;
-                throw new InvalidOperationException("git merge-tree could not start");
+                return new LandingEscalationRecheckResult(
+                    ConditionResolved: false,
+                    Status: "GitMergeTreeCouldNotStart",
+                    Observation: "git merge-tree could not start",
+                    EvidenceFingerprint: "launch-failed",
+                    TerminalUnsatisfiable: true);
             },
             runAcceptance: _ => true);
 
-        var summary = new ConductorBatchLoop().Run(
-            kernel,
-            driver,
-            ConductorAutonomyPolicy.Conservative,
-            NoStopPath(),
-            maxIterations: 2,
-            watchInterval: TimeSpan.FromMilliseconds(1),
-            sleepFunc: _ => false);
+        BatchLoopSummary? summary = null;
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ => false));
 
-        Assert.Equal(1, summary.Ticks);
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.Ticks);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal(1, rebaseChecks);
         Assert.Equal(1, conflictChecks);
         Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
-            evt.Message.Contains("Landing escalation recheck failed", StringComparison.Ordinal));
+            evt.Message.Contains("terminal-unsatisfiable", StringComparison.Ordinal));
         Assert.DoesNotContain(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.Contains("Landing escalation self-cleared", StringComparison.Ordinal));
+        Assert.Contains("ESCALATION_RECHECK_UNSATISFIABLE", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("ESCALATION_RECHECK_FAILED", output, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_applies_retry_intent_and_publishes_outcome_after_tick_persist")]
@@ -7404,8 +7432,8 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_stop_persistent_busy_detach_checkpoint_is_bounded")]
-    public void BatchLoopStopPersistentBusyDetachCheckpointIsBounded()
+    [Xunit.Fact]
+    public void Stop_TenSimulatedBusyMinutes_HasBoundedOutput()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
@@ -7413,7 +7441,7 @@ public sealed class ConductorBatchLoopTests
             DefaultAgents(),
             "bounded detached checkpoint failure");
         var task = goal.Tasks.Single();
-        var now = DateTimeOffset.UtcNow;
+        var now = DateTimeOffset.UnixEpoch;
         kernel.RecordTaskDispatch(
             goal.Id,
             task.Id,
@@ -7434,26 +7462,62 @@ public sealed class ConductorBatchLoopTests
                 OwnedProcessIds: [444]));
 
         var attempts = 0;
+        var delays = new List<TimeSpan>();
         var runner = new BackgroundDispatchRunner();
         var stopFile = ExistingStopPath();
         try
         {
-            var summary = new ConductorBatchLoop(
-                detachGoalRunningDispatches: (loopKernel, loopGoal) =>
-                    runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id)).Run(
-                    kernel,
-                    MakeDriver(),
-                    ConductorAutonomyPolicy.Conservative,
-                    stopFile,
-                    onlyGoalId: goal.Id.Value,
-                    persistTick: _ =>
-                    {
-                        attempts++;
-                        throw SqliteBusy();
-                    },
-                    busyWriteDelay: _ => { });
+            BatchLoopSummary? summary = null;
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+                summary = new ConductorBatchLoop(
+                    detachGoalRunningDispatches: (loopKernel, loopGoal) =>
+                        runner.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
+                    utcNow: () => now,
+                    writeJitter: () => 0).Run(
+                        kernel,
+                        MakeDriver(),
+                        ConductorAutonomyPolicy.Conservative,
+                        stopFile,
+                        onlyGoalId: goal.Id.Value,
+                        persistTick: _ =>
+                        {
+                            attempts++;
+                            throw SqliteBusy();
+                        },
+                        busyWriteDelay: delay =>
+                        {
+                            delays.Add(delay);
+                            now = now.AddMinutes(5);
+                        }));
 
-            Assert.True(summary.StopRequested);
+            Assert.NotNull(summary);
+            Assert.True(summary!.StopRequested);
+            var outputLines = output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+            var busyLines = outputLines
+                .Where(line => line.StartsWith("TICK_WRITE_BUSY ", StringComparison.Ordinal))
+                .ToArray();
+            var degradedLines = outputLines
+                .Where(line => line.StartsWith("TICK_WRITE_DEGRADED ", StringComparison.Ordinal))
+                .ToArray();
+            var retryingLines = outputLines
+                .Where(line => line.StartsWith("TICK_WRITE_RETRYING ", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Collection(
+                busyLines,
+                line => Assert.Contains(" attempt=1 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=2 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=3 ", line, StringComparison.Ordinal));
+            Assert.Collection(
+                degradedLines,
+                line => Assert.Contains(" attempt=1 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=2 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=3 ", line, StringComparison.Ordinal));
+            Assert.Collection(
+                retryingLines,
+                line => Assert.Contains(" attempt=1 ", line, StringComparison.Ordinal),
+                line => Assert.Contains(" attempt=2 ", line, StringComparison.Ordinal));
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(output) < 1024 * 1024);
+            Assert.Equal(TimeSpan.FromMinutes(10), now - DateTimeOffset.UnixEpoch);
         }
         finally
         {
@@ -7461,6 +7525,10 @@ public sealed class ConductorBatchLoopTests
         }
 
         Assert.Equal(ConductorBatchLoop.DefaultGracefulDetachCheckpointAttempts, attempts);
+        Assert.Equal(ConductorBatchLoop.DefaultGracefulDetachCheckpointAttempts - 1, delays.Count);
+        Assert.All(delays, delay => Assert.True(delay > TimeSpan.Zero));
+        Assert.True(delays[1] >= delays[0]);
+        Assert.All(delays, delay => Assert.True(delay <= RetryLoopPolicy.MaximumWriteDelay));
         Assert.True(kernel.GetTask(goal.Id, task.Id).LastProcess!.WasGracefullyDetachedByConductor);
     }
 

@@ -570,21 +570,12 @@ internal sealed class ConductorDriver
             }
 
             var evidence = ReadLandingRecheckEvidence(worktreePath);
-            var mergeTree = new WorkerGitContext().ReadReviewerMergeTreeStatus(
-                worktreePath,
-                evidence.MainHead,
-                evidence.BranchHead);
-            return mergeTree.IsClean
-                ? new LandingEscalationRecheckResult(
-                    ConditionResolved: true,
-                    Status: "MergeTreeClean",
-                    Observation: "Read-only merge-tree check found no conflict with main.",
-                    EvidenceFingerprint: evidence.Fingerprint)
-                : new LandingEscalationRecheckResult(
-                    ConditionResolved: false,
-                    Status: "MergeTreeConflict",
-                    Observation: $"Read-only merge-tree check still conflicts with main: {string.Join(", ", mergeTree.ConflictPaths)}",
-                    EvidenceFingerprint: evidence.Fingerprint);
+            return ClassifyPreLandingRebaseConflict(
+                () => new WorkerGitContext().ReadReviewerMergeTreeStatus(
+                    worktreePath,
+                    evidence.MainHead,
+                    evidence.BranchHead),
+                evidence.Fingerprint);
         };
 
         _land = (goal, policy) =>
@@ -708,6 +699,38 @@ internal sealed class ConductorDriver
             BuildPreReviewEvidenceContext(
                 TryResolveAcceptanceBranchHead(goal),
                 _getLandingFileScopes(goal));
+    }
+
+    internal static LandingEscalationRecheckResult ClassifyPreLandingRebaseConflict(
+        Func<ReviewerMergeTreeStatus> readMergeTree,
+        string evidenceFingerprint)
+    {
+        ReviewerMergeTreeStatus mergeTree;
+        try
+        {
+            mergeTree = readMergeTree();
+        }
+        catch (ReviewerMergeTreeStatusException ex) when (!ex.GitProcessStarted)
+        {
+            return new LandingEscalationRecheckResult(
+                ConditionResolved: false,
+                Status: "GitMergeTreeCouldNotStart",
+                Observation: ex.Message,
+                EvidenceFingerprint: evidenceFingerprint,
+                TerminalUnsatisfiable: true);
+        }
+
+        return mergeTree.IsClean
+            ? new LandingEscalationRecheckResult(
+                ConditionResolved: true,
+                Status: "MergeTreeClean",
+                Observation: "Read-only merge-tree check found no conflict with main.",
+                EvidenceFingerprint: evidenceFingerprint)
+            : new LandingEscalationRecheckResult(
+                ConditionResolved: false,
+                Status: "MergeTreeConflict",
+                Observation: $"Read-only merge-tree check still conflicts with main: {string.Join(", ", mergeTree.ConflictPaths)}",
+                EvidenceFingerprint: evidenceFingerprint);
     }
 
     internal ConductorDriver(
@@ -3854,7 +3877,8 @@ internal sealed record LandingEscalationRecheckResult(
     bool ConditionResolved,
     string Status,
     string Observation,
-    string EvidenceFingerprint);
+    string EvidenceFingerprint,
+    bool TerminalUnsatisfiable = false);
 
 internal sealed record ConductorLandingReceipt(
     string GoalId,

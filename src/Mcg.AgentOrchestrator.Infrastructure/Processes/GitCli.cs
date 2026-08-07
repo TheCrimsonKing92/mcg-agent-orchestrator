@@ -23,7 +23,12 @@ internal static class GitCli
         "-c", "maintenance.auto=false",
     ];
 
-    public readonly record struct GitResult(int ExitCode, string Output, string Error, bool DrainTimedOut = false)
+    public readonly record struct GitResult(
+        int ExitCode,
+        string Output,
+        string Error,
+        bool DrainTimedOut = false,
+        bool ProcessStarted = true)
     {
         public bool Succeeded => ExitCode == 0;
     }
@@ -40,12 +45,20 @@ internal static class GitCli
         Run(workingDirectory, DefaultTimeoutMilliseconds, args);
 
     public static GitResult Run(string workingDirectory, int timeoutMilliseconds, params string[] args)
+        => RunExecutable("git", workingDirectory, timeoutMilliseconds, args);
+
+    internal static GitResult RunExecutable(
+        string executable,
+        string workingDirectory,
+        int timeoutMilliseconds,
+        params string[] args)
     {
+        var processStarted = false;
         try
         {
             var startInfo = new ProcessStartInfo
             {
-                FileName = "git",
+                FileName = executable,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -63,7 +76,8 @@ internal static class GitCli
 
             using var process = Process.Start(startInfo);
             if (process is null)
-                return new GitResult(1, string.Empty, "failed to start git process");
+                return new GitResult(1, string.Empty, "failed to start git process", ProcessStarted: false);
+            processStarted = true;
 
             // Drain asynchronously so WaitForExit's timeout is real: a synchronous ReadToEnd would
             // block on an inherited pipe even after git exits, and the timeout would never fire.
@@ -92,7 +106,7 @@ internal static class GitCli
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or System.ComponentModel.Win32Exception)
         {
-            return new GitResult(1, string.Empty, ex.Message);
+            return new GitResult(1, string.Empty, ex.Message, ProcessStarted: processStarted);
         }
     }
 
