@@ -198,7 +198,7 @@ internal sealed class ConductorDriver
         _dispatchAndStart = (goal, policy) =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch", "Starting subscription dispatch.");
-            var goalSnapshotBeforeDispatch = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+            var goalSnapshotBeforeDispatch = kernel.ExportGoalSnapshot(goal.Id);
             var criticalCheckpointPersisted = false;
             SubscriptionStartResult result;
             try
@@ -234,7 +234,6 @@ internal sealed class ConductorDriver
             }
             catch (Exception ex)
             {
-
                 var exceptionReason = $"Subscription dispatch start failed: {ex.Message}";
                 GoalOperationJournal.Failed(dir, goal, "conductor:dispatch", exceptionReason);
                 return DispatchStartOutcome.SpawnFailed(exceptionReason);
@@ -280,13 +279,8 @@ internal sealed class ConductorDriver
                         },
                     readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState);
             }
-            catch (DispatchRecordWriteException)
+            catch (Exception ex) when (ex is not DispatchRecordWriteException)
             {
-                throw;
-            }
-            catch (Exception ex)
-            {
-
                 var exceptionReason = $"Recorded dispatch start failed: {ex.Message}";
                 GoalOperationJournal.Failed(dir, goal, "conductor:dispatch-start", exceptionReason);
                 return DispatchStartOutcome.SpawnFailed(exceptionReason);

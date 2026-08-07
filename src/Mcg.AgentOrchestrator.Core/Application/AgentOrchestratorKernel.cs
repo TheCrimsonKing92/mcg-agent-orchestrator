@@ -105,6 +105,8 @@ public sealed partial class AgentOrchestratorKernel
         SweepParkedGoalHumanWaits();
     }
 
+    public GoalSnapshot ExportGoalSnapshot(GoalId goalId) => GetGoal(goalId).ToSnapshot();
+
     public void ReplaceGoalWithSnapshot(GoalSnapshot snapshot)
     {
         var goal = Goal.FromSnapshot(snapshot);

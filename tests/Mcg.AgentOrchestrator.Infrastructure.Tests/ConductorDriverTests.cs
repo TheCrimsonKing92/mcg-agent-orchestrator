@@ -4,6 +4,7 @@ using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using System.Text.Json;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
@@ -584,6 +585,56 @@ public sealed class ConductorDriverTests
         {
             Assert.Equal(ReadFactsPerGoal(workspace, goal), driver.GetFacts(goal));
         }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_real_dispatch_checkpoint_rolls_back_then_notifies_on_success")]
+    public void ConductorDriverRealDispatchCheckpointRollsBackThenNotifiesOnSuccess()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var (kernel, goal) = SimpleGoal("Real dispatch checkpoint rollback");
+        GoalWorktrees.Ensure(root, goal.Id);
+        var before = JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id));
+        var persistAttempts = 0;
+        var successfulCheckpointNotifications = 0;
+        var profiles = WorkerProfileCatalog.Default().Upsert(
+            new WorkerProfile("codex-cli", "Write-Output {promptPath}; Write-Output {sandboxMode}"));
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            profiles,
+            persistCriticalDispatchStart: (_, _) =>
+            {
+                persistAttempts++;
+                if (persistAttempts == 1)
+                    throw new SqliteException("injected busy checkpoint", 5);
+            });
+        driver.DispatchRecordWriteSucceededSink = _ => successfulCheckpointNotifications++;
+
+        var ex = Assert.Throws<DispatchRecordWriteException>(() =>
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative));
+
+        Assert.False(ex.ProcessMayHaveStarted);
+        Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id)));
+        Assert.Null(kernel.GetGoal(goal.Id).Tasks.Single().LastProcess);
+        Assert.Equal(0, successfulCheckpointNotifications);
+
+        var result = driver.AdvanceOnce(kernel.GetGoal(goal.Id), ConductorAutonomyPolicy.Conservative);
+
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+        Assert.Equal(4, persistAttempts);
+        Assert.Equal(3, successfulCheckpointNotifications);
+        Assert.NotNull(kernel.GetGoal(goal.Id).Tasks.Single().LastProcess);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_real_facts_refresh_after_conductor_record")]

@@ -40,8 +40,7 @@ internal sealed class DispatchRecordWriteException : InvalidOperationException
     internal bool ProcessMayHaveStarted =>
         CheckpointPhase == DispatchRecordCheckpointPhase.ProcessMayHaveStarted;
 
-    internal bool IsFatal =>
-        ProcessMayHaveStarted || Cause == DispatchRecordWriteFailureCause.Unrecoverable;
+    internal bool IsFatal => ProcessMayHaveStarted;
 
     internal static DispatchRecordWriteException From(
         Exception exception,
@@ -105,7 +104,7 @@ internal sealed class DispatchRecordWriteException : InvalidOperationException
             : cause switch
         {
             DispatchRecordWriteFailureCause.Contention => "DISPATCH_RECORD_WRITE_CONTENTION",
-            DispatchRecordWriteFailureCause.Unrecoverable => "DISPATCH_RECORD_WRITE_FAILED",
+            DispatchRecordWriteFailureCause.Unrecoverable => "DISPATCH_RECORD_WRITE_UNRECOVERABLE",
             null => "DISPATCH_RECORD_WRITE_UNCLASSIFIED"
         };
         var code = sqliteErrorCode?.ToString() ?? "unavailable";

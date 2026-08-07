@@ -60,7 +60,10 @@ public sealed class ConductorBatchLoopTests
     }
 
     private static Exception SqliteBusy() =>
-        new SqliteException("SQLite Error 5: 'database is locked'.", 5);
+        new InvalidOperationException("SQLite Error 5: 'database is locked'.");
+
+    private static SqliteException TypedSqliteBusy(int sqliteErrorCode = 5) =>
+        new($"SQLite Error {sqliteErrorCode}: 'database is locked'.", sqliteErrorCode);
 
     private static GoalWorktreeRebaseResult DefaultRebaseSuccess() =>
         new(GoalWorktreeRebaseStatus.AlreadyFastForwardable, "goal/test", "OK", [], null);
@@ -5784,12 +5787,12 @@ public sealed class ConductorBatchLoopTests
                 DateTimeOffset.UtcNow, null, null));
 
         var attempts = 0;
-        var ex = Assert.Throws<InvalidOperationException>(() =>
+        var ex = Assert.Throws<DispatchRecordWriteException>(() =>
             ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
                 (_, _) =>
                 {
                     attempts++;
-                    throw SqliteBusy();
+                    throw TypedSqliteBusy();
                 },
                 kernel,
                 goalId,
@@ -5804,13 +5807,15 @@ public sealed class ConductorBatchLoopTests
     }
 
     [Xunit.Theory(DisplayName = "DispatchRecordWrite_classifier_maps_only_busy_and_locked_to_contention")]
-    [Xunit.InlineData(5, "Contention")]
-    [Xunit.InlineData(6, "Contention")]
+    [Xunit.InlineData(5, (int)DispatchRecordWriteFailureCause.Contention)]
+    [Xunit.InlineData(6, (int)DispatchRecordWriteFailureCause.Contention)]
     public void DispatchRecordWriteClassifierMapsOnlyBusyAndLockedToContention(
         int sqliteErrorCode,
-        string expected)
+        int expectedCause)
     {
-        Assert.Equal(expected, DispatchRecordWriteException.ClassifySqliteErrorCode(sqliteErrorCode).ToString());
+        Assert.Equal(
+            (DispatchRecordWriteFailureCause)expectedCause,
+            DispatchRecordWriteException.ClassifySqliteErrorCode(sqliteErrorCode));
     }
 
     [Xunit.Fact(DisplayName = "DispatchRecordWrite_classifier_maps_all_other_primary_and_unknown_codes_to_unrecoverable")]
@@ -5836,8 +5841,8 @@ public sealed class ConductorBatchLoopTests
         var spawns = 0;
         var observedTicks = new List<(int Tick, int Spawns, string Snapshot)>();
         var tickSummaries = new List<BatchTickSummary>();
-        var processId = Environment.ProcessId;
-        var driver = MakeDriver(
+        ConductorDriver? driver = null;
+        driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             dispatchAndStart: currentGoal =>
             {
@@ -5846,12 +5851,13 @@ public sealed class ConductorBatchLoopTests
                     (_, _) =>
                     {
                         persistAttempts++;
-                        if (persistAttempts == 1)
-                            throw new SqliteException($"injected sqlite {sqliteErrorCode}", sqliteErrorCode);
+                        if (persistAttempts is 1 or 3)
+                            throw TypedSqliteBusy(sqliteErrorCode);
                     },
                     kernel,
                     currentGoal.Id,
                     task.Id);
+                driver!.DispatchRecordWriteSucceededSink?.Invoke(currentGoal.Id);
                 spawns++;
                 return DispatchStartOutcome.Started();
             });
@@ -5861,7 +5867,7 @@ public sealed class ConductorBatchLoopTests
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: 2,
+            maxIterations: 3,
             onTick: tick =>
             {
                 tickSummaries.Add(tick);
@@ -5871,19 +5877,20 @@ public sealed class ConductorBatchLoopTests
                     JsonSerializer.Serialize(kernel.ExportSnapshot().Goals.Single())));
             });
 
-        Assert.Equal(processId, Environment.ProcessId);
-        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(3, summary.Ticks);
         Assert.Equal(0, summary.Escalated);
         Assert.Equal(1, spawns);
-        Assert.Equal([1, 2], observedTicks.Select(item => item.Tick).ToArray());
+        Assert.Equal([1, 2, 3], observedTicks.Select(item => item.Tick).ToArray());
         Assert.Equal(0, observedTicks[0].Spawns);
         Assert.Equal(before, observedTicks[0].Snapshot);
         Assert.Equal(GoalStatus.Active, kernel.GetGoal(goal.Id).Status);
-        var contentionLine = Assert.Single(tickSummaries
+        var contentionLines = tickSummaries
             .SelectMany(tick => tick.ProgressLines ?? [])
-            .Where(line => line.StartsWith("DISPATCH_RECORD_WRITE_CONTENTION ", StringComparison.Ordinal)));
-        Assert.Contains("skip=1/5", contentionLine, StringComparison.Ordinal);
-        Assert.DoesNotContain("DISPATCH_RECORD_WRITE_FAILED", contentionLine, StringComparison.Ordinal);
+            .Where(line => line.StartsWith("DISPATCH_RECORD_WRITE_CONTENTION ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, contentionLines.Length);
+        Assert.All(contentionLines, line => Assert.Contains("skip=1/5", line, StringComparison.Ordinal));
+        Assert.All(contentionLines, line => Assert.DoesNotContain("DISPATCH_RECORD_WRITE_FAILED", line, StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_dispatch_record_contention_message_with_fatal_token_does_not_stop_loop")]
@@ -5900,7 +5907,7 @@ public sealed class ConductorBatchLoopTests
                 goal.Id,
                 task.Id,
                 5,
-                new SqliteException("busy", 5),
+                TypedSqliteBusy(),
                 "quoted diagnostic DISPATCH_RECORD_WRITE_FAILED must not control flow"));
 
         var summary = new ConductorBatchLoop().Run(
@@ -5934,15 +5941,17 @@ public sealed class ConductorBatchLoopTests
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: 1,
+            maxIterations: ConductorBatchLoop.DispatchRecordContentionSkipLimit + 1,
             onTick: ticks.Add);
 
-        Assert.Equal(1, summary.Ticks);
-        Assert.Equal(0, summary.Escalated);
-        var line = Assert.Single(ticks.SelectMany(tick => tick.ProgressLines ?? [])
-            .Where(progress => progress.StartsWith("DISPATCH_RECORD_WRITE_UNCLASSIFIED ", StringComparison.Ordinal)));
-        Assert.Contains("System.InvalidOperationException", line, StringComparison.Ordinal);
-        Assert.Contains("opaque_persistence_adapter_failure", line, StringComparison.Ordinal);
+        Assert.Equal(1, summary.Escalated);
+        var lines = ticks.SelectMany(tick => tick.ProgressLines ?? [])
+            .Where(progress => progress.StartsWith("DISPATCH_RECORD_WRITE_UNCLASSIFIED ", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(ConductorBatchLoop.DispatchRecordContentionSkipLimit, lines.Length);
+        Assert.All(lines, line => Assert.Contains("System.InvalidOperationException", line, StringComparison.Ordinal));
+        Assert.All(lines, line => Assert.Contains("opaque_persistence_adapter_failure", line, StringComparison.Ordinal));
+        Assert.Contains("skip=5/5", lines[^1], StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_dispatch_record_contention_escalates_goal_at_visible_bound_without_stopping_loop")]
@@ -5964,7 +5973,7 @@ public sealed class ConductorBatchLoopTests
                     goal.Id,
                     task.Id,
                     5,
-                    new SqliteException("busy", 5));
+                    TypedSqliteBusy());
             });
 
         var summary = new ConductorBatchLoop().Run(
@@ -5987,8 +5996,8 @@ public sealed class ConductorBatchLoopTests
             line.Contains("dispatch-record-write-contention-limit", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_unrecoverable_dispatch_record_write_stops_loop")]
-    public void BatchLoopUnrecoverableDispatchRecordWriteStopsLoop()
+    [Xunit.Fact(DisplayName = "BatchLoop_unrecoverable_pre_process_dispatch_record_write_is_bounded_per_goal")]
+    public void BatchLoopUnrecoverablePreProcessDispatchRecordWriteIsBoundedPerGoal()
     {
         var (kernel, goal) = SimpleGoal("unrecoverable dispatch record failure");
         var task = goal.Tasks.Single();
@@ -6004,32 +6013,37 @@ public sealed class ConductorBatchLoopTests
                 return DispatchStartOutcome.Started();
             });
 
-        var ex = Assert.Throws<DispatchRecordWriteException>(() => new ConductorBatchLoop().Run(
+        var summary = new ConductorBatchLoop().Run(
             kernel,
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: 2));
+            maxIterations: ConductorBatchLoop.DispatchRecordContentionSkipLimit + 1);
 
-        Assert.Equal(DispatchRecordWriteFailureCause.Unrecoverable, ex.Cause);
-        Assert.Contains("DISPATCH_RECORD_WRITE_FAILED", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Contains(kernel.GetGoal(goal.Id).Timeline, entry =>
+            entry.Message.Contains("dispatch-record-write-unrecoverable-limit", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "DispatchRecordWrite_post_process_contention_is_fatal")]
-    public void DispatchRecordWritePostProcessContentionIsFatal()
+    [Xunit.Theory(DisplayName = "DispatchRecordWrite_post_process_failure_is_fatal_regardless_of_cause")]
+    [Xunit.InlineData(5, (int)DispatchRecordWriteFailureCause.Contention)]
+    [Xunit.InlineData(8, (int)DispatchRecordWriteFailureCause.Unrecoverable)]
+    public void DispatchRecordWritePostProcessFailureIsFatalRegardlessOfCause(
+        int sqliteErrorCode,
+        int expectedCause)
     {
         var (kernel, goal) = SimpleGoal("post process contention");
         var task = goal.Tasks.Single();
 
         var ex = Assert.Throws<DispatchRecordWriteException>(() =>
             ConductorBatchLoop.PersistCriticalDispatchStartOrThrow(
-                (_, _) => throw SqliteBusy(),
+                (_, _) => throw new SqliteException("injected post-process write failure", sqliteErrorCode),
                 kernel,
                 goal.Id,
                 task.Id,
                 DispatchRecordCheckpointPhase.ProcessMayHaveStarted));
 
-        Assert.Equal(DispatchRecordWriteFailureCause.Contention, ex.Cause);
+        Assert.Equal((DispatchRecordWriteFailureCause)expectedCause, ex.Cause);
         Assert.True(ex.ProcessMayHaveStarted);
         Assert.True(ex.IsFatal);
         Assert.Contains("DISPATCH_RECORD_WRITE_FAILED", ex.Message, StringComparison.Ordinal);
@@ -10038,7 +10052,7 @@ public sealed class ConductorBatchLoopTests
         var reapedGoalIds = new List<GoalId>();
         var expected = new DispatchRecordWriteException(
             DispatchRecordWriteFailureCause.Unrecoverable,
-            DispatchRecordCheckpointPhase.BeforeProcessStart,
+            DispatchRecordCheckpointPhase.ProcessMayHaveStarted,
             "dispatch-start",
             goal.Id,
             goal.Tasks.Single().Id,
