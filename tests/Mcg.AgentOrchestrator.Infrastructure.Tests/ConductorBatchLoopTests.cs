@@ -9545,7 +9545,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal([faultyGoal.Id], reapedGoalIds);
         Assert.Contains(ticks.SelectMany(tick => tick.ProgressLines ?? []), line =>
             line.StartsWith(
-                $"GOAL goal={faultyGoal.Id.Value[..8]} result=escalated reason=Access to retry path denied.",
+                $"GOAL goal={faultyGoal.Id.Value[..8]} result=escalated reason=Access_to_retry_path_denied.",
                 StringComparison.Ordinal));
     }
 
