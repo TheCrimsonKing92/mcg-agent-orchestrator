@@ -4823,12 +4823,16 @@ public sealed class ConductorBatchLoopTests
         TimeSpan idle,
         IReadOnlyList<int> ownedPids,
         IReadOnlyCollection<int> alivePids,
-        IReadOnlyList<string> files) =>
+        IReadOnlyList<string> files,
+        int loopProcessId = 9001,
+        int launcherProcessId = 9002) =>
         new(
             readHeartbeat: (process, observedAt) => Heartbeat(process, observedAt, stdoutBytes, stderrBytes, idle, ownedPids),
             readChanges: (_, _) => new DispatchLiveChangeSnapshot(files, files.Take(3).ToArray(), Math.Max(0, files.Count - 3)),
             isProcessAlive: alivePids.Contains,
-            now: () => now);
+            now: () => now,
+            loopProcessId: loopProcessId,
+            launcherProcessId: launcherProcessId);
 
     private static DispatchHeartbeatStatus Heartbeat(
         TaskProcessRecord process,
@@ -9624,6 +9628,9 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains($"role={task.RequiredRole}", line);
         Assert.Contains("task=1/", line);
         Assert.Contains("elapsed=2m0s", line);
+        Assert.Contains("state=working", line);
+        Assert.Contains("pid=111", line);
+        Assert.DoesNotContain("pid=222", line);
         Assert.Contains("liveness=\"alive\"", line);
         Assert.Contains("output_delta=50", line);
         Assert.Contains("last_progress_age=15s", line);
@@ -9634,10 +9641,78 @@ public sealed class ConductorBatchLoopTests
         var human = ticks.Single().ProgressLines!.Single(l => l.StartsWith($"[{goal.Id.Value[..8]}] {task.RequiredRole}", StringComparison.Ordinal));
         Assert.Contains("(task 1/", human);
         Assert.Contains("running 2m0s", human);
-        Assert.Contains("worker pid 222 alive", human);
+        Assert.Contains("state=working", human);
+        Assert.Contains("worker pid=111 alive", human);
+        Assert.DoesNotContain("pid=222", human);
         Assert.Contains("+42B stdout", human);
         Assert.Contains("last progress 15s ago", human);
         Assert.Contains("4 files changed (src/A.cs, src/B.cs, src/C.cs, +1 more)", human);
+    }
+
+    [Xunit.Theory(DisplayName = "WatchProgress_suppresses_conductor_process_ids")]
+    [Xunit.InlineData(9001)]
+    [Xunit.InlineData(9002)]
+    public void WatchProgressSuppressesConductorProcessIds(int conductorProcessId)
+    {
+        var (kernel, goal) = SimpleGoal("watch pid guard");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-1), "abc123", conductorProcessId);
+        var reporter = FakeWatchReporter(
+            now,
+            stdoutBytes: 10,
+            stderrBytes: 0,
+            idle: TimeSpan.FromSeconds(5),
+            ownedPids: [333],
+            alivePids: [333],
+            files: []);
+
+        var lines = reporter.BuildLines(
+            kernel.GetGoal(goal.Id),
+            quiet: false,
+            policy: ConductorAutonomyPolicy.Conservative,
+            watchInterval: TimeSpan.FromSeconds(1));
+
+        var machine = lines.Single(line => line.StartsWith("WATCH_PROGRESS ", StringComparison.Ordinal));
+        var human = lines.Single(line => line.StartsWith($"[{goal.Id.Value[..8]}]", StringComparison.Ordinal));
+        Assert.Contains("pid=unknown", machine);
+        Assert.Contains("worker pid=unknown alive", human);
+        Assert.DoesNotContain($"pid={conductorProcessId}", machine);
+        Assert.DoesNotContain($"pid={conductorProcessId}", human);
+    }
+
+    [Xunit.Fact(DisplayName = "WatchProgress_distinguishes_working_quiet_and_stalled_state")]
+    public void WatchProgressDistinguishesWorkingQuietAndStalledState()
+    {
+        var (kernel, goal) = SimpleGoal("watch progress state");
+        var task = goal.Tasks.First();
+        var now = DateTimeOffset.Parse("2026-06-22T12:00:00Z");
+        StartProcess(kernel, goal, task, now.AddMinutes(-12), "abc123");
+        var currentGoal = kernel.GetGoal(goal.Id);
+        var workingReporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromSeconds(5), [111], [111], []);
+        var quietReporter = FakeWatchReporter(now, 0, 0, TimeSpan.FromSeconds(5), [111], [111], []);
+        var stalledReporter = FakeWatchReporter(now, 10, 0, TimeSpan.FromMinutes(10), [111], [111], []);
+
+        var working = workingReporter.BuildLines(
+            currentGoal,
+            quiet: false,
+            policy: ConductorAutonomyPolicy.Conservative,
+            stallThreshold: TimeSpan.FromMinutes(10));
+        var quiet = quietReporter.BuildLines(
+            currentGoal,
+            quiet: false,
+            policy: ConductorAutonomyPolicy.Conservative,
+            stallThreshold: TimeSpan.FromMinutes(10));
+        var stalled = stalledReporter.BuildLines(
+            currentGoal,
+            quiet: false,
+            policy: ConductorAutonomyPolicy.Conservative,
+            stallThreshold: TimeSpan.FromMinutes(10));
+
+        Assert.All(working, line => Assert.Contains("state=working", line));
+        Assert.All(quiet, line => Assert.Contains("state=quiet", line));
+        Assert.All(stalled.Where(line => !line.Contains("WARNING", StringComparison.Ordinal)), line => Assert.Contains("state=stalled", line));
+        Assert.NotEqual(working[0], stalled[0]);
     }
 
     [Xunit.Fact(DisplayName = "WatchProgress_throttles_until_output_or_file_count_changes")]
