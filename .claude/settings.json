@@ -189,7 +189,9 @@
       "PowerShell(.\\mcg-orchestrator.cmd backlog-reopen *)",
       "PowerShell(.\\mcg-orchestrator.cmd backlog-import*)",
       "PowerShell(.\\mcg-orchestrator.cmd abandon-goal *)",
-      "PowerShell(.\\mcg-orchestrator.cmd recover *)"
+      "PowerShell(.\\mcg-orchestrator.cmd recover *)",
+      "PowerShell(.\\scripts\\Send-OperatorPage.ps1 *)",
+      "PowerShell(./scripts/Send-OperatorPage.ps1 *)"
     ]
   }
 }

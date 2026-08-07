@@ -6019,7 +6019,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         environment["GIT_AUTHOR_EMAIL"] = HermeticGitIdentityEmail;
         environment["GIT_COMMITTER_NAME"] = HermeticGitIdentityName;
         environment["GIT_COMMITTER_EMAIL"] = HermeticGitIdentityEmail;
-        environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
+        // A relocated DOTNET_CLI_HOME reads as a first use, and the SDK responds by PERSISTING
+        // "$DOTNET_CLI_HOME\.dotnet\tools" into the operator's HKCU\Environment\Path. That is ambient
+        // state written by a function whose entire purpose is to write none, so it must be suppressed
+        // here rather than cleaned up afterwards. DOTNET_SKIP_FIRST_TIME_EXPERIENCE does NOT suppress
+        // it - measured on .NET 10, the entry is still written; the SDK dropped that variable years ago.
+        environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"] = "0";
         environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         environment["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";
         environment["DOTNET_NOLOGO"] = "1";

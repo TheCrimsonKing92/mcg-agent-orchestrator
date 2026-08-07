@@ -260,6 +260,13 @@ public sealed class HermeticVerificationEnvironmentTests
             Path.Combine(Path.GetTempPath(), "mcg-hvp"),
             environment["USERPROFILE"]);
         Assert.Equal(environment["USERPROFILE"], environment["DOTNET_CLI_HOME"]);
+
+        // Relocating DOTNET_CLI_HOME makes the SDK treat the run as a first use and PERSIST
+        // "$DOTNET_CLI_HOME\.dotnet\tools" into HKCU\Environment\Path - ambient state escaping the
+        // hermetic boundary, one dead entry at a time, invisible until PATH is inspected by hand.
+        // DOTNET_SKIP_FIRST_TIME_EXPERIENCE does not suppress it on .NET 10; only this variable does.
+        Assert.Equal("0", environment["DOTNET_ADD_GLOBAL_TOOLS_TO_PATH"]);
+        Assert.DoesNotContain("DOTNET_SKIP_FIRST_TIME_EXPERIENCE", environment.Keys);
         if (OperatingSystem.IsWindows())
         {
             var expectedCache = Path.Combine(environment["USERPROFILE"]!, "powershell", "ModuleAnalysisCache");

@@ -9457,6 +9457,133 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Ticks);
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_RetryAdvanceThrowEscalatesOneGoalAndContinuesBatch")]
+    public void BatchLoop_FaultIsolation_RetryAdvanceThrowEscalatesOneGoalAndContinuesBatch()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var faultyGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "retry fault goal");
+        var healthyGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "healthy retry neighbor");
+        PassVerification(kernel, faultyGoal, faultyGoal.Tasks.Single());
+        PassVerification(kernel, healthyGoal, healthyGoal.Tasks.Single());
+
+        var attempts = new Dictionary<GoalId, int>();
+        var reapedGoalIds = new List<GoalId>();
+        var healthyLanded = false;
+        var healthyRecorded = false;
+        var healthyCleanedUp = false;
+        var driver = MakeDriver(
+            getFacts: goal => goal.Id == healthyGoal.Id
+                ? new GoalLifecycleFacts(
+                    WorkspaceExists: true,
+                    IsMerged: healthyLanded,
+                    IsRecorded: healthyRecorded,
+                    IsCleanedUp: healthyCleanedUp)
+                : new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptance: goal =>
+            {
+                attempts.TryGetValue(goal.Id, out var attempt);
+                attempts[goal.Id] = ++attempt;
+                if (goal.Id == faultyGoal.Id)
+                {
+                    if (attempt == 1)
+                        return false;
+
+                    throw new UnauthorizedAccessException("Access to retry path denied.");
+                }
+
+                return true;
+            },
+            land: goal =>
+            {
+                if (goal.Id == healthyGoal.Id)
+                    healthyLanded = true;
+
+                return new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "Landed");
+            },
+            record: goal =>
+            {
+                if (goal.Id == healthyGoal.Id)
+                    healthyRecorded = true;
+            },
+            cleanup: goal =>
+            {
+                if (goal.Id == healthyGoal.Id)
+                {
+                    healthyCleanedUp = true;
+                    kernel.CompleteGoal(goal.Id, "Healthy neighbor completed normally.");
+                }
+
+                return new GoalWorktreeRemoveResult("Workspace cleaned up.", null, [], null);
+            });
+
+        var ticks = new List<BatchTickSummary>();
+        var summary = new ConductorBatchLoop(
+            reapGoalRunningDispatches: (_, goal) => reapedGoalIds.Add(goal.Id)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 3,
+                maxVerifyRetries: 2,
+                onTick: ticks.Add);
+
+        Assert.Equal(2, attempts[faultyGoal.Id]);
+        Assert.Equal(1, attempts[healthyGoal.Id]);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Equal(0, summary.Retried);
+        Assert.Equal(3, summary.Advanced);
+        Assert.True(healthyLanded);
+        Assert.True(healthyRecorded);
+        Assert.True(healthyCleanedUp);
+        Assert.Equal(GoalStatus.Completed, kernel.GetGoal(healthyGoal.Id).Status);
+        Assert.Equal([faultyGoal.Id], reapedGoalIds);
+        Assert.Contains(ticks.SelectMany(tick => tick.ProgressLines ?? []), line =>
+            line.StartsWith(
+                $"GOAL goal={faultyGoal.Id.Value[..8]} result=escalated reason=Access_to_retry_path_denied.",
+                StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_CriticalRetryAdvanceThrowStillTerminatesLoop")]
+    public void BatchLoop_FaultIsolation_CriticalRetryAdvanceThrowStillTerminatesLoop()
+    {
+        var (kernel, goal) = SimpleGoal("critical retry fault goal");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+
+        var attempts = 0;
+        var reapedGoalIds = new List<GoalId>();
+        var expected = new InvalidOperationException("DISPATCH_RECORD_WRITE_FAILED retry advance persistence failed");
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptance: _ =>
+            {
+                attempts++;
+                if (attempts == 1)
+                    return false;
+
+                throw expected;
+            });
+
+        var actual = Assert.Throws<InvalidOperationException>(() =>
+            new ConductorBatchLoop(
+                reapGoalRunningDispatches: (_, reapedGoal) => reapedGoalIds.Add(reapedGoal.Id)).Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    maxVerifyRetries: 2));
+
+        Assert.Same(expected, actual);
+        Assert.Equal(2, attempts);
+        Assert.Empty(reapedGoalIds);
+    }
+
     // ── Terminal-goal skip: terminal historical goals not in eligible set ─
 
     [Xunit.Fact(DisplayName = "BatchLoop_terminal_historical_goals_are_excluded_from_eligible_set")]

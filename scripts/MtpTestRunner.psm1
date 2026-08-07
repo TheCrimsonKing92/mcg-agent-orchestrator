@@ -528,7 +528,12 @@ function Set-MtpHermeticEnvironment {
     $env:HOME = $profileRoot
     $env:USERPROFILE = $userProfile
     $env:DOTNET_CLI_HOME = $profileRoot
-    $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+    # DOTNET_CLI_HOME is unique per run, so the SDK treats every run as a first use and PERSISTS
+    # "$DOTNET_CLI_HOME\.dotnet\tools" into HKCU\Environment\Path - one dead entry per run, forever.
+    # Twelve had accumulated before anyone noticed. DOTNET_SKIP_FIRST_TIME_EXPERIENCE does NOT prevent
+    # this (measured: it still wrote the entry); the SDK dropped that variable years ago. Only
+    # DOTNET_ADD_GLOBAL_TOOLS_TO_PATH suppresses the PATH write.
+    $env:DOTNET_ADD_GLOBAL_TOOLS_TO_PATH = '0'
     $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
     $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
     $env:DOTNET_NOLOGO = '1'
