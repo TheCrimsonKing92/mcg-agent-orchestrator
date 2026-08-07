@@ -128,8 +128,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             PostLandingCanaryCommand.ClassifyFailure(productReject));
     }
 
-    [Xunit.Fact(DisplayName = "Canary fault classifier separates resource pressure, environment faults, and verdict failures")]
-    public void FaultClassifierHasThreeDistinctDispositions()
+    [Xunit.Fact(DisplayName = "Canary fault classifier uses positive evidence for known and unexpected dispositions")]
+    public void FaultClassifierSeparatesKnownAndUnexpectedDispositions()
     {
         var busy = new DotnetBuildSlotsBusyException(new DotnetBuildLeaseAcquisition.SlotsBusy(
             "run-canary-classifier",
@@ -141,6 +141,13 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Equal(
             PostLandingCanaryFaultDisposition.EnvironmentFault,
             PostLandingCanaryFailureClassifier.Classify(new IOException("environment unavailable")));
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.PreconditionFailure,
+            PostLandingCanaryFailureClassifier.Classify(
+                new PostLandingCanaryPreconditionException("operator action required")));
+        Assert.Equal(
+            PostLandingCanaryFaultDisposition.UnexpectedFault,
+            PostLandingCanaryFailureClassifier.Classify(new InvalidOperationException("unexpected defect")));
         Assert.Equal(
             PostLandingCanaryFaultDisposition.VerdictFailure,
             PostLandingCanaryFailureClassifier.Classify(
@@ -1033,20 +1040,30 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             detail => detail.Contains("ix_run_events_type_operation_seq", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "Known-green fixture runs through the freshly built public acceptance entrypoint without dirtying main")]
+    [Xunit.Fact(DisplayName = "Known-green fixture runs from an isolated landed worktree despite a dirty operator checkout")]
     public async Task KnownGreenFixtureRunsThroughFreshBinaryWithoutDirtyingRepository()
     {
         var root = FindRepoRoot();
         var landingSha = GoalAcceptanceVerifier.ResolveGitText(root, "rev-parse", "HEAD")?.Trim();
         Assert.False(string.IsNullOrWhiteSpace(landingSha));
-        var statusBefore = GoalAcceptanceVerifier.ResolveGitText(root, "status", "--porcelain");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         var buildCacheRoot = Path.Combine(
             Path.GetTempPath(),
             "mcg-canary-binary-tests",
             Guid.NewGuid().ToString("N"));
+        var dirtySentinel = Path.Combine(root, $"post-landing-canary-dirty-{Guid.NewGuid():N}.sentinel");
         try
         {
+            File.WriteAllText(dirtySentinel, "operator-owned uncommitted content");
+            var statusBefore = GoalAcceptanceVerifier.ResolveGitText(
+                root,
+                "status",
+                "--porcelain",
+                "--untracked-files=all");
+            Assert.Contains(
+                Path.GetFileName(dirtySentinel),
+                statusBefore,
+                StringComparison.Ordinal);
             var outcome = await new PostLandingCanaryRunner(
                     root,
                     buildCacheRoot: buildCacheRoot)
@@ -1058,10 +1075,15 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             Assert.True(outcome.ExecutedTestCount > 0);
             Assert.Equal(
                 statusBefore,
-                GoalAcceptanceVerifier.ResolveGitText(root, "status", "--porcelain"));
+                GoalAcceptanceVerifier.ResolveGitText(
+                    root,
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all"));
         }
         finally
         {
+            try { File.Delete(dirtySentinel); } catch { }
             try { Directory.Delete(buildCacheRoot, recursive: true); } catch { }
         }
     }
@@ -1126,7 +1148,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("generated-by-canary.txt", runDirtiness.Detail, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Repository preconditions abandon unverified while repository verdicts fail closed")]
+    [Xunit.Fact(DisplayName = "Repository preconditions defer without consuming attempt budget while repository verdicts fail closed")]
     public async Task RepositoryFailureChannelsDriveDistinctCoordinatorDispositions()
     {
         var precondition = PostLandingCanaryRepositoryInvariant.Evaluate(
@@ -1144,9 +1166,9 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var preconditionException = PostLandingCanaryRunner.CreateRepositoryFailureException(precondition);
         var verdictException = PostLandingCanaryRunner.CreateRepositoryFailureException(verdict);
 
-        Assert.IsType<InvalidOperationException>(preconditionException);
+        Assert.IsType<PostLandingCanaryPreconditionException>(preconditionException);
         Assert.Equal(
-            PostLandingCanaryFaultDisposition.EnvironmentFault,
+            PostLandingCanaryFaultDisposition.PreconditionFailure,
             PostLandingCanaryFailureClassifier.Classify(preconditionException));
         Assert.IsType<PostLandingCanaryEvaluationException>(verdictException);
         Assert.Equal(
@@ -1155,21 +1177,58 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
         using (var preconditionFixture = new CanaryTestFixture())
         {
+            var releaseRetry = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var retryCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var calls = 0;
             var (coordinator, circuit) = preconditionFixture.CreateCoordinator(
-                new FakeRunner((_, _) => Task.FromException<PostLandingCanaryOutcome>(preconditionException)),
-                maxAttempts: 1);
+                new FakeRunner((_, _) => Interlocked.Increment(ref calls) == 1
+                    ? Task.FromException<PostLandingCanaryOutcome>(preconditionException)
+                    : Task.FromResult(PostLandingCanaryOutcome.Passed(1, "precondition cleared"))),
+                maxAttempts: 1,
+                delay: (_, cancellationToken) => releaseRetry.Task.WaitAsync(cancellationToken),
+                progress: line =>
+                {
+                    if (line.Contains("result=passed", StringComparison.Ordinal))
+                    {
+                        retryCompleted.TrySetResult();
+                    }
+                });
 
             Assert.Equal(
-                PostLandingCanaryDisposition.Abandoned,
+                PostLandingCanaryDisposition.Deferred,
                 await coordinator.RunAsync(
                     new PostLandingCanaryRequest("sha-precondition", ["engine/precondition"]),
                     CancellationToken.None));
             Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
             var records = await preconditionFixture.RawStore.ReadByTypeSinceAsync(
                 RunEventTypes.PostLandingCanary);
-            Assert.Contains(records, record =>
-                record.Operation == "abandoned" && record.Status == "Unverified");
+            var deferred = Assert.Single(records.Where(record => record.Operation == "deferred"));
+            Assert.Equal("CouldNotEvaluate", deferred.Status);
+            Assert.Contains("PostLandingCanaryPreconditionException", deferred.Detail, StringComparison.Ordinal);
+            var payload = JsonSerializer.Deserialize<PostLandingCanaryEventPayload>(
+                Assert.IsType<string>(deferred.PayloadJson),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            var deferredPayload = Assert.IsType<PostLandingCanaryEventPayload>(payload);
+            Assert.Equal("precondition-failure", deferredPayload.FailureReason);
+            Assert.Equal(0, deferredPayload.AttemptCount);
+            Assert.DoesNotContain(records, record => record.Operation == "abandoned");
             Assert.DoesNotContain(records, record => record.Operation == "escalation");
+            var operatorItem = Assert.Single(await preconditionFixture.OperatorItems.GetAttentionQueueAsync());
+            Assert.Contains("precondition requires operator action", operatorItem.Subject, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("operator-note.txt", operatorItem.Body, StringComparison.Ordinal);
+
+            releaseRetry.TrySetResult();
+            await retryCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var completedEvents = await preconditionFixture.Events.ReadForLandingAsync("sha-precondition");
+            Assert.Equal(2, calls);
+            Assert.Equal(
+                [1, 1],
+                completedEvents
+                    .Where(item => item.Kind == PostLandingCanaryEventKind.Started)
+                    .Select(item => item.Payload.AttemptCount));
+            Assert.Contains(completedEvents, item =>
+                item.Kind == PostLandingCanaryEventKind.Passed && item.Payload.ExecutedTestCount == 1);
+            Assert.Empty(await preconditionFixture.OperatorItems.GetAttentionQueueAsync());
         }
 
         using (var verdictFixture = new CanaryTestFixture())
@@ -1191,6 +1250,28 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             Assert.Contains(records, record =>
                 record.Operation == "escalation" && record.Status == "CanaryGateFailure");
             Assert.DoesNotContain(records, record => record.Operation == "abandoned");
+        }
+
+        using (var unexpectedFixture = new CanaryTestFixture())
+        {
+            var unexpected = new InvalidOperationException("unexpected deterministic defect");
+            var (coordinator, _) = unexpectedFixture.CreateCoordinator(
+                new FakeRunner((_, _) => Task.FromException<PostLandingCanaryOutcome>(unexpected)),
+                maxAttempts: 1);
+
+            Assert.Equal(
+                PostLandingCanaryDisposition.Abandoned,
+                await coordinator.RunAsync(
+                    new PostLandingCanaryRequest("sha-unexpected", ["engine/unexpected"]),
+                    CancellationToken.None));
+            var abandoned = Assert.Single((await unexpectedFixture.RawStore.ReadByTypeSinceAsync(
+                    RunEventTypes.PostLandingCanary))
+                .Where(record => record.Operation == "abandoned"));
+            Assert.Equal("InvalidOperationException: unexpected deterministic defect", abandoned.Detail);
+            var payload = JsonSerializer.Deserialize<PostLandingCanaryEventPayload>(
+                Assert.IsType<string>(abandoned.PayloadJson),
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            Assert.Equal("unexpected-fault", Assert.IsType<PostLandingCanaryEventPayload>(payload).FailureReason);
         }
     }
 

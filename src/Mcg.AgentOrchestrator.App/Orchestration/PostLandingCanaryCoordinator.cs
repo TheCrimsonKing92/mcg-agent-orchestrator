@@ -222,7 +222,8 @@ internal sealed class PostLandingCanaryCoordinator
     {
         var priorEvents = await _events.ReadForLandingAsync(request.LandingSha, cancellationToken)
             .ConfigureAwait(false);
-        var attempt = priorEvents.Count(item => item.Kind == PostLandingCanaryEventKind.Started) + 1;
+        var runOrdinal = priorEvents.Count(item => item.Kind == PostLandingCanaryEventKind.Started) + 1;
+        var attempt = ConsumedAttemptCount(priorEvents) + 1;
         var startedAt = _utcNow();
         var started = await _events.AppendOnceAsync(
             PostLandingCanaryEventKind.Started,
@@ -231,7 +232,7 @@ internal sealed class PostLandingCanaryCoordinator
                 $"Post-landing canary attempt {attempt} started.",
                 startedAt: startedAt,
                 attemptCount: attempt),
-            PostLandingCanaryEventIds.Started(request.LandingSha, attempt),
+            PostLandingCanaryEventIds.Started(request.LandingSha, runOrdinal),
             startedAt,
             cancellationToken).ConfigureAwait(false);
         if (!started.Appended)
@@ -239,6 +240,7 @@ internal sealed class PostLandingCanaryCoordinator
             return await DeferOrAbandonAsync(
                     request,
                     attempt,
+                    runOrdinal,
                     PostLandingCanaryFaultDisposition.EnvironmentFault,
                     "InvalidOperationException: canary attempt start was already recorded without a terminal outcome.",
                     startedAt,
@@ -313,6 +315,7 @@ internal sealed class PostLandingCanaryCoordinator
                 return await DeferOrAbandonAsync(
                         request,
                         attempt,
+                        runOrdinal,
                         faultDisposition,
                         outcome.Detail,
                         startedAt,
@@ -341,6 +344,23 @@ internal sealed class PostLandingCanaryCoordinator
 
         if (outcome.Green)
         {
+            if (_operatorItems is not null)
+            {
+                try
+                {
+                    await _operatorItems.TryResolveAsync(
+                            PreconditionCorrelationKey(request.LandingSha),
+                            "Post-landing canary precondition cleared and the landed SHA passed.",
+                            CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    ReportProgress(
+                        $"CANARY_GATE sha={request.LandingSha} result=operator-item-error " +
+                        $"receipt={receiptReference} detail={ex.GetType().Name}: {ex.Message}");
+                }
+            }
             ReportProgress(
                 $"CANARY_GATE sha={request.LandingSha} result=passed executed={outcome.ExecutedTestCount} receipt={receiptReference}");
             return PostLandingCanaryDisposition.Passed;
@@ -409,15 +429,16 @@ internal sealed class PostLandingCanaryCoordinator
     private async Task<PostLandingCanaryDisposition> DeferOrAbandonAsync(
         PostLandingCanaryRequest request,
         int attempt,
+        int runOrdinal,
         PostLandingCanaryFaultDisposition faultDisposition,
         string detail,
         DateTimeOffset startedAt,
         DateTimeOffset completedAt)
     {
-        var reason = faultDisposition == PostLandingCanaryFaultDisposition.ResourceBusy
-            ? "resource-busy"
-            : "environment-fault";
-        if (attempt >= _configuration.MaxAttempts)
+        var reason = FaultReasonToken(faultDisposition);
+        var consumesAttempt = faultDisposition != PostLandingCanaryFaultDisposition.PreconditionFailure;
+        var completedAttemptCount = consumesAttempt ? attempt : attempt - 1;
+        if (consumesAttempt && attempt >= _configuration.MaxAttempts)
         {
             var abandoned = await _events.AppendOnceAsync(
                     PostLandingCanaryEventKind.Abandoned,
@@ -427,7 +448,7 @@ internal sealed class PostLandingCanaryCoordinator
                         reason,
                         startedAt: startedAt,
                         completedAt: completedAt,
-                        attemptCount: attempt),
+                        attemptCount: completedAttemptCount),
                     PostLandingCanaryEventIds.Abandoned(request.LandingSha),
                     completedAt,
                     CancellationToken.None)
@@ -476,14 +497,36 @@ internal sealed class PostLandingCanaryCoordinator
                     reason,
                     startedAt: startedAt,
                     completedAt: completedAt,
-                    attemptCount: attempt,
+                    attemptCount: completedAttemptCount,
                     notBefore: notBefore),
-                PostLandingCanaryEventIds.Deferred(request.LandingSha, attempt),
+                PostLandingCanaryEventIds.Deferred(request.LandingSha, runOrdinal),
                 completedAt,
                 CancellationToken.None)
             .ConfigureAwait(false);
+        if (faultDisposition == PostLandingCanaryFaultDisposition.PreconditionFailure && _operatorItems is not null)
+        {
+            try
+            {
+                await _operatorItems.RaiseAsync(
+                        CollaborationItemType.Verify,
+                        goalId: null,
+                        subject: $"Post-landing canary precondition requires operator action for {request.LandingSha}",
+                        body:
+                            $"Resolve the reported repository precondition, then allow the queued canary retry.\n" +
+                            $"{detail}\nrun-event:{deferred.Event.Sequence}",
+                        correlationKey: PreconditionCorrelationKey(request.LandingSha),
+                        cancellationToken: CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                ReportProgress(
+                    $"CANARY_GATE sha={request.LandingSha} result=operator-item-error " +
+                    $"receipt=run-event:{deferred.Event.Sequence} detail={ex.GetType().Name}: {ex.Message}");
+            }
+        }
         ReportProgress(
-            $"CANARY_GATE sha={request.LandingSha} result=deferred attempt={attempt} reason={reason} " +
+            $"CANARY_GATE sha={request.LandingSha} result=deferred attempt={completedAttemptCount} reason={reason} " +
             $"not-before={notBefore:O} receipt=run-event:{deferred.Event.Sequence}");
         ScheduleDeferredRetry(request);
         return PostLandingCanaryDisposition.Deferred;
@@ -552,17 +595,21 @@ internal sealed class PostLandingCanaryCoordinator
             ? $"missing-sha-{Guid.NewGuid():N}"
             : landing.LandingSha.Trim();
         var detail = $"{exception.GetType().Name}: {exception.Message}";
+        var faultDisposition = PostLandingCanaryFailureClassifier.Classify(exception);
+        var reason = FaultReasonToken(faultDisposition);
         try
         {
             var request = new PostLandingCanaryRequest(durableLandingSha, landing.ChangedFiles);
             var priorEvents = _events.ReadForLandingAsync(durableLandingSha, CancellationToken.None)
                 .GetAwaiter()
                 .GetResult();
-            var attempt = priorEvents.Count(item => item.Kind == PostLandingCanaryEventKind.Started) + 1;
+            var runOrdinal = priorEvents.Count(item => item.Kind == PostLandingCanaryEventKind.Started) + 1;
+            var attempt = ConsumedAttemptCount(priorEvents) + 1;
             return DeferOrAbandonAsync(
                     request,
                     attempt,
-                    PostLandingCanaryFailureClassifier.Classify(exception),
+                    runOrdinal,
+                    faultDisposition,
                     detail,
                     now,
                     now)
@@ -582,12 +629,12 @@ internal sealed class PostLandingCanaryCoordinator
                     goalId: null,
                     subject: $"Post-landing canary could not evaluate {durableLandingSha}",
                     body: $"Landing {durableLandingSha} is UNVERIFIED.\n{detail}",
-                    correlationKey: $"post-landing-canary:environment:{durableLandingSha.ToLowerInvariant()}",
+                    correlationKey: $"post-landing-canary:{reason}:{durableLandingSha.ToLowerInvariant()}",
                     cancellationToken: CancellationToken.None)
                 .GetAwaiter()
                 .GetResult();
             _progress(
-                $"CANARY_GATE sha={durableLandingSha} result=deferred reason=environment-fault " +
+                $"CANARY_GATE sha={durableLandingSha} result=deferred reason={reason} " +
                 $"detail={detail}");
         }
         catch
@@ -629,6 +676,27 @@ internal sealed class PostLandingCanaryCoordinator
         PostLandingCanaryFailureReason.EvaluatedArtifactFailure => "evaluated-artifact-failure",
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown canary failure reason.")
     };
+
+    private static int ConsumedAttemptCount(IReadOnlyList<PostLandingCanaryEvent> events) =>
+        events
+            .Where(item => item.Kind is PostLandingCanaryEventKind.Deferred or PostLandingCanaryEventKind.Abandoned)
+            .Select(item => item.Payload.AttemptCount)
+            .DefaultIfEmpty(0)
+            .Max();
+
+    private static string FaultReasonToken(PostLandingCanaryFaultDisposition disposition) => disposition switch
+    {
+        PostLandingCanaryFaultDisposition.ResourceBusy => "resource-busy",
+        PostLandingCanaryFaultDisposition.PreconditionFailure => "precondition-failure",
+        PostLandingCanaryFaultDisposition.EnvironmentFault => "environment-fault",
+        PostLandingCanaryFaultDisposition.UnexpectedFault => "unexpected-fault",
+        PostLandingCanaryFaultDisposition.VerdictFailure => "verdict-failure",
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(disposition), disposition, "Unknown canary fault disposition.")
+    };
+
+    private static string PreconditionCorrelationKey(string landingSha) =>
+        $"post-landing-canary:precondition:{landingSha.ToLowerInvariant()}";
 
     private static async Task ConfirmRunnerTerminatedAsync(Task task)
     {

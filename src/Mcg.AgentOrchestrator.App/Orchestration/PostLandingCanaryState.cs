@@ -113,7 +113,9 @@ internal enum PostLandingCanaryFailureReason
 internal enum PostLandingCanaryFaultDisposition
 {
     ResourceBusy,
+    PreconditionFailure,
     EnvironmentFault,
+    UnexpectedFault,
     VerdictFailure
 }
 
@@ -122,8 +124,10 @@ internal static class PostLandingCanaryFailureClassifier
     internal static PostLandingCanaryFaultDisposition Classify(Exception exception) => exception switch
     {
         DotnetBuildSlotsBusyException => PostLandingCanaryFaultDisposition.ResourceBusy,
+        PostLandingCanaryPreconditionException => PostLandingCanaryFaultDisposition.PreconditionFailure,
         PostLandingCanaryEvaluationException => PostLandingCanaryFaultDisposition.VerdictFailure,
-        _ => PostLandingCanaryFaultDisposition.EnvironmentFault
+        IOException => PostLandingCanaryFaultDisposition.EnvironmentFault,
+        _ => PostLandingCanaryFaultDisposition.UnexpectedFault
     };
 
     internal static PostLandingCanaryFaultDisposition Classify(PostLandingCanaryOutcome outcome) =>
@@ -145,6 +149,14 @@ internal static class PostLandingCanaryFailureClassifier
 internal sealed class PostLandingCanaryEvaluationException : Exception
 {
     internal PostLandingCanaryEvaluationException(string message)
+        : base(message)
+    {
+    }
+}
+
+internal sealed class PostLandingCanaryPreconditionException : Exception
+{
+    internal PostLandingCanaryPreconditionException(string message)
         : base(message)
     {
     }
@@ -214,8 +226,8 @@ internal sealed record PostLandingCanaryEvent(
 internal static class PostLandingCanaryEventIds
 {
     internal static string Queued(string landingSha) => Build(landingSha, "queued");
-    internal static string Started(string landingSha, int attempt) => Build(landingSha, $"started:{attempt}");
-    internal static string Deferred(string landingSha, int attempt) => Build(landingSha, $"deferred:{attempt}");
+    internal static string Started(string landingSha, int runOrdinal) => Build(landingSha, $"started:{runOrdinal}");
+    internal static string Deferred(string landingSha, int runOrdinal) => Build(landingSha, $"deferred:{runOrdinal}");
     internal static string Receipt(string landingSha) => Build(landingSha, "receipt");
     internal static string Abandoned(string landingSha) => Build(landingSha, "abandoned");
     internal static string Escalation(string landingSha) => Build(landingSha, "escalation");
