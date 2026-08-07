@@ -368,8 +368,14 @@ public sealed record ConductorAutonomyPolicy(
     // Returns Conservative (default) when the file does not exist.
     // Throws with the file path in the message when an existing file cannot be read, parsed, or validated.
     public static ConductorAutonomyPolicy LoadFromOrchestratorDirectory(string rootDirectory)
+        => LoadFromOrchestratorDirectory(
+            new DirectoryInfo(Path.Combine(rootDirectory, ".orchestrator")));
+
+    // Loads from conductor-policy.json under an already-resolved (and potentially project/tenant-scoped)
+    // orchestrator directory.
+    public static ConductorAutonomyPolicy LoadFromOrchestratorDirectory(DirectoryInfo orchestratorDirectory)
     {
-        var path = Path.GetFullPath(Path.Combine(rootDirectory, ".orchestrator", "conductor-policy.json"));
+        var path = Path.GetFullPath(Path.Combine(orchestratorDirectory.FullName, "conductor-policy.json"));
         string json;
         try
         {

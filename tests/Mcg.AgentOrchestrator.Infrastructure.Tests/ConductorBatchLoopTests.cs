@@ -184,11 +184,11 @@ public sealed class ConductorBatchLoopTests
         var root = CreateTempDirectory("mcg-conductor-policy-resolution");
         try
         {
-            var absent = CliCommandHandlers.ResolveConductorPolicy(null, root);
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator", "projects", "scoped-project");
+            var absent = CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory);
             Assert.Same(ConductorAutonomyPolicy.Default, absent.Policy);
             Assert.Equal("default", absent.Source);
 
-            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
             Directory.CreateDirectory(orchestratorDirectory);
             var policyPath = Path.Combine(orchestratorDirectory, "conductor-policy.json");
             var configured = ConductorAutonomyPolicy.Conservative with
@@ -198,18 +198,18 @@ public sealed class ConductorBatchLoopTests
             };
             File.WriteAllText(policyPath, configured.ToJson());
 
-            var fromFile = CliCommandHandlers.ResolveConductorPolicy(null, root);
+            var fromFile = CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory);
             Assert.Equal(8, fromFile.Policy.MaxConcurrentPaidWorkers);
             Assert.Equal($"file:{Path.GetFullPath(policyPath)}", fromFile.Source);
             Assert.Contains(fromFile.Warnings, warning =>
                 warning.Contains("above the highest preset value 5", StringComparison.Ordinal));
 
-            var explicitPreset = CliCommandHandlers.ResolveConductorPolicy("Permissive", root);
+            var explicitPreset = CliCommandHandlers.ResolveConductorPolicy("Permissive", orchestratorDirectory);
             Assert.Same(ConductorAutonomyPolicy.Permissive, explicitPreset.Policy);
             Assert.Equal("preset", explicitPreset.Source);
 
             var unknown = Assert.Throws<InvalidOperationException>(() =>
-                CliCommandHandlers.ResolveConductorPolicy("UnknownName", root));
+                CliCommandHandlers.ResolveConductorPolicy("UnknownName", orchestratorDirectory));
             Assert.Equal(
                 "Unknown conductor policy 'UnknownName'. Valid: Conservative, Permissive, Manual",
                 unknown.Message);
@@ -232,10 +232,10 @@ public sealed class ConductorBatchLoopTests
             File.WriteAllText(policyPath, "{ not-json");
 
             var failure = Assert.Throws<FormatException>(() =>
-                CliCommandHandlers.ResolveConductorPolicy(null, root));
+                CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory));
             Assert.Contains(policyPath, failure.Message, StringComparison.Ordinal);
 
-            var explicitPreset = CliCommandHandlers.ResolveConductorPolicy("Permissive", root);
+            var explicitPreset = CliCommandHandlers.ResolveConductorPolicy("Permissive", orchestratorDirectory);
             Assert.Same(ConductorAutonomyPolicy.Permissive, explicitPreset.Policy);
             Assert.Contains(explicitPreset.Warnings, warning =>
                 warning.Contains(policyPath, StringComparison.Ordinal) &&
@@ -262,7 +262,8 @@ public sealed class ConductorBatchLoopTests
                 MaxConcurrentPaidWorkers = 1
             };
             File.WriteAllText(policyPath, initialPolicy.ToJson());
-            var initialResolution = CliCommandHandlers.ResolveConductorPolicy(null, root);
+            var initialResolution = CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory);
+            var eventLogPath = Path.Combine(orchestratorDirectory, "logs", ConductEventLogWriter.CurrentFileName);
             var (kernel, _) = SimpleGoal();
             var dispatches = 0;
             var driver = MakeDriver(
@@ -275,7 +276,8 @@ public sealed class ConductorBatchLoopTests
                 });
             var sleeps = 0;
 
-            var output = CaptureConsole(() => new ConductorBatchLoop().Run(
+            var output = CaptureConsole(() => new ConductorBatchLoop(
+                conductEventLogWriter: new ConductEventLogWriter(eventLogPath)).Run(
                 kernel,
                 driver,
                 initialResolution.Policy,
@@ -285,18 +287,21 @@ public sealed class ConductorBatchLoopTests
                 sleepFunc: _ =>
                 {
                     sleeps++;
-                    File.WriteAllText(policyPath, (initialPolicy with { MaxConcurrentPaidWorkers = 2 }).ToJson());
+                    File.WriteAllText(policyPath, (initialPolicy with { MaxConcurrentPaidWorkers = 8 }).ToJson());
                     return false;
                 },
                 policySource: initialResolution.Source,
-                reloadPolicy: () => CliCommandHandlers.ResolveConductorPolicy(null, root)));
+                reloadPolicy: () => CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory)));
 
             Assert.Equal(1, sleeps);
             Assert.Equal(1, dispatches);
             Assert.Contains("At worker cap (1/1)", output, StringComparison.Ordinal);
             Assert.Contains("POLICY_RELOAD tick=2", output, StringComparison.Ordinal);
             Assert.Contains("oldMaxConcurrentPaidWorkers=1", output, StringComparison.Ordinal);
-            Assert.Contains("newMaxConcurrentPaidWorkers=2", output, StringComparison.Ordinal);
+            Assert.Contains("newMaxConcurrentPaidWorkers=8", output, StringComparison.Ordinal);
+            var events = File.ReadAllText(eventLogPath);
+            Assert.Contains("\"eventKind\":\"policy-warning\"", events, StringComparison.Ordinal);
+            Assert.Contains("\"eventKind\":\"policy-reload\"", events, StringComparison.Ordinal);
         }
         finally
         {
@@ -319,7 +324,8 @@ public sealed class ConductorBatchLoopTests
                 MaxConcurrentPaidWorkers = 1
             };
             File.WriteAllText(policyPath, initialPolicy.ToJson());
-            var initialResolution = CliCommandHandlers.ResolveConductorPolicy(null, root);
+            var initialResolution = CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory);
+            var eventLogPath = Path.Combine(orchestratorDirectory, "logs", ConductEventLogWriter.CurrentFileName);
             var (kernel, _) = SimpleGoal();
             var dispatches = 0;
             var driver = MakeDriver(
@@ -332,7 +338,8 @@ public sealed class ConductorBatchLoopTests
                 });
             var sleeps = 0;
 
-            var output = CaptureConsole(() => new ConductorBatchLoop().Run(
+            var output = CaptureConsole(() => new ConductorBatchLoop(
+                conductEventLogWriter: new ConductEventLogWriter(eventLogPath)).Run(
                 kernel,
                 driver,
                 initialResolution.Policy,
@@ -350,13 +357,17 @@ public sealed class ConductorBatchLoopTests
                     return false;
                 },
                 policySource: initialResolution.Source,
-                reloadPolicy: () => CliCommandHandlers.ResolveConductorPolicy(null, root)));
+                reloadPolicy: () => CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory)));
 
             Assert.Equal(2, sleeps);
             Assert.Equal(1, dispatches);
             Assert.Contains("POLICY_RELOAD_FAILED tick=2", output, StringComparison.Ordinal);
             Assert.Contains(policyPath.Replace(' ', '_'), output, StringComparison.Ordinal);
             Assert.Contains("POLICY_RELOAD tick=3", output, StringComparison.Ordinal);
+            Assert.Contains(
+                "\"eventKind\":\"policy-reload-failed\"",
+                File.ReadAllText(eventLogPath),
+                StringComparison.Ordinal);
         }
         finally
         {

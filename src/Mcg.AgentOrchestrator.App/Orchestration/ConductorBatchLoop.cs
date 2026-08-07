@@ -1505,7 +1505,7 @@ internal sealed class ConductorBatchLoop
 
         var required = kind is "loop-relaunch-rollback" or "goal-stalled" or "sweep-blocker" or
             "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or
-            "blocked-recheck-heartbeat" ||
+            "blocked-recheck-heartbeat" or "policy-reload-failed" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
         try
         {
@@ -1556,6 +1556,9 @@ internal sealed class ConductorBatchLoop
             "LOOP_JANITORIAL_FAILED" => "loop-janitorial-failure",
             "LOOP_START" => "loop-start",
             "LOOP_STOP" => "loop-stop",
+            "POLICY_RELOAD" => "policy-reload",
+            "POLICY_RELOAD_FAILED" => "policy-reload-failed",
+            "POLICY_WARNING" => "policy-warning",
             "SWEEP_BLOCKER" => "sweep-blocker",
             "SWEEP_ESCALATION" => "sweep-escalation",
             "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",

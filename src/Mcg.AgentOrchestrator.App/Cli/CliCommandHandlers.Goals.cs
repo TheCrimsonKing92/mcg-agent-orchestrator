@@ -33,9 +33,9 @@ private static readonly Regex OpeningBacklogObjectiveReferenceRegex = new(
     @"\A\s*\(?\s*backlog\s+([0-9a-f]{8,64})\s*\)?",
     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetName, string rootDirectory)
+internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetName, string orchestratorDirectory)
 {
-    var policyPath = Path.GetFullPath(Path.Combine(rootDirectory, ".orchestrator", "conductor-policy.json"));
+    var policyPath = Path.GetFullPath(Path.Combine(orchestratorDirectory, "conductor-policy.json"));
     if (presetName is not null)
     {
         var preset = ConductorAutonomyPolicy.All.FirstOrDefault(
@@ -45,7 +45,7 @@ internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetN
         var warnings = new List<string>();
         try
         {
-            _ = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(rootDirectory);
+            _ = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(orchestratorDirectory));
         }
         catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
         {
@@ -56,7 +56,7 @@ internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetN
         return new ConductorPolicyResolution(preset, "preset", warnings);
     }
 
-    var loaded = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(rootDirectory);
+    var loaded = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(orchestratorDirectory));
     if (ReferenceEquals(loaded, ConductorAutonomyPolicy.Default))
     {
         return new ConductorPolicyResolution(loaded, "default", []);
@@ -1090,7 +1090,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var loopPolicyName = GetFlagValue(parts, "--policy");
                 var loopPolicyResolution = ResolveConductorPolicy(
                     loopPolicyName,
-                    context.Workspace.ExecutionDirectory);
+                    context.Workspace.OrchestratorDirectory);
                 PrintConductorPolicyWarnings(loopPolicyResolution);
                 var loopPolicy = loopPolicyResolution.Policy;
                 int? loopMaxIter = null;
@@ -1370,7 +1370,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath),
                     policySource: loopPolicyResolution.Source,
                     reloadPolicy: loopPolicyName is null
-                        ? () => ResolveConductorPolicy(null, context.Workspace.ExecutionDirectory)
+                        ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
                         : null);
                 if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
                 {
@@ -1393,7 +1393,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var conductPolicyName = GetFlagValue(parts, "--policy");
             var conductPolicyResolution = ResolveConductorPolicy(
                 conductPolicyName,
-                context.Workspace.ExecutionDirectory);
+                context.Workspace.OrchestratorDirectory);
             PrintConductorPolicyWarnings(conductPolicyResolution);
             var conductPolicy = conductPolicyResolution.Policy;
             Console.WriteLine(
@@ -1468,7 +1468,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath),
                     policySource: conductPolicyResolution.Source,
                     reloadPolicy: conductPolicyName is null
-                        ? () => ResolveConductorPolicy(null, context.Workspace.ExecutionDirectory)
+                        ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
                         : null);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
