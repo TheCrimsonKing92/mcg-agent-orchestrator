@@ -33,6 +33,55 @@ private static readonly Regex OpeningBacklogObjectiveReferenceRegex = new(
     @"\A\s*\(?\s*backlog\s+([0-9a-f]{8,64})\s*\)?",
     RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetName, string orchestratorDirectory)
+{
+    var policyPath = Path.GetFullPath(Path.Combine(orchestratorDirectory, "conductor-policy.json"));
+    if (presetName is not null)
+    {
+        var preset = ConductorAutonomyPolicy.All.FirstOrDefault(
+            policy => policy.Name.Equals(presetName, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException(
+                $"Unknown conductor policy '{presetName}'. Valid: {string.Join(", ", ConductorAutonomyPolicy.All.Select(policy => policy.Name))}");
+        var warnings = new List<string>();
+        try
+        {
+            _ = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(orchestratorDirectory));
+        }
+        catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
+        {
+            warnings.Add(
+                $"Policy file '{policyPath}' is invalid and was ignored because --policy {preset.Name} was supplied: {ex.Message}");
+        }
+
+        return new ConductorPolicyResolution(preset, "preset", warnings);
+    }
+
+    var loaded = ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(new DirectoryInfo(orchestratorDirectory));
+    if (ReferenceEquals(loaded, ConductorAutonomyPolicy.Default))
+    {
+        return new ConductorPolicyResolution(loaded, "default", []);
+    }
+
+    var fileWarnings = new List<string>();
+    var highestPresetWorkerCap = ConductorAutonomyPolicy.All.Max(policy => policy.MaxConcurrentPaidWorkers);
+    if (loaded.MaxConcurrentPaidWorkers > highestPresetWorkerCap)
+    {
+        fileWarnings.Add(
+            $"Policy file '{policyPath}' sets maxConcurrentPaidWorkers={loaded.MaxConcurrentPaidWorkers}, " +
+            $"above the highest preset value {highestPresetWorkerCap}; honoring the configured value.");
+    }
+
+    return new ConductorPolicyResolution(loaded, $"file:{policyPath}", fileWarnings);
+}
+
+private static void PrintConductorPolicyWarnings(ConductorPolicyResolution resolution)
+{
+    foreach (var warning in resolution.Warnings)
+    {
+        Console.WriteLine($"[conduct] WARNING: {warning}");
+    }
+}
+
 private sealed record SourceBacklogItemLink(BacklogItem Item, bool FromExplicitFlag);
 
 private static int PersistResolvedParkedHumanWaitsForNextTick(
@@ -1039,12 +1088,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var supervisedChild = HasCliConfirmation(parts, ConductorContinuitySupervisor.ChildFlag);
                 var continuityExitArtifactPath = GetFlagValue(parts, ConductorContinuitySupervisor.ExitArtifactFlag);
                 var loopPolicyName = GetFlagValue(parts, "--policy");
-                var loopPolicy = loopPolicyName is null
-                    ? ConductorAutonomyPolicy.Default
-                    : ConductorAutonomyPolicy.All.FirstOrDefault(
-                        p => p.Name.Equals(loopPolicyName, StringComparison.OrdinalIgnoreCase))
-                      ?? throw new InvalidOperationException(
-                        $"Unknown conductor policy '{loopPolicyName}'. Valid: {string.Join(", ", ConductorAutonomyPolicy.All.Select(p => p.Name))}");
+                var loopPolicyResolution = ResolveConductorPolicy(
+                    loopPolicyName,
+                    context.Workspace.OrchestratorDirectory);
+                PrintConductorPolicyWarnings(loopPolicyResolution);
+                var loopPolicy = loopPolicyResolution.Policy;
                 int? loopMaxIter = null;
                 if (GetFlagValue(parts, "--max-iterations") is { } miStr)
                     loopMaxIter = int.Parse(miStr, System.Globalization.CultureInfo.InvariantCulture);
@@ -1319,7 +1367,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     quiet: quietWatchProgress,
                     stallWarningThreshold: stallWarningThreshold,
                     unscopedStallTickThreshold: unscopedStallTickThreshold,
-                    journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath));
+                    journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath),
+                    policySource: loopPolicyResolution.Source,
+                    reloadPolicy: loopPolicyName is null
+                        ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
+                        : null);
                 if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
                 {
                     ConductorContinuityExitArtifact.Write(
@@ -1339,12 +1391,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             CliArgumentParser.RequirePartCount(parts, 2, "conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>]");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
             var conductPolicyName = GetFlagValue(parts, "--policy");
-            var conductPolicy = conductPolicyName is null
-                ? ConductorAutonomyPolicy.Default
-                : ConductorAutonomyPolicy.All.FirstOrDefault(
-                    p => p.Name.Equals(conductPolicyName, StringComparison.OrdinalIgnoreCase))
-                  ?? throw new InvalidOperationException(
-                    $"Unknown conductor policy '{conductPolicyName}'. Valid: {string.Join(", ", ConductorAutonomyPolicy.All.Select(p => p.Name))}");
+            var conductPolicyResolution = ResolveConductorPolicy(
+                conductPolicyName,
+                context.Workspace.OrchestratorDirectory);
+            PrintConductorPolicyWarnings(conductPolicyResolution);
+            var conductPolicy = conductPolicyResolution.Policy;
+            Console.WriteLine(
+                $"[conduct] START goal={context.CurrentGoal.Id.Value[..8]} policy={conductPolicy.Name} " +
+                $"policySource={Regex.Replace(conductPolicyResolution.Source, @"\s", "_")}");
             var conductDriver = new ConductorDriver(
                 context.Kernel,
                 context.Workspace,
@@ -1411,7 +1465,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     onlyGoalId: watchGoalId, persistTick: context.PersistCheckpoint,
                     persistGoalTick: context.PersistGoalCheckpoint,
                     buildOperatorDispositions: wk => ConductorOperatorDispositionSnapshots.Build(wk, context.Workspace.ExecutionDirectory),
-                    journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath));
+                    journalMode: SqliteOrchestratorStateRepository.VerifyJournalMode(context.Workspace.SqliteStatePath),
+                    policySource: conductPolicyResolution.Source,
+                    reloadPolicy: conductPolicyName is null
+                        ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
+                        : null);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
             }

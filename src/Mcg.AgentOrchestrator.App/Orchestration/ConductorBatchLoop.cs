@@ -5,6 +5,11 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+internal sealed record ConductorPolicyResolution(
+    ConductorAutonomyPolicy Policy,
+    string Source,
+    IReadOnlyList<string> Warnings);
+
 internal sealed class ConductorBatchLoop
 {
     internal const string StopFileName = ".conduct-stop";
@@ -135,7 +140,9 @@ internal sealed class ConductorBatchLoop
         TimeSpan? goalStallThreshold = null,
         int unscopedStallTickThreshold = DefaultUnscopedStallTickThreshold,
         Action<TimeSpan>? busyWriteDelay = null,
-        string? journalMode = null)
+        string? journalMode = null,
+        string policySource = "preset",
+        Func<ConductorPolicyResolution>? reloadPolicy = null)
     {
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
         var previousRetryDiagnostics = CurrentRetryDiagnostics.Value;
@@ -288,7 +295,7 @@ internal sealed class ConductorBatchLoop
             };
         }
         EmitProgress(
-            $"LOOP_START policy={Sanitize(policy.Name)} maxIterations={maxIterations?.ToString() ?? "none"} " +
+            $"LOOP_START policy={Sanitize(policy.Name)} policySource={SanitizeReason(policySource)} maxIterations={maxIterations?.ToString() ?? "none"} " +
             $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")}" +
             (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
 
@@ -342,6 +349,34 @@ internal sealed class ConductorBatchLoop
             }
 
             var nextTick = totalTicks + 1;
+            if (reloadPolicy is not null)
+            {
+                try
+                {
+                    var reloaded = reloadPolicy();
+                    if (!PoliciesMatch(policy, reloaded.Policy) ||
+                        !string.Equals(policySource, reloaded.Source, StringComparison.Ordinal))
+                    {
+                        foreach (var warning in reloaded.Warnings)
+                        {
+                            EmitProgress($"POLICY_WARNING tick={nextTick} message={SanitizeReason(warning)}");
+                        }
+
+                        EmitProgress(
+                            $"POLICY_RELOAD tick={nextTick} source={SanitizeReason(reloaded.Source)} " +
+                            $"{FormatPolicyValues("old", policy)} {FormatPolicyValues("new", reloaded.Policy)}");
+                        policy = reloaded.Policy;
+                        policySource = reloaded.Source;
+                    }
+                }
+                catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
+                {
+                    EmitProgress(
+                        $"POLICY_RELOAD_FAILED tick={nextTick} source={SanitizeReason(policySource)} " +
+                        $"currentPolicy={Sanitize(policy.Name)} reason={SanitizeReason($"{ex.GetType().Name}: {ex.Message}")}");
+                }
+            }
+
             var preTickTimingLines = new List<string>();
             var sweepClock = Stopwatch.StartNew();
             var sweepResult = RunJanitorialPhase("sweep", nextTick, () => _sweep(kernel));
@@ -1470,7 +1505,7 @@ internal sealed class ConductorBatchLoop
 
         var required = kind is "loop-relaunch-rollback" or "goal-stalled" or "sweep-blocker" or
             "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or
-            "blocked-recheck-heartbeat" ||
+            "blocked-recheck-heartbeat" or "policy-reload-failed" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
         try
         {
@@ -1521,6 +1556,9 @@ internal sealed class ConductorBatchLoop
             "LOOP_JANITORIAL_FAILED" => "loop-janitorial-failure",
             "LOOP_START" => "loop-start",
             "LOOP_STOP" => "loop-stop",
+            "POLICY_RELOAD" => "policy-reload",
+            "POLICY_RELOAD_FAILED" => "policy-reload-failed",
+            "POLICY_WARNING" => "policy-warning",
             "SWEEP_BLOCKER" => "sweep-blocker",
             "SWEEP_ESCALATION" => "sweep-escalation",
             "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",
@@ -2068,6 +2106,36 @@ internal sealed class ConductorBatchLoop
 
     private static string SanitizeHandoffDetail(string value) =>
         value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
+
+    private static bool PoliciesMatch(ConductorAutonomyPolicy left, ConductorAutonomyPolicy right) =>
+        string.Equals(left.ToJson(), right.ToJson(), StringComparison.Ordinal);
+
+    private static string FormatPolicyValues(string prefix, ConductorAutonomyPolicy policy)
+    {
+        var providerCaps = policy.PerProviderBudgetCaps is null
+            ? "none"
+            : string.Join(',', policy.PerProviderBudgetCaps
+                .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(entry => $"{Sanitize(entry.Key)}:{entry.Value}"));
+        var transitions = string.Join(',', policy.TransitionMap
+            .OrderBy(entry => entry.Key)
+            .Select(entry => $"{entry.Key}:{entry.Value}"));
+
+        return $"{prefix}Name={Sanitize(policy.Name)} " +
+               $"{prefix}MaxConcurrentPaidWorkers={policy.MaxConcurrentPaidWorkers} " +
+               $"{prefix}MaxTotalBudget={policy.MaxTotalBudget} " +
+               $"{prefix}MaxCriterionRetries={policy.MaxCriterionRetries} " +
+               $"{prefix}PerProviderBudgetCaps={providerCaps} " +
+               $"{prefix}AutoPromoteRiskThreshold={policy.AutoPromoteRiskThreshold?.ToString() ?? "none"} " +
+               $"{prefix}MaxEmptyOutputDispatchRetries={policy.MaxEmptyOutputDispatchRetries} " +
+               $"{prefix}MaxEmptyOutputAutoRecoverCycles={policy.MaxEmptyOutputAutoRecoverCycles} " +
+               $"{prefix}EmptyOutputRetryInitialDelaySeconds={policy.EmptyOutputRetryInitialDelaySeconds} " +
+               $"{prefix}EmptyOutputRetryBackoffMultiplier={policy.EmptyOutputRetryBackoffMultiplier} " +
+               $"{prefix}EmptyOutputRetryMaxDelaySeconds={policy.EmptyOutputRetryMaxDelaySeconds} " +
+               $"{prefix}ReviewAutoRetryWarningRound={policy.ReviewAutoRetryWarningRound} " +
+               $"{prefix}ReviewAutoRetryStopRound={policy.ReviewAutoRetryStopRound} " +
+               $"{prefix}TransitionMap={transitions}";
+    }
 
     private IReadOnlyDictionary<string, ParallelLandingOutcome> RunParallelAcceptanceBatch(
         IReadOnlyList<Goal> eligible,
