@@ -633,9 +633,10 @@ internal sealed class GoalRefinementService
         IReadOnlyList<string> refinedCriteria)
     {
         var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(objective);
-        return declaredCriteria.Count > 0
-            ? [.. declaredCriteria]
-            : [.. refinedCriteria];
+        return declaredCriteria
+            .Concat(refinedCriteria)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static string BuildCorrelationKey(GoalId goalId, string topicKey)

@@ -1895,8 +1895,16 @@ internal sealed class ConductorDriver
 
     private static string BuildTerminalEscalationReason(Goal goal, GoalLifecycleState state)
     {
-        var latestTaskFailure = state == GoalLifecycleState.Failed
-            ? goal.Timeline.LastOrDefault(item => item.Kind == ProgressKind.TaskFailed)
+        var failedTaskIds = goal.Tasks
+            .Where(task => task.Status == WorkTaskStatus.Failed)
+            .Select(task => task.Id)
+            .ToHashSet();
+        var latestTaskFailure = state == GoalLifecycleState.Failed &&
+                                goal.Status is not (GoalStatus.Cancelled or GoalStatus.Superseded)
+            ? goal.Timeline.LastOrDefault(item =>
+                item.Kind == ProgressKind.TaskFailed &&
+                item.TaskId is { } taskId &&
+                failedTaskIds.Contains(taskId))
             : null;
         return latestTaskFailure is null
             ? $"Goal is in {state} state; operator action required"

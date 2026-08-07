@@ -650,8 +650,8 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal("observable-behavior", output.Forks[0].Kind);
     }
 
-    [Xunit.Fact(DisplayName = "GoalRefinementService_preserves_every_declared_acceptance_item_when_refiner_returns_subset")]
-    public async Task GoalRefinementServicePreservesEveryDeclaredAcceptanceItemWhenRefinerReturnsSubset()
+    [Xunit.Fact(DisplayName = "GoalRefinementService_unions_declared_and_refined_acceptance_items_without_duplicates")]
+    public async Task GoalRefinementServiceUnionsDeclaredAndRefinedAcceptanceItemsWithoutDuplicates()
     {
         var objective = """
             Implement the reviewer validation change.
@@ -666,7 +666,7 @@ public sealed class GoalRefinementTests
             ```json
             {
               "behavioralContract": "Reviewer validation accepts diligent supersets.",
-              "acceptanceCriteria": ["A reviewer superset is accepted."],
+              "acceptanceCriteria": ["A REVIEWER SUPERSET IS ACCEPTED.", "The clarified operator choice is verified."],
               "verificationClass": "TestVerifiable",
               "decisions": [],
               "forks": []
@@ -682,7 +682,8 @@ public sealed class GoalRefinementTests
                 "A reviewer superset is accepted.",
                 "Extra attestations are recorded as informational.",
                 "Every declared criterion is registered.",
-                "The conductor reports the task failure reason."
+                "The conductor reports the task failure reason.",
+                "The clarified operator choice is verified."
             ],
             result.Spec.AcceptanceCriteria);
     }
