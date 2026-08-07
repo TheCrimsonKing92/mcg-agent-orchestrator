@@ -95,13 +95,10 @@ internal static class GoalRefinementGate
             return true;
         }
 
-        var questions = openClarifications
-            .Select(item => item.Subject)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        reason = questions.Length == 0
+        reason = openClarifications.Length == 0
             ? "Resolve the spec clarification item before dispatching planner work."
-            : $"Resolve spec clarification before dispatching planner work: {string.Join("; ", questions)}";
+            : $"Resolve spec clarification before dispatching planner work: {openClarifications.Length} pending for goal {goal.Id.Value[..8]}. " +
+              $"Run `attention show {goal.Id.Value[..8]}` to read and answer them.";
         return true;
     }
 

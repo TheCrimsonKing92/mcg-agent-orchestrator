@@ -339,6 +339,11 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Equal(CollaborationItemStatus.Raised, collab.Items[0].Status);
         Xunit.Assert.NotNull(collab.Items[0].CorrelationKey);
         Xunit.Assert.StartsWith(GoalRefinementService.CorrelationKeyPrefix, collab.Items[0].CorrelationKey);
+        Xunit.Assert.Equal("external contract", collab.Items[0].Subject);
+        Xunit.Assert.DoesNotContain("Which API version to target?", collab.Items[0].Subject, StringComparison.Ordinal);
+        Xunit.Assert.InRange(collab.Items[0].Subject.Length, 1, 80);
+        Xunit.Assert.Contains("Question: Which API version to target?", collab.Items[0].Body, StringComparison.Ordinal);
+        Xunit.Assert.Equal(1, collab.Items.Count(item => item.Body.Contains("Goal objective:", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact]
@@ -368,6 +373,43 @@ public sealed class GoalRefinementTests
         Xunit.Assert.True(
             DiscordInteractionHandler.BuildAnswerCustomId(clarification.CorrelationKey!).Length <= 100,
             "The persisted correlation key must remain safe for a Discord answer custom id.");
+        Xunit.Assert.Equal("stranded edits preservation mechanism", clarification.Subject);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementGate_summarizes_pending_clarifications_without_repeating_questions")]
+    public async Task GoalRefinementGateSummarizesPendingClarificationsWithoutRepeatingQuestions()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Choose an API contract");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        const string firstQuestion = "Which API version should be used?";
+        const string secondQuestion = "Should retries use exponential backoff?";
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "api version",
+            $"Question: {firstQuestion}",
+            $"{GoalRefinementService.CorrelationKeyPrefix}{goal.Id.Value}:api-version");
+        await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "retry backoff",
+            $"Question: {secondQuestion}",
+            $"{GoalRefinementService.CorrelationKeyPrefix}{goal.Id.Value}:retry-backoff");
+
+        var blocked = GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(
+            workspace,
+            goal,
+            eventWriter: null,
+            out var reason);
+
+        Xunit.Assert.True(blocked);
+        Xunit.Assert.Contains("2 pending", reason, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"attention show {goal.Id.Value[..8]}", reason, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(firstQuestion, reason, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(secondQuestion, reason, StringComparison.Ordinal);
     }
 
     // --- Resolve clarification and record precedent ---

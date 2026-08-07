@@ -61,6 +61,11 @@ internal sealed class GoalRefinementService
         CancellationToken cancellationToken = default)
     {
         var goal = kernel.GetGoal(goalId);
+        var includeObjectiveInNextClarification = !(await _collaboration.ListAsync(goalId.Value, cancellationToken))
+            .Any(item =>
+                item.Type == CollaborationItemType.Clarification &&
+                !CollaborationItemLifecycle.IsTerminal(item.Status) &&
+                item.Body.Contains("Goal objective:", StringComparison.OrdinalIgnoreCase));
         var resolvedClarifications = await LoadResolvedClarificationsAsync(goal, cancellationToken);
         var existingOpenQuestions = goal.RefinedSpec?.OpenQuestions
             .Where(question => string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase))
@@ -129,10 +134,13 @@ internal sealed class GoalRefinementService
             await _collaboration.RaiseAsync(
                 CollaborationItemType.Clarification,
                 goalId.Value,
-                $"Spec feasibility clarification needed: {finding.Criterion}",
-                BuildFeasibilityClarificationBody(goal.Objective, finding),
+                BuildClarificationSubject(topicKey),
+                BuildFeasibilityClarificationBody(
+                    finding,
+                    includeObjectiveInNextClarification ? goal.Objective : null),
                 correlationKey,
                 cancellationToken);
+            includeObjectiveInNextClarification = false;
             openQuestions.Add(new RefinedSpecOpenQuestion(
                 correlationKey,
                 questionText,
@@ -232,10 +240,13 @@ internal sealed class GoalRefinementService
                     await _collaboration.RaiseAsync(
                         CollaborationItemType.Clarification,
                         goalId.Value,
-                        $"Spec clarification needed: {fork.Question}",
-                        BuildClarificationBody(goal.Objective, fork),
+                        BuildClarificationSubject(topicKey),
+                        BuildClarificationBody(
+                            fork,
+                            includeObjectiveInNextClarification ? goal.Objective : null),
                         correlationKey,
                         cancellationToken);
+                    includeObjectiveInNextClarification = false;
                     openQuestions.Add(new RefinedSpecOpenQuestion(
                         correlationKey,
                         fork.Question,
@@ -620,9 +631,10 @@ internal sealed class GoalRefinementService
         return $"{CorrelationKeyPrefix}{goalId.Value}:{NormalizeTopicKey(topicKey, null, topicKey)}";
     }
 
-    private static string BuildClarificationBody(string objective, SpecRefinementFork fork) => $"""
-        Goal objective: {objective}
+    private static string BuildClarificationSubject(string topicKey) =>
+        string.Join(' ', topicKey.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
+    private static string BuildClarificationBody(SpecRefinementFork fork, string? objective) => $"""
         Question: {fork.Question}
         Fork kind: {fork.Kind}
         Topic key: {NormalizeTopicKey(fork.TopicKey, fork.Kind, fork.Question)}
@@ -630,13 +642,11 @@ internal sealed class GoalRefinementService
         Refiner confidence: {fork.RefinerConfidence}
 
         Please provide your answer to resolve this ambiguity before the goal can proceed.
-        """;
+        """ + BuildGoalObjectiveSuffix(objective);
 
     private static string BuildFeasibilityClarificationBody(
-        string objective,
-        CriterionFeasibilityFinding finding) => $"""
-        Goal objective: {objective}
-
+        CriterionFeasibilityFinding finding,
+        string? objective) => $"""
         Question: {AcceptanceCriterionFeasibility.BuildQuestion(finding)}
         Fork kind: {AcceptanceCriterionFeasibility.ForkKind}
         Topic key: {finding.TopicKey}
@@ -648,7 +658,10 @@ internal sealed class GoalRefinementService
         Refiner confidence: deterministic
 
         Dispatch remains blocked until one of the three listed dispositions is supplied.
-        """;
+        """ + BuildGoalObjectiveSuffix(objective);
+
+    private static string BuildGoalObjectiveSuffix(string? objective) =>
+        string.IsNullOrWhiteSpace(objective) ? string.Empty : $"\n\nGoal objective: {objective}";
 
     private async Task<RefinedSpec> ApplyFeasibilityResolutionAsync(
         AgentOrchestratorKernel kernel,
@@ -669,8 +682,8 @@ internal sealed class GoalRefinementService
                 await _collaboration.RaiseAsync(
                     CollaborationItemType.Clarification,
                     goalId.Value,
-                    $"Spec feasibility clarification needed: {unresolvedFinding.Criterion}",
-                    BuildFeasibilityClarificationBody(kernel.GetGoal(goalId).Objective, unresolvedFinding),
+                    BuildClarificationSubject(unresolvedFinding.TopicKey),
+                    BuildFeasibilityClarificationBody(unresolvedFinding, kernel.GetGoal(goalId).Objective),
                     question.Id,
                     cancellationToken);
             }
@@ -728,8 +741,8 @@ internal sealed class GoalRefinementService
                 await _collaboration.RaiseAsync(
                     CollaborationItemType.Clarification,
                     goalId.Value,
-                    $"Spec feasibility clarification needed: {replacementFinding.Criterion}",
-                    BuildFeasibilityClarificationBody(kernel.GetGoal(goalId).Objective, replacementFinding),
+                    BuildClarificationSubject(replacementFinding.TopicKey),
+                    BuildFeasibilityClarificationBody(replacementFinding, kernel.GetGoal(goalId).Objective),
                     correlationKey,
                     cancellationToken);
                 questions.Add(new RefinedSpecOpenQuestion(

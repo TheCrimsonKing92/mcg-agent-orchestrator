@@ -351,7 +351,7 @@ public sealed class DiscordCollaborationViewService
     private static IReadOnlyList<CollaborationItem> OrderItems(IEnumerable<CollaborationItem> items) =>
         items
             .OrderBy(item => CollaborationItemLifecycle.AttentionPriority(item.Type))
-            .ThenByDescending(item => item.RaisedAt)
+            .ThenBy(item => item.RaisedAt)
             // Collapse duplicate escalations: a conductor that re-raises the same goal+reason each tick
             // produces many items sharing one correlation key — which would render as duplicate Discord
             // button customIds (Discord rejects with 50035) and a wall of repeated text. Show one per
@@ -368,6 +368,9 @@ public sealed class DiscordCollaborationViewService
     // accumulates several long items (e.g. multiple verbose clarifications) would otherwise blow past
     // this and crash the listener, so the aggregated per-goal message is capped.
     internal const int DiscordMessageLimit = 2000;
+    internal const int MinimumItemSlice = 120;
+    private const int ObjectivePreviewLimit = 160;
+    private const int SubjectDisplayLimit = 40;
 
     private static string BuildGoalContent(
         string goalKey,
@@ -375,46 +378,251 @@ public sealed class DiscordCollaborationViewService
         string overflow,
         string? footer)
     {
-        // Reserve headroom for the footer, truncation notice, and button-overflow inventory so none
-        // of the open items hidden from the five-button surface become invisible.
-        var budget = DiscordMessageLimit - 220 - overflow.Length;
-        var sb = new StringBuilder();
-        sb.AppendLine($"**Goal `{GoalLabel(goalKey)}` — {items.Count} item(s) need attention:**");
-        sb.AppendLine();
-        var rendered = 0;
-        for (var i = 0; i < Math.Min(items.Count, MaxActionButtons); i++)
+        var goalLabel = GoalLabel(goalKey);
+        var header = new StringBuilder($"**Goal `{goalLabel}` — {items.Count} item(s) need attention:**");
+        var objective = ExtractGoalObjective(items);
+        if (!string.IsNullOrWhiteSpace(objective))
+            header.Append($"\nObjective: {TruncateToLength(objective, ObjectivePreviewLimit)}");
+
+        var naturalItems = items
+            .Select((item, index) => RenderItem(item, index + 1, int.MaxValue, goalLabel))
+            .ToArray();
+        var renderCount = items.Count;
+        string? omittedLine = null;
+        while (renderCount > 0)
         {
-            var item = items[i];
-            var line = $"{i + 1}. **[{item.Type}]** {Truncate(item.Subject, 180)}";
-            var body = string.IsNullOrWhiteSpace(item.Body) ? null : $"> {Truncate(item.Body, 220)}";
-            if (rendered > 0 && sb.Length + line.Length + (body?.Length ?? 0) + 4 > budget)
+            var omitted = items.Count - renderCount;
+            omittedLine = omitted == 0
+                ? null
+                : $"+{omitted} more clarifications not shown — run `attention show {goalLabel}`";
+            var available = AvailableItemBudget(
+                header.Length,
+                renderCount,
+                omittedLine,
+                overflow,
+                footer);
+            var required = naturalItems
+                .Take(renderCount)
+                .Sum(item => Math.Min(item.Length, MinimumItemSlice));
+            if (available >= required)
+                break;
+
+            renderCount--;
+        }
+
+        if (renderCount == 0 && items.Count > 0)
+        {
+            renderCount = 1;
+            omittedLine = items.Count == 1
+                ? null
+                : $"+{items.Count - 1} more clarifications not shown — run `attention show {goalLabel}`";
+        }
+
+        var itemBudget = AvailableItemBudget(
+            header.Length,
+            renderCount,
+            omittedLine,
+            overflow,
+            footer);
+        var allocations = AllocateFairShares(
+            naturalItems.Take(renderCount).Select(item => item.Length).ToArray(),
+            itemBudget);
+        var renderedItems = items
+            .Take(renderCount)
+            .Select((item, index) => RenderItem(item, index + 1, allocations[index], goalLabel))
+            .ToArray();
+
+        var blocks = new List<string> { header.ToString() };
+        if (renderedItems.Length > 0)
+            blocks.Add(string.Join('\n', renderedItems));
+        if (!string.IsNullOrWhiteSpace(overflow))
+            blocks.Add(overflow);
+        if (!string.IsNullOrWhiteSpace(footer))
+            blocks.Add(footer);
+        if (!string.IsNullOrWhiteSpace(omittedLine))
+            blocks.Add(omittedLine);
+
+        var result = string.Join("\n\n", blocks);
+        return result.Length <= DiscordMessageLimit
+            ? result
+            : TruncateToLength(result, DiscordMessageLimit);
+    }
+
+    private static int AvailableItemBudget(
+        int headerLength,
+        int itemCount,
+        string? omittedLine,
+        string overflow,
+        string? footer)
+    {
+        var budget = DiscordMessageLimit - headerLength;
+        if (itemCount > 0)
+            budget -= 2 + itemCount - 1;
+        foreach (var block in new[] { omittedLine, overflow, footer })
+        {
+            if (!string.IsNullOrWhiteSpace(block))
+                budget -= 2 + block.Length;
+        }
+
+        return Math.Max(0, budget);
+    }
+
+    private static int[] AllocateFairShares(IReadOnlyList<int> naturalLengths, int totalBudget)
+    {
+        var allocations = new int[naturalLengths.Count];
+        var remaining = Enumerable.Range(0, naturalLengths.Count).ToList();
+        var remainingBudget = totalBudget;
+        while (remaining.Count > 0)
+        {
+            var share = remainingBudget / remaining.Count;
+            var completed = remaining.Where(index => naturalLengths[index] <= share).ToArray();
+            if (completed.Length == 0)
             {
-                sb.AppendLine($"_…and {items.Count - rendered} more item(s) — truncated to fit Discord's {DiscordMessageLimit}-char limit. Resolve some to see the rest._");
+                foreach (var index in remaining)
+                {
+                    allocations[index] = share;
+                    if (remainingBudget % remaining.Count > 0)
+                    {
+                        allocations[index]++;
+                        remainingBudget--;
+                    }
+                }
+
                 break;
             }
 
-            sb.AppendLine(line);
-            if (body is not null)
-                sb.AppendLine(body);
-            rendered++;
+            foreach (var index in completed)
+            {
+                allocations[index] = naturalLengths[index];
+                remainingBudget -= allocations[index];
+                remaining.Remove(index);
+            }
         }
 
-        if (overflow.Length > 0)
-        {
-            sb.AppendLine();
-            sb.AppendLine(overflow);
-        }
-
-        if (!string.IsNullOrWhiteSpace(footer))
-        {
-            sb.AppendLine();
-            sb.AppendLine(footer);
-        }
-
-        var result = sb.ToString().Trim();
-        // Hard safety net so a single oversized item or footer can never exceed the limit.
-        return result.Length <= DiscordMessageLimit ? result : result[..(DiscordMessageLimit - 1)] + "…";
+        return allocations;
     }
+
+    private static string RenderItem(CollaborationItem item, int index, int maxLength, string goalLabel)
+    {
+        var subject = TruncateToLength(item.Subject.Trim(), SubjectDisplayLimit);
+        var label = $"{index}. **[{item.Type}]** {subject}";
+        var displayBody = item.Type == CollaborationItemType.Clarification
+            ? ExtractClarificationDisplayBody(item.Body)
+            : RemoveGoalObjective(item.Body);
+        if (string.IsNullOrWhiteSpace(displayBody) || label.Length >= maxLength)
+            return label;
+
+        var quotedBody = Quote(displayBody);
+        var natural = $"{label}\n{quotedBody}";
+        if (natural.Length <= maxLength)
+            return natural;
+
+        var bodyBudget = maxLength - label.Length - 1;
+        var pointer = Quote($"… truncated to fit: `attention show {goalLabel}`");
+        var mainBudget = Math.Max(0, bodyBudget - pointer.Length - 1);
+        var (question, options) = SplitAnswerOptions(displayBody);
+        string renderedMain;
+        if (!string.IsNullOrWhiteSpace(options))
+        {
+            var quotedOptions = Quote(options);
+            if (quotedOptions.Length < mainBudget)
+            {
+                var questionBudget = mainBudget - quotedOptions.Length - 1;
+                renderedMain = $"{Quote(TruncateToLength(Flatten(question), Math.Max(1, questionBudget - 2)))}\n{quotedOptions}";
+            }
+            else
+            {
+                var questionBudget = Math.Min(32, Math.Max(0, mainBudget / 4));
+                var optionsBudget = Math.Max(1, mainBudget - questionBudget - 1);
+                renderedMain = $"{Quote(TruncateToLength(Flatten(question), Math.Max(1, questionBudget - 2)))}\n" +
+                    Quote(TruncateToLength(Flatten(options), Math.Max(1, optionsBudget - 2)));
+            }
+        }
+        else
+        {
+            renderedMain = Quote(TruncateToLength(Flatten(question), Math.Max(1, mainBudget - 2)));
+        }
+
+        var rendered = $"{label}\n{renderedMain}\n{pointer}";
+        return rendered.Length <= maxLength ? rendered : TruncateToLength(rendered, maxLength);
+    }
+
+    private static string? ExtractGoalObjective(IEnumerable<CollaborationItem> items)
+    {
+        foreach (var item in items)
+        {
+            var lines = item.Body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                if (!lines[i].StartsWith("Goal objective:", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var objective = new List<string> { lines[i]["Goal objective:".Length..].Trim() };
+                for (i++; i < lines.Length && !string.IsNullOrWhiteSpace(lines[i]); i++)
+                    objective.Add(lines[i].Trim());
+                return string.Join(' ', objective).Trim();
+            }
+        }
+
+        return null;
+    }
+
+    private static string ExtractClarificationDisplayBody(string body)
+    {
+        var lines = RemoveGoalObjective(body)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n');
+        var questionStart = Array.FindIndex(lines, line => line.StartsWith("Question:", StringComparison.OrdinalIgnoreCase));
+        if (questionStart < 0)
+            return string.Join('\n', lines).Trim();
+
+        var end = Array.FindIndex(lines, questionStart + 1, line =>
+            line.StartsWith("Fork kind:", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("Topic key:", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("Blast radius:", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("Refiner confidence:", StringComparison.OrdinalIgnoreCase));
+        if (end < 0)
+            end = lines.Length;
+        return string.Join('\n', lines[questionStart..end]).Trim();
+    }
+
+    private static string RemoveGoalObjective(string body)
+    {
+        var lines = body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var output = new List<string>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (!lines[i].StartsWith("Goal objective:", StringComparison.OrdinalIgnoreCase))
+            {
+                output.Add(lines[i]);
+                continue;
+            }
+
+            while (i + 1 < lines.Length && !string.IsNullOrWhiteSpace(lines[i + 1]))
+                i++;
+        }
+
+        return string.Join('\n', output).Trim();
+    }
+
+    private static (string Question, string Options) SplitAnswerOptions(string body)
+    {
+        var lines = body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var optionStart = Array.FindIndex(lines, line =>
+            line.StartsWith("Answer options:", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("Options:", StringComparison.OrdinalIgnoreCase) ||
+            line.StartsWith("Choose exactly one", StringComparison.OrdinalIgnoreCase));
+        return optionStart < 0
+            ? (body, string.Empty)
+            : (string.Join('\n', lines[..optionStart]).Trim(), string.Join('\n', lines[optionStart..]).Trim());
+    }
+
+    private static string Quote(string value) =>
+        string.Join('\n', value.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').Select(line => $"> {line}"));
+
+    private static string Flatten(string value) =>
+        string.Join(' ', value.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
     private static string BuildAllResolvedContent(string goalKey, string? resolvedBy) =>
         $"✅ Goal `{GoalLabel(goalKey)}` — all attention items resolved{(resolvedBy is null ? "" : $" (last by {resolvedBy})")}.";
@@ -524,6 +732,13 @@ public sealed class DiscordCollaborationViewService
 
     private static string Truncate(string value, int max) =>
         value.Length <= max ? value : value[..max] + "…";
+
+    private static string TruncateToLength(string value, int max) =>
+        value.Length <= max
+            ? value
+            : max <= 1
+                ? "…"[..Math.Max(0, max)]
+                : value[..(max - 1)] + "…";
 
     private sealed record GoalActionSurface(
         IReadOnlyList<DiscordButtonDefinition> Buttons,
