@@ -1698,6 +1698,72 @@ protected static void WriteSkill(string workingDirectory, string skillName)
 
 public sealed class WorkerDispatchSpecClarificationTests : WorkerDispatchTestSupport
 {
+    [Xunit.Fact]
+    public async Task IndependentForksInOneResponseRaiseOneClarificationRound()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var provider = new QueueRefinerProvider("""
+            ```json
+            {
+              "behavioralContract": "All independently identifiable choices are clarified together.",
+              "acceptanceCriteria": ["All independent forks are surfaced."],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": [
+                {"kind":"observable-behavior","topicKey":"no-op-revision","refinerConfidence":"low","blastRadius":"high","question":"What happens for an identical revision?","choice":"","rationale":"Operator decision required."},
+                {"kind":"scope","topicKey":"per-round-run-cap","refinerConfidence":"low","blastRadius":"high","question":"How many runs may one round request?","choice":"","rationale":"Operator decision required."},
+                {"kind":"ownership-lifecycle","topicKey":"duplicate-request-dedup","refinerConfidence":"low","blastRadius":"high","question":"How are duplicate requests deduplicated?","choice":"","rationale":"Operator decision required."}
+              ]
+            }
+            ```
+            """);
+        var service = CreateRefinementService(workspace, store, provider);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Clarify every independently identifiable fork.");
+
+        var result = await service.RefineAsync(kernel, goal.Id);
+
+        Assert.Equal(RefinementOutcome.AwaitingClarification, result.Outcome);
+        Assert.Equal(3, result.Spec.OpenQuestions.Count);
+        Assert.Equal(3, (await store.ListAsync(goal.Id.Value)).Count);
+        Assert.Equal(1, kernel.GetGoal(goal.Id).ClarificationRoundCount);
+        Assert.Contains("enumerate every material fork", provider.Requests.Single().Messages.Single().Content);
+    }
+
+    [Xunit.Fact]
+    public async Task AnswerDependentForkCanRaiseASecondClarificationRound()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var provider = new QueueRefinerProvider(
+            AskJson("revision-semantics", "observable-behavior", "Do briefs supersede or replace?"),
+            AskJson("artifact-disposition", "ownership-lifecycle", "Where do superseded artifacts go?"));
+        var service = CreateRefinementService(workspace, store, provider);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Define brief revision behavior.");
+
+        var first = await service.RefineAsync(kernel, goal.Id);
+        var firstItem = Assert.Single(await store.ListAsync(goal.Id.Value));
+        Assert.True(await service.TryResolveOpenClarificationAsync(
+            kernel,
+            firstItem.CorrelationKey!,
+            "Briefs supersede earlier briefs."));
+
+        var second = await service.RefineAsync(kernel, goal.Id);
+
+        Assert.Equal(RefinementOutcome.AwaitingClarification, first.Outcome);
+        Assert.Equal(RefinementOutcome.AwaitingClarification, second.Outcome);
+        Assert.Contains(second.Spec.OpenQuestions, question => question.TopicKey == "artifact-disposition");
+        Assert.Equal(2, (await store.ListAsync(goal.Id.Value)).Count);
+        Assert.Equal(2, kernel.GetGoal(goal.Id).ClarificationRoundCount);
+        Assert.Contains("Briefs supersede earlier briefs.", provider.Requests[1].Messages.Single().Content);
+        Assert.Contains("could the question have been asked before that answer existed", provider.Requests[1].Messages.Single().Content);
+        Assert.Contains("must still be returned now rather than suppressed", provider.Requests[1].Messages.Single().Content);
+    }
+
     [Xunit.Fact(DisplayName = "SpecRefiner_answered_clarification_is_resolved_input_and_not_reasked")]
     public async Task SpecRefinerAnsweredClarificationIsResolvedInputAndNotReasked()
     {

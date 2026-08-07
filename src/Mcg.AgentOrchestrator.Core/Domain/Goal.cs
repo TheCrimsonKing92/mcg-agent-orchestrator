@@ -43,6 +43,8 @@ public sealed class Goal
 
     public int OperatorAcceptanceRegateCount { get; private set; }
 
+    public int ClarificationRoundCount { get; private set; }
+
     public string? SourceBacklogItemId { get; private set; }
 
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
@@ -115,6 +117,11 @@ public sealed class Goal
     internal void SetStatus(GoalStatus status) => Status = status;
 
     internal void SetRefinedSpec(RefinedSpec spec) => RefinedSpec = spec;
+
+    internal void RecordClarificationRound() => ClarificationRoundCount++;
+
+    internal void RestoreClarificationRoundCount(int count) =>
+        ClarificationRoundCount = Math.Max(0, count);
 
     internal void SetSourceBacklogItemId(string id) => SourceBacklogItemId = id;
 
@@ -349,7 +356,8 @@ public sealed class Goal
                     CurrentHold.State,
                     CurrentHold.Blocker,
                     CurrentHold.StartedAt,
-                    CurrentHold.StalledAt));
+                    CurrentHold.StalledAt),
+            ClarificationRoundCount: ClarificationRoundCount);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -367,6 +375,7 @@ public sealed class Goal
 
         var goal = new Goal(new GoalId(snapshot.Id), snapshot.Objective, snapshot.Tasks.Select(TaskSpec.FromSnapshot).ToList());
         goal.SetStatus(snapshot.Status);
+        goal.RestoreClarificationRoundCount(snapshot.ClarificationRoundCount);
 
         foreach (var evt in snapshot.Timeline.OrderBy(item => item.OccurredAt))
         {
