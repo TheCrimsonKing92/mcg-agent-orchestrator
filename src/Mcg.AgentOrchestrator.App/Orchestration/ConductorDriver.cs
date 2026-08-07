@@ -133,7 +133,8 @@ internal sealed class ConductorDriver
             tryRunPreSlot: RunParallelLandingAcceptancePreSlot);
         _focusedEvidenceAttemptCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             Path.Combine(workspace.OrchestratorDirectory, "pre-review-evidence-attempts"),
-            dir);
+            dir,
+            conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath));
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
         kernel.SetEventWriter(eventWriter);
         _tryBuildAwaitingClarificationEscalationReason = goal =>
@@ -2486,7 +2487,8 @@ internal sealed class ConductorDriver
                 policy,
                 new ConductorAdvanceOutcome.Held(
                     fromState,
-                    $"Pre-review focused evidence is running in background attempt {attemptDecision.Attempt.AttemptId}."));
+                    _focusedEvidenceAttemptCoordinator.DescribeFocusedEvidenceHold(attemptDecision.Attempt),
+                    $"pre-review-evidence:{attemptDecision.Attempt.AttemptId}"));
             return true;
         }
 

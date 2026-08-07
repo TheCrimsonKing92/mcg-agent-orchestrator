@@ -1,6 +1,9 @@
 using System.Globalization;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -83,6 +86,40 @@ internal sealed class ConductEventLogWriter
         }
     }
 
+    internal bool AppendRequired(ConductEvidenceLifecycleEvent record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        lock (_lock)
+        {
+            var directory = Path.GetDirectoryName(_path) ?? ".";
+            Directory.CreateDirectory(directory);
+            var pendingDirectory = Path.Combine(directory, PendingEventsDirectoryName);
+            Directory.CreateDirectory(pendingDirectory);
+            var eventHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(record.EventId)));
+            var pendingPath = Path.Combine(
+                pendingDirectory,
+                $"{Path.GetFileName(_path)}.pending-{eventHash}.jsonl");
+            if (!File.Exists(pendingPath) && !RequiredEventAlreadyRecorded(record.EventId))
+            {
+                File.WriteAllText(pendingPath, JsonSerializer.Serialize(record, JsonOptions) + Environment.NewLine);
+            }
+
+            try
+            {
+                DrainRequiredEvents();
+                return !File.Exists(pendingPath);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+    }
+
     private string Serialize(string eventKind, string? goalId, string detail, DateTimeOffset? timestamp)
     {
         var record = new ConductEventRecord(
@@ -108,10 +145,57 @@ internal sealed class ConductEventLogWriter
             var pattern = $"{Path.GetFileName(_path)}.pending-*.jsonl";
             foreach (var pendingPath in Directory.GetFiles(pendingDirectory, pattern).Order(StringComparer.Ordinal))
             {
+                var payload = File.ReadAllText(pendingPath);
+                var eventId = TryReadEventId(payload);
+                if (eventId is not null && RequiredEventAlreadyRecorded(eventId))
+                {
+                    File.Delete(pendingPath);
+                    continue;
+                }
+
                 RotateIfNeeded();
-                File.AppendAllText(_path, File.ReadAllText(pendingPath));
+                File.AppendAllText(_path, payload);
                 File.Delete(pendingPath);
             }
+        }
+    }
+
+    private bool RequiredEventAlreadyRecorded(string eventId)
+    {
+        var directory = Path.GetDirectoryName(_path) ?? ".";
+        if (!Directory.Exists(directory))
+        {
+            return false;
+        }
+
+        var stem = Path.GetFileNameWithoutExtension(_path);
+        var extension = Path.GetExtension(_path);
+        foreach (var path in Directory.EnumerateFiles(directory, $"{stem}*{extension}", SearchOption.TopDirectoryOnly))
+        {
+            foreach (var line in File.ReadLines(path))
+            {
+                if (string.Equals(TryReadEventId(line), eventId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string? TryReadEventId(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty("event_id", out var value)
+                ? value.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 
@@ -188,3 +272,18 @@ internal sealed record ConductEventRecord(
     string EventKind,
     string? GoalId,
     string Detail);
+
+internal sealed record ConductEvidenceLifecycleEvent(
+    DateTimeOffset Timestamp,
+    string EventKind,
+    string GoalId,
+    [property: JsonPropertyName("goal")] string Goal,
+    [property: JsonPropertyName("attempt")] string Attempt,
+    [property: JsonPropertyName("ordinal")] int Ordinal,
+    [property: JsonPropertyName("event_id")] string EventId,
+    [property: JsonPropertyName("duration_s")] object? DurationSeconds = null,
+    [property: JsonPropertyName("outcome")] string? Outcome = null,
+    [property: JsonPropertyName("tests_executed")] object? TestsExecuted = null,
+    [property: JsonPropertyName("superseded_by")] string? SupersededBy = null,
+    [property: JsonPropertyName("cause")] string? Cause = null,
+    [property: JsonPropertyName("detail")] string? Detail = null);

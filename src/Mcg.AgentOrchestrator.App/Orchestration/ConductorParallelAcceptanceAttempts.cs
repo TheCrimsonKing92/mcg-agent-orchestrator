@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -19,7 +21,31 @@ internal enum ConductorParallelAcceptanceAttemptOutcome
     BlockedBuildSlot,
     BlockedBuildLock,
     LaunchFailed,
+    Faulted,
     Reconciled
+}
+
+internal enum ConductorEvidenceAttemptOutcome
+{
+    Passed,
+    Failed,
+    Superseded,
+    Faulted,
+    Cancelled,
+    LaunchFailed,
+    BlockedBuildSlot,
+    BlockedBuildLock,
+    CorruptArtifacts,
+    Unknown
+}
+
+internal enum ConductorEvidenceSupersessionCause
+{
+    RetryInvalidated,
+    CandidateChanged,
+    FocusedRequestChanged,
+    GoalMovedOn,
+    CoordinatorReplacement
 }
 
 internal enum ConductorParallelAcceptanceAttemptDecisionKind
@@ -58,7 +84,13 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     IReadOnlyList<string>? LeaseReceipts = null,
     int ReplayedLeaseReceiptCount = 0,
     string Kind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind,
-    string? FocusedEvidenceRequest = null)
+    string? FocusedEvidenceRequest = null,
+    int Ordinal = 0,
+    long? MonotonicStartedTimestamp = null,
+    long? MonotonicTimestampFrequency = null,
+    string? ConductEventLogPath = null,
+    string? SupersededBy = null,
+    ConductorEvidenceSupersessionCause? SupersessionCause = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -251,6 +283,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly string _rootDirectory;
     private readonly string? _executionDirectory;
     private readonly Func<DateTimeOffset> _utcNow;
+    private readonly TimeProvider _timeProvider;
     private readonly Func<int, bool> _isProcessAlive;
     private readonly Func<ConductorParallelAcceptanceOwnedProcessLaunch, ConductorParallelAcceptanceOwnedProcessLaunchResult> _launchOwnedProcess;
     private readonly bool _runInline;
@@ -260,6 +293,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _heartbeatWritten;
     private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests? _attemptCompletionGateForTests;
     private readonly Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?> _acquireStableSlotLease;
+    private readonly ConductEventLogWriter? _conductEventLogWriter;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
         string rootDirectory,
@@ -273,7 +307,9 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         TimeSpan? recentHeartbeatGrace = null,
         Action<ConductorParallelAcceptanceAttempt, string>? heartbeatWritten = null,
         ConductorParallelAcceptanceAttemptCompletionGateForTests? attemptCompletionGateForTests = null,
-        Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?>? acquireStableSlotLease = null)
+        Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?>? acquireStableSlotLease = null,
+        ConductEventLogWriter? conductEventLogWriter = null,
+        TimeProvider? timeProvider = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -284,7 +320,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         _rootDirectory = rootDirectory;
         _executionDirectory = executionDirectory;
-        _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _utcNow = utcNow ?? _timeProvider.GetUtcNow;
         _isProcessAlive = isProcessAlive ?? IsProcessAlive;
         _launchOwnedProcess = launchOwnedProcess ?? LaunchExternalOwnedProcess;
         _runInline = runInline;
@@ -294,6 +331,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _heartbeatWritten = heartbeatWritten;
         _attemptCompletionGateForTests = attemptCompletionGateForTests;
         _acquireStableSlotLease = acquireStableSlotLease ?? AcquireAttemptStableSlotLease;
+        _conductEventLogWriter = conductEventLogWriter;
     }
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
@@ -341,6 +379,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (current is not null && IsReconciled(current))
         {
+            if (current.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
+                current.SupersessionCause is not null)
+            {
+                var successor = CreateAttempt(candidate, policy, dispatchKind, focusedEvidenceRequest);
+                CompleteSupersession(current, successor);
+                return Launch(candidate, policy, runAcceptance, dispatchKind, focusedEvidenceRequest, successor);
+            }
+
             current = null;
         }
 
@@ -429,7 +475,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 return false;
             }
 
-            return MarkStaleUnderLock(current, reason.Trim());
+            return MarkStaleUnderLock(
+                current,
+                reason.Trim(),
+                ConductorEvidenceSupersessionCause.RetryInvalidated);
         }
     }
 
@@ -476,6 +525,26 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         return liveGoalIds;
     }
 
+    internal string DescribeFocusedEvidenceHold(ConductorParallelAcceptanceAttempt attempt)
+    {
+        var elapsed = DurationSeconds(attempt);
+        var humanElapsed = elapsed is double seconds
+            ? FormatElapsed(TimeSpan.FromSeconds(seconds))
+            : "unknown";
+        return $"PRE_REVIEW_FOCUSED_EVIDENCE_RUNNING: attempt {attempt.Ordinal}, {humanElapsed} elapsed (attempt={attempt.AttemptId})";
+    }
+
+    private static string FormatElapsed(TimeSpan elapsed)
+    {
+        var wholeSeconds = Math.Max(0, (long)elapsed.TotalSeconds);
+        var hours = wholeSeconds / 3600;
+        var minutes = wholeSeconds % 3600 / 60;
+        var seconds = wholeSeconds % 60;
+        return hours > 0
+            ? $"{hours}h{minutes}m{seconds}s"
+            : $"{minutes}m{seconds}s";
+    }
+
     private bool IsLiveAttempt(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running &&
         !attempt.ReconciledAt.HasValue &&
@@ -518,12 +587,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorAutonomyPolicy policy,
         ConductorParallelAcceptanceRunAcceptance runAcceptance,
         string dispatchKind,
-        string? focusedEvidenceRequest)
+        string? focusedEvidenceRequest,
+        ConductorParallelAcceptanceAttempt? reservedAttempt = null)
     {
-        var attempt = CreateAttempt(candidate, policy, dispatchKind, focusedEvidenceRequest);
+        var attempt = reservedAttempt ?? CreateAttempt(candidate, policy, dispatchKind, focusedEvidenceRequest);
         try
         {
             Persist(attempt);
+            EmitEvidenceStart(attempt);
             WriteHeartbeat(attempt, "starting");
             File.AppendAllText(attempt.StdoutPath, $"{attempt.Kind} attempt {attempt.AttemptId} started for {attempt.GoalPrefix} slot-{attempt.SlotIndex}{Environment.NewLine}");
 
@@ -707,7 +778,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 TryWriteExit(attempt.ExitCodePath, 1);
                 var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                     Path.GetDirectoryName(Path.GetDirectoryName(attempt.MetadataPath) ?? string.Empty) ?? Environment.CurrentDirectory,
-                    attempt.ExecutionDirectory);
+                    attempt.ExecutionDirectory,
+                    conductEventLogWriter: string.IsNullOrWhiteSpace(attempt.ConductEventLogPath)
+                        ? null
+                        : new ConductEventLogWriter(attempt.ConductEventLogPath));
                 coordinator.CompleteWithoutResult(
                     attempt with { OwnerProcessId = Environment.ProcessId },
                     IsTransientAttemptIo(ex)
@@ -859,7 +933,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         {
             CompleteWithoutResult(
                 attempt,
-                ConductorParallelAcceptanceAttemptOutcome.Failed,
+                ConductorParallelAcceptanceAttemptOutcome.Faulted,
                 ex.Message);
             TryAppend(attempt.StderrPath, $"{ex}{Environment.NewLine}");
         }
@@ -1106,7 +1180,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private bool MarkStaleUnderLock(
         ConductorParallelAcceptanceAttempt attempt,
-        string detail)
+        string detail,
+        ConductorEvidenceSupersessionCause? supersessionCause = null)
     {
         var current = TryReadAttemptFile(attempt.MetadataPath);
         if (current is null ||
@@ -1122,9 +1197,32 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             CompletedAt = _utcNow(),
             ReconciledAt = _utcNow(),
             LastHeartbeatAt = _utcNow(),
-            Detail = detail
+            Detail = detail,
+            SupersessionCause = supersessionCause
         });
         return true;
+    }
+
+    private void CompleteSupersession(
+        ConductorParallelAcceptanceAttempt attempt,
+        ConductorParallelAcceptanceAttempt successor)
+    {
+        ConductorParallelAcceptanceAttempt superseded;
+        lock (MetadataWriteGate)
+        {
+            var current = TryReadAttemptFile(attempt.MetadataPath) ?? attempt;
+            superseded = current with
+            {
+                SupersededBy = successor.AttemptId,
+                SupersessionCause = current.SupersessionCause ?? ConductorEvidenceSupersessionCause.CoordinatorReplacement,
+                CompletedAt = current.CompletedAt ?? _utcNow(),
+                LastHeartbeatAt = _utcNow()
+            };
+            WriteAttemptFile(superseded);
+        }
+
+        // The old terminal event must be durable before the successor start is visible.
+        EmitEvidenceEnd(superseded);
     }
 
     private bool TryBuildDurablePassedCompletion(
@@ -1229,6 +1327,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var directory = Path.Combine(_rootDirectory, candidate.Goal.Id.Value);
         Directory.CreateDirectory(directory);
         PruneOldAttempts(directory, RetainedAttemptCountPerGoal - 1);
+        var ordinal = AllocateOrdinal(directory);
         var prefix = Path.Combine(directory, id);
         return new ConductorParallelAcceptanceAttempt(
             id,
@@ -1251,7 +1350,32 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             policy.Name,
             candidate.ScopePaths,
             Kind: dispatchKind,
-            FocusedEvidenceRequest: focusedEvidenceRequest);
+            FocusedEvidenceRequest: focusedEvidenceRequest,
+            Ordinal: ordinal,
+            MonotonicStartedTimestamp: _timeProvider.GetTimestamp(),
+            MonotonicTimestampFrequency: _timeProvider.TimestampFrequency,
+            ConductEventLogPath: _conductEventLogWriter?.CurrentPath);
+    }
+
+    private static int AllocateOrdinal(string directory)
+    {
+        var sequencePath = Path.Combine(directory, "attempt-sequence.txt");
+        lock (MetadataWriteGate)
+        {
+            var current = 0;
+            if (File.Exists(sequencePath))
+            {
+                _ = int.TryParse(File.ReadAllText(sequencePath), NumberStyles.None, CultureInfo.InvariantCulture, out current);
+            }
+            else
+            {
+                current = Directory.EnumerateFiles(directory, "*.attempt.json").Count();
+            }
+
+            var next = checked(current + 1);
+            File.WriteAllText(sequencePath, next.ToString(CultureInfo.InvariantCulture));
+            return next;
+        }
     }
 
     private ConductorParallelAcceptanceAttempt? TryReadLatest(string goalId)
@@ -1309,16 +1433,21 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private void Persist(ConductorParallelAcceptanceAttempt attempt)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(attempt.MetadataPath) ?? _rootDirectory);
+        ConductorParallelAcceptanceAttempt persisted;
         lock (MetadataWriteGate)
         {
-            WriteAttemptFile(attempt with { LastHeartbeatAt = _utcNow() });
+            persisted = attempt with { LastHeartbeatAt = _utcNow() };
+            WriteAttemptFile(persisted);
         }
+
+        EmitEvidenceEnd(persisted);
     }
 
     private bool TryPersistTerminal(
         ConductorParallelAcceptanceAttempt attempt,
         Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceAttempt> transition)
     {
+        ConductorParallelAcceptanceAttempt terminal;
         lock (MetadataWriteGate)
         {
             var current = TryReadAttemptFile(attempt.MetadataPath);
@@ -1330,10 +1459,139 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 return false;
             }
 
-            WriteAttemptFile(transition(current));
-            return true;
+            terminal = transition(current);
+            WriteAttemptFile(terminal);
+        }
+
+        EmitEvidenceEnd(terminal);
+        return true;
+    }
+
+    private void EmitEvidenceStart(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (_conductEventLogWriter is null ||
+            !string.Equals(attempt.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _conductEventLogWriter.AppendRequired(new ConductEvidenceLifecycleEvent(
+            attempt.StartedAt,
+            "EVIDENCE_START",
+            attempt.GoalId,
+            attempt.GoalId,
+            attempt.AttemptId,
+            attempt.Ordinal,
+            $"evidence:{attempt.AttemptId}:start"));
+    }
+
+    private void EmitEvidenceEnd(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (_conductEventLogWriter is null ||
+            !string.Equals(attempt.Kind, PreReviewEvidenceDispatchKind, StringComparison.Ordinal) ||
+            attempt.Outcome is ConductorParallelAcceptanceAttemptOutcome.Running or ConductorParallelAcceptanceAttemptOutcome.Reconciled ||
+            attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.StaleCandidate &&
+            string.IsNullOrWhiteSpace(attempt.SupersededBy))
+        {
+            return;
+        }
+
+        var outcome = EvidenceOutcomeFor(attempt);
+        _conductEventLogWriter.AppendRequired(new ConductEvidenceLifecycleEvent(
+            attempt.CompletedAt ?? _utcNow(),
+            "EVIDENCE_END",
+            attempt.GoalId,
+            attempt.GoalId,
+            attempt.AttemptId,
+            attempt.Ordinal,
+            $"evidence:{attempt.AttemptId}:end",
+            DurationSeconds(attempt),
+            EvidenceToken(outcome),
+            ExecutedTestCount(attempt.TestResultPaths),
+            attempt.SupersededBy,
+            attempt.SupersessionCause is { } cause ? EvidenceToken(cause) : null,
+            attempt.Detail));
+    }
+
+    private object DurationSeconds(ConductorParallelAcceptanceAttempt attempt)
+    {
+        if (attempt.MonotonicStartedTimestamp is not { } started ||
+            attempt.MonotonicTimestampFrequency != _timeProvider.TimestampFrequency)
+        {
+            return "unknown";
+        }
+
+        try
+        {
+            var elapsed = _timeProvider.GetElapsedTime(started, _timeProvider.GetTimestamp());
+            return elapsed < TimeSpan.Zero
+                ? "unknown"
+                : Math.Round(elapsed.TotalSeconds, 3, MidpointRounding.AwayFromZero);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return "unknown";
         }
     }
+
+    private static object ExecutedTestCount(IReadOnlyList<string>? paths)
+    {
+        if (paths is null || paths.Count == 0)
+        {
+            return "unknown";
+        }
+
+        long total = 0;
+        try
+        {
+            foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!File.Exists(path))
+                {
+                    return "unknown";
+                }
+
+                var counters = XDocument.Load(path)
+                    .Descendants()
+                    .FirstOrDefault(element => element.Name.LocalName == "Counters");
+                if (counters is null ||
+                    !long.TryParse(counters.Attribute("passed")?.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var passed) ||
+                    !long.TryParse(counters.Attribute("failed")?.Value, NumberStyles.None, CultureInfo.InvariantCulture, out var failed))
+                {
+                    return "unknown";
+                }
+
+                total = checked(total + passed + failed);
+            }
+
+            return total;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException or OverflowException)
+        {
+            return "unknown";
+        }
+    }
+
+    private static ConductorEvidenceAttemptOutcome EvidenceOutcomeFor(ConductorParallelAcceptanceAttempt attempt) =>
+        attempt.Outcome switch
+        {
+            ConductorParallelAcceptanceAttemptOutcome.Passed => ConductorEvidenceAttemptOutcome.Passed,
+            ConductorParallelAcceptanceAttemptOutcome.Failed => ConductorEvidenceAttemptOutcome.Failed,
+            ConductorParallelAcceptanceAttemptOutcome.StaleCandidate when !string.IsNullOrWhiteSpace(attempt.SupersededBy) =>
+                ConductorEvidenceAttemptOutcome.Superseded,
+            ConductorParallelAcceptanceAttemptOutcome.Faulted => ConductorEvidenceAttemptOutcome.Faulted,
+            ConductorParallelAcceptanceAttemptOutcome.Cancelled => ConductorEvidenceAttemptOutcome.Cancelled,
+            ConductorParallelAcceptanceAttemptOutcome.LaunchFailed => ConductorEvidenceAttemptOutcome.LaunchFailed,
+            ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot => ConductorEvidenceAttemptOutcome.BlockedBuildSlot,
+            ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock => ConductorEvidenceAttemptOutcome.BlockedBuildLock,
+            ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts => ConductorEvidenceAttemptOutcome.CorruptArtifacts,
+            ConductorParallelAcceptanceAttemptOutcome.ProcessDied => ConductorEvidenceAttemptOutcome.Unknown,
+            _ => ConductorEvidenceAttemptOutcome.Unknown
+        };
+
+    private static string EvidenceToken<T>(T value) where T : struct, Enum =>
+        string.Concat(value.ToString().Select((character, index) =>
+            char.IsUpper(character) && index > 0 ? $"_{char.ToLowerInvariant(character)}" : char.ToLowerInvariant(character).ToString()));
 
     private ConductorParallelAcceptanceAttempt TryPersistOwnerProcess(
         ConductorParallelAcceptanceAttempt attempt,
@@ -1678,7 +1936,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (run.Exception is not null)
         {
-            return ConductorParallelAcceptanceAttemptOutcome.Failed;
+            return ConductorParallelAcceptanceAttemptOutcome.Faulted;
         }
 
         if (run.EarlyResult is not null)
@@ -1707,7 +1965,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             or ConductorParallelAcceptanceAttemptOutcome.Cancelled
             or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot
             or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock
-            or ConductorParallelAcceptanceAttemptOutcome.LaunchFailed;
+            or ConductorParallelAcceptanceAttemptOutcome.LaunchFailed
+            or ConductorParallelAcceptanceAttemptOutcome.Faulted;
 
     private static bool IsReconciled(ConductorParallelAcceptanceAttempt attempt) =>
         attempt.ReconciledAt.HasValue ||

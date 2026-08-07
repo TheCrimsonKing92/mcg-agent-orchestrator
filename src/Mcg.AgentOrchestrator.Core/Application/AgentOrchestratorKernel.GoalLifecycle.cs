@@ -1794,8 +1794,9 @@ public sealed partial class AgentOrchestratorKernel
         string state,
         string blocker,
         DateTimeOffset observedAt,
-        TimeSpan stallThreshold) =>
-        GetGoal(goalId).ObserveHold(state, blocker, observedAt, stallThreshold);
+        TimeSpan stallThreshold,
+        string? stableIdentity = null) =>
+        GetGoal(goalId).ObserveHold(state, blocker, observedAt, stallThreshold, stableIdentity);
 
     public bool ClearGoalHold(GoalId goalId) => GetGoal(goalId).ClearHold();
 

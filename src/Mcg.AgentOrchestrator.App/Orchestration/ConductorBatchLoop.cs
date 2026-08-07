@@ -1990,7 +1990,8 @@ internal sealed class ConductorBatchLoop
                 observedAt,
                 stallThreshold,
                 changedGoalIds,
-                tickLines);
+                tickLines,
+                held.StableIdentity);
             return;
         }
 
@@ -2005,7 +2006,8 @@ internal sealed class ConductorBatchLoop
         DateTimeOffset observedAt,
         TimeSpan stallThreshold,
         HashSet<GoalId> changedGoalIds,
-        List<string> tickLines)
+        List<string> tickLines,
+        string? stableIdentity = null)
     {
         try
         {
@@ -2014,7 +2016,8 @@ internal sealed class ConductorBatchLoop
                 state,
                 blocker,
                 observedAt,
-                stallThreshold);
+                stallThreshold,
+                stableIdentity);
             if (observation.StateChanged)
             {
                 changedGoalIds.Add(goal.Id);
