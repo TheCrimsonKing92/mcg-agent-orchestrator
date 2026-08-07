@@ -425,8 +425,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProcessJobs_register_identity_failure_kills_attached_process_tree")]
-    public void WorkerProcessJobsRegisterIdentityFailureKillsAttachedProcessTree()
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_register_victim_identity_failure_preserves_attached_process_tree")]
+    public void WorkerProcessJobsRegisterVictimIdentityFailurePreservesAttachedProcessTree()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -460,17 +460,41 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 ])))
                 ?? throw new InvalidOperationException("Failed to start wrapper process.");
 
-            Assert.False(WorkerProcessJobs.TryRegister(
+            using var ownerProcess = Process.GetCurrentProcess();
+            Assert.True(SpawnProcessIdentityReader.TryRead(ownerProcess, out var ownerIdentity));
+            var victimAttempts = 0;
+            var retryDelays = new List<int>();
+            Assert.True(WorkerProcessJobs.TryRegister(
                 wrapper,
                 "identity-read-failure",
                 _ =>
                 {
+                    victimAttempts++;
                     File.WriteAllText(startSignal, "go");
                     childPid = WaitForPidFile(marker);
                     return null;
-                }));
-            Assert.False(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
+                },
+                _ => ownerIdentity,
+                retryDelays.Add,
+                out var registrationDiagnostic));
+            Assert.Equal(10, victimAttempts);
+            Assert.Equal(Enumerable.Repeat(25, 9), retryDelays);
+            Assert.Contains("stage=victim-identity-read", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("attempts=10", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("outcome=durable-registration-skipped-process-preserved", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.DoesNotContain("attached-process-tree-termination-requested", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.True(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
             Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Contains(
+                new SqliteRunEventStore(dbPath, ensureSchema: false).ReadSinceAsync().GetAwaiter().GetResult(),
+                evt => evt.Operation == "WORKER_PROCESS_REGISTRATION_DEGRADED" &&
+                       evt.Status == "degraded" &&
+                       evt.Detail == registrationDiagnostic);
+            Assert.False(wrapper.HasExited);
+            Assert.False(wrapper.WaitForExit(100));
+            Assert.True(IsRunning(Assert.IsType<int>(childPid)));
+
+            WorkerProcessJobs.Release(wrapper.Id);
             Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(5)));
             Assert.True(WaitUntilNotRunning(Assert.IsType<int>(childPid), TimeSpan.FromSeconds(5)));
         }
@@ -588,25 +612,24 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 wrapper,
                 "owner-retry",
                 _ => victimIdentity,
-                ownerProcess => SpawnProcessIdentityReader.ReadForRegistration(
-                    ownerProcess,
-                    candidate =>
-                    {
-                        ownerAttempts++;
-                        return ownerAttempts >= 3 && SpawnProcessIdentityReader.TryRead(candidate, out var ownerIdentity)
-                            ? ownerIdentity
-                            : null;
-                    },
-                    ownerDelays.Add,
-                    maxAttempts: 5,
-                    delayMilliseconds: 13).Identity));
+                candidate =>
+                {
+                    ownerAttempts++;
+                    return ownerAttempts >= 2 && SpawnProcessIdentityReader.TryRead(candidate, out var ownerIdentity)
+                        ? ownerIdentity
+                        : null;
+                },
+                ownerDelays.Add,
+                out var registrationDiagnostic));
 
             var entry = Assert.Single(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
             Assert.Equal(Environment.ProcessId, entry.OwnerProcessId);
             Assert.NotNull(entry.OwnerProcessStartedAt);
             Assert.False(string.IsNullOrWhiteSpace(entry.OwnerProcessImagePath));
-            Assert.Equal(3, ownerAttempts);
-            Assert.Equal([13, 13], ownerDelays);
+            Assert.Equal(2, ownerAttempts);
+            Assert.Equal([25], ownerDelays);
+            Assert.Equal(string.Empty, registrationDiagnostic);
+            Assert.False(wrapper.HasExited);
 
             WorkerProcessJobs.Release(wrapper.Id);
             Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(5)));
@@ -625,8 +648,8 @@ public sealed class WorkerProcessJobsTests : IDisposable
         }
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProcessJobs_register_owner_identity_failure_kills_attached_process")]
-    public void WorkerProcessJobsRegisterOwnerIdentityFailureKillsAttachedProcess()
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_register_owner_identity_failure_preserves_attached_process")]
+    public void WorkerProcessJobsRegisterOwnerIdentityFailurePreservesAttachedProcess()
     {
         var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
         var dbPath = Path.Combine(root, "state.db");
@@ -639,13 +662,100 @@ public sealed class WorkerProcessJobsTests : IDisposable
             wrapper = StartLongRunningShell();
             Assert.True(SpawnProcessIdentityReader.TryRead(wrapper, out var victimIdentity));
 
-            Assert.False(WorkerProcessJobs.TryRegister(
+            var ownerAttempts = 0;
+            var retryDelays = new List<int>();
+            Assert.True(WorkerProcessJobs.TryRegister(
                 wrapper,
                 "owner-identity-failure",
                 _ => victimIdentity,
-                _ => null));
-            Assert.False(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
+                _ =>
+                {
+                    ownerAttempts++;
+                    return null;
+                },
+                retryDelays.Add,
+                out var registrationDiagnostic));
+            Assert.Equal(10, ownerAttempts);
+            Assert.Equal(Enumerable.Repeat(25, 9), retryDelays);
+            Assert.Contains("stage=owner-identity-read", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("attempts=10", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("outcome=durable-registration-skipped-process-preserved", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.DoesNotContain("attached-process-tree-termination-requested", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.True(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
             Assert.Empty(WorkerProcessJobs.ListActiveRegistryEntriesForTests());
+            Assert.Contains(
+                new SqliteRunEventStore(dbPath, ensureSchema: false).ReadSinceAsync().GetAwaiter().GetResult(),
+                evt => evt.Operation == "WORKER_PROCESS_REGISTRATION_DEGRADED" &&
+                       evt.Status == "degraded" &&
+                       evt.Detail == registrationDiagnostic);
+            Assert.False(wrapper.HasExited);
+            Assert.False(wrapper.WaitForExit(100));
+
+            Assert.True(WorkerProcessJobs.TryDetachForGracefulStop(wrapper.Id, out var detachFailure), detachFailure);
+            Assert.False(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
+            Assert.False(wrapper.WaitForExit(100));
+            Assert.True(IsRunning(wrapper.Id));
+        }
+        finally
+        {
+            WorkerProcessJobs.ClearRegistryForTests();
+            if (wrapper is not null)
+            {
+                try { wrapper.Kill(entireProcessTree: true); } catch { }
+                wrapper.Dispose();
+            }
+
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_register_identity_exception_preserves_attached_process")]
+    public void WorkerProcessJobsRegisterIdentityExceptionPreservesAttachedProcess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), "mcg-worker-job-tests", Guid.NewGuid().ToString("n"));
+        var dbPath = Path.Combine(root, "state.db");
+        Directory.CreateDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(dbPath);
+        Process? wrapper = null;
+        try
+        {
+            WorkerProcessJobs.ConfigureRegistry(dbPath);
+            wrapper = StartLongRunningShell();
+
+            var victimAttempts = 0;
+            Assert.True(WorkerProcessJobs.TryRegister(
+                wrapper,
+                "identity-read-exception",
+                _ =>
+                {
+                    victimAttempts++;
+                    throw new Win32Exception(5, "Synthetic identity read denial.");
+                },
+                _ => throw new InvalidOperationException("Owner reader must not run after victim degradation."),
+                _ => { },
+                out var registrationDiagnostic));
+
+            Assert.Equal(10, victimAttempts);
+            Assert.Contains("attempts=10", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("stage=victim-identity-read", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("exception=Win32Exception", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("operation_message=Synthetic identity read denial.", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.Contains("outcome=durable-registration-skipped-process-preserved", registrationDiagnostic, StringComparison.Ordinal);
+            Assert.True(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
+            Assert.Contains(
+                new SqliteRunEventStore(dbPath, ensureSchema: false).ReadSinceAsync().GetAwaiter().GetResult(),
+                evt => evt.Operation == "WORKER_PROCESS_REGISTRATION_DEGRADED" &&
+                       evt.Status == "degraded" &&
+                       evt.Detail == registrationDiagnostic);
+            Assert.False(wrapper.HasExited);
+            Assert.False(wrapper.WaitForExit(100));
+
+            WorkerProcessJobs.Release(wrapper.Id);
             Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(5)));
         }
         finally
@@ -887,6 +997,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
                 out var failure));
 
             Assert.Contains("stage=owned-process-group-attachment", failure, StringComparison.Ordinal);
+            Assert.Contains("cleanup=process-tree-termination-requested", failure, StringComparison.Ordinal);
             Assert.Contains("exception=OwnedProcessAttachmentException", failure, StringComparison.Ordinal);
             Assert.Contains("native_error_code=5", failure, StringComparison.Ordinal);
             Assert.Contains("native_message=", failure, StringComparison.Ordinal);
@@ -896,6 +1007,7 @@ public sealed class WorkerProcessJobsTests : IDisposable
             Assert.Contains("candidate_in_job=true", failure, StringComparison.Ordinal);
             Assert.Contains("owner_job_limit_flags=0x00000000", failure, StringComparison.Ordinal);
             Assert.True(WaitUntilNotRunning(candidate.Id, TimeSpan.FromSeconds(5)));
+            Assert.True(candidate.HasExited);
             Assert.False(WorkerProcessJobs.HasRegisteredJob(candidate.Id));
         }
         finally
