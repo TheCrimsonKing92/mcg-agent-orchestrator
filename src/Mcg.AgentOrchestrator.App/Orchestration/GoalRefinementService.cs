@@ -677,8 +677,10 @@ internal sealed class GoalRefinementService
         IReadOnlyList<string> refinedCriteria)
     {
         var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(objective);
-        return declaredCriteria
-            .Concat(refinedCriteria)
+        if (declaredCriteria.Count > 0)
+            return declaredCriteria.ToList();
+
+        return refinedCriteria
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
