@@ -64,13 +64,14 @@ public sealed record TaskVerificationRecord(
     DateTimeOffset? DispatchStartedAt = null,
     int? ChildProcessId = null,
     int? ChildExitCode = null,
-    IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts = null)
+    IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts = null,
+    string? OrchestratorFailureReason = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
     public string StandardError { get; init; } = VerificationTextBounds.BoundText(StandardError, StandardErrorPath);
 
-    public bool Succeeded => ExitCode == 0;
+    public bool Succeeded => ExitCode == 0 && string.IsNullOrWhiteSpace(OrchestratorFailureReason);
 
     public IReadOnlyList<ReviewFinding> GetOpenAdvisoryFindings(
         IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections) =>

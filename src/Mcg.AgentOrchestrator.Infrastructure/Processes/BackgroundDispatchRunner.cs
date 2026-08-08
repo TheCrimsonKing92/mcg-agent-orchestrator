@@ -679,16 +679,28 @@ public sealed class BackgroundDispatchRunner
 
             if (TryDetectStartupHang(processRecord, out var startupHangDiagnostic))
             {
-                var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
-                TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, startupHangDiagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, startupHangDiagnostic), resourceAccounting);
+                return CompleteSuspectedHangDispatch(
+                    kernel,
+                    goalId,
+                    taskId,
+                    task,
+                    processRecord,
+                    startupHangDiagnostic,
+                    DispatchRecoveryAction.Reap,
+                    recoveryDecision);
             }
 
             if (TryDetectProbableProgressStall(task, goalId, processRecord, out var stallDiagnostic))
             {
-                var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
-                TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, stallDiagnostic, WithAction(DispatchRecoveryAction.ClassifyBlocker, recoveryDecision, stallDiagnostic), resourceAccounting);
+                return CompleteSuspectedHangDispatch(
+                    kernel,
+                    goalId,
+                    taskId,
+                    task,
+                    processRecord,
+                    stallDiagnostic,
+                    DispatchRecoveryAction.ClassifyBlocker,
+                    recoveryDecision);
             }
 
             return new DispatchRefreshOutcome(processRecord, null, RecoveryDecision: recoveryDecision);
@@ -1146,8 +1158,10 @@ public sealed class BackgroundDispatchRunner
         int exitCode,
         string? standardErrorDiagnostic = null,
         DispatchRecoveryDecision? recoveryDecision = null,
-        TaskProcessResourceAccounting? capturedResourceAccounting = null)
+        TaskProcessResourceAccounting? capturedResourceAccounting = null,
+        string? orchestratorFailureReason = null)
     {
+        var observedExitCode = exitCode;
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
         var outputSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath);
         var errorSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
@@ -1404,6 +1418,13 @@ public sealed class BackgroundDispatchRunner
                 FormatResourceReceipt(goalId, taskId, resourceAccounting));
         }
 
+        if (!string.IsNullOrWhiteSpace(orchestratorFailureReason))
+        {
+            // The exit artifact records what the dispatch host observed. A detector disposition is a
+            // separate fact and must not rewrite that artifact or fabricate a contradictory exit code.
+            exitCode = observedExitCode;
+        }
+
         var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput);
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
@@ -1461,7 +1482,8 @@ public sealed class BackgroundDispatchRunner
             HumanInputQuestion: humanInputQuestion,
             DispatchStartedAt: processRecord.StartedAt,
             ChildProcessId: completed.ChildProcessId,
-            ChildExitCode: completed.ChildExitCode);
+            ChildExitCode: completed.ChildExitCode,
+            OrchestratorFailureReason: orchestratorFailureReason);
 
         var outcome = new DispatchRefreshOutcome(
             completed,
@@ -1598,6 +1620,49 @@ public sealed class BackgroundDispatchRunner
             completionDiagnostic,
             WithAction(DispatchRecoveryAction.Reap, recoveryDecision, completionDiagnostic),
             resourceAccounting);
+    }
+
+    private DispatchRefreshOutcome CompleteSuspectedHangDispatch(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        TaskSpec task,
+        TaskProcessRecord processRecord,
+        string detectorDiagnostic,
+        DispatchRecoveryAction recoveryAction,
+        DispatchRecoveryDecision recoveryDecision)
+    {
+        var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
+        var exitRead = ReadExitCodeWithRetry(processRecord.ExitCodePath);
+        var exitCode = exitRead.Kind == ExitCodeReadKind.Valid
+            ? exitRead.ExitCode!.Value
+            : 1;
+        var completionDiagnostic = detectorDiagnostic;
+        string? orchestratorFailureReason = detectorDiagnostic;
+
+        if (TryBuildHungWrapperRescueNote(task, processRecord, goalId, out var rescueNote, out var deniedNote))
+        {
+            exitCode = exitRead.Kind == ExitCodeReadKind.Valid
+                ? exitRead.ExitCode!.Value
+                : 0;
+            orchestratorFailureReason = null;
+            completionDiagnostic = AppendDiagnostic(completionDiagnostic, rescueNote);
+        }
+        else if (!string.IsNullOrWhiteSpace(deniedNote))
+        {
+            completionDiagnostic = AppendDiagnostic(completionDiagnostic, deniedNote);
+        }
+
+        return BuildCompletedProcessOutcome(
+            kernel,
+            goalId,
+            taskId,
+            processRecord,
+            exitCode,
+            completionDiagnostic,
+            WithAction(recoveryAction, recoveryDecision, completionDiagnostic),
+            resourceAccounting,
+            orchestratorFailureReason);
     }
 
     private bool TryBuildHungWrapperRescueNote(
