@@ -767,6 +767,7 @@ public sealed class GoalBacklogLinkTests
 
         Assert.False(closed);
         Assert.Empty(messages);
+        Assert.False(File.Exists(dbPath));
     }
 
     [Xunit.Fact(DisplayName = "GoalBacklogLink_land_missing_source_backlog_item_records_goal_warning_without_throwing")]
