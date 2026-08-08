@@ -655,42 +655,26 @@ public sealed class BackgroundDispatchRunner
 
             if (TryDetectHungCodexWrapper(task, processRecord, out var diagnostic))
             {
-                var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
-                if (RequiresFileChangeEvidence(task) &&
-                    InspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt) is
-                        { IsAvailable: true, Evidence: var wt } &&
-                    wt.IsClean && wt.HasRelevantCommitAfterDispatch)
-                {
-                    var reapNote =
-                        "Background dispatch wrapper appears hung after codex final output; no exit file was written. " +
-                        $"Wrapper process reaped; task completed based on relevant file-change evidence " +
-                        $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
-                    TryWriteExitCode(processRecord.ExitCodePath, 0);
-                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, reapNote), resourceAccounting);
-                }
-
-                TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, diagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, diagnostic), resourceAccounting);
+                return CompleteHungWrapperDispatch(
+                    kernel,
+                    goalId,
+                    taskId,
+                    task,
+                    processRecord,
+                    diagnostic,
+                    recoveryDecision);
             }
 
             if (TryDetectHungSubscriptionWrapper(task, processRecord, out var wrapperDiagnostic))
             {
-                var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
-                if (RequiresFileChangeEvidence(task) &&
-                    InspectGoalWorktree(processRecord.WorkingDirectory, goalId, task.LastDispatch!.DispatchedAt) is
-                        { IsAvailable: true, Evidence: var wt } &&
-                    wt.IsClean && wt.HasRelevantCommitAfterDispatch)
-                {
-                    var reapNote =
-                        "Background dispatch wrapper appears hung with stalled heartbeat; no exit file was written. " +
-                        $"Wrapper process reaped; task completed based on relevant file-change evidence " +
-                        $"(branch={wt.Branch}; head={wt.Head}; commits_after_dispatch={wt.CommitsAfterDispatch}).";
-                    TryWriteExitCode(processRecord.ExitCodePath, 0);
-                    return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 0, reapNote, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, reapNote), resourceAccounting);
-                }
-
-                TryWriteExitCode(processRecord.ExitCodePath, 1);
-                return BuildCompletedProcessOutcome(kernel, goalId, taskId, processRecord, 1, wrapperDiagnostic, WithAction(DispatchRecoveryAction.Reap, recoveryDecision, wrapperDiagnostic), resourceAccounting);
+                return CompleteHungWrapperDispatch(
+                    kernel,
+                    goalId,
+                    taskId,
+                    task,
+                    processRecord,
+                    wrapperDiagnostic,
+                    recoveryDecision);
             }
 
             if (TryDetectStartupHang(processRecord, out var startupHangDiagnostic))
@@ -1582,6 +1566,122 @@ public sealed class BackgroundDispatchRunner
             task.RequiredRole is AgentRole.Developer or AgentRole.Tester;
     }
 
+    private DispatchRefreshOutcome CompleteHungWrapperDispatch(
+        AgentOrchestratorKernel kernel,
+        GoalId goalId,
+        TaskId taskId,
+        TaskSpec task,
+        TaskProcessRecord processRecord,
+        string hungDiagnostic,
+        DispatchRecoveryDecision recoveryDecision)
+    {
+        var resourceAccounting = ReapTrackedProcessJobs(processRecord, waitForExit: true);
+        var exitCode = 1;
+        var completionDiagnostic = hungDiagnostic;
+
+        if (TryBuildHungWrapperRescueNote(task, processRecord, goalId, out var rescueNote, out var deniedNote))
+        {
+            exitCode = 0;
+            completionDiagnostic = AppendDiagnostic(completionDiagnostic, rescueNote);
+        }
+        else if (!string.IsNullOrWhiteSpace(deniedNote))
+        {
+            completionDiagnostic = AppendDiagnostic(completionDiagnostic, deniedNote);
+        }
+
+        return BuildCompletedProcessOutcome(
+            kernel,
+            goalId,
+            taskId,
+            processRecord,
+            exitCode,
+            completionDiagnostic,
+            WithAction(DispatchRecoveryAction.Reap, recoveryDecision, completionDiagnostic),
+            resourceAccounting);
+    }
+
+    private bool TryBuildHungWrapperRescueNote(
+        TaskSpec task,
+        TaskProcessRecord processRecord,
+        GoalId goalId,
+        out string rescueNote,
+        out string deniedNote)
+    {
+        rescueNote = string.Empty;
+        deniedNote = string.Empty;
+
+        var standardOutput = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath).DecisionText;
+        var standardError = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath).DecisionText;
+        var hasPopulatedStandardOutput =
+            SafeFileLength(processRecord.StandardOutputPath) > 0L ||
+            (TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat) &&
+             heartbeat.StandardOutputBytes > 0L);
+        var hasSuccessfulWorkerResult = HasSuccessfulWorkerResult(
+            processRecord.WorkingDirectory,
+            standardOutput,
+            standardError,
+            allowNoChangedFiles: true,
+            requireNoBlockers: true);
+        if (CanCompleteHungWrapperWithoutChangeEvidence(
+                task,
+                hasPopulatedStandardOutput,
+                hasSuccessfulWorkerResult,
+                out var capabilityGapDiagnostic))
+        {
+            rescueNote =
+                $"Wrapper process reaped; task completed because read-only role {task.RequiredRole} " +
+                "produced populated standard output with a complete, non-blocked WORKER_RESULT.";
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(capabilityGapDiagnostic))
+        {
+            deniedNote = capabilityGapDiagnostic;
+            return false;
+        }
+
+        if (DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var capability) &&
+            capability == DispatchRoleOutputCapability.ReadOnly)
+        {
+            deniedNote =
+                $"Hung-wrapper rescue denied for read-only role {task.RequiredRole}: completion requires " +
+                "populated standard output and a complete, non-blocked WORKER_RESULT.";
+            return false;
+        }
+
+        if (RequiresFileChangeEvidence(task) &&
+            task.LastDispatch is { } dispatch &&
+            InspectGoalWorktree(processRecord.WorkingDirectory, goalId, dispatch.DispatchedAt) is
+                { IsAvailable: true, Evidence: var worktreeEvidence } &&
+            worktreeEvidence.IsClean && worktreeEvidence.HasRelevantCommitAfterDispatch)
+        {
+            rescueNote =
+                "Wrapper process reaped; task completed based on relevant file-change evidence " +
+                $"(branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; " +
+                $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}).";
+            return true;
+        }
+
+        return false;
+    }
+
+    internal static bool CanCompleteHungWrapperWithoutChangeEvidence(
+        TaskSpec task,
+        bool hasPopulatedStandardOutput,
+        bool hasSuccessfulWorkerResult,
+        out string? capabilityGapDiagnostic)
+    {
+        var recognized = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var capability);
+        capabilityGapDiagnostic = recognized
+            ? null
+            : "HungWrapperUnrecognizedRoleCapability: no completion-evidence capability is mapped for " +
+              $"role value '{(int)task.RequiredRole}' ({task.RequiredRole}); refusing rescue.";
+        return recognized &&
+            capability == DispatchRoleOutputCapability.ReadOnly &&
+            hasPopulatedStandardOutput &&
+            hasSuccessfulWorkerResult;
+    }
+
     private static void RecordProviderSessionFromHeartbeat(
         AgentOrchestratorKernel kernel,
         GoalId goalId,
@@ -1766,12 +1866,19 @@ public sealed class BackgroundDispatchRunner
         return false;
     }
 
-    private static bool HasSuccessfulWorkerResult(string workingDirectory, string standardOutput, string standardError)
+    private static bool HasSuccessfulWorkerResult(
+        string workingDirectory,
+        string standardOutput,
+        string standardError,
+        bool allowNoChangedFiles = false,
+        bool requireNoBlockers = false)
     {
         if (WorkerResultParser.TryParseSuccessfulResult(
                 $"{standardOutput}\n{standardError}",
                 out _,
-                out _))
+                out _,
+                allowNoChangedFiles,
+                requireNoBlockers))
         {
             return true;
         }
@@ -1786,7 +1893,12 @@ public sealed class BackgroundDispatchRunner
 
             try
             {
-                if (WorkerResultParser.TryParseSuccessfulResult(ReadDecisionBestEffort(path), out _, out _))
+                if (WorkerResultParser.TryParseSuccessfulResult(
+                        ReadDecisionBestEffort(path),
+                        out _,
+                        out _,
+                        allowNoChangedFiles,
+                        requireNoBlockers))
                 {
                     return true;
                 }
@@ -3261,13 +3373,6 @@ public sealed class BackgroundDispatchRunner
             return false;
         }
 
-        // Only Developer/Tester subscription dispatches carry file-change evidence;
-        // other roles use the broader progress-stall timeout instead.
-        if (!RequiresFileChangeEvidence(task))
-        {
-            return false;
-        }
-
         if (!TryReadHeartbeat(GetHeartbeatPath(processRecord), out var heartbeat))
         {
             return false;
@@ -3289,7 +3394,7 @@ public sealed class BackgroundDispatchRunner
 
         diagnostic =
             $"Background dispatch wrapper appears hung with stalled heartbeat for {FormatDuration(idleFor)}; no exit file was written. " +
-            "Marking dispatch based on worktree evidence.";
+            "Marking dispatch based on role completion evidence.";
         return true;
     }
 
