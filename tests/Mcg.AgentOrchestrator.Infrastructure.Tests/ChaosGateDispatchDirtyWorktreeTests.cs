@@ -8,7 +8,7 @@ public sealed class ChaosGateDispatchDirtyWorktreeTests : ChaosGateTestBase
     public void Gate4_DirtyWorktreeAtCompletion_IsRejected()
     {
         var root = CreateSeededRepo();
-        var (kernel, goal, task, _) = CreateChaosDispatch(
+        var (kernel, goal, task, process) = CreateChaosDispatch(
             root, AgentRole.Developer,
             WorkerResultBlock("none", "dotnet build", "not run"),
             string.Empty,
@@ -20,5 +20,14 @@ public sealed class ChaosGateDispatchDirtyWorktreeTests : ChaosGateTestBase
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         Assert.Equal(1, task.LastVerification!.ExitCode);
         Assert.Contains("left the worktree dirty", task.LastVerification.StandardError, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.Prefix,
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Assert.Equal("0", File.ReadAllText(process.ExitCodePath).Trim());
+
+        var outcome = DispatchFailureClassifier.Classify(task, task.LastVerification);
+        Assert.Equal(DispatchOutcomeKind.DirtyWorktreeRecoverable, outcome.Kind);
+        Assert.Contains("rule=dirty-dispatch-recovery", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 }

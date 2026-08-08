@@ -2096,6 +2096,82 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Equal(1, task.LastVerification!.ExitCode);
         Assert.Contains("unavailable_reason=git-inspection-failed", task.LastVerification.StandardError, StringComparison.Ordinal);
         Assert.Contains("git_receipt=operation=head", task.LastVerification.StandardError, StringComparison.Ordinal);
+        AssertNamedOrchestratorFailure(
+            task,
+            process,
+            DispatchFailureDiagnosticMarker.WorktreeInspectionFailed);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_researcher_contract_rejection_records_named_authored_failure")]
+    public void BackgroundDispatchRunnerResearcherContractRejectionRecordsNamedAuthoredFailure()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-08T12:00:00Z"));
+        var (kernel, goal, task, process) = CreateCompletedResearcherContractDispatch(
+            root,
+            "Research summary without the required durable sections.",
+            clock);
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Contains("Researcher output contract failed", task.LastVerification!.StandardError, StringComparison.Ordinal);
+        AssertNamedOrchestratorFailure(
+            task,
+            process,
+            DispatchFailureDiagnosticMarker.ResearcherOutputContractRejected);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_researcher_receipt_persistence_failure_records_named_authored_failure")]
+    public void BackgroundDispatchRunnerResearcherReceiptPersistenceFailureRecordsNamedAuthoredFailure()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-08T12:05:00Z"));
+        var (kernel, goal, task, process) = CreateCompletedResearcherContractDispatch(
+            root,
+            ResearcherContractFixture(),
+            clock);
+        using var readLock = new FileStream(
+            process.StandardOutputPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Contains("could not persist the accepted artifact", task.LastVerification!.StandardError, StringComparison.Ordinal);
+        AssertNamedOrchestratorFailure(
+            task,
+            process,
+            DispatchFailureDiagnosticMarker.ResearcherArtifactPersistenceFailed);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_planner_receipt_persistence_failure_records_named_authored_failure")]
+    public void BackgroundDispatchRunnerPlannerReceiptPersistenceFailureRecordsNamedAuthoredFailure()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-08T12:10:00Z"));
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Planner,
+            PlannerContractPlanFixture(),
+            string.Empty,
+            clock);
+        using var readLock = new FileStream(
+            process.StandardOutputPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Contains("could not persist the accepted plan", task.LastVerification!.StandardError, StringComparison.Ordinal);
+        AssertNamedOrchestratorFailure(
+            task,
+            process,
+            DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed);
     }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_no_change_rationale_without_source_change_fails")]
@@ -2768,7 +2844,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var root = CreateSeededDispatchRepository();
     var clock = new TestClock(DateTimeOffset.Parse("2026-07-06T12:00:00Z"));
     var buildError = "FAIL build: 1 error(s) (Invoke-WorkerBuildCheck) src/Feature.cs(10,20): error CS1002: ; expected";
-    var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+    var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
         root,
         AgentRole.Developer,
         "Implemented the change." + Environment.NewLine + WorkerResultBlock(
@@ -2786,6 +2862,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains("WORKER_RESULT reported failed worker build check", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("CS1002", task.LastVerification.StandardError, StringComparison.Ordinal);
+    AssertNamedOrchestratorFailure(
+        task,
+        process,
+        DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed);
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_file_role_without_worker_result_contract_passes_advisory")]
@@ -3726,6 +3806,78 @@ private static (
     var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
     runner.ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
     return (task, process, outcome);
+}
+
+private static (
+    AgentOrchestratorKernel Kernel,
+    Goal Goal,
+    TaskSpec Task,
+    TaskProcessRecord Process) CreateCompletedResearcherContractDispatch(
+        string root,
+        string standardOutput,
+        IClock clock)
+{
+    var kernel = new AgentOrchestratorKernel();
+    var researcherSpec = new TaskSpec(TaskId.New(), "Research the current source.", AgentRole.Researcher);
+    var plannerSpec = new TaskSpec(TaskId.New(), "Plan from the research.", AgentRole.Planner);
+    var goal = kernel.CreateGoal("Research contract completion", [researcherSpec, plannerSpec]);
+    kernel.ActivateGoal(
+        goal.Id,
+        [
+            TestSubscriptionAgent("researcher", "Researcher", AgentRole.Researcher),
+            TestSubscriptionAgent("planner", "Planner", AgentRole.Planner)
+        ]);
+
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, "Researcher.out.log");
+    var stderr = Path.Combine(logs, "Researcher.err.log");
+    var exit = Path.Combine(logs, "Researcher.exit.txt");
+    File.WriteAllText(stdout, standardOutput);
+    File.WriteAllText(stderr, string.Empty);
+    File.WriteAllText(exit, "0");
+
+    var task = kernel.GetTask(goal.Id, researcherSpec.Id);
+    kernel.RecordTaskDispatch(
+        goal.Id,
+        task.Id,
+        new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, clock.UtcNow));
+    var process = new TaskProcessRecord(
+        999999,
+        "codex exec prompt",
+        worktree,
+        stdout,
+        stderr,
+        exit,
+        clock.UtcNow,
+        null,
+        null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    return (kernel, goal, task, process);
+}
+
+private static DispatchOutcome AssertNamedOrchestratorFailure(
+    TaskSpec task,
+    TaskProcessRecord process,
+    string expectedRule)
+{
+    Assert.Equal(WorkTaskStatus.Failed, task.Status);
+    Assert.NotNull(task.LastVerification);
+    Assert.Equal(1, task.LastVerification!.ExitCode);
+    Assert.Null(task.LastVerification.OrchestratorFailureReason);
+    Assert.Equal("0", File.ReadAllText(process.ExitCodePath).Trim());
+    Assert.Contains(
+        DispatchFailureDiagnosticMarker.Format(expectedRule),
+        task.LastVerification.StandardError,
+        StringComparison.Ordinal);
+
+    var outcome = DispatchFailureClassifier.Classify(task, task.LastVerification);
+    Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+    Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+    Assert.Equal(TaskOutcomeClass.UnknownEra, outcome.OutcomeClass);
+    Assert.Contains($"rule={expectedRule}", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    return outcome;
 }
 
 private static void AssertExitCode(string path, int expected)

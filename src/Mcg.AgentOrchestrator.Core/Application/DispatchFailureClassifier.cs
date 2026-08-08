@@ -68,8 +68,50 @@ public static class DispatchRoleOutputCapabilities
     }
 }
 
+public static class DispatchFailureDiagnosticMarker
+{
+    public const string Prefix = "@@MCG_ORCHESTRATOR_DIAGNOSTIC_CODE@@";
+    public const string ResearcherOutputContractRejected = "researcher-output-contract-rejected";
+    public const string ResearcherArtifactPersistenceFailed = "researcher-artifact-persistence-failed";
+    public const string PlannerOutputContractRejected = "planner-output-contract-rejected";
+    public const string PlannerPlanPersistenceFailed = "planner-plan-persistence-failed";
+    public const string WorkerBuildCheckFailed = "worker-build-check-failed";
+    public const string RequiredFileChangeEvidenceMissing = "required-file-change-evidence-missing";
+    public const string WorktreeInspectionFailed = "worktree-inspection-failed";
+
+    public static string Format(string code) => $"{Prefix} {code}";
+}
+
 public static class DispatchFailureClassifier
 {
+    private sealed record OrchestratorAuthoredFailure(TaskOutcomeRule Rule, string Description);
+
+    private static readonly IReadOnlyDictionary<string, OrchestratorAuthoredFailure> OrchestratorAuthoredFailures =
+        new Dictionary<string, OrchestratorAuthoredFailure>(StringComparer.Ordinal)
+        {
+            [DispatchFailureDiagnosticMarker.ResearcherOutputContractRejected] = new(
+                TaskOutcomeRules.ResearcherOutputContractRejected,
+                "Researcher output contract rejected the captured research."),
+            [DispatchFailureDiagnosticMarker.ResearcherArtifactPersistenceFailed] = new(
+                TaskOutcomeRules.ResearcherArtifactPersistenceFailed,
+                "Researcher output contract could not persist the accepted research artifact."),
+            [DispatchFailureDiagnosticMarker.PlannerOutputContractRejected] = new(
+                TaskOutcomeRules.PlannerOutputContractRejected,
+                "Planner output contract rejected the captured plan."),
+            [DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed] = new(
+                TaskOutcomeRules.PlannerPlanPersistenceFailed,
+                "Planner output contract could not persist the accepted plan."),
+            [DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed] = new(
+                TaskOutcomeRules.WorkerBuildCheckFailed,
+                "Deterministic worker build check failed."),
+            [DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing] = new(
+                TaskOutcomeRules.RequiredFileChangeEvidenceMissing,
+                "Developer/Tester dispatch did not produce required relevant file-change evidence."),
+            [DispatchFailureDiagnosticMarker.WorktreeInspectionFailed] = new(
+                TaskOutcomeRules.WorktreeInspectionFailed,
+                "Completed dispatch worktree inspection failed.")
+        };
+
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
     public static readonly TimeSpan SilentLaunchFailureMaxDuration = TimeSpan.FromMinutes(1);
 
@@ -334,6 +376,7 @@ public static class DispatchFailureClassifier
     private static bool IsRunnerBookkeepingLine(string line) =>
         line.StartsWith("RESOURCE ", StringComparison.Ordinal) ||
         line.StartsWith("CLASSIFIER ", StringComparison.Ordinal) ||
+        line.StartsWith(DispatchFailureDiagnosticMarker.Prefix, StringComparison.Ordinal) ||
         line.StartsWith("Dispatch recovery policy action=", StringComparison.Ordinal) ||
         line.StartsWith("Developer/Tester dispatch did not produce required relevant file-change evidence.", StringComparison.Ordinal);
 
@@ -748,6 +791,24 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification)));
         }
 
+        if (TryGetOrchestratorAuthoredFailure(verification, out var authoredFailure))
+        {
+            return BuildOutcome(
+                authoredFailure.Rule,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                BuildOrchestratorAuthoredFailureEvidenceSummary(authoredFailure.Description, verification)));
+        }
+
         return BuildOutcome(
             TaskOutcomeRules.UnknownFailure,
             task,
@@ -762,6 +823,45 @@ public static class DispatchFailureClassifier
             null,
             RecoveryRecommendation.OperatorNeeded,
             BuildUnknownFailureEvidenceSummary(verification)));
+    }
+
+    private static bool TryGetOrchestratorAuthoredFailure(
+        TaskVerificationRecord verification,
+        out OrchestratorAuthoredFailure failure)
+    {
+        var markerPrefix = DispatchFailureDiagnosticMarker.Prefix + " ";
+        // Markers are appended in causal order by the completion path. When more than one site
+        // fires, the first marker is the proximate authored failure and therefore owns the label.
+        foreach (var line in verification.StandardError.Split(
+                     ['\r', '\n'],
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith(markerPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var code = line[markerPrefix.Length..];
+            if (OrchestratorAuthoredFailures.TryGetValue(code, out failure!))
+            {
+                return true;
+            }
+        }
+
+        failure = null!;
+        return false;
+    }
+
+    private static string BuildOrchestratorAuthoredFailureEvidenceSummary(
+        string description,
+        TaskVerificationRecord verification)
+    {
+        var substantiveLines = GetSubstantiveStandardErrorLines(verification)
+            .TakeLast(3)
+            .ToArray();
+        return substantiveLines.Length == 0
+            ? description
+            : $"{description} diagnostic stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
     }
 
     private static DispatchOutcome BuildOutcome(

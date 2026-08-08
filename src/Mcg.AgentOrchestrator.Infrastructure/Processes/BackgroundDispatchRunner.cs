@@ -1186,8 +1186,10 @@ public sealed class BackgroundDispatchRunner
             {
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    researchContract.Diagnostic);
+                    AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        researchContract.Diagnostic),
+                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.ResearcherOutputContractRejected));
             }
             else if (!ResearcherOutputContract.TryPersistDurableReceipt(
                          processRecord.StandardOutputPath,
@@ -1196,8 +1198,10 @@ public sealed class BackgroundDispatchRunner
             {
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    $"Researcher output contract could not persist the accepted artifact: {appendDiagnostic}. Retry Researcher for contract repair.");
+                    AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        $"Researcher output contract could not persist the accepted artifact: {appendDiagnostic}. Retry Researcher for contract repair."),
+                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.ResearcherArtifactPersistenceFailed));
             }
         }
 
@@ -1216,8 +1220,10 @@ public sealed class BackgroundDispatchRunner
             {
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    plannerContract.Diagnostic);
+                    AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        plannerContract.Diagnostic),
+                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerOutputContractRejected));
             }
             else
             {
@@ -1230,8 +1236,10 @@ public sealed class BackgroundDispatchRunner
                 {
                     exitCode = 1;
                     standardErrorDiagnostic = AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
-                        $"Planner output contract could not persist the accepted plan: {appendDiagnostic}. Retry Planner for contract repair.");
+                        AppendDiagnostic(
+                            standardErrorDiagnostic ?? string.Empty,
+                            $"Planner output contract could not persist the accepted plan: {appendDiagnostic}. Retry Planner for contract repair."),
+                        DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed));
                 }
             }
         }
@@ -1279,8 +1287,10 @@ public sealed class BackgroundDispatchRunner
             {
                 exitCode = 1;
                 standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    failedBuildCheckDiagnostic);
+                    AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        failedBuildCheckDiagnostic),
+                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed));
             }
 
             var provider = ResolveWorkerProvider(task.LastDispatch);
@@ -1375,10 +1385,12 @@ public sealed class BackgroundDispatchRunner
                     // (a Developer that produced nothing is a real failure, not exit-code noise).
                     exitCode = 1;
                     standardErrorDiagnostic = AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
-                        "Developer/Tester dispatch did not produce required relevant file-change evidence. " +
-                        $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
-                        $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}.");
+                        AppendDiagnostic(
+                            standardErrorDiagnostic ?? string.Empty,
+                            "Developer/Tester dispatch did not produce required relevant file-change evidence. " +
+                            $"branch={worktreeEvidence.Branch}; head={worktreeEvidence.Head}; worktree={worktreeEvidence.WorktreeStatus}; " +
+                            $"commits_after_dispatch={worktreeEvidence.CommitsAfterDispatch}; changed_paths={worktreeEvidence.ChangedPathsSummary}."),
+                        DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing));
                 }
             }
 
@@ -1400,6 +1412,9 @@ public sealed class BackgroundDispatchRunner
             if (string.Equals(unavailableInspection.UnavailableReason, "git-inspection-failed", StringComparison.Ordinal))
             {
                 exitCode = 1;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorktreeInspectionFailed));
             }
         }
         if (task.LastDispatch is { } completedDispatch && !IsLocalDispatch(completedDispatch))

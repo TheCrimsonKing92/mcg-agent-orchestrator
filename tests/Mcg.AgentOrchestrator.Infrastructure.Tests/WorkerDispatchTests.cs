@@ -840,8 +840,15 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Equal(1, task.LastVerification!.ExitCode);
         Assert.Contains("Planner output contract failed", task.LastVerification.StandardError, StringComparison.Ordinal);
         Assert.Contains("Retry Planner for contract repair", task.LastVerification.StandardError, StringComparison.Ordinal);
+        Assert.Contains(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerOutputContractRejected),
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
         var outcome = DispatchFailureClassifier.Classify(task, task.LastVerification);
         Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Assert.Equal(TaskOutcomeClass.UnknownEra, outcome.OutcomeClass);
+        Assert.Contains("rule=planner-output-contract-rejected", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Assert.Contains("Planner output contract failed", outcome.EvidenceSummary, StringComparison.Ordinal);
     }
 

@@ -44,6 +44,13 @@ internal static class TaskOutcomeRules
 
     public static readonly TaskOutcomeRule ProviderUnknown = new("provider-unknown", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule TesterVerificationInconclusive = new("tester-verification-inconclusive", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule ResearcherOutputContractRejected = new("researcher-output-contract-rejected", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule ResearcherArtifactPersistenceFailed = new("researcher-artifact-persistence-failed", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule PlannerOutputContractRejected = new("planner-output-contract-rejected", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule PlannerPlanPersistenceFailed = new("planner-plan-persistence-failed", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule WorkerBuildCheckFailed = new("worker-build-check-failed", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule RequiredFileChangeEvidenceMissing = new("required-file-change-evidence-missing", TaskOutcomeClass.UnknownEra);
+    public static readonly TaskOutcomeRule WorktreeInspectionFailed = new("worktree-inspection-failed", TaskOutcomeClass.UnknownEra);
     public static readonly TaskOutcomeRule UnknownFailure = new("unknown-failure", TaskOutcomeClass.UnknownEra);
 
     private static readonly TaskOutcomeRule RecoverableSubscriptionLimitLegacy = new("recoverable-subscription-limit", TaskOutcomeClass.Environmental);
@@ -72,6 +79,13 @@ internal static class TaskOutcomeRules
         RealFailure,
         ProviderUnknown,
         TesterVerificationInconclusive,
+        ResearcherOutputContractRejected,
+        ResearcherArtifactPersistenceFailed,
+        PlannerOutputContractRejected,
+        PlannerPlanPersistenceFailed,
+        WorkerBuildCheckFailed,
+        RequiredFileChangeEvidenceMissing,
+        WorktreeInspectionFailed,
         UnknownFailure
     ];
 
