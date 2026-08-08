@@ -817,12 +817,12 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.DoesNotContain('\uFFFD', captured);
     }
 
-    [Xunit.Fact(DisplayName = "Planner_dispatch_completion_fails_loudly_when_plan_contract_is_incomplete")]
-    public void PlannerDispatchCompletionFailsLoudlyWhenPlanContractIsIncomplete()
+    [Xunit.Fact]
+    public void IncompleteContract_KnownWrongArtifactZeroRecordedCodeOne()
     {
         var root = CreateSeededDispatchRepository();
         var clock = new TestClock(DateTimeOffset.Parse("2026-07-29T11:00:00Z"));
-        var (kernel, goal, task, _) = CreateCompletedGoalWorktreeDispatch(
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
             root,
             AgentRole.Planner,
             "Summary only." + Environment.NewLine + WorkerResultBlock("none", "source survey", "pass - summary prepared"),
@@ -834,6 +834,9 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             .RefreshLatestProcess(kernel, goal.Id, task.Id);
 
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        // Characterizes the known-wrong behavior observed by goal 94fdcb8a. A later fix should
+        // deliberately flip the recorded-code assertion while preserving the worker-authored artifact.
+        Assert.Equal("0", File.ReadAllText(process.ExitCodePath).Trim());
         Assert.Equal(1, task.LastVerification!.ExitCode);
         Assert.Contains("Planner output contract failed", task.LastVerification.StandardError, StringComparison.Ordinal);
         Assert.Contains("Retry Planner for contract repair", task.LastVerification.StandardError, StringComparison.Ordinal);
