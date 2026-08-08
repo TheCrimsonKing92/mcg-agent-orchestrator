@@ -137,6 +137,31 @@ public sealed class WorkerResultBlockersTests
         Assert.Empty(round.TouchedAnchors);
     }
 
+    [Xunit.Fact(DisplayName = "TryFindReviewFindingRound_preserves_system_touch_proof_diagnostic")]
+    public void TryFindReviewFindingRoundPreservesSystemTouchProofDiagnostic()
+    {
+        const string touchProofDiagnostic =
+            "Round-diff touch proof unavailable because the carried finding round has no reviewed-commit baseline.";
+        var verification = new TaskVerificationRecord(
+            "test",
+            "C:\\tmp",
+            0,
+            """
+            WORKER_RESULT:
+            findings: [{"stable_id":"reported-goals-may-lack-timeline-evidence","state":"open","location":{"file":"src/TerminalGoalTimeline.cs","region":"BuildReportedGoals"},"description":"Reported goals may lack timeline evidence."}]
+            touched_anchors: []
+            verdict: pass
+            END_WORKER_RESULT
+            """,
+            "",
+            DateTimeOffset.UtcNow,
+            ReviewFindingTouchedAnchors: [],
+            ReviewFindingTouchProofDiagnostic: touchProofDiagnostic);
+
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var diagnostic), diagnostic);
+        Assert.Equal(touchProofDiagnostic, round.TouchProofDiagnostic);
+    }
+
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_rejects_untouched_resolved_reopen")]
     public void ReviewFindingConvergenceRejectsUntouchedResolvedReopen()
     {
@@ -467,6 +492,71 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(error.Violation.Message, mismatch.Message);
         Assert.Equal(error.Violation.PriorStableId, mismatch.PriorStableId);
         Assert.Equal(error.Violation.SubmittedStableId, mismatch.SubmittedStableId);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_afc62d88_allows_persistent_finding_to_follow_touched_code")]
+    public void ReviewFindingConvergenceAfc62d88AllowsPersistentFindingToFollowTouchedCode()
+    {
+        // Regression fixture from afc62d88/bb5ff6ed. The dispatch artifact preserved the real stable_id
+        // and TerminalGoalS... source prefix, but truncated the remainder of both recorded locations.
+        var priorLocation = new ReviewFindingLocation(
+            "src/Mcg.AgentOrchestrator.App/Orchestration/TerminalGoalSummary.cs",
+            "TerminalGoalSummary.BuildReportedGoals",
+            "timeline evidence");
+        var movedLocation = new ReviewFindingLocation(
+            "src/Mcg.AgentOrchestrator.App/Orchestration/TerminalGoalTimeline.cs",
+            "TerminalGoalTimeline.BuildReportedGoals",
+            "timeline evidence");
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "reported-goals-may-lack-timeline-evidence",
+                ReviewFindingState.Open,
+                priorLocation,
+                "Reported goals may lack timeline evidence.")
+        };
+        var next = new ReviewFindingRound(
+            [previous[0] with { Location = movedLocation }],
+            [priorLocation]);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        var carried = Assert.Single(state);
+        Assert.Equal("reported-goals-may-lack-timeline-evidence", carried.StableId);
+        Assert.Equal(ReviewFindingState.Open, carried.State);
+        Assert.Equal(movedLocation, carried.Location);
+    }
+
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_afc62d88_untouched_reopen_reports_unavailable_touch_proof")]
+    public void ReviewFindingConvergenceAfc62d88UntouchedReopenReportsUnavailableTouchProof()
+    {
+        // Regression fixture from the consecutive afc62d88/bb5ff6ed violation record. The dispatch
+        // artifact preserved the real stable_id and file prefix but truncated the recorded location.
+        const string diagnostic =
+            "Round-diff touch proof unavailable because the carried finding round has no reviewed-commit baseline.";
+        var anchor = new ReviewFindingLocation(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTests.cs",
+            "ConductorBatchLoopTests.NoBranchSlugDerivation",
+            "branch slug derivation");
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "no-branch-slug-derivation-untested",
+                ReviewFindingState.Resolved,
+                anchor,
+                "Branch slug derivation lacks coverage.")
+        };
+        var next = new ReviewFindingRound(
+            [previous[0] with { State = ReviewFindingState.Open }],
+            [],
+            diagnostic);
+
+        var error = Assert.Throws<ReviewFindingConvergenceException>(
+            () => ReviewFindingConvergence.ApplyRound(previous, next));
+
+        Assert.Equal(ReviewFindingConvergence.UntouchedReopenViolationCode, error.Code);
+        Assert.Equal("no-branch-slug-derivation-untested", error.Violation.PriorStableId);
+        Assert.Contains(diagnostic, error.Violation.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Theory(DisplayName = "ReviewFindingConvergence_keeps_identity_across_region_paraphrases_and_refreshes_raw_region")]

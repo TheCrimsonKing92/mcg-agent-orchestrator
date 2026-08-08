@@ -558,7 +558,8 @@ public sealed partial class AgentOrchestratorKernel
         TaskSpec task,
         TaskVerificationRecord verification)
     {
-        if (task.RequiredRole != AgentRole.Reviewer || !verification.WorkerResultPresent)
+        if (task.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester) ||
+            !verification.WorkerResultPresent)
         {
             return verification;
         }
@@ -566,6 +567,7 @@ public sealed partial class AgentOrchestratorKernel
         return verification with
         {
             ReviewFindingTouchedAnchors = task.LastDispatch?.ReviewFindingTouchedAnchors ?? [],
+            ReviewFindingTouchProofDiagnostic = task.LastDispatch?.ReviewFindingTouchProofDiagnostic,
             ReviewedCommit = task.LastDispatch?.BaseCommit
         };
     }

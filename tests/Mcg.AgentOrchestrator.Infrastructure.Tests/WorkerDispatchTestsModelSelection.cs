@@ -3124,4 +3124,230 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(File.Exists(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "manifest.md")));
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_afc62d88_Tester_round_derives_touch_proof_and_accepts_moved_finding_without_worker_start")]
+    public void WorkerProfileDispatcherAfc62d88TesterRoundDerivesTouchProofAndAcceptsMovedFindingWithoutWorkerStart()
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel(
+            new TestClock(DateTimeOffset.Parse("2026-08-08T10:02:30Z")));
+        var testerSpec = new TaskSpec(TaskId.New(), "Recheck the persistent timeline-evidence finding.", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Validate afc62d88 moved finding convergence.", [testerSpec]);
+        var testerAgent = TestSubscriptionAgent("tester", "Tester", AgentRole.Tester);
+        kernel.ActivateGoal(goal.Id, [testerAgent]);
+        var tester = goal.Tasks.Single(task => task.Id == testerSpec.Id);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var sourceDirectory = Path.Combine(
+            worktree,
+            "src",
+            "Mcg.AgentOrchestrator.App",
+            "Orchestration");
+        Directory.CreateDirectory(sourceDirectory);
+        var priorPath = Path.Combine(sourceDirectory, "TerminalGoalSummary.cs");
+        File.WriteAllText(
+            priorPath,
+            "namespace Test; internal static class TerminalGoalSummary { internal static string BuildReportedGoals() { var timelineEvidence = \"missing\"; return timelineEvidence; } }");
+        RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-08-08T10:00:00Z"));
+        RunGit(worktree, ["commit", "-m", "Add terminal goal summary"], DateTimeOffset.Parse("2026-08-08T10:00:00Z"));
+        var priorCommit = ReadGit(worktree, ["rev-parse", "HEAD"]);
+        var priorLocation = new ReviewFindingLocation(
+            "src/Mcg.AgentOrchestrator.App/Orchestration/TerminalGoalSummary.cs",
+            "TerminalGoalSummary.BuildReportedGoals",
+            "timelineEvidence");
+        var movedLocation = new ReviewFindingLocation(
+            "src/Mcg.AgentOrchestrator.App/Orchestration/TerminalGoalTimeline.cs",
+            "TerminalGoalTimeline.BuildReportedGoals",
+            "timelineEvidence");
+        var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory} {promptPath}");
+
+        WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            tester,
+            profile,
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-08-08T10:01:00Z"));
+        kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, priorCommit);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                tester.LastDispatch!.Command,
+                worktree,
+                0,
+                AfcTesterOutput(new ReviewFinding(
+                    "reported-goals-may-lack-timeline-evidence",
+                    ReviewFindingState.Open,
+                    priorLocation,
+                    "Reported goals may lack timeline evidence.",
+                    FindingSeverity.Advisory)),
+                string.Empty,
+                DateTimeOffset.Parse("2026-08-08T10:02:00Z"),
+                WorkerResultPresent: true));
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+
+        var movedPath = Path.Combine(sourceDirectory, "TerminalGoalTimeline.cs");
+        File.Move(priorPath, movedPath);
+        File.WriteAllText(
+            movedPath,
+            "namespace Test; internal static class TerminalGoalTimeline { internal static string BuildReportedGoals() { var timelineEvidence = \"missing\"; return timelineEvidence; } }");
+        RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-08-08T10:03:00Z"));
+        RunGit(worktree, ["commit", "-m", "Move terminal goal timeline"], DateTimeOffset.Parse("2026-08-08T10:03:00Z"));
+        var movedCommit = ReadGit(worktree, ["rev-parse", "HEAD"]);
+        var movedFinding = new ReviewFinding(
+            "reported-goals-may-lack-timeline-evidence",
+            ReviewFindingState.Open,
+            movedLocation,
+            "Reported goals may lack timeline evidence.",
+            FindingSeverity.Advisory);
+        kernel.RetryTask(
+            goal.Id,
+            tester.Id,
+            "review-finding contract-repair: attempt 1/2",
+            retryRoundKind: RetryRoundKind.Mechanical);
+
+        var prepared = WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            tester,
+            profile,
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-08-08T10:03:01Z"));
+
+        Assert.Equal(priorLocation, Assert.Single(tester.LastDispatch!.ReviewFindingTouchedAnchors!));
+        Assert.Contains(
+            "when the system-derived round diff touched the prior anchor",
+            File.ReadAllText(prepared.PromptPath),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ROUND_DIFF_TOUCHED_ANCHORS (system-derived; authoritative for regression reopening and identity relocation):",
+            File.ReadAllText(prepared.PromptPath),
+            StringComparison.Ordinal);
+        Assert.Contains(priorLocation.ToString(), File.ReadAllText(prepared.PromptPath), StringComparison.Ordinal);
+        Assert.Null(tester.LastProcess);
+        kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, movedCommit);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                tester.LastDispatch.Command,
+                worktree,
+                0,
+                AfcTesterOutput(movedFinding),
+                string.Empty,
+                DateTimeOffset.Parse("2026-08-08T10:05:00Z"),
+                WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
+        Assert.Null(tester.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(priorLocation, Assert.Single(tester.LastVerification.ReviewFindingTouchedAnchors!));
+        Assert.Equal(movedLocation, Assert.Single(tester.LastVerification.MergedReviewFindings!).Location);
+        Assert.Null(tester.LastProcess);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_moved_finding_when_identical_commits_provide_no_touch_proof")]
+    public void WorkerProfileDispatcherRejectsMovedFindingWhenIdenticalCommitsProvideNoTouchProof()
+    {
+        var root = CreateSeededDispatchRepository();
+        var promptRoot = Path.Combine(root, "prompts");
+        var kernel = new AgentOrchestratorKernel(
+            new TestClock(DateTimeOffset.Parse("2026-08-08T11:02:30Z")));
+        var testerSpec = new TaskSpec(TaskId.New(), "Recheck a finding without a changed anchor.", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Reject an unproved finding relocation.", [testerSpec]);
+        kernel.ActivateGoal(goal.Id, [TestSubscriptionAgent("tester", "Tester", AgentRole.Tester)]);
+        var tester = goal.Tasks.Single(task => task.Id == testerSpec.Id);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var sourceDirectory = Path.Combine(worktree, "src");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(
+            Path.Combine(sourceDirectory, "A.cs"),
+            "namespace Test; internal static class A { internal static void Run() { } }");
+        RunGit(worktree, ["add", "-A"], DateTimeOffset.Parse("2026-08-08T11:00:00Z"));
+        RunGit(worktree, ["commit", "-m", "Add unchanged anchor"], DateTimeOffset.Parse("2026-08-08T11:00:00Z"));
+        var unchangedCommit = ReadGit(worktree, ["rev-parse", "HEAD"]);
+        var priorLocation = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var movedLocation = new ReviewFindingLocation("src/B.cs", "B.Run", "guard");
+        var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory} {promptPath}");
+
+        WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            tester,
+            profile,
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-08-08T11:01:00Z"));
+        kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, unchangedCommit);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                tester.LastDispatch!.Command,
+                worktree,
+                0,
+                AfcTesterOutput(new ReviewFinding(
+                    "reported-goals-may-lack-timeline-evidence",
+                    ReviewFindingState.Open,
+                    priorLocation,
+                    "Reported goals may lack timeline evidence.",
+                    FindingSeverity.Advisory)),
+                string.Empty,
+                DateTimeOffset.Parse("2026-08-08T11:02:00Z"),
+                WorkerResultPresent: true));
+
+        kernel.RetryTask(goal.Id, tester.Id, "Recheck without a Developer change.");
+        WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            tester,
+            profile,
+            promptRoot,
+            worktree,
+            DateTimeOffset.Parse("2026-08-08T11:03:00Z"));
+
+        Assert.Empty(tester.LastDispatch!.ReviewFindingTouchedAnchors!);
+        Assert.Contains("identical", tester.LastDispatch.ReviewFindingTouchProofDiagnostic, StringComparison.OrdinalIgnoreCase);
+        kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, unchangedCommit);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            tester.Id,
+            new TaskVerificationRecord(
+                tester.LastDispatch.Command,
+                worktree,
+                0,
+                AfcTesterOutput(new ReviewFinding(
+                    "reported-goals-may-lack-timeline-evidence",
+                    ReviewFindingState.Open,
+                    movedLocation,
+                    "Reported goals may lack timeline evidence.",
+                    FindingSeverity.Advisory)),
+                string.Empty,
+                DateTimeOffset.Parse("2026-08-08T11:04:00Z"),
+                WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, tester.Status);
+        Assert.Equal(unchangedCommit, tester.LastVerification!.ReviewedCommit);
+        Assert.Equal(
+            ReviewFindingConvergence.IdentityMovedViolationCode,
+            tester.LastVerification.ReviewFindingContractViolation!.Code);
+    }
+
+    private static string AfcTesterOutput(ReviewFinding finding) => string.Join(
+        Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: focused test",
+        "tests: pass - focused receipt",
+        "commit: none",
+        "blockers: none",
+        $"findings: {JsonSerializer.Serialize(new[] { finding })}",
+        "touched_anchors: []",
+        "verdict: pass",
+        "model_fit: OpenAI/gpt-5.5 - adequate - focused test - fixture",
+        "skills: none",
+        "confidence: high",
+        "END_WORKER_RESULT");
+
 }

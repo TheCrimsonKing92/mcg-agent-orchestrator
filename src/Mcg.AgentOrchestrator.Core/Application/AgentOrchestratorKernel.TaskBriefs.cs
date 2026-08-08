@@ -39,17 +39,18 @@ public sealed partial class AgentOrchestratorKernel
     public IReadOnlyList<ReviewFinding> GetReviewFindingState(
         GoalId goalId,
         out IReadOnlyList<string> inconsistencies) =>
-        ReplayStoredReviewFindingRounds(GetGoal(goalId), out inconsistencies);
+        ReplayStoredReviewFindingRounds(GetGoal(goalId), AgentRole.Reviewer, out inconsistencies);
 
     private static IReadOnlyList<ReviewFinding> ReplayStoredReviewFindingRounds(
         Goal goal,
+        AgentRole role,
         out IReadOnlyList<string> inconsistencies)
     {
         IReadOnlyList<ReviewFinding> state = [];
         List<string>? skipped = null;
         var latestFindingOccurrences = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         foreach (var verification in goal.Tasks
-            .Where(candidate => candidate.RequiredRole == AgentRole.Reviewer)
+            .Where(candidate => candidate.RequiredRole == role)
             .SelectMany(candidate => candidate.VerificationHistory)
             .OrderBy(candidate => candidate.CompletedAt))
         {
@@ -64,7 +65,7 @@ public sealed partial class AgentOrchestratorKernel
                 if (!string.IsNullOrWhiteSpace(parseDiagnostic))
                 {
                     (skipped ??= []).Add(
-                        $"reviewer findings could not be parsed and were skipped: {parseDiagnostic}");
+                        $"{role.ToString().ToLowerInvariant()} findings could not be parsed and were skipped: {parseDiagnostic}");
                 }
 
                 continue;
@@ -118,7 +119,8 @@ public sealed partial class AgentOrchestratorKernel
         bool? reviewerMergeTreeClean = null,
         IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
         int? reviewerMergeTreeTotalConflictPathCount = null,
-        IReadOnlyList<ReviewFindingLocation>? reviewerRoundTouchedAnchors = null)
+        IReadOnlyList<ReviewFindingLocation>? reviewerRoundTouchedAnchors = null,
+        string? reviewerRoundTouchProofDiagnostic = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -309,7 +311,8 @@ public sealed partial class AgentOrchestratorKernel
             goal,
             task,
             reviewerScopeChangedFiles,
-            reviewerRoundTouchedAnchors);
+            reviewerRoundTouchedAnchors,
+            reviewerRoundTouchProofDiagnostic);
         if (reviewerConvergenceScope.Count > 0)
         {
             segments.Add(TaskBriefSegment.Fixed(reviewerConvergenceScope));
@@ -1159,14 +1162,15 @@ public sealed partial class AgentOrchestratorKernel
         Goal goal,
         TaskSpec task,
         IReadOnlyList<string>? changedFiles,
-        IReadOnlyList<ReviewFindingLocation>? roundTouchedAnchors)
+        IReadOnlyList<ReviewFindingLocation>? roundTouchedAnchors,
+        string? roundTouchProofDiagnostic)
     {
-        if (task.RequiredRole != AgentRole.Reviewer)
+        if (task.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester))
         {
             return [];
         }
 
-        var state = ReplayStoredReviewFindingRounds(goal, out _);
+        var state = ReplayStoredReviewFindingRounds(goal, task.RequiredRole, out _);
 
         if (state.Count == 0)
         {
@@ -1191,10 +1195,15 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add($"- {finding.StableId} | severity={finding.Severity.ToString().ToLowerInvariant()} | {finding.Location} | carry forward; do not re-review unless this exact anchor was touched.");
         }
 
-        lines.Add("ROUND_DIFF_TOUCHED_ANCHORS (system-derived; authoritative for regression reopening):");
+        lines.Add("ROUND_DIFF_TOUCHED_ANCHORS (system-derived; authoritative for regression reopening and identity relocation):");
         foreach (var anchor in roundTouchedAnchors ?? [])
         {
             lines.Add($"- {anchor}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(roundTouchProofDiagnostic))
+        {
+            lines.Add($"ROUND_DIFF_TOUCH_PROOF_UNAVAILABLE: {roundTouchProofDiagnostic}");
         }
 
         lines.Add("GOAL_DIFF_CHANGED_FILES (context only; file membership does not prove a structural anchor was touched):");
@@ -1203,7 +1212,7 @@ public sealed partial class AgentOrchestratorKernel
             lines.Add($"- {file}");
         }
 
-        lines.Add("Actively check only OPEN_ACTIVE_RECHECK, RESOLVED_CARRIED anchors listed in ROUND_DIFF_TOUCHED_ANCHORS, and net-new code. Carry every other resolved finding forward as resolved.");
+        lines.Add("Actively check OPEN_ACTIVE_RECHECK, RESOLVED_CARRIED anchors listed in ROUND_DIFF_TOUCHED_ANCHORS, and net-new code. The touched-anchor set also authorizes a persistent open finding to keep its stable ID at the defect's current location. Carry every other resolved finding forward as resolved.");
         lines.Add(string.Empty);
         return lines;
     }

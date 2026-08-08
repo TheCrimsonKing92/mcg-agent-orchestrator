@@ -2,6 +2,10 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+internal sealed record ReviewerRoundTouchScope(
+    IReadOnlyList<ReviewFindingLocation> TouchedAnchors,
+    string? Diagnostic = null);
+
 internal sealed class WorkerGitContext
 {
     private readonly Func<string, int, string[], GitCli.GitResult> _reviewerMergeTreeGitRunner;
@@ -105,11 +109,24 @@ internal sealed class WorkerGitContext
         string workingDirectory,
         string? previousReviewedCommit,
         string? currentCommit,
+        IReadOnlyList<ReviewFindingLocation> anchors) =>
+        ReadReviewerRoundTouchScope(
+            workingDirectory,
+            previousReviewedCommit,
+            currentCommit,
+            anchors).TouchedAnchors;
+
+    internal ReviewerRoundTouchScope ReadReviewerRoundTouchScope(
+        string workingDirectory,
+        string? previousReviewedCommit,
+        string? currentCommit,
         IReadOnlyList<ReviewFindingLocation> anchors)
     {
         if (anchors.Count == 0)
         {
-            return [];
+            return new ReviewerRoundTouchScope(
+                [],
+                "Round-diff touch proof unavailable because the carried finding ledger has no structural anchors.");
         }
 
         if (!LooksLikeGitWorkspace(workingDirectory))
@@ -119,21 +136,32 @@ internal sealed class WorkerGitContext
                 "Reviewer round touched-anchor scope unavailable because the working directory is not a git workspace.");
         }
 
-        // No usable baseline: DEGRADE, do not throw. This list is only ever used to PROVE that a resolved
-        // structural anchor was touched again, so an empty list means "cannot prove", which errs toward NOT
-        // reopening resolved findings - the conservative direction. Throwing instead aborted the Reviewer
+        // No usable baseline: DEGRADE, do not throw. Record why proof is unavailable so an empty list is not
+        // misclassified as positive evidence that every carried anchor was untouched. Throwing instead aborted the Reviewer
         // DISPATCH BEFORE IT STARTED, and because a task's first round records no reviewed commit the goal
         // could never advance again: retrying the Developer worked, the Reviewer threw every time, and no
         // operator verb could repopulate the baseline. That wedged goal 5f59b0d6 permanently, and it is
         // reachable from the ordinary review-retry cycle.
         //
-        // The equal-commits case immediately below already degrades silently for exactly the same reason, so
-        // this is the established behaviour for an uninformative baseline, not a new one.
-        if (string.IsNullOrWhiteSpace(previousReviewedCommit) ||
-            string.IsNullOrWhiteSpace(currentCommit) ||
-            string.Equals(previousReviewedCommit, currentCommit, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(previousReviewedCommit))
         {
-            return [];
+            return new ReviewerRoundTouchScope(
+                [],
+                "Round-diff touch proof unavailable because the carried finding round has no reviewed-commit baseline.");
+        }
+
+        if (string.IsNullOrWhiteSpace(currentCommit))
+        {
+            return new ReviewerRoundTouchScope(
+                [],
+                "Round-diff touch proof unavailable because the current target commit is missing.");
+        }
+
+        if (string.Equals(previousReviewedCommit, currentCommit, StringComparison.OrdinalIgnoreCase))
+        {
+            return new ReviewerRoundTouchScope(
+                [],
+                $"Round-diff touch proof unavailable because the carried and current reviewed commits are identical ({currentCommit}).");
         }
 
         var touched = new List<ReviewFindingLocation>();
@@ -182,7 +210,7 @@ internal sealed class WorkerGitContext
             }
         }
 
-        return touched;
+        return new ReviewerRoundTouchScope(touched);
     }
 
     internal ReviewerMergeTreeStatus ReadReviewerMergeTreeStatus(

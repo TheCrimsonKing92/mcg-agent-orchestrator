@@ -65,7 +65,8 @@ public sealed record TaskVerificationRecord(
     int? ChildProcessId = null,
     int? ChildExitCode = null,
     IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts = null,
-    string? OrchestratorFailureReason = null)
+    string? OrchestratorFailureReason = null,
+    string? ReviewFindingTouchProofDiagnostic = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -103,7 +104,8 @@ public sealed record TaskDispatchRecord(
     DateTimeOffset? ProviderSessionRetiredAt = null,
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
     int BriefVersion = 1,
-    string? BriefSnapshot = null)
+    string? BriefSnapshot = null,
+    string? ReviewFindingTouchProofDiagnostic = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

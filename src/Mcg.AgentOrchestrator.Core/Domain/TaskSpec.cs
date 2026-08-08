@@ -123,7 +123,8 @@ public sealed class TaskSpec
                     LastVerification.DispatchStartedAt,
                     LastVerification.ChildProcessId,
                     LastVerification.ChildExitCode,
-                    LastVerification.FindingEvidenceReceipts),
+                    LastVerification.FindingEvidenceReceipts,
+                    LastVerification.ReviewFindingTouchProofDiagnostic),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -144,7 +145,8 @@ public sealed class TaskSpec
                     verification.DispatchStartedAt,
                     verification.ChildProcessId,
                     verification.ChildExitCode,
-                    verification.FindingEvidenceReceipts))
+                    verification.FindingEvidenceReceipts,
+                    verification.ReviewFindingTouchProofDiagnostic))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -173,7 +175,8 @@ public sealed class TaskSpec
                     LastDispatch.ProviderSessionRetiredAt,
                     LastDispatch.ReviewFindingTouchedAnchors,
                     LastDispatch.BriefVersion,
-                    LastDispatch.BriefSnapshot),
+                    LastDispatch.BriefSnapshot,
+                    LastDispatch.ReviewFindingTouchProofDiagnostic),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -262,6 +265,7 @@ public sealed class TaskSpec
                     ProviderFailureKind: verification.ProviderFailureKind,
                     WorkerResultPresent: verification.WorkerResultPresent,
                     ReviewFindingTouchedAnchors: verification.ReviewFindingTouchedAnchors,
+                    ReviewFindingTouchProofDiagnostic: verification.ReviewFindingTouchProofDiagnostic,
                     ReviewedCommit: verification.ReviewedCommit,
                     MergedReviewFindings: verification.MergedReviewFindings,
                     ReviewFindingContractViolation: verification.ReviewFindingContractViolation,
@@ -287,6 +291,7 @@ public sealed class TaskSpec
                 ProviderFailureKind: snapshot.LastVerification.ProviderFailureKind,
                 WorkerResultPresent: snapshot.LastVerification.WorkerResultPresent,
                 ReviewFindingTouchedAnchors: snapshot.LastVerification.ReviewFindingTouchedAnchors,
+                ReviewFindingTouchProofDiagnostic: snapshot.LastVerification.ReviewFindingTouchProofDiagnostic,
                 ReviewedCommit: snapshot.LastVerification.ReviewedCommit,
                 MergedReviewFindings: snapshot.LastVerification.MergedReviewFindings,
                 ReviewFindingContractViolation: snapshot.LastVerification.ReviewFindingContractViolation,
@@ -328,6 +333,7 @@ public sealed class TaskSpec
                 DirtyStateHash: snapshot.LastDispatch.DirtyStateHash,
                 ProviderSessionRetiredAt: snapshot.LastDispatch.ProviderSessionRetiredAt,
                 ReviewFindingTouchedAnchors: snapshot.LastDispatch.ReviewFindingTouchedAnchors,
+                ReviewFindingTouchProofDiagnostic: snapshot.LastDispatch.ReviewFindingTouchProofDiagnostic,
                 BriefVersion: snapshot.LastDispatch.BriefVersion,
                 BriefSnapshot: snapshot.LastDispatch.BriefSnapshot));
         }

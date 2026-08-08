@@ -208,8 +208,7 @@ public static class WorkerProfileDispatcher
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
-        var reviewerRoundTouchedAnchors = ReadReviewerRoundTouchedAnchors(
-            kernel,
+        var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
             task,
             workingDirectory,
@@ -228,7 +227,8 @@ public static class WorkerProfileDispatcher
             reviewerMergeTreeClean,
             reviewerMergeTreeConflictPaths,
             reviewerMergeTreeTotalConflictPathCount,
-            reviewerRoundTouchedAnchors);
+            reviewerRoundTouchScope.TouchedAnchors,
+            reviewerRoundTouchScope.Diagnostic);
         TaskBrief budgetedBrief;
         try
         {
@@ -272,36 +272,37 @@ public static class WorkerProfileDispatcher
             ReasoningEffortReason: reasoningEffortReason,
             DispatchLane: dispatchLane ?? profile.Name,
             ModelSelectionReason: modelSelectionReason,
-            ReviewFindingTouchedAnchors: reviewerRoundTouchedAnchors),
+            ReviewFindingTouchedAnchors: reviewerRoundTouchScope.TouchedAnchors,
+            ReviewFindingTouchProofDiagnostic: reviewerRoundTouchScope.Diagnostic),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 
-    private static IReadOnlyList<ReviewFindingLocation> ReadReviewerRoundTouchedAnchors(
-        AgentOrchestratorKernel kernel,
+    internal static ReviewerRoundTouchScope ReadReviewRoundTouchScope(
         Goal goal,
         TaskSpec task,
         string workingDirectory,
         string? currentHeadCommit)
     {
-        if (task.RequiredRole != AgentRole.Reviewer)
+        if (task.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester))
         {
-            return [];
+            return new ReviewerRoundTouchScope([]);
         }
 
-        var resolvedAnchors = kernel.GetReviewFindingState(goal.Id)
-            .Where(finding => finding.State == ReviewFindingState.Resolved)
+        var carriedRound = goal.Tasks
+            .Where(candidate => candidate.RequiredRole == task.RequiredRole)
+            .SelectMany(candidate => candidate.VerificationHistory)
+            .Where(verification => verification.MergedReviewFindings is not null)
+            .OrderByDescending(verification => verification.CompletedAt)
+            .FirstOrDefault();
+        var anchors = (carriedRound?.MergedReviewFindings ?? [])
             .Select(finding => finding.Location)
             .ToArray();
-        var previousReviewedCommit = task.VerificationHistory
-            .OrderByDescending(verification => verification.CompletedAt)
-            .Select(verification => verification.ReviewedCommit)
-            .FirstOrDefault(commit => !string.IsNullOrWhiteSpace(commit));
-        return new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+        return new WorkerGitContext().ReadReviewerRoundTouchScope(
             workingDirectory,
-            previousReviewedCommit,
+            carriedRound?.ReviewedCommit,
             currentHeadCommit,
-            resolvedAnchors);
+            anchors);
     }
 
     private static void EnsureReviewerScopeForPreparation(
