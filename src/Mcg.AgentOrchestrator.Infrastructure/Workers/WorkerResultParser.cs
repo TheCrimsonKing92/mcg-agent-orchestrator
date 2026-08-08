@@ -9,7 +9,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 /// and falls back to a field scan when no block opener is present.
 /// Substance checks (commit reachability and test evidence) remain the
 /// caller's responsibility and are NOT relaxed here. The blockers field is
-/// advisory context for otherwise successful changed work.
+/// advisory context by default; callers may require an explicitly unblocked result.
 /// </summary>
 internal static class WorkerResultParser
 {
@@ -113,7 +113,9 @@ internal static class WorkerResultParser
     internal static bool TryParseSuccessfulResult(
         string text,
         out Dictionary<string, string> fields,
-        out string diagnostic)
+        out string diagnostic,
+        bool allowNoChangedFiles = false,
+        bool requireNoBlockers = false)
     {
         if (!TryParseResult(text, out var result, out diagnostic))
         {
@@ -122,7 +124,7 @@ internal static class WorkerResultParser
         }
 
         fields = new Dictionary<string, string>(result.Fields, StringComparer.OrdinalIgnoreCase);
-        if (!HasSubstantiveValue(fields, "files"))
+        if (!allowNoChangedFiles && !HasSubstantiveValue(fields, "files"))
         {
             diagnostic = "WORKER_RESULT has no changed files.";
             return false;
@@ -141,6 +143,12 @@ internal static class WorkerResultParser
         if (TestsReportFailure(result, out _))
         {
             diagnostic = $"WORKER_RESULT tests reported failure: {fields["tests"]}.";
+            return false;
+        }
+
+        if (requireNoBlockers && result.BlockersStatus != BlockersStatus.None)
+        {
+            diagnostic = "WORKER_RESULT reports a blocker.";
             return false;
         }
 

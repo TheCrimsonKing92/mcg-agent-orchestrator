@@ -1619,7 +1619,9 @@ public sealed class BackgroundDispatchRunner
         var hasSuccessfulWorkerResult = HasSuccessfulWorkerResult(
             processRecord.WorkingDirectory,
             standardOutput,
-            standardError);
+            standardError,
+            allowNoChangedFiles: true,
+            requireNoBlockers: true);
         if (CanCompleteHungWrapperWithoutChangeEvidence(
                 task,
                 hasPopulatedStandardOutput,
@@ -1864,12 +1866,19 @@ public sealed class BackgroundDispatchRunner
         return false;
     }
 
-    private static bool HasSuccessfulWorkerResult(string workingDirectory, string standardOutput, string standardError)
+    private static bool HasSuccessfulWorkerResult(
+        string workingDirectory,
+        string standardOutput,
+        string standardError,
+        bool allowNoChangedFiles = false,
+        bool requireNoBlockers = false)
     {
         if (WorkerResultParser.TryParseSuccessfulResult(
                 $"{standardOutput}\n{standardError}",
                 out _,
-                out _))
+                out _,
+                allowNoChangedFiles,
+                requireNoBlockers))
         {
             return true;
         }
@@ -1884,7 +1893,12 @@ public sealed class BackgroundDispatchRunner
 
             try
             {
-                if (WorkerResultParser.TryParseSuccessfulResult(ReadDecisionBestEffort(path), out _, out _))
+                if (WorkerResultParser.TryParseSuccessfulResult(
+                        ReadDecisionBestEffort(path),
+                        out _,
+                        out _,
+                        allowNoChangedFiles,
+                        requireNoBlockers))
                 {
                     return true;
                 }
