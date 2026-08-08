@@ -246,7 +246,7 @@ internal sealed class ConductorDriver
             return outcome;
         };
 
-        _startRecordedDispatches = (goal, _) =>
+        _startRecordedDispatches = (goal, policy) =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch-start", "Starting recorded dispatch.");
             ProcessBatchExecutionResult result;
@@ -268,7 +268,8 @@ internal sealed class ConductorDriver
                                 checkpointPhase);
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                         },
-                    readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState);
+                    readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
+                    reviewAutoRetryStopRound: policy.ReviewAutoRetryStopRound);
             }
             catch (Exception ex) when (ex is not DispatchRecordWriteException)
             {

@@ -5727,7 +5727,7 @@ public sealed class ConductorDriverTests
             Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"),
             configuredPolicy.ToJson());
 
-        ReviewRetryCapReceipt Prepare(bool readyBatch)
+        ReviewRetryCapReceipt Prepare(string path)
         {
             var kernel = new AgentOrchestratorKernel();
             var reviewer = new TaskSpec(TaskId.New(), "Review configured cap", AgentRole.Reviewer);
@@ -5739,15 +5739,26 @@ public sealed class ConductorDriverTests
                 [],
                 []));
             kernel.ActivateGoal(goal.Id, DefaultAgents());
-            if (readyBatch)
+            var profiles = WorkerProfileCatalog.Default();
+            if (path == "ready-batch")
             {
                 var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
                     kernel,
                     workspace,
                     goal,
                     DefaultAgents(),
-                    WorkerProfileCatalog.Default());
+                    profiles);
                 Assert.Single(batch.Dispatches);
+            }
+            else if (path == "profile")
+            {
+                GoalManagementCommandService.ProfileDispatchTask(
+                    kernel,
+                    workspace,
+                    goal,
+                    reviewer,
+                    profiles.GetRequired("codex-cli"),
+                    DefaultAgents());
             }
             else
             {
@@ -5757,14 +5768,26 @@ public sealed class ConductorDriverTests
                     goal,
                     reviewer,
                     DefaultAgents(),
-                    WorkerProfileCatalog.Default());
+                    profiles);
+                if (path == "refresh")
+                {
+                    GoalManagementCommandService.RefreshPreparedDispatchBeforeStart(
+                        kernel,
+                        workspace,
+                        goal,
+                        reviewer,
+                        DefaultAgents(),
+                        profiles);
+                }
             }
 
             return Assert.IsType<ReviewRetryCapReceipt>(reviewer.LastDispatch!.ReviewRetryCap);
         }
 
-        Assert.Equal(9, Prepare(readyBatch: false).StopRound);
-        Assert.Equal(9, Prepare(readyBatch: true).StopRound);
+        Assert.Equal(9, Prepare("subscription-task").StopRound);
+        Assert.Equal(9, Prepare("ready-batch").StopRound);
+        Assert.Equal(9, Prepare("profile").StopRound);
+        Assert.Equal(9, Prepare("refresh").StopRound);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_operator_evidence_blocker_escalates_without_retry")]
