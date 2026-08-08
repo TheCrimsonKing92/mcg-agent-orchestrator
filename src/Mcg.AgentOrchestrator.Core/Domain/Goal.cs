@@ -293,8 +293,9 @@ public sealed class Goal
             throw new ArgumentException("Goal brief cannot be empty.", nameof(newBrief));
         }
 
+        var normalizedBrief = newBrief.Trim();
         var current = AuthoritativeBrief;
-        if (string.Equals(NormalizeLineEndings(current.Text), NormalizeLineEndings(newBrief), StringComparison.Ordinal))
+        if (string.Equals(NormalizeLineEndings(current.Text), NormalizeLineEndings(normalizedBrief), StringComparison.Ordinal))
         {
             throw new GoalBriefRevisionNoChangeException(
                 $"Submitted brief is identical to authoritative brief v{current.Version} after line-ending normalization.");
@@ -305,7 +306,7 @@ public sealed class Goal
         _briefVersions[currentIndex] = current with { SupersededByVersion = nextVersionNumber };
         var next = new GoalBriefVersion(
             nextVersionNumber,
-            newBrief,
+            normalizedBrief,
             recordedAt,
             NormalizeOptionalText(reason));
         _briefVersions.Add(next);

@@ -108,7 +108,7 @@ public sealed class GoalBriefRevisionTests
         clock.Advance();
         kernel.ReviseGoalBrief(goal.Id, "v2 brief");
         clock.Advance();
-        kernel.ReviseGoalBrief(goal.Id, "v3 brief", "second narrowing");
+        kernel.ReviseGoalBrief(goal.Id, "  v3 brief\r\n", "second narrowing");
         var restoredKernel = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
         var restored = restoredKernel.GetGoal(goal.Id);
 
