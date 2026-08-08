@@ -20,7 +20,12 @@ public static class AgentOutputDirectives
                 "## Ownership and lifecycle; ## External and edge contracts; ## Integration seams; ## Verification commands and classes; ## Risks and stop conditions. " +
                 "Map every numbered acceptance criterion, and state valid/invalid premise evidence, backticked file/symbol citations, the owner/lifecycle decision, external and unhappy-path contracts, integration sequence, " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
-                "Cited repository paths must exist unless explicitly marked as a new file to create.");
+                "Cited repository paths must exist unless explicitly marked as a new file to create. " +
+                "Mark a new file with the exact token `(new file)` or `— new file` immediately after its backticked path, " +
+                "or with the words 'new file', 'create', or 'add' within 24 characters before it containing no other backtick. " +
+                "A marker applies only to the single citation it is adjacent to, not to the whole line, so mark every new path individually. " +
+                "To cite a symbol, use a double colon such as `Path/File.cs::SymbolName`, or `Path/File.cs:123`, or `Path/File.cs#L12`; " +
+                "a single colon before a symbol name is not recognised and the whole string is then treated as a file path that does not exist.");
         }
         else if (role == AgentRole.Researcher)
         {

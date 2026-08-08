@@ -185,6 +185,42 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.Contains("target citation 'src/MissingUnmarked.cs' does not exist", result.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void PlannerContract_AcceptsEveryNewFileFormPublishedToThePlanner()
+    {
+        // Couples the grammar published in AgentOutputDirectives.WorkerResultTemplateLinesForRole(Planner)
+        // to the grammar this contract enforces. Goal e5c18520 lost three paid Planner rounds writing
+        // "— new SQLite-backed cross-process store", which declares newness but is not an accepted form.
+        // If the regexes change, the directive must change with them, and this test is what says so.
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var targetBody = string.Join(
+            "\n",
+            "- Add `src/MarkedByPrefixKeyword.cs` to own the durable claim records.",
+            "- Introduce `src/MarkedByParenSuffix.cs` (new file) for the ownership seam.",
+            "- Introduce `src/MarkedByDashSuffix.cs` — new file for the reconciliation seam.");
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_PublishedDirectiveStatesTheAcceptedNewFileForms()
+    {
+        var directive = string.Join(
+            "\n",
+            Mcg.AgentOrchestrator.Core.AgentOutputDirectives.WorkerResultTemplateLinesForRole(
+                Mcg.AgentOrchestrator.Core.AgentRole.Planner));
+
+        // The enforced suffix regex accepts only these two tokens, and the em dash is U+2014.
+        Xunit.Assert.Contains("(new file)", directive, StringComparison.Ordinal);
+        Xunit.Assert.Contains("— new file", directive, StringComparison.Ordinal);
+        // A single colon before a symbol is not recognised by CitedFilePath; the double colon is.
+        Xunit.Assert.Contains("::", directive, StringComparison.Ordinal);
+    }
+
     private static string ReplaceSectionBody(string plan, string heading, string replacement)
     {
         var normalized = plan.ReplaceLineEndings("\n");
