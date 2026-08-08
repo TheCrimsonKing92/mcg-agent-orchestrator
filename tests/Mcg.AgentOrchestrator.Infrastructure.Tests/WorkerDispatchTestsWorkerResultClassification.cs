@@ -1385,6 +1385,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     Assert.Equal(WorkTaskStatus.Completed, scenario.Task.Status);
     Assert.True(scenario.Task.LastVerification!.Succeeded);
+    Assert.Null(scenario.Task.LastVerification.OrchestratorFailureReason);
     Assert.Equal(0, scenario.Outcome.ProcessRecord.ExitCode);
     Assert.Equal(0, scenario.Outcome.Verification!.ExitCode);
     AssertExitCode(scenario.Process.ExitCodePath, 0);
@@ -1402,6 +1403,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     Assert.Equal(WorkTaskStatus.Completed, scenario.Task.Status);
     Assert.True(scenario.Task.LastVerification!.Succeeded);
+    Assert.Null(scenario.Task.LastVerification.OrchestratorFailureReason);
     Assert.Equal(0, scenario.Outcome.ProcessRecord.ExitCode);
     Assert.Equal(0, scenario.Outcome.Verification!.ExitCode);
     AssertExitCode(scenario.Process.ExitCodePath, 0);
@@ -3657,6 +3659,7 @@ private static (
         int? observedExitCode)
 {
     var root = CreateTempDirectory();
+    File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
     var stdout = Path.Combine(root, "worker.out.log");
     var stderr = Path.Combine(root, "worker.err.log");
     var exit = Path.Combine(root, "worker.exit.txt");
