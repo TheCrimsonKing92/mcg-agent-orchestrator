@@ -1715,19 +1715,117 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Xunit.Assert.Null(task.LastVerification);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_wrapper_completes_when_Developer_worktree_evidence_passes")]
-    public void BackgroundDispatchRunnerHungWrapperCompletesWhenDeveloperWorktreeEvidencePasses()
+    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_hung_wrappers_complete_read_only_roles_with_valid_worker_result")]
+    [Xunit.InlineData(AgentRole.Planner, true)]
+    [Xunit.InlineData(AgentRole.Planner, false)]
+    [Xunit.InlineData(AgentRole.Researcher, true)]
+    [Xunit.InlineData(AgentRole.Researcher, false)]
+    [Xunit.InlineData(AgentRole.Reviewer, true)]
+    [Xunit.InlineData(AgentRole.Reviewer, false)]
+    public void BackgroundDispatchRunnerHungWrappersCompleteReadOnlyRolesWithValidWorkerResult(
+        AgentRole role,
+        bool codexWrapper)
+    {
+        var scenario = RunHungReadOnlyRoleScenario(
+            role,
+            codexWrapper,
+            BuildSuccessfulReadOnlyOutput(role),
+            childExitCode: role == AgentRole.Planner ? 0 : null);
+
+        Assert.Equal(0, scenario.Outcome.ProcessRecord.ExitCode);
+        Assert.Equal(0, scenario.Outcome.Verification!.ExitCode);
+        Assert.Equal(WorkTaskStatus.Completed, scenario.Task.Status);
+        AssertExitCode(scenario.Process.ExitCodePath, 0);
+        Assert.Contains("wrapper appears hung", scenario.Task.LastVerification!.StandardError, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("complete, non-blocked WORKER_RESULT", scenario.Task.LastVerification.StandardError, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_hung_wrappers_fail_read_only_roles_without_valid_worker_result")]
+    [Xunit.InlineData(true, "empty")]
+    [Xunit.InlineData(false, "empty")]
+    [Xunit.InlineData(true, "malformed")]
+    [Xunit.InlineData(false, "malformed")]
+    [Xunit.InlineData(true, "blocked")]
+    [Xunit.InlineData(false, "blocked")]
+    public void BackgroundDispatchRunnerHungWrappersFailReadOnlyRolesWithoutValidWorkerResult(
+        bool codexWrapper,
+        string evidenceKind)
+    {
+        var standardOutput = evidenceKind switch
+        {
+            "empty" => string.Empty,
+            "malformed" => "WORKER_RESULT:\nblockers: none",
+            "blocked" => WorkerResultBlock(
+                "none",
+                "inspection",
+                "not-run - blocked before verification",
+                blockers: "exact-blocker - required evidence is missing"),
+            _ => throw new ArgumentOutOfRangeException(nameof(evidenceKind))
+        };
+        var scenario = RunHungReadOnlyRoleScenario(
+            AgentRole.Planner,
+            codexWrapper,
+            standardOutput,
+            childExitCode: 0);
+
+        Assert.Equal(1, scenario.Outcome.ProcessRecord.ExitCode);
+        Assert.Equal(1, scenario.Outcome.Verification!.ExitCode);
+        Assert.Equal(0, scenario.Outcome.ProcessRecord.ChildExitCode);
+        Assert.Equal(WorkTaskStatus.Failed, scenario.Task.Status);
+        AssertExitCode(scenario.Process.ExitCodePath, 1);
+        Assert.Contains("wrapper appears hung", scenario.Task.LastVerification!.StandardError, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("rescue denied", scenario.Task.LastVerification.StandardError, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_read_only_hung_wrapper_rescue_is_dispatch_agnostic")]
+    public void BackgroundDispatchRunnerReadOnlyHungWrapperRescueIsDispatchAgnostic()
+    {
+        var taskWithoutDispatch = new TaskSpec(TaskId.New(), "Plan the work.", AgentRole.Planner);
+
+        Assert.True(BackgroundDispatchRunner.CanCompleteHungWrapperWithoutChangeEvidence(
+            taskWithoutDispatch,
+            hasPopulatedStandardOutput: true,
+            hasSuccessfulWorkerResult: true,
+            out var capabilityGapDiagnostic));
+        Assert.Null(capabilityGapDiagnostic);
+
+        var localScenario = RunHungReadOnlyRoleScenario(
+            AgentRole.Reviewer,
+            codexWrapper: false,
+            BuildSuccessfulReadOnlyOutput(AgentRole.Reviewer),
+            localDispatch: true);
+        Assert.Equal(0, localScenario.Outcome.ProcessRecord.ExitCode);
+        Assert.Equal(WorkTaskStatus.Completed, localScenario.Task.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_unrecognized_role_capability_fails_closed")]
+    public void BackgroundDispatchRunnerUnrecognizedRoleCapabilityFailsClosed()
+    {
+        var task = new TaskSpec(TaskId.New(), "Unknown role task.", (AgentRole)999);
+
+        Assert.False(BackgroundDispatchRunner.CanCompleteHungWrapperWithoutChangeEvidence(
+            task,
+            hasPopulatedStandardOutput: true,
+            hasSuccessfulWorkerResult: true,
+            out var capabilityGapDiagnostic));
+        Assert.Contains("HungWrapperUnrecognizedRoleCapability", capabilityGapDiagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_hung_wrapper_completes_when_file_role_worktree_evidence_passes")]
+    [Xunit.InlineData(AgentRole.Developer)]
+    [Xunit.InlineData(AgentRole.Tester)]
+    public void BackgroundDispatchRunnerHungWrapperCompletesWhenFileRoleWorktreeEvidencePasses(AgentRole role)
 {
     var root = CreateSeededDispatchRepository();
     var now = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
     var clock = new TestClock(now);
     var kernel = new AgentOrchestratorKernel();
-    var taskSpec = new TaskSpec(TaskId.New(), "Developer task.", AgentRole.Developer);
+    var taskSpec = new TaskSpec(TaskId.New(), $"{role} task.", role);
     var goal = kernel.CreateGoal("Hung wrapper with evidence", [taskSpec]);
     var agent = new AgentDefinition(
-        new AgentId("codex-developer"),
-        "Codex Developer",
-        AgentRole.Developer,
+        new AgentId($"codex-{role.ToString().ToLowerInvariant()}"),
+        $"Codex {role}",
+        role,
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
 
@@ -1747,7 +1845,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
     File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
 
-    var task = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+    var task = goal.Tasks.Single(t => t.RequiredRole == role);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, now.AddMinutes(-5)));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null));
 
@@ -1812,19 +1910,21 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("commits_after_dispatch=1", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_wrapper_fails_when_Developer_worktree_evidence_missing")]
-    public void BackgroundDispatchRunnerHungWrapperFailsWhenDeveloperWorktreeEvidenceMissing()
+    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_hung_wrapper_fails_when_file_role_worktree_evidence_missing")]
+    [Xunit.InlineData(AgentRole.Developer)]
+    [Xunit.InlineData(AgentRole.Tester)]
+    public void BackgroundDispatchRunnerHungWrapperFailsWhenFileRoleWorktreeEvidenceMissing(AgentRole role)
 {
     var root = CreateSeededDispatchRepository();
     var now = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
     var clock = new TestClock(now);
     var kernel = new AgentOrchestratorKernel();
-    var taskSpec = new TaskSpec(TaskId.New(), "Developer task.", AgentRole.Developer);
+    var taskSpec = new TaskSpec(TaskId.New(), $"{role} task.", role);
     var goal = kernel.CreateGoal("Hung wrapper without evidence", [taskSpec]);
     var agent = new AgentDefinition(
-        new AgentId("codex-developer"),
-        "Codex Developer",
-        AgentRole.Developer,
+        new AgentId($"codex-{role.ToString().ToLowerInvariant()}"),
+        $"Codex {role}",
+        role,
         new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
 
@@ -1835,12 +1935,15 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var stdout = Path.Combine(logs, "dev.out.log");
     var stderr = Path.Combine(logs, "dev.err.log");
     var exit = Path.Combine(logs, "dev.exit.txt");
-    File.WriteAllText(stdout, "Implemented the change.");
+    File.WriteAllText(
+        stdout,
+        "Completed role work." + Environment.NewLine +
+        WorkerResultBlock("none", "focused verification", "pass - structured evidence", blockers: "none"));
     File.WriteAllText(stderr, "Tokens used: input=123 output=45");
     File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
     File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
 
-    var task = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+    var task = goal.Tasks.Single(t => t.RequiredRole == role);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, now.AddMinutes(-5)));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null));
 
@@ -3358,6 +3461,92 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains(latestPrefix, allResult.StandardOutput);
     Assert.Contains("older stdout tail", allResult.StandardOutput);
     Assert.Contains("latest stdout tail", allResult.StandardOutput);
+}
+
+private static (
+    TaskSpec Task,
+    TaskProcessRecord Process,
+    DispatchRefreshOutcome Outcome) RunHungReadOnlyRoleScenario(
+        AgentRole role,
+        bool codexWrapper,
+        string standardOutput,
+        bool localDispatch = false,
+        int? childExitCode = null)
+{
+    var root = CreateTempDirectory();
+    File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+    var logs = Path.Combine(root, "logs");
+    Directory.CreateDirectory(logs);
+    var stdout = Path.Combine(logs, "worker.out.log");
+    var stderr = Path.Combine(logs, "worker.err.log");
+    var exit = Path.Combine(logs, "worker.exit.txt");
+    var childExit = childExitCode is null ? null : Path.Combine(logs, "worker.child-exit.json");
+    var now = DateTimeOffset.Parse("2026-08-08T06:00:00Z");
+    var startedAt = now.AddMinutes(codexWrapper ? -5 : -40);
+    var command = codexWrapper ? "codex exec prompt" : "claude prompt";
+    var workerName = localDispatch ? "local" : codexWrapper ? "codex-cli" : "claude-cli";
+    File.WriteAllText(stdout, standardOutput);
+    File.WriteAllText(stderr, codexWrapper ? "Tokens used: input=123 output=45" : string.Empty);
+    File.SetLastWriteTimeUtc(stdout, now.AddMinutes(-3).UtcDateTime);
+    File.SetLastWriteTimeUtc(stderr, now.AddMinutes(-3).UtcDateTime);
+    if (childExit is not null)
+    {
+        File.WriteAllText(
+            childExit,
+            JsonSerializer.Serialize(
+                new DispatchProcessHost.DispatchChildExitRecord(888888, childExitCode, now.AddMinutes(-1)),
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+    }
+
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Hung read-only wrapper", [new TaskSpec(TaskId.New(), $"{role} task.", role)]);
+    var agent = new AgentDefinition(
+        new AgentId($"test-{role.ToString().ToLowerInvariant()}"),
+        $"Test {role}",
+        role,
+        new ModelProfile("Test", "test-model", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(workerName, command, root, startedAt));
+    var process = new TaskProcessRecord(
+        999999,
+        command,
+        root,
+        stdout,
+        stderr,
+        exit,
+        startedAt,
+        null,
+        null,
+        ChildExitRecordPath: childExit);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    if (!codexWrapper)
+    {
+        WriteHeartbeat(
+            process,
+            now.AddMinutes(-31),
+            now.AddMinutes(-31),
+            "running",
+            new FileInfo(stdout).Length,
+            0,
+            childPid: null);
+    }
+
+    var outcome = new BackgroundDispatchRunner(new TestClock(now), TimeSpan.FromMinutes(2), _ => true)
+        .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+    return (task, process, outcome);
+}
+
+private static string BuildSuccessfulReadOnlyOutput(AgentRole role)
+{
+    var roleOutput = role == AgentRole.Planner
+        ? PlannerContractPlanFixture() + Environment.NewLine
+        : $"Completed {role} analysis." + Environment.NewLine;
+    return roleOutput + WorkerResultBlock(
+        "none",
+        "source inspection",
+        "pass - structured result complete",
+        blockers: "none");
 }
 
 private static void AssertExitCode(string path, int expected)

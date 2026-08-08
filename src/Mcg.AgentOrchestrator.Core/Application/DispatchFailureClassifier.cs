@@ -45,15 +45,31 @@ public sealed record ProviderSubscriptionCooldown(
     TaskId SourceTaskId,
     DateTimeOffset RetryAfter);
 
+public enum DispatchRoleOutputCapability
+{
+    RequiresChangeEvidence,
+    ReadOnly,
+    VerificationOnly
+}
+
+public static class DispatchRoleOutputCapabilities
+{
+    public static bool TryGet(AgentRole role, out DispatchRoleOutputCapability capability)
+    {
+        capability = role switch
+        {
+            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer => DispatchRoleOutputCapability.ReadOnly,
+            AgentRole.Tester => DispatchRoleOutputCapability.VerificationOnly,
+            AgentRole.Developer or AgentRole.Ideation => DispatchRoleOutputCapability.RequiresChangeEvidence,
+            _ => DispatchRoleOutputCapability.RequiresChangeEvidence
+        };
+
+        return Enum.IsDefined(role);
+    }
+}
+
 public static class DispatchFailureClassifier
 {
-    private enum DispatchRoleOutputCapability
-    {
-        RequiresChangeEvidence,
-        ReadOnly,
-        VerificationOnly
-    }
-
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
     public static readonly TimeSpan SilentLaunchFailureMaxDuration = TimeSpan.FromMinutes(1);
 
@@ -414,7 +430,8 @@ public static class DispatchFailureClassifier
         }
 
         if (verification.Succeeded &&
-            GetDispatchRoleOutputCapability(task.RequiredRole) != DispatchRoleOutputCapability.ReadOnly &&
+            (!DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var roleCapability) ||
+             roleCapability != DispatchRoleOutputCapability.ReadOnly) &&
             WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
             testsStatus == WorkerResultBlockers.TestsStatus.Fail)
         {
@@ -1287,7 +1304,7 @@ public static class DispatchFailureClassifier
     }
 
     private static bool CanCompleteWithoutChangeEvidence(TaskSpec task, TaskVerificationRecord verification) =>
-        GetDispatchRoleOutputCapability(task.RequiredRole) switch
+        DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var capability) && capability switch
         {
             DispatchRoleOutputCapability.ReadOnly => true,
             DispatchRoleOutputCapability.VerificationOnly => HasAcceptableStructuredTestsForCompletion(verification),
@@ -1302,14 +1319,6 @@ public static class DispatchFailureClassifier
         verification.HeartbeatStandardOutputBytes > 0 ||
         !string.IsNullOrWhiteSpace(verification.StandardOutput) ||
         HasStandardOutputFileBytes(verification);
-
-    private static DispatchRoleOutputCapability GetDispatchRoleOutputCapability(AgentRole role) =>
-        role switch
-        {
-            AgentRole.Planner or AgentRole.Researcher or AgentRole.Reviewer => DispatchRoleOutputCapability.ReadOnly,
-            AgentRole.Tester => DispatchRoleOutputCapability.VerificationOnly,
-            _ => DispatchRoleOutputCapability.RequiresChangeEvidence
-        };
 
     private static bool HasSubstantiveWorkerEvidence(bool workerResultPresent, bool hasCommittedChanges) =>
         workerResultPresent && hasCommittedChanges;
