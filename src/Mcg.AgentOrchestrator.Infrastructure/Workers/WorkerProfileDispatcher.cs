@@ -208,8 +208,7 @@ public static class WorkerProfileDispatcher
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
         var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
-        var reviewerRoundTouchedAnchors = ReadReviewerRoundTouchedAnchors(
-            kernel,
+        var reviewerRoundTouchedAnchors = ReadReviewRoundTouchedAnchors(
             goal,
             task,
             workingDirectory,
@@ -277,20 +276,25 @@ public static class WorkerProfileDispatcher
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
 
-    private static IReadOnlyList<ReviewFindingLocation> ReadReviewerRoundTouchedAnchors(
-        AgentOrchestratorKernel kernel,
+    private static IReadOnlyList<ReviewFindingLocation> ReadReviewRoundTouchedAnchors(
         Goal goal,
         TaskSpec task,
         string workingDirectory,
         string? currentHeadCommit)
     {
-        if (task.RequiredRole != AgentRole.Reviewer)
+        if (task.RequiredRole is not (AgentRole.Reviewer or AgentRole.Tester))
         {
             return [];
         }
 
-        var resolvedAnchors = kernel.GetReviewFindingState(goal.Id)
-            .Where(finding => finding.State == ReviewFindingState.Resolved)
+        var carriedFindings = goal.Tasks
+            .Where(candidate => candidate.RequiredRole == task.RequiredRole)
+            .SelectMany(candidate => candidate.VerificationHistory)
+            .Where(verification => verification.MergedReviewFindings is not null)
+            .OrderByDescending(verification => verification.CompletedAt)
+            .Select(verification => verification.MergedReviewFindings!)
+            .FirstOrDefault() ?? [];
+        var anchors = carriedFindings
             .Select(finding => finding.Location)
             .ToArray();
         var previousReviewedCommit = task.VerificationHistory
@@ -301,7 +305,7 @@ public static class WorkerProfileDispatcher
             workingDirectory,
             previousReviewedCommit,
             currentHeadCommit,
-            resolvedAnchors);
+            anchors);
     }
 
     private static void EnsureReviewerScopeForPreparation(

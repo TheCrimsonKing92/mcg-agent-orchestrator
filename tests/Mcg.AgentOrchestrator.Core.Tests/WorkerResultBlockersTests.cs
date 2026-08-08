@@ -469,6 +469,39 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(error.Violation.SubmittedStableId, mismatch.SubmittedStableId);
     }
 
+    [Xunit.Fact(DisplayName = "ReviewFindingConvergence_afc62d88_allows_persistent_finding_to_follow_touched_code")]
+    public void ReviewFindingConvergenceAfc62d88AllowsPersistentFindingToFollowTouchedCode()
+    {
+        // Regression fixture from afc62d88/bb5ff6ed. The dispatch artifact preserved the real stable_id
+        // and TerminalGoalS... source prefix, but truncated the remainder of both recorded locations.
+        var priorLocation = new ReviewFindingLocation(
+            "src/Mcg.AgentOrchestrator.App/Orchestration/TerminalGoalSummary.cs",
+            "TerminalGoalSummary.BuildReportedGoals",
+            "timeline evidence");
+        var movedLocation = new ReviewFindingLocation(
+            "src/Mcg.AgentOrchestrator.App/Orchestration/TerminalGoalTimeline.cs",
+            "TerminalGoalTimeline.BuildReportedGoals",
+            "timeline evidence");
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "reported-goals-may-lack-timeline-evidence",
+                ReviewFindingState.Open,
+                priorLocation,
+                "Reported goals may lack timeline evidence.")
+        };
+        var next = new ReviewFindingRound(
+            [previous[0] with { Location = movedLocation }],
+            [priorLocation]);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        var carried = Assert.Single(state);
+        Assert.Equal("reported-goals-may-lack-timeline-evidence", carried.StableId);
+        Assert.Equal(ReviewFindingState.Open, carried.State);
+        Assert.Equal(movedLocation, carried.Location);
+    }
+
     [Xunit.Theory(DisplayName = "ReviewFindingConvergence_keeps_identity_across_region_paraphrases_and_refreshes_raw_region")]
     [Xunit.InlineData("A.Run", "A.Run")]
     [Xunit.InlineData("GoalAcceptanceVerifier.RunFocusedEvidence", "RunFocusedEvidence()")]

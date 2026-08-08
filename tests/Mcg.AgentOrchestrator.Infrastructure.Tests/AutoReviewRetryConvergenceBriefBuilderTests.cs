@@ -805,7 +805,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.Contains("open_count: 2", brief, StringComparison.Ordinal);
         Assert.Contains($"stable_id: F-1 | severity=advisory | {firstLocation}", brief, StringComparison.Ordinal);
         Assert.Contains("- stable_id: F-2", brief, StringComparison.Ordinal);
-        Assert.Contains("reuse stable_id and location VERBATIM", brief, StringComparison.Ordinal);
+        Assert.Contains("authoritative stable_id and prior location", brief, StringComparison.Ordinal);
+        Assert.Contains("report the same stable_id at the defect's current location", brief, StringComparison.Ordinal);
         Assert.DoesNotContain("auto-review-retry", brief, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(ReviewFindingState.Open, AutoReviewRetryConvergenceBriefBuilder
             .ReadStructuredReviewFindingState(goal, reviewer)

@@ -335,7 +335,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
             lines.Add($"{prefix}_detail: {mismatch.Message}");
         }
 
-        lines.Add("## CANONICAL_OPEN_ACTIVE_RECHECK (authoritative; reuse stable_id and location VERBATIM)");
+        lines.Add("## CANONICAL_OPEN_ACTIVE_RECHECK (authoritative stable_id and prior location)");
         lines.Add($"open_count: {open.Length}");
         foreach (var finding in open)
         {
@@ -356,7 +356,7 @@ internal static class AutoReviewRetryConvergenceBriefBuilder
         lines.Add(
             open.Length == 0
                 ? "Rules: the canonical ledger is empty; report every finding as newly opened. Open a new stable_id only for a defect at an anchor not listed above. Keep verdict and blockers unchanged unless your conclusion actually changed."
-                : "Rules: reuse every carried stable_id and location exactly as printed. Open a new stable_id only for a defect at an anchor not listed above. Keep verdict and blockers unchanged unless your conclusion actually changed.");
+                : "Rules: reuse every carried stable_id. Keep its printed location unless the code moved and the system-derived round diff touched that prior anchor; then report the same stable_id at the defect's current location. Open a new stable_id only for a distinct defect at an unlisted anchor. Keep verdict and blockers unchanged unless your conclusion actually changed.");
         lines.Add($"Full {reviewerTask.RequiredRole} output: {outputArtifact}");
         return string.Join(Environment.NewLine, lines);
     }

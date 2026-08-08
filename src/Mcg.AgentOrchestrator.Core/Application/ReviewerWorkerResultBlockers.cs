@@ -177,9 +177,9 @@ public static class WorkerResultBlockers
             Findings = reportedRound.Findings
                 .Select(finding => finding with { EvidenceOutcome = null })
                 .ToArray(),
-            // Reviewer-authored touched_anchors remains a required, validated receipt, but is not
-            // authoritative for regression reopening. Only dispatch-preparation's round diff may
-            // prove that a resolved structural anchor was touched.
+            // Worker-authored touched_anchors remains a required, validated receipt, but is not
+            // authoritative for regression reopening or identity relocation. Only dispatch-
+            // preparation's round diff may prove that a structural anchor was touched.
             TouchedAnchors = verification.ReviewFindingTouchedAnchors ?? []
         };
         return true;
