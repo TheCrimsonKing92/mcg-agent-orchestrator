@@ -453,7 +453,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        startInfo.RedirectStandardInput = true;
+        startInfo.RedirectStandardInput = !captureToFiles;
         if (!captureToFiles)
         {
             foreach (var argument in arguments)
@@ -466,7 +466,10 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         using var process = WorkerProcessJobs.StartRegisteredOrThrow(
             startInfo,
             $"post-landing-canary:{workingDirectory}");
-        process.StandardInput.Close();
+        if (startInfo.RedirectStandardInput)
+        {
+            process.StandardInput.Close();
+        }
 
         try
         {
