@@ -1241,14 +1241,14 @@ internal sealed class ConductorDriver
             return true;
         }
 
-        if (violation.Code == ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode)
+        if (violation.Code is ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode or
+                ReviewFindingConvergence.MissingReviewRetryCapReceiptViolationCode)
         {
             var receipt = reviewerTask.LastDispatch?.ReviewRetryCap;
             decision = VerifyingFindingAutoRetryDecision.Escalate(BuildReviewCapDecisionMessage(
                 goal,
                 reviewerTask,
-                receipt?.Round ?? 0,
-                receipt?.StopRound ?? 0,
+                receipt,
                 violation.Message,
                 FormatVerifyingRoleOutputArtifact(reviewerTask),
                 canonicalLedger));
@@ -1380,8 +1380,7 @@ internal sealed class ConductorDriver
                     ? BuildReviewCapDecisionMessage(
                         goal,
                         triggeringTask,
-                        round,
-                        policy.ReviewAutoRetryStopRound,
+                        new ReviewRetryCapReceipt(round, policy.ReviewAutoRetryStopRound),
                         trigger.Finding,
                         outputArtifact,
                         triggeringTask.LastVerification?.MergedReviewFindings ?? [])
@@ -1485,8 +1484,7 @@ internal sealed class ConductorDriver
     private static string BuildReviewCapDecisionMessage(
         Goal goal,
         TaskSpec reviewerTask,
-        int round,
-        int stopRound,
+        ReviewRetryCapReceipt? receipt,
         string trigger,
         string outputArtifact,
         IReadOnlyList<ReviewFinding> ledger)
@@ -1504,7 +1502,10 @@ internal sealed class ConductorDriver
         var candidateSha = reviewerTask.LastVerification?.ReviewedCommit ??
             reviewerTask.LastDispatch?.BaseCommit ??
             "missing";
-        return $"auto-review-retry stopped at review round {round}/{stopRound}: blocked-at-cap for Reviewer task {reviewerTask.Id.Value[..8]}; " +
+        var capBoundary = receipt is null
+            ? "because the system-owned review-cap receipt is missing"
+            : $"at review round {receipt.Round}/{receipt.StopRound}";
+        return $"auto-review-retry stopped {capBoundary}: blocked-at-cap for Reviewer task {reviewerTask.Id.Value[..8]}; " +
             $"candidate_sha={candidateSha}; surviving_stable_ids={stableIds}; findings: {findings}. " +
             "operator decision required: continue work, waive the applicable criterion as an explicit override, split the goal, or supersede the requirement. " +
             $"The goal remains non-terminal and cannot advance to acceptance. Full reviewer output: {outputArtifact}";

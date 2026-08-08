@@ -5629,6 +5629,144 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_honest_blocked_at_cap_surfaces_operator_decision")]
+    public void ConductorDriverReviewerHonestBlockedAtCapSurfacesOperatorDecision()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        for (var i = 1; i <= 6; i++)
+        {
+            kernel.RetryTask(goal.Id, developer.Id, $"auto-review-retry round {i}: prior reviewer finding");
+            PassVerification(kernel, goal, developer);
+        }
+
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "reviewer",
+            "review-cap",
+            "C:\\tmp",
+            DateTimeOffset.UtcNow,
+            BaseCommit: "candidate-cap-sha",
+            ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
+        var finding = new ReviewFinding(
+            "F-HONEST-CAP",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Guard.cs", "Guard.Run", "guard"),
+            "Guard is still missing.",
+            FindingSeverity.Blocking,
+            FindingCategory.Correctness);
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected candidate",
+            "commit: none",
+            "blockers: F-HONEST-CAP - Guard is still missing.",
+            $"findings: {JsonSerializer.Serialize(new[] { finding })}",
+            "touched_anchors: []",
+            "verdict: blocked-at-cap",
+            "model_fit: fixture/model - adequate - review",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-cap",
+            "C:\\tmp",
+            0,
+            stdout,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: "C:\\tmp\\honest-cap.out.log",
+            WorkerResultPresent: true,
+            ReviewedCommit: "candidate-cap-sha"));
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+
+        var dispatched = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(dispatched);
+        Assert.Contains("blocked-at-cap", escalation);
+        Assert.Contains("surviving_stable_ids=F-HONEST-CAP", escalation);
+        Assert.Contains("candidate_sha=candidate-cap-sha", escalation);
+        Assert.Contains("operator decision required", escalation);
+        Assert.Contains("C:\\tmp\\honest-cap.out.log", escalation);
+        Assert.False(goal.IsTerminal);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "Subscription_dispatch_paths_use_workspace_configured_review_stop_round")]
+    public void SubscriptionDispatchPathsUseWorkspaceConfiguredReviewStopRound()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        Directory.CreateDirectory(workspace.OrchestratorDirectory);
+        var configuredPolicy = ConductorAutonomyPolicy.Permissive with
+        {
+            ReviewAutoRetryStopRound = 9
+        };
+        File.WriteAllText(
+            Path.Combine(workspace.OrchestratorDirectory, "conductor-policy.json"),
+            configuredPolicy.ToJson());
+
+        ReviewRetryCapReceipt Prepare(bool readyBatch)
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var reviewer = new TaskSpec(TaskId.New(), "Review configured cap", AgentRole.Reviewer);
+            var goal = kernel.CreateGoal("Use the configured review cap", [reviewer]);
+            kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+                "Review configured cap",
+                ["The dispatch receipt uses the configured stop round."],
+                VerificationClass.TestVerifiable,
+                [],
+                []));
+            kernel.ActivateGoal(goal.Id, DefaultAgents());
+            if (readyBatch)
+            {
+                var batch = GoalManagementCommandService.SubscriptionDispatchReadyBatch(
+                    kernel,
+                    workspace,
+                    goal,
+                    DefaultAgents(),
+                    WorkerProfileCatalog.Default());
+                Assert.Single(batch.Dispatches);
+            }
+            else
+            {
+                GoalManagementCommandService.SubscriptionDispatchTask(
+                    kernel,
+                    workspace,
+                    goal,
+                    reviewer,
+                    DefaultAgents(),
+                    WorkerProfileCatalog.Default());
+            }
+
+            return Assert.IsType<ReviewRetryCapReceipt>(reviewer.LastDispatch!.ReviewRetryCap);
+        }
+
+        Assert.Equal(9, Prepare(readyBatch: false).StopRound);
+        Assert.Equal(9, Prepare(readyBatch: true).StopRound);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_operator_evidence_blocker_escalates_without_retry")]
     public void ConductorDriverReviewerOperatorEvidenceBlockerEscalatesWithoutRetry()
     {

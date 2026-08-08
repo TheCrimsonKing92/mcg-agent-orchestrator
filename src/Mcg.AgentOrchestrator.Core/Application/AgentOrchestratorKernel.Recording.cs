@@ -342,6 +342,7 @@ public sealed partial class AgentOrchestratorKernel
         bool enforceFailureEvidenceRule)
     {
         var goal = GetGoal(goalId);
+        string? nonPassingCriteriaDiagnostic = null;
         if (verification.WorkerResultPresent &&
             task.RequiredRole == AgentRole.Reviewer &&
             WorkerResultBlockers.TryFindBlockedAtCapVerdict(verification, out _) &&
@@ -432,18 +433,15 @@ public sealed partial class AgentOrchestratorKernel
                             refinedSpec.AcceptanceCriteria[item.CriterionIndex].Trim(),
                             StringComparison.OrdinalIgnoreCase)))
                 .ToArray();
-            if (nonPassingVerdicts.Length > 0)
+            if (nonPassingVerdicts.Length > 0 &&
+                WorkerResultBlockers.TryFindPassVerdict(verification))
             {
                 var details = string.Join(
                     "; ",
                     nonPassingVerdicts.Select(item =>
                         $"criterion_index={item.CriterionIndex} verdict={item.Verdict} evidence={item.Evidence}"));
-                ReportTaskProgress(
-                    goalId,
-                    task.Id,
-                    WorkTaskStatus.Failed,
-                    $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}.");
-                return true;
+                nonPassingCriteriaDiagnostic =
+                    $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}.";
             }
 
             foreach (var extra in criterionVerdicts.Where(item =>
@@ -516,6 +514,16 @@ public sealed partial class AgentOrchestratorKernel
                 task.Id,
                 WorkTaskStatus.Failed,
                 $"Reviewer WORKER_RESULT verdict rejected: merged structured finding state still has open blocking stable_id(s): {openIds}.");
+            return true;
+        }
+
+        if (nonPassingCriteriaDiagnostic is not null)
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                nonPassingCriteriaDiagnostic);
             return true;
         }
 
@@ -645,7 +653,9 @@ public sealed partial class AgentOrchestratorKernel
             return verification with
             {
                 ReviewFindingContractViolation = violation,
-                MergedReviewFindings = violation?.Code == ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode
+                MergedReviewFindings = violation?.Code is
+                        ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode or
+                        ReviewFindingConvergence.MissingReviewRetryCapReceiptViolationCode
                     ? mergedFindings
                     : null
             };
@@ -706,16 +716,26 @@ public sealed partial class AgentOrchestratorKernel
 
             try
             {
-                if (isCurrentRound &&
-                    role == AgentRole.Reviewer &&
-                    reviewRetryCap is { IsAtCap: true })
+                if (isCurrentRound && role == AgentRole.Reviewer)
                 {
-                    ReviewFindingConvergence.ValidateResolutionAtCap(
-                        state,
-                        round,
-                        goal.EffectiveAcceptanceCriteriaCorrections,
-                        currentVerification.ReviewedCommit,
-                        evidenceReceipts);
+                    if (reviewRetryCap is { IsAtCap: true })
+                    {
+                        ReviewFindingConvergence.ValidateResolutionAtCap(
+                            state,
+                            round,
+                            goal.EffectiveAcceptanceCriteriaCorrections,
+                            currentVerification.ReviewedCommit,
+                            evidenceReceipts);
+                    }
+                    else if (reviewRetryCap is null)
+                    {
+                        ReviewFindingConvergence.ValidateResolutionWithoutCapReceipt(
+                            state,
+                            round,
+                            goal.EffectiveAcceptanceCriteriaCorrections,
+                            currentVerification.ReviewedCommit,
+                            evidenceReceipts);
+                    }
                 }
 
                 state = isCurrentRound

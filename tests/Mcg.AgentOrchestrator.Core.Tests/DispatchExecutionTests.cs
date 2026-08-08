@@ -1329,6 +1329,79 @@ public sealed class DispatchExecutionTests
         Assert.NotEqual(GoalStatus.Verified, goal.Status);
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_missing_review_retry_cap_receipt_fails_closed_on_unproven_resolution")]
+    public void RecordDispatchExecutionResultMissingReviewRetryCapReceiptFailsClosedOnUnprovenResolution()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Fail closed when legacy cap context is unavailable", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "abc1234"));
+        var open = StructuredReviewerResult(
+            "needs-work",
+            """[{"stable_id":"F-LEGACY-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            "Missing guard.");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "legacy snapshot recheck");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "review-2",
+            "C:\\repo",
+            clock.UtcNow,
+            BaseCommit: "abc1234",
+            ReviewFindingTouchedAnchors: [],
+            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors."));
+        var claimedResolved = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"F-LEGACY-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2", "C:\\repo", 0, claimedResolved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        var violation = Assert.IsType<ReviewFindingContractViolation>(reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.MissingReviewRetryCapReceiptViolationCode, violation.Code);
+        var retained = Assert.Single(reviewer.LastVerification.MergedReviewFindings!);
+        Assert.Equal("F-LEGACY-CAP", retained.StableId);
+        Assert.Equal(ReviewFindingState.Open, retained.State);
+    }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_blocked_at_cap_is_rejected_before_recorded_cap")]
+    public void RecordDispatchExecutionResultBlockedAtCapIsRejectedBeforeRecordedCap()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Reject early blocked-at-cap", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "review",
+            "C:\\repo",
+            clock.UtcNow,
+            ReviewRetryCap: new ReviewRetryCapReceipt(6, 7)));
+        var blocked = StructuredReviewerResult(
+            "blocked-at-cap",
+            """[{"stable_id":"F-EARLY-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking"}]""",
+            "F-EARLY-CAP - Missing guard.");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review", "C:\\repo", 0, blocked, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("blocked-at-cap is only valid", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_review_retry_cap_accepts_touched_blocker_resolution")]
     public void RecordDispatchExecutionResultReviewRetryCapAcceptsTouchedBlockerResolution()
     {
@@ -1466,6 +1539,56 @@ public sealed class DispatchExecutionTests
             "review-2", "C:\\repo", 0, complete, string.Empty, clock.UtcNow, WorkerResultPresent: true));
 
         Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_non_passing_criteria_rejects_pass_but_preserves_needs_work_blockers")]
+    public void RecordDispatchExecutionResultNonPassingCriteriaRejectsPassButPreservesNeedsWorkBlockers()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Enforce criteria only as a pass gate", [reviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Review the guard",
+            ["Guard is implemented."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-pass", "C:\\repo", clock.UtcNow));
+        var invalidPass = StructuredReviewerResult(
+            "pass",
+            "[]",
+            "none",
+            """[{"criterion_index":0,"verdict":"not-verifiable","evidence":"Required receipt is unavailable."}]""");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-pass", "C:\\repo", 0, invalidPass, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskFailed &&
+            evt.Message.Contains("criteria attestation rejected", StringComparison.Ordinal));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "report the open blocker");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-needs-work", "C:\\repo", clock.UtcNow));
+        var needsWork = StructuredReviewerResult(
+            "needs-work",
+            """[{"stable_id":"F-CRITERION","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Guard is missing.","severity":"blocking"}]""",
+            "F-CRITERION - Guard is missing.",
+            """[{"criterion_index":0,"verdict":"not-met","evidence":"src/A.cs has no guard."}]""");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-needs-work", "C:\\repo", 1, needsWork, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        var failure = goal.Timeline.Last(evt => evt.TaskId == reviewer.Id && evt.Kind == ProgressKind.TaskFailed);
+        Assert.Contains("open blocking stable_id(s): F-CRITERION", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("criteria attestation rejected", failure.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_accepts_and_records_extra_criteria_attestations")]

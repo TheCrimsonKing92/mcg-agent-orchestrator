@@ -492,6 +492,8 @@ public static class ReviewFindingConvergence
     public const string NeedsWorkWithoutOpenFindingsViolationCode = "ERR_REVIEW_NEEDS_WORK_WITHOUT_OPEN_FINDINGS";
     public const string UnprovenResolutionAtCapViolationCode = "ERR_REVIEW_FINDING_UNPROVEN_RESOLUTION_AT_CAP";
 
+    public const string MissingReviewRetryCapReceiptViolationCode = "ERR_REVIEW_FINDING_MISSING_CAP_RECEIPT";
+
     public static IReadOnlyList<ReviewFinding> ApplyRound(
         IReadOnlyList<ReviewFinding> previous,
         ReviewFindingRound nextRound) =>
@@ -655,6 +657,65 @@ public static class ReviewFindingConvergence
             message,
             new ReviewFindingContractViolation(
                 UnprovenResolutionAtCapViolationCode,
+                message,
+                first.StableId,
+                first.StableId,
+                first.Location,
+                submittedById[first.StableId].Location,
+                mismatches));
+    }
+
+    public static void ValidateResolutionWithoutCapReceipt(
+        IReadOnlyList<ReviewFinding> previous,
+        ReviewFindingRound nextRound,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections,
+        string? reviewedCommit,
+        IReadOnlyList<FindingEvidenceReceipt> evidenceReceipts)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(nextRound);
+        ArgumentNullException.ThrowIfNull(criteriaCorrections);
+        ArgumentNullException.ThrowIfNull(evidenceReceipts);
+
+        var submittedById = nextRound.Findings.ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
+        var unproven = ReviewFindings.GetOpenBlockingFindings(previous, criteriaCorrections)
+            .Where(prior =>
+                submittedById.TryGetValue(prior.StableId, out var submitted) &&
+                submitted.State == ReviewFindingState.Resolved &&
+                !HasAuthoritativeCapResolutionProof(
+                    prior,
+                    nextRound.TouchedAnchors,
+                    reviewedCommit,
+                    evidenceReceipts))
+            .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
+            .ToArray();
+        if (unproven.Length == 0)
+        {
+            return;
+        }
+
+        var stableIds = string.Join(", ", unproven.Select(finding => finding.StableId));
+        var candidate = string.IsNullOrWhiteSpace(reviewedCommit) ? "missing" : reviewedCommit.Trim();
+        var message =
+            $"Reviewer dispatch is missing its system-owned review-retry cap receipt, so open blocking stable_id(s) {stableIds} " +
+            "cannot be safely classified against the configured cap. They were submitted as resolved without a system-confirmed " +
+            $"touched anchor, valid focused-evidence receipt bound to candidate {candidate}, or active operator waiver. " +
+            "The prior open ledger was retained for operator decision.";
+        var mismatches = unproven.Select(finding => new ReviewFindingIdentityMismatch(
+            MissingReviewRetryCapReceiptViolationCode,
+            message,
+            finding.StableId,
+            finding.StableId,
+            finding.Location,
+            submittedById[finding.StableId].Location)).ToArray();
+        var first = unproven[0];
+        throw new ReviewFindingConvergenceException(
+            MissingReviewRetryCapReceiptViolationCode,
+            CountOpen(previous),
+            CountOpen(nextRound.Findings),
+            message,
+            new ReviewFindingContractViolation(
+                MissingReviewRetryCapReceiptViolationCode,
                 message,
                 first.StableId,
                 first.StableId,
