@@ -27,13 +27,13 @@ The determination is **contract-defect**, not Planner inadequacy. Two retained P
 
    > - `docs/negative-controls/e5c18520.md` — new RED/GREEN receipt.
 
-   Both statements unambiguously describe files to create. The Planner prompt says new paths must be explicitly marked, but does not prescribe either literal suffix. `ValidateCitedPaths` therefore rejected a well-formed plan at the contract-rejection branch corresponding to `BackgroundDispatchRunner.cs:1217`.
+   Both statements unambiguously describe files to create. The exact-token directive (`(new file)` or `— new file`) landed on 2026-08-08 in `64c81e1d`, after this Planner output was rejected on 2026-08-05; the rejected Planner had only been told to mark new paths explicitly. This correction publishes the accepted descriptive artifact-kind form as well. `ValidateCitedPaths` therefore rejected a well-formed plan at the contract-rejection branch corresponding to `BackgroundDispatchRunner.cs:1217`.
 
-2. `6fd7171d` used a backticked provenance tuple in prose. `NormalizeCitedPath` treated every backticked string containing `/` as a filesystem path, so it rejected `cli / operator / local-process`. The retained stdout states, verbatim:
+2. `6fd7171d` used a backticked provenance tuple in prose. `NormalizeCitedPath` treated every backticked string containing `/` as a filesystem path, so it rejected `cli / operator / local-process`. The first rejecting citation in the `## Target seams and symbols` span states, verbatim:
 
-   > 1. Extend `CliCommandTests.PersistentRunnerCommands.cs` with a CLI retry executed against an active Discord-typed test channel; assert `cli / operator / local-process`.
+   > - the existing CLI-facing wrapper, which always supplies `cli / operator / local-process`;
 
-   Here `cli / operator / local-process` appears in the acceptance mapping and is a value tuple, not a path. The failure was the `citation.Contains('/')` fallback in `NormalizeCitedPath`, again reaching the contract-rejection branch corresponding to line 1217.
+   Here `cli / operator / local-process` is a value tuple, not a path. The failure was the `citation.Contains('/')` fallback in `NormalizeCitedPath`, again reaching the contract-rejection branch corresponding to line 1217.
 
 The narrow correction admits descriptive new-artifact suffixes only when they end in a recognized artifact kind, and ignores slash-delimited prose only when whitespace surrounds the separators. Negative controls retain rejection for a missing path followed merely by `new behavior`. The complete `e5c18520` artifact and the retained `6fd7171d` artifact both resolve after the correction.
 
@@ -47,6 +47,8 @@ Stored dispatch artifacts were inspected for all four named goals without queryi
 | `6fd7171d` | The retained `20260808142417` Planner artifact rejects slash-delimited provenance under the pre-fix predicate and resolves after the correction. | Contract rejection / no plan, line 1217, for that artifact. |
 | `e5c18520` | The supplied rejected `20260805154436` Planner artifact fails the two descriptive new-artifact markers above and resolves after the correction. | Contract rejection / no plan, line 1217. |
 | `6a960b3f` | The retained `20260808132803` Planner artifact rejects the root-relative basename `DispatchOutcomeClassifyTests.cs`; the later `20260808133641` artifact has a durable ingested receipt. | The first artifact reaches line 1217; the persisted non-zero record cannot be independently matched without `TaskVerificationRecord.StandardError`. |
+
+Unaddressed follow-up: root-relative basename citations remain a separate presentation-defect shape and account for two of the four observed goals. Retained artifacts `.orchestrator/logs/94fdcb8a-1ca3f5f9-20260808122725.out.log` (`CliCommandTests.AttentionCommands.cs`) and `.orchestrator/logs/6a960b3f-9f908e37-20260808132803.out.log` (`DispatchOutcomeClassifyTests.cs`) preserve the evidence. This slice does not widen path inference to guess directories for bare basenames.
 
 The two line-1217/line-1231 labels and the exit-artifact policy remain out of scope here and owned by backlog `ba3e1bde`. The current task explicitly prohibited orchestrator-state access, so persisted `TaskVerificationRecord.StandardError` values were not queried; rows above say unattributable where stored files cannot substitute for that record.
 

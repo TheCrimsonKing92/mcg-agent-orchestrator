@@ -2,15 +2,20 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
 {
+    private const string E5c18520FixtureName = "e5c18520-316cfc5a-20260805154436.out.txt";
+    private static readonly string[] E5c18520AcceptanceCriteria =
+    [
+        "Add the real-process handoff regression.",
+        "Rebuild occupied logical slots from durable claims.",
+        "Persist and classify process identity.",
+        "Emit adoption and wait events.",
+        "Integrate adoption into the max-duration handoff path."
+    ];
+
     [Xunit.Fact]
     public void PlannerContract_ExactRejectedE5c18520NewStoreMarker_Passes()
     {
-        var fixturePath = Path.Combine(
-            AppContext.BaseDirectory,
-            "Fixtures",
-            "PlannerOutputContract",
-            "e5c18520-316cfc5a-20260805154436.out.txt");
-        var fixtureBytes = File.ReadAllBytes(fixturePath);
+        var fixtureBytes = ReadExactLiveFixtureBytes(E5c18520FixtureName);
         Xunit.Assert.Equal(
             "86A0C693C22296BC7E6517EB7A36384B99057288E057237278F364B3B65844F1",
             Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(fixtureBytes)));
@@ -19,9 +24,28 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var result = PlannerOutputContract.Resolve(
             plan,
             string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot());
+            InfrastructureTestSupport.FindRepositoryRoot(),
+            acceptanceCriteria: E5c18520AcceptanceCriteria);
 
         Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ExactRejectedE5c18520WithoutArtifactKind_ReproducesRejection()
+    {
+        var plan = ReadExactLiveFixture(E5c18520FixtureName).Replace(
+            "`src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AcceptanceOwnershipStore.cs` — new SQLite-backed cross-process store.",
+            "`src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AcceptanceOwnershipStore.cs` — new behavior for cross-process claims.",
+            StringComparison.Ordinal);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            InfrastructureTestSupport.FindRepositoryRoot(),
+            acceptanceCriteria: E5c18520AcceptanceCriteria);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("AcceptanceOwnershipStore.cs", result.Diagnostic, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -29,6 +53,19 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     {
         var workingDirectory = CreateTempDirectory();
         var targetBody = "- Extend `src/Missing.cs` — new behavior for the existing validation path.";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("target citation 'src/Missing.cs' does not exist", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ArtifactKindFollowedByDescriptionDoesNotMarkMissingPathAsNewFile()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var targetBody = "- Extend `src/Missing.cs` — new test coverage for the parser.";
         var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
 
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
@@ -234,6 +271,19 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.Contains("target citation 'src/MissingUnmarked.cs' does not exist", result.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void PlannerContract_PublishedDirectiveStatesDescriptiveArtifactKindForm()
+    {
+        var directive = string.Join(
+            "\n",
+            Mcg.AgentOrchestrator.Core.AgentOutputDirectives.WorkerResultTemplateLinesForRole(
+                Mcg.AgentOrchestrator.Core.AgentRole.Planner));
+
+        Xunit.Assert.Contains("up to three descriptive words", directive, StringComparison.Ordinal);
+        Xunit.Assert.Contains("artifact-kind noun", directive, StringComparison.Ordinal);
+        Xunit.Assert.Contains("period, semicolon, or the end of the line", directive, StringComparison.Ordinal);
+    }
+
     private static string ReplaceSectionBody(string plan, string heading, string replacement)
     {
         var normalized = plan.ReplaceLineEndings("\n");
@@ -242,10 +292,16 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         return normalized[..bodyStart] + "\n\n" + replacement.Trim() + "\n" + normalized[nextHeading..];
     }
 
-    private static string ReadExactLiveFixture(string fileName) =>
-        File.ReadAllText(Path.Combine(
+    private static string PlannerFixturePath(string fileName) =>
+        Path.Combine(
             AppContext.BaseDirectory,
             "Fixtures",
             "PlannerOutputContract",
-            fileName));
+            fileName);
+
+    private static byte[] ReadExactLiveFixtureBytes(string fileName) =>
+        File.ReadAllBytes(PlannerFixturePath(fileName));
+
+    private static string ReadExactLiveFixture(string fileName) =>
+        File.ReadAllText(PlannerFixturePath(fileName));
 }
