@@ -437,37 +437,24 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string operation,
         CancellationToken cancellationToken)
     {
-        var captureToFiles = OperatingSystem.IsWindows();
+        var nativeFileCapture = OperatingSystem.IsWindows();
         var (stdoutPath, stderrPath) = logs.CreateCaptureFiles(operation);
-        var startInfo = captureToFiles
-            ? BuildWindowsFileCaptureStartInfo(
-                fileName,
-                arguments,
-                workingDirectory,
-                stdoutPath,
-                stderrPath)
-            : new ProcessStartInfo(fileName)
-        {
-            WorkingDirectory = workingDirectory,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-        startInfo.RedirectStandardInput = !captureToFiles;
-        if (!captureToFiles)
-        {
-            foreach (var argument in arguments)
-            {
-                startInfo.ArgumentList.Add(argument);
-            }
-        }
+        var startInfo = BuildFileCaptureStartInfo(
+            fileName,
+            arguments,
+            workingDirectory,
+            redirectStandardStreams: !nativeFileCapture);
 
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
-        using var process = WorkerProcessJobs.StartRegisteredOrThrow(
-            startInfo,
-            $"post-landing-canary:{workingDirectory}");
+        using var process = nativeFileCapture
+            ? WorkerProcessJobs.StartRegisteredWithFileCaptureOrThrow(
+                startInfo,
+                stdoutPath,
+                stderrPath,
+                $"post-landing-canary:{workingDirectory}")
+            : WorkerProcessJobs.StartRegisteredOrThrow(
+                startInfo,
+                $"post-landing-canary:{workingDirectory}");
         if (startInfo.RedirectStandardInput)
         {
             process.StandardInput.Close();
@@ -477,27 +464,20 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         {
             // Do not cancel pipe drains before the killed process tree closes its handles.
             // Completion of this method is the coordinator's termination confirmation.
-            var stdoutTask = captureToFiles
-                ? Task.FromResult(string.Empty)
-                : process.StandardOutput.ReadToEndAsync();
-            var stderrTask = captureToFiles
-                ? Task.FromResult(string.Empty)
-                : process.StandardError.ReadToEndAsync();
+            var stdoutTask = nativeFileCapture
+                ? Task.CompletedTask
+                : CopyCapturedOutputAsync(process.StandardOutput, stdoutPath);
+            var stderrTask = nativeFileCapture
+                ? Task.CompletedTask
+                : CopyCapturedOutputAsync(process.StandardError, stderrPath);
             try
             {
                 await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-                var stdout = captureToFiles
-                    ? await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stdoutPath, false)
-                        .ConfigureAwait(false)
-                    : await stdoutTask.ConfigureAwait(false);
-                var stderr = captureToFiles
-                    ? await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stderrPath, false)
-                        .ConfigureAwait(false)
-                    : await stderrTask.ConfigureAwait(false);
-                if (!captureToFiles)
-                {
-                    await PersistManagedCaptureAsync(stdoutPath, stdout, stderrPath, stderr).ConfigureAwait(false);
-                }
+                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                var stdout = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stdoutPath, false)
+                    .ConfigureAwait(false);
+                var stderr = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stderrPath, false)
+                    .ConfigureAwait(false);
                 return new PostLandingCanaryProcessResult(
                     process.ExitCode,
                     stdout,
@@ -514,15 +494,6 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
                 await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
                 await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-                if (!captureToFiles)
-                {
-                    await PersistManagedCaptureAsync(
-                            stdoutPath,
-                            await stdoutTask.ConfigureAwait(false),
-                            stderrPath,
-                            await stderrTask.ConfigureAwait(false))
-                        .ConfigureAwait(false);
-                }
                 if (!process.HasExited)
                 {
                     throw new InvalidOperationException(
@@ -538,46 +509,43 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         }
     }
 
-    private static ProcessStartInfo BuildWindowsFileCaptureStartInfo(
+    internal static ProcessStartInfo BuildFileCaptureStartInfo(
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory,
-        string stdoutPath,
-        string stderrPath)
+        bool redirectStandardStreams = true)
     {
-        var command = string.Join(' ', new[] { fileName }
-            .Concat(arguments)
-            .Select(QuoteWindowsShellToken));
-        command = $"({command}) > {QuoteWindowsShellToken(stdoutPath)} 2> {QuoteWindowsShellToken(stderrPath)}";
-        return new ProcessStartInfo("cmd.exe")
+        var startInfo = new ProcessStartInfo(fileName)
         {
-            Arguments = $"/d /s /c \"{command}\"",
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            RedirectStandardInput = redirectStandardStreams,
+            RedirectStandardOutput = redirectStandardStreams,
+            RedirectStandardError = redirectStandardStreams
         };
-    }
-
-    private static string QuoteWindowsShellToken(string value)
-    {
-        if (value.Contains('"'))
+        foreach (var argument in arguments)
         {
-            throw new ArgumentException("Post-landing canary process arguments cannot contain double quotes.");
+            startInfo.ArgumentList.Add(argument);
         }
 
-        return value.Length == 0 || value.IndexOfAny([' ', '\t', '&', '|', '<', '>', '^', '(', ')']) >= 0
-            ? $"\"{value}\""
-            : value;
+        return startInfo;
     }
 
-    private static async Task PersistManagedCaptureAsync(
-        string stdoutPath,
-        string stdout,
-        string stderrPath,
-        string stderr)
+    private static async Task CopyCapturedOutputAsync(StreamReader source, string destinationPath)
     {
-        await File.WriteAllTextAsync(stdoutPath, stdout, CancellationToken.None).ConfigureAwait(false);
-        await File.WriteAllTextAsync(stderrPath, stderr, CancellationToken.None).ConfigureAwait(false);
+        await using var destination = new FileStream(
+            destinationPath,
+            new FileStreamOptions
+            {
+                Mode = FileMode.Create,
+                Access = FileAccess.Write,
+                Share = FileShare.Read | FileShare.Delete,
+                BufferSize = 1,
+                Options = FileOptions.Asynchronous | FileOptions.WriteThrough
+            });
+        await source.BaseStream.CopyToAsync(destination, CancellationToken.None).ConfigureAwait(false);
+        await destination.FlushAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     private static string Tail(string value)

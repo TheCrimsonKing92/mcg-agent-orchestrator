@@ -291,10 +291,36 @@ public static class WorkerProcessJobs
                 RegisterOrThrow);
         }
 
+        return StartRegisteredWindows(
+            () => OwnedProcessGroup.StartSuspended(startInfo),
+            ownerId);
+    }
+
+    internal static Process StartRegisteredWithFileCaptureOrThrow(
+        ProcessStartInfo startInfo,
+        string stdoutPath,
+        string stderrPath,
+        string? ownerId = null)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Owned file-capture launch is Windows-only.");
+        }
+
+        return StartRegisteredWindows(
+            () => OwnedProcessGroup.StartSuspendedWithFileCapture(startInfo, stdoutPath, stderrPath),
+            ownerId);
+    }
+
+    private static Process StartRegisteredWindows(
+        Func<OwnedProcessGroup.SuspendedProcessStart> start,
+        string? ownerId)
+    {
         OwnedProcessGroup.SuspendedProcessStart launch;
         try
         {
-            launch = OwnedProcessGroup.StartSuspended(startInfo);
+            launch = start();
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
         {

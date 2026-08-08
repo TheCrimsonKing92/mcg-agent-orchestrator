@@ -1092,6 +1092,84 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             detail => detail.Contains("ix_run_events_type_operation_seq", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "Windows post-landing capture passes exact argv without a shell")]
+    public async Task WindowsFileCapturePassesExactArgumentVectorWithoutShell()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var testRoot = Path.Combine(
+            Path.GetTempPath(),
+            "mcg canary argv & (tests)",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testRoot);
+        var scriptPath = Path.Combine(testRoot, "capture-argv.ps1");
+        var outputPath = Path.Combine(testRoot, "received argv & (capture).json");
+        var stdoutPath = Path.Combine(testRoot, "native stdout & (capture).log");
+        var stderrPath = Path.Combine(testRoot, "native stderr & (capture).log");
+        var expectedArguments = new[]
+        {
+            Path.Combine("plain", "path"),
+            Path.Combine(testRoot, "path with spaces", "repository"),
+            Path.Combine(testRoot, "path&with&metacharacters", "repository"),
+            Path.Combine(testRoot, "path(with(parentheses)", "repository"),
+            Path.Combine(testRoot, "path%PATH%with-expansion-token", "repository"),
+            Path.Combine(testRoot, new string('l', 220), "repository")
+        };
+        try
+        {
+            File.WriteAllText(
+                scriptPath,
+                "$received = @($args | Select-Object -Skip 1)\r\n" +
+                "[IO.File]::WriteAllText($args[0], (ConvertTo-Json -InputObject $received -Compress))\r\n");
+            var arguments = new[]
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                scriptPath,
+                outputPath
+            }.Concat(expectedArguments).ToArray();
+            var startInfo = PostLandingCanaryRunner.BuildFileCaptureStartInfo(
+                "powershell.exe",
+                arguments,
+                testRoot,
+                redirectStandardStreams: false);
+
+            Assert.Equal("powershell.exe", startInfo.FileName);
+            Assert.Equal(arguments, startInfo.ArgumentList);
+            Assert.False(startInfo.RedirectStandardOutput);
+            Assert.False(startInfo.RedirectStandardError);
+            using var process = WorkerProcessJobs.StartRegisteredWithFileCaptureOrThrow(
+                startInfo,
+                stdoutPath,
+                stderrPath,
+                "post-landing-canary-argv-test");
+            try
+            {
+                await process.WaitForExitAsync();
+
+                Assert.True(
+                    process.ExitCode == 0,
+                    $"stdout: {File.ReadAllText(stdoutPath)}{Environment.NewLine}" +
+                    $"stderr: {File.ReadAllText(stderrPath)}");
+                Assert.Equal(expectedArguments, JsonSerializer.Deserialize<string[]>(File.ReadAllText(outputPath)));
+            }
+            finally
+            {
+                WorkerProcessJobs.Release(process.Id);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(testRoot, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Known-green fixture runs from an isolated landed worktree despite a dirty operator checkout")]
     public async Task KnownGreenFixtureRunsThroughFreshBinaryWithoutDirtyingRepository()
     {
@@ -1172,7 +1250,10 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 new PostLandingCanaryRequest(landingSha!, ["integration-test"]),
                 timeout.Token));
 
-            Assert.Contains("induced canary stderr", exception.Message, StringComparison.Ordinal);
+            var expectedStderr = OperatingSystem.IsWindows()
+                ? "not a git command"
+                : "induced canary stderr";
+            Assert.Contains(expectedStderr, exception.Message, StringComparison.OrdinalIgnoreCase);
             var stdoutLogs = Directory.GetFiles(
                 logDirectory,
                 $"post-landing-canary-{landingSha}-*.out.log");
@@ -1181,10 +1262,13 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 $"post-landing-canary-{landingSha}-*.err.log");
             Assert.NotEmpty(stdoutLogs);
             Assert.NotEmpty(stderrLogs);
-            Assert.Contains(stdoutLogs, path =>
-                File.ReadAllText(path).Contains("induced canary stdout", StringComparison.Ordinal));
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Contains(stdoutLogs, path =>
+                    File.ReadAllText(path).Contains("induced canary stdout", StringComparison.Ordinal));
+            }
             Assert.Contains(stderrLogs, path =>
-                File.ReadAllText(path).Contains("induced canary stderr", StringComparison.Ordinal));
+                File.ReadAllText(path).Contains(expectedStderr, StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -1407,11 +1491,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
     {
         if (OperatingSystem.IsWindows())
         {
-            var path = Path.Combine(root, "fail-canary.cmd");
-            File.WriteAllText(
-                path,
-                "@echo off\r\necho induced canary stdout\r\necho induced canary stderr 1>&2\r\nexit /b 23\r\n");
-            return path;
+            return "git.exe";
         }
 
         var scriptPath = Path.Combine(root, "fail-canary.sh");
