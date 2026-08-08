@@ -214,7 +214,8 @@ internal sealed class ConductorDriver
                             criticalCheckpointPersisted = true;
                             DispatchRecordWriteSucceededSink?.Invoke(goalId);
                         },
-                    readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState);
+                    readCurrentInterruptedDispatchState: readCurrentInterruptedDispatchState,
+                    reviewAutoRetryStopRound: policy.ReviewAutoRetryStopRound);
             }
             catch (DispatchRecordWriteException ex)
             {
@@ -1240,6 +1241,20 @@ internal sealed class ConductorDriver
             return true;
         }
 
+        if (violation.Code == ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode)
+        {
+            var receipt = reviewerTask.LastDispatch?.ReviewRetryCap;
+            decision = VerifyingFindingAutoRetryDecision.Escalate(BuildReviewCapDecisionMessage(
+                goal,
+                reviewerTask,
+                receipt?.Round ?? 0,
+                receipt?.StopRound ?? 0,
+                violation.Message,
+                FormatVerifyingRoleOutputArtifact(reviewerTask),
+                canonicalLedger));
+            return true;
+        }
+
         if (violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
                 ReviewFindingConvergence.UntouchedReopenViolationCode &&
             reviewerTask.LastVerification?.ReviewFindingTouchProofDiagnostic is { Length: > 0 } touchProofDiagnostic)
@@ -1357,13 +1372,22 @@ internal sealed class ConductorDriver
             return true;
         }
 
-        var round = CountPriorAutoReviewRetries(goal) + 1;
+        var round = ReviewRetryCapReceipt.Create(goal, policy.ReviewAutoRetryStopRound).Round;
         if (round >= policy.ReviewAutoRetryStopRound)
         {
             decision = VerifyingFindingAutoRetryDecision.Escalate(
-                $"auto-review-retry stopped at review round {round}/{policy.ReviewAutoRetryStopRound} for task {targetTask.Id.Value[..8]}; " +
-                $"operator decision required (split, supersede, or continue). Findings: {TrimForConductorMessage(trigger.Finding)}. " +
-                $"Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
+                triggeringTask.RequiredRole == AgentRole.Reviewer
+                    ? BuildReviewCapDecisionMessage(
+                        goal,
+                        triggeringTask,
+                        round,
+                        policy.ReviewAutoRetryStopRound,
+                        trigger.Finding,
+                        outputArtifact,
+                        triggeringTask.LastVerification?.MergedReviewFindings ?? [])
+                    : $"auto-review-retry stopped at review round {round}/{policy.ReviewAutoRetryStopRound} for task {targetTask.Id.Value[..8]}; " +
+                        $"operator decision required (split, supersede, or continue). Findings: {TrimForConductorMessage(trigger.Finding)}. " +
+                        $"Full {triggeringTask.RequiredRole.ToString().ToLowerInvariant()} output: {outputArtifact}");
             return true;
         }
 
@@ -1411,14 +1435,32 @@ internal sealed class ConductorDriver
             return null;
         }
 
-        if (task.RequiredRole == AgentRole.Reviewer &&
-            WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
+        string blocker;
+        if (task.RequiredRole == AgentRole.Reviewer)
+        {
+            var hasNeedsWork = WorkerResultBlockers.TryFindUnsuppressedNeedsWorkVerdict(
                 task.LastVerification,
                 goal.EffectiveAcceptanceCriteriaCorrections,
-                out var blocker,
-                out var suppressedFindings))
-        {
-            return new VerifyingFindingTrigger(task, blocker, suppressedFindings, null);
+                out blocker,
+                out var suppressedFindings);
+            var hasBlockedAtCap = WorkerResultBlockers.TryFindUnsuppressedBlockedAtCapVerdict(
+                task.LastVerification,
+                goal.EffectiveAcceptanceCriteriaCorrections,
+                out var capBlocker,
+                out var capSuppressedFindings);
+            if (hasBlockedAtCap && task.LastDispatch?.ReviewRetryCap is not { IsAtCap: true })
+            {
+                return null;
+            }
+
+            if (hasNeedsWork || hasBlockedAtCap)
+            {
+                return new VerifyingFindingTrigger(
+                    task,
+                    hasBlockedAtCap ? capBlocker : blocker,
+                    hasBlockedAtCap ? capSuppressedFindings : suppressedFindings,
+                    null);
+            }
         }
 
         if (task.RequiredRole != AgentRole.Tester ||
@@ -1438,6 +1480,34 @@ internal sealed class ConductorDriver
         }
 
         return new VerifyingFindingTrigger(task, blocker, [], upstreamDeveloper);
+    }
+
+    private static string BuildReviewCapDecisionMessage(
+        Goal goal,
+        TaskSpec reviewerTask,
+        int round,
+        int stopRound,
+        string trigger,
+        string outputArtifact,
+        IReadOnlyList<ReviewFinding> ledger)
+    {
+        var open = ReviewFindings.GetOpenBlockingFindings(
+            ledger,
+            goal.EffectiveAcceptanceCriteriaCorrections);
+        var stableIds = open.Count == 0
+            ? "unavailable"
+            : string.Join(",", open.Select(finding => finding.StableId));
+        var findings = open.Count == 0
+            ? TrimForConductorMessage(trigger)
+            : string.Join("; ", open.Select(finding =>
+                $"stable_id={finding.StableId} description={TrimForConductorMessage(finding.Description)}"));
+        var candidateSha = reviewerTask.LastVerification?.ReviewedCommit ??
+            reviewerTask.LastDispatch?.BaseCommit ??
+            "missing";
+        return $"auto-review-retry stopped at review round {round}/{stopRound}: blocked-at-cap for Reviewer task {reviewerTask.Id.Value[..8]}; " +
+            $"candidate_sha={candidateSha}; surviving_stable_ids={stableIds}; findings: {findings}. " +
+            "operator decision required: continue work, waive the applicable criterion as an explicit override, split the goal, or supersede the requirement. " +
+            $"The goal remains non-terminal and cannot advance to acceptance. Full reviewer output: {outputArtifact}";
     }
 
     private void RecordSuppressedAutoReviewRetryFindings(
@@ -1492,11 +1562,6 @@ internal sealed class ConductorDriver
         return string.IsNullOrWhiteSpace(dispatch.BaseCommit) ||
             !string.Equals(dispatch.BaseCommit, dispatch.ResultCommit, StringComparison.OrdinalIgnoreCase);
     }
-
-    private static int CountPriorAutoReviewRetries(Goal goal) =>
-        goal.Timeline.Count(evt =>
-            evt.Kind == ProgressKind.TaskRetried &&
-            evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
 
     private bool TryBuildFindingEvidenceRequest(
         Goal goal,

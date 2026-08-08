@@ -1281,6 +1281,150 @@ public sealed class DispatchExecutionTests
             evt.Message.Contains("F-1", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_review_retry_cap_rejects_untouched_blocker_resolution")]
+    public void RecordDispatchExecutionResultReviewRetryCapRejectsUntouchedBlockerResolution()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Keep an unchanged cap-round blocker open", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var location = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "abc1234"));
+        var open = StructuredReviewerResult(
+            "needs-work",
+            """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            "Missing guard.");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "operator requested cap-round recheck");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "review-2",
+            "C:\\repo",
+            clock.UtcNow,
+            BaseCommit: "abc1234",
+            ReviewFindingTouchedAnchors: [],
+            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors.",
+            ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
+        var claimedResolved = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"F-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2", "C:\\repo", 0, claimedResolved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        var violation = Assert.IsType<ReviewFindingContractViolation>(reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode, violation.Code);
+        var retained = Assert.Single(reviewer.LastVerification.MergedReviewFindings!);
+        Assert.Equal("F-CAP", retained.StableId);
+        Assert.Equal(ReviewFindingState.Open, retained.State);
+        Assert.Equal(location, retained.Location);
+        Assert.NotEqual(GoalStatus.Verified, goal.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_review_retry_cap_accepts_touched_blocker_resolution")]
+    public void RecordDispatchExecutionResultReviewRetryCapAcceptsTouchedBlockerResolution()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Accept a proven cap-round blocker resolution", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var location = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "abc1234"));
+        var open = StructuredReviewerResult(
+            "needs-work",
+            """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            "Missing guard.");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck changed anchor");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "review-2",
+            "C:\\repo",
+            clock.UtcNow,
+            BaseCommit: "def5678",
+            ReviewFindingTouchedAnchors: [location],
+            ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
+        var resolved = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"F-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",
+            "none");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2", "C:\\repo", 0, resolved, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingState.Resolved, Assert.Single(reviewer.LastVerification.MergedReviewFindings!).State);
+    }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_review_retry_cap_allows_explicit_operator_waiver")]
+    public void RecordDispatchExecutionResultReviewRetryCapAllowsExplicitOperatorWaiver()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Audit an explicit incomplete-work override", [reviewer]);
+        kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Review the blocking criterion",
+            ["Missing guard."],
+            VerificationClass.TestVerifiable,
+            [],
+            []));
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "abc1234"));
+        var open = StructuredReviewerResult(
+            "needs-work",
+            """[{"stable_id":"F-WAIVE","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking","category":"spec-compliance"}]""",
+            "Missing guard.",
+            """[{"criterion_index":0,"verdict":"not-met","evidence":"src/A.cs:10"}]""");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1", "C:\\repo", 1, open, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        kernel.WaiveAcceptanceCriterion(goal.Id, "Missing guard.", "Operator accepts the known gap for this candidate.", "operator@example");
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "review explicit waiver");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "review-2",
+            "C:\\repo",
+            clock.UtcNow,
+            BaseCommit: "abc1234",
+            ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
+        var waivedPass = StructuredReviewerResult(
+            "pass",
+            """[{"stable_id":"F-WAIVE","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking","category":"spec-compliance"}]""",
+            "none",
+            """[{"criterion_index":0,"verdict":"not-met","evidence":"Explicit operator waiver recorded."}]""");
+
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2", "C:\\repo", 0, waivedPass, string.Empty, clock.UtcNow, WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Completed, reviewer.Status);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskNote &&
+            evt.Message.Contains("stable_id=F-WAIVE", StringComparison.Ordinal) &&
+            evt.Message.Contains("review_cap=7/7", StringComparison.Ordinal) &&
+            evt.Message.Contains("candidate_sha=abc1234", StringComparison.Ordinal) &&
+            evt.Message.Contains("operator@example", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reviewer_pass_requires_complete_criteria_attestation")]
     public void RecordDispatchExecutionResultReviewerPassRequiresCompleteCriteriaAttestation()
     {

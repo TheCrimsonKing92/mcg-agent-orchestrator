@@ -273,7 +273,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     IModelProviderRegistry? providers = null,
     bool approveHighRiskOwnership = false,
     Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
-    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
+    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
+    int? reviewAutoRetryStopRound = null)
 {
     GoalRefinementGate.EnsureRefined(
         kernel,
@@ -292,7 +293,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         workspace.PromptDirectory,
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
-        safeBatch.TaskIds);
+        safeBatch.TaskIds,
+        reviewAutoRetryStopRound: reviewAutoRetryStopRound);
     var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
         dispatch.Task.InterruptedDispatchRecoveryId is not null);
     if (!containsInterruptedDispatchRecovery &&

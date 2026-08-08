@@ -5542,6 +5542,93 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_false_pass_at_cap_surfaces_retained_findings")]
+    public void ConductorDriverReviewerFalsePassAtCapSurfacesRetainedFindings()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = new ReviewFinding(
+            "F-CAP-BOUNDARY",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Guard.cs", "Guard.Run", "preemption"),
+            "Preemption remains unproved.",
+            FindingSeverity.Blocking,
+            FindingCategory.TestCoverage);
+        FailReviewerNeedsWork(kernel, goal, reviewer, finding.Description, findings: [finding]);
+        for (var i = 1; i <= 6; i++)
+        {
+            kernel.RetryTask(goal.Id, developer.Id, $"auto-review-retry round {i}: prior reviewer finding");
+            PassVerification(kernel, goal, developer);
+        }
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "operator requested final review");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "reviewer",
+            "review-cap",
+            "C:\\tmp",
+            DateTimeOffset.UtcNow,
+            BaseCommit: "4cc96e28",
+            ReviewFindingTouchedAnchors: [],
+            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors.",
+            ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
+        var resolved = finding with { State = ReviewFindingState.Resolved };
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected unchanged candidate",
+            "commit: none",
+            "blockers: none",
+            $"findings: {JsonSerializer.Serialize(new[] { resolved })}",
+            "touched_anchors: []",
+            "verdict: pass",
+            "model_fit: fixture/model - adequate - review",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-cap",
+            "C:\\tmp",
+            0,
+            stdout,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: "C:\\tmp\\reviewer-cap.out.log",
+            WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Equal(
+            ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode,
+            reviewer.LastVerification!.ReviewFindingContractViolation!.Code);
+        var dispatched = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
+            writeEscalation: (_, _, message) => { escalation = message; });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(dispatched);
+        Assert.Contains("stopped at review round 7/7", escalation);
+        Assert.Contains("surviving_stable_ids=F-CAP-BOUNDARY", escalation);
+        Assert.Contains("candidate_sha=4cc96e28", escalation);
+        Assert.Contains("continue work", escalation);
+        Assert.Contains("explicit override", escalation);
+        Assert.Contains("split the goal", escalation);
+        Assert.Contains("supersede", escalation);
+        Assert.Contains("C:\\tmp\\reviewer-cap.out.log", escalation);
+        Assert.False(goal.IsTerminal);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_operator_evidence_blocker_escalates_without_retry")]
     public void ConductorDriverReviewerOperatorEvidenceBlockerEscalatesWithoutRetry()
     {

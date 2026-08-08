@@ -95,6 +95,33 @@ public static class WorkerResultBlockers
         return !string.IsNullOrWhiteSpace(blocker);
     }
 
+    public static bool TryFindBlockedAtCapVerdict(TaskVerificationRecord? verification, out string blocker)
+    {
+        blocker = string.Empty;
+        if (verification is null)
+        {
+            return false;
+        }
+
+        var hasBlockedAtCapVerdict = false;
+        foreach (var line in EnumerateWorkerResultLines(verification))
+        {
+            if (TryFindField(line, "verdict", out var verdict) &&
+                verdict.Trim().Equals("blocked-at-cap", StringComparison.OrdinalIgnoreCase))
+            {
+                hasBlockedAtCapVerdict = true;
+            }
+
+            if (TryFindBlockersField(line, out var candidate) ||
+                TryFindBlockerMarkedFinding(line, out candidate))
+            {
+                blocker = candidate;
+            }
+        }
+
+        return hasBlockedAtCapVerdict && !string.IsNullOrWhiteSpace(blocker);
+    }
+
     public static bool TryFindUnsuppressedNeedsWorkVerdict(
         TaskVerificationRecord? verification,
         IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections,
@@ -122,6 +149,33 @@ public static class WorkerResultBlockers
             return true;
         }
 
+        blocker = string.Join("; ", kept);
+        suppressedFindings = suppressed.Select(item => item.Finding).ToArray();
+        return !string.IsNullOrWhiteSpace(blocker);
+    }
+
+    public static bool TryFindUnsuppressedBlockedAtCapVerdict(
+        TaskVerificationRecord? verification,
+        IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> criteriaCorrections,
+        out string blocker,
+        out IReadOnlyList<string> suppressedFindings)
+    {
+        suppressedFindings = [];
+        if (!TryFindBlockedAtCapVerdict(verification, out blocker))
+        {
+            return false;
+        }
+
+        if (criteriaCorrections.Count == 0)
+        {
+            return true;
+        }
+
+        ReviewFindings.TryFilterWaivedDescriptions(
+            SplitBlockerFindings(blocker),
+            criteriaCorrections,
+            out var kept,
+            out var suppressed);
         blocker = string.Join("; ", kept);
         suppressedFindings = suppressed.Select(item => item.Finding).ToArray();
         return !string.IsNullOrWhiteSpace(blocker);

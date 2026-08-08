@@ -176,7 +176,8 @@ public sealed class TaskSpec
                     LastDispatch.ReviewFindingTouchedAnchors,
                     LastDispatch.BriefVersion,
                     LastDispatch.BriefSnapshot,
-                    LastDispatch.ReviewFindingTouchProofDiagnostic),
+                    LastDispatch.ReviewFindingTouchProofDiagnostic,
+                    LastDispatch.ReviewRetryCap),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -335,7 +336,8 @@ public sealed class TaskSpec
                 ReviewFindingTouchedAnchors: snapshot.LastDispatch.ReviewFindingTouchedAnchors,
                 ReviewFindingTouchProofDiagnostic: snapshot.LastDispatch.ReviewFindingTouchProofDiagnostic,
                 BriefVersion: snapshot.LastDispatch.BriefVersion,
-                BriefSnapshot: snapshot.LastDispatch.BriefSnapshot));
+                BriefSnapshot: snapshot.LastDispatch.BriefSnapshot,
+                ReviewRetryCap: snapshot.LastDispatch.ReviewRetryCap));
         }
 
         if (snapshot.LastProcess is not null)

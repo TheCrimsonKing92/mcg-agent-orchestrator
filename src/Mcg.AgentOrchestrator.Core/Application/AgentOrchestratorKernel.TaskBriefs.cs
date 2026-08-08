@@ -120,7 +120,8 @@ public sealed partial class AgentOrchestratorKernel
         IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
         int? reviewerMergeTreeTotalConflictPathCount = null,
         IReadOnlyList<ReviewFindingLocation>? reviewerRoundTouchedAnchors = null,
-        string? reviewerRoundTouchProofDiagnostic = null)
+        string? reviewerRoundTouchProofDiagnostic = null,
+        ReviewRetryCapReceipt? reviewRetryCap = null)
     {
         var goal = GetGoal(goalId);
         var task = goal.FindTask(taskId);
@@ -193,6 +194,14 @@ public sealed partial class AgentOrchestratorKernel
             {
                 headerLines.Add($"- HEAD commit: {targetHeadCommit.Trim()}");
             }
+        }
+
+        if (task.RequiredRole == AgentRole.Reviewer && reviewRetryCap is not null)
+        {
+            headerLines.Add($"Review retry budget: round {reviewRetryCap.Round}/{reviewRetryCap.StopRound}.");
+            headerLines.Add(reviewRetryCap.IsAtCap
+                ? "This dispatch is at the automatic review-retry cap. If blocking findings remain, use `verdict: blocked-at-cap` and list every open blocker; never return `pass` for known-incomplete work. The orchestrator will surface the findings for an operator decision."
+                : $"If blockers remain, use `needs-work`; `blocked-at-cap` is only valid at round {reviewRetryCap.StopRound}/{reviewRetryCap.StopRound}.");
         }
 
         var segments = new List<TaskBriefSegment>

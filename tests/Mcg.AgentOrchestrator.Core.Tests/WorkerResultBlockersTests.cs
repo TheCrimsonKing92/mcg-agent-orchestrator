@@ -3,6 +3,23 @@ using System.Text.Json;
 
 public sealed class WorkerResultBlockersTests
 {
+    [Xunit.Fact(DisplayName = "WorkerResultBlockers_parses_blocked_at_cap_with_open_blocker")]
+    public void WorkerResultBlockersParsesBlockedAtCapWithOpenBlocker()
+    {
+        var verification = new TaskVerificationRecord(
+            "review",
+            "C:\\repo",
+            0,
+            "WORKER_RESULT:\nblockers: F-CAP - Missing guard.\nfindings: []\ntouched_anchors: []\nverdict: blocked-at-cap\nEND_WORKER_RESULT",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true);
+
+        Assert.True(WorkerResultBlockers.TryFindBlockedAtCapVerdict(verification, out var blocker));
+        Assert.Equal("F-CAP - Missing guard.", blocker);
+        Assert.False(WorkerResultBlockers.TryFindPassVerdict(verification));
+    }
+
     [Xunit.Fact(DisplayName = "WorkerResultBlockers_parses_inconclusive_tests_and_preserves_receipt")]
     public void WorkerResultBlockersParsesInconclusiveTestsAndPreservesReceipt()
     {

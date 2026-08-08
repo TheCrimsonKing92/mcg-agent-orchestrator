@@ -105,11 +105,31 @@ public sealed record TaskDispatchRecord(
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
     int BriefVersion = 1,
     string? BriefSnapshot = null,
-    string? ReviewFindingTouchProofDiagnostic = null)
+    string? ReviewFindingTouchProofDiagnostic = null,
+    ReviewRetryCapReceipt? ReviewRetryCap = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 
     public string? BriefSnapshot { get; internal set; } = BriefSnapshot;
+}
+
+public sealed record ReviewRetryCapReceipt(int Round, int StopRound)
+{
+    public bool IsAtCap => Round >= StopRound;
+
+    public static ReviewRetryCapReceipt Create(Goal goal, int stopRound)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        if (stopRound <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stopRound), "Review retry stop round must be greater than zero.");
+        }
+
+        var priorAutomaticRetries = goal.Timeline.Count(evt =>
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
+        return new ReviewRetryCapReceipt(priorAutomaticRetries + 1, stopRound);
+    }
 }
 
 public enum DispatchResumeAdmissionKind

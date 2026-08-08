@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -174,7 +175,8 @@ public static class WorkerProfileDispatcher
         IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
         int? reviewerMergeTreeTotalConflictPathCount = null,
         string? dispatchLane = null,
-        string? modelSelectionReason = null)
+        string? modelSelectionReason = null,
+        ReviewRetryCapReceipt? reviewRetryCap = null)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -213,6 +215,11 @@ public static class WorkerProfileDispatcher
             task,
             workingDirectory,
             targetContext?.HeadCommit);
+        var effectiveReviewRetryCap = task.RequiredRole == AgentRole.Reviewer
+            ? reviewRetryCap ?? ReviewRetryCapReceipt.Create(
+                goal,
+                ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
+            : null;
         var brief = kernel.BuildTaskBrief(
             goal.Id,
             task.Id,
@@ -228,7 +235,8 @@ public static class WorkerProfileDispatcher
             reviewerMergeTreeConflictPaths,
             reviewerMergeTreeTotalConflictPathCount,
             reviewerRoundTouchScope.TouchedAnchors,
-            reviewerRoundTouchScope.Diagnostic);
+            reviewerRoundTouchScope.Diagnostic,
+            effectiveReviewRetryCap);
         TaskBrief budgetedBrief;
         try
         {
@@ -273,7 +281,8 @@ public static class WorkerProfileDispatcher
             DispatchLane: dispatchLane ?? profile.Name,
             ModelSelectionReason: modelSelectionReason,
             ReviewFindingTouchedAnchors: reviewerRoundTouchScope.TouchedAnchors,
-            ReviewFindingTouchProofDiagnostic: reviewerRoundTouchScope.Diagnostic),
+            ReviewFindingTouchProofDiagnostic: reviewerRoundTouchScope.Diagnostic,
+            ReviewRetryCap: effectiveReviewRetryCap),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
@@ -411,7 +420,8 @@ public static class WorkerProfileDispatcher
         bool allowGitReference = false,
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        int? reviewAutoRetryStopRound = null)
     {
         EnsureTaskNeedsExecution(task);
 
@@ -472,7 +482,12 @@ public static class WorkerProfileDispatcher
             reviewerMergeTreeConflictPaths: preflight.ReviewerMergeTreeConflictPaths,
             reviewerMergeTreeTotalConflictPathCount: preflight.ReviewerMergeTreeTotalConflictPathCount,
             dispatchLane: roleSelection.DispatchLane ?? profile.Name,
-            modelSelectionReason: roleSelection.Reason);
+            modelSelectionReason: roleSelection.Reason,
+            reviewRetryCap: task.RequiredRole == AgentRole.Reviewer
+                ? ReviewRetryCapReceipt.Create(
+                    goal,
+                    reviewAutoRetryStopRound ?? ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
+                : null);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1013,7 +1028,8 @@ public static class WorkerProfileDispatcher
         string workingDirectory,
         DateTimeOffset dispatchedAt,
         IReadOnlySet<TaskId>? taskIdsToPrepare = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        int? reviewAutoRetryStopRound = null)
     {
         return PrepareSubscriptionReadyBatch(
             kernel,
@@ -1024,7 +1040,8 @@ public static class WorkerProfileDispatcher
             workingDirectory,
             dispatchedAt,
             taskIdsToPrepare,
-            commandExists).Dispatches;
+            commandExists,
+            reviewAutoRetryStopRound).Dispatches;
     }
 
     public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
@@ -1036,7 +1053,8 @@ public static class WorkerProfileDispatcher
         string workingDirectory,
         DateTimeOffset dispatchedAt,
         IReadOnlySet<TaskId>? taskIdsToPrepare = null,
-        Func<string, bool>? commandExists = null)
+        Func<string, bool>? commandExists = null,
+        int? reviewAutoRetryStopRound = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1107,7 +1125,12 @@ public static class WorkerProfileDispatcher
                 reviewerMergeTreeConflictPaths: preflight.ReviewerMergeTreeConflictPaths,
                 reviewerMergeTreeTotalConflictPathCount: preflight.ReviewerMergeTreeTotalConflictPathCount,
                 dispatchLane: roleSelection.DispatchLane ?? profile.Name,
-                modelSelectionReason: roleSelection.Reason));
+                modelSelectionReason: roleSelection.Reason,
+                reviewRetryCap: selection.Task.RequiredRole == AgentRole.Reviewer
+                    ? ReviewRetryCapReceipt.Create(
+                        goal,
+                        reviewAutoRetryStopRound ?? ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
+                    : null));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
