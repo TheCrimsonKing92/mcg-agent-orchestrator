@@ -239,7 +239,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         CancellationToken cancellationToken)
     {
         var worktreeRoot = Path.Combine(
-            Path.GetTempPath(),
+            _repositoryRoot,
+            ".orchestrator",
             "mcg-post-landing-canary-worktrees",
             landingSha[..Math.Min(12, landingSha.Length)],
             Guid.NewGuid().ToString("N"));
@@ -439,8 +440,9 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         var captureToFiles = OperatingSystem.IsWindows();
         var (stdoutPath, stderrPath) = logs.CreateCaptureFiles(operation);
         var startInfo = captureToFiles
-            ? GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
-                [fileName, .. arguments],
+            ? BuildWindowsFileCaptureStartInfo(
+                fileName,
+                arguments,
                 workingDirectory,
                 stdoutPath,
                 stderrPath)
@@ -534,6 +536,38 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         {
             WorkerProcessJobs.Release(process.Id);
         }
+    }
+
+    private static ProcessStartInfo BuildWindowsFileCaptureStartInfo(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        string stdoutPath,
+        string stderrPath)
+    {
+        var command = string.Join(' ', new[] { fileName }
+            .Concat(arguments)
+            .Select(QuoteWindowsShellToken));
+        command += $" > {QuoteWindowsShellToken(stdoutPath)} 2> {QuoteWindowsShellToken(stderrPath)}";
+        return new ProcessStartInfo("cmd.exe")
+        {
+            Arguments = $"/d /s /c \"{command}\"",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+    }
+
+    private static string QuoteWindowsShellToken(string value)
+    {
+        if (value.Contains('"'))
+        {
+            throw new ArgumentException("Post-landing canary process arguments cannot contain double quotes.");
+        }
+
+        return value.Length == 0 || value.IndexOfAny([' ', '\t', '&', '|', '<', '>', '^', '(', ')']) >= 0
+            ? $"\"{value}\""
+            : value;
     }
 
     private static async Task PersistManagedCaptureAsync(
