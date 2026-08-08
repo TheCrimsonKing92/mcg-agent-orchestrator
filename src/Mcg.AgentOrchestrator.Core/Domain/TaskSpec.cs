@@ -433,6 +433,18 @@ public sealed class TaskSpec
         var findings = LastVerification.MergedReviewFindings?.ToArray() ?? [];
         var index = Array.FindIndex(findings, finding =>
             string.Equals(finding.StableId, stableId, StringComparison.Ordinal));
+        if (index < 0 &&
+            LastVerification.MergedReviewFindings is null &&
+            WorkerResultBlockers.TryFindReviewFindingRound(LastVerification, out var reportedRound, out _))
+        {
+            var reportedFinding = reportedRound.Findings.FirstOrDefault(finding =>
+                string.Equals(finding.StableId, stableId, StringComparison.Ordinal));
+            if (reportedFinding is not null)
+            {
+                findings = [.. findings, reportedFinding];
+                index = findings.Length - 1;
+            }
+        }
         if (index < 0)
         {
             throw new InvalidOperationException($"Finding '{stableId}' is not present in the latest verification.");

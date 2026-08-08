@@ -1189,6 +1189,59 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
         evt.TaskId == task.Id &&
         evt.Message.Contains("restored task status to Assigned", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "RecordFindingEvidenceOutcome_recovers_requesting_finding_from_unmerged_worker_output")]
+    public void RecordFindingEvidenceOutcomeRecoversRequestingFindingFromUnmergedWorkerOutput()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var reviewer = new TaskSpec(TaskId.New(), "Review the change.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Preserve typed evidence outcomes after truncated output", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            reviewer.Id,
+            new TaskDispatchRecord("reviewer", "review", "C:\\repo", DateTimeOffset.UtcNow));
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "blockers: exact-blocker - focused receipt required",
+            """findings: [{"stable_id":"truncated-finding","state":"open","location":{"file":"tests/Test.cs","region":"Test.Run"},"description":"Focused receipt required.","evidence_request":{"selections":[{"test_project":"Core.Tests","test_class":"GoalLifecycleTests"}]}}]""",
+            "touched_anchors: []",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                "C:\\repo",
+                1,
+                output,
+                "",
+                DateTimeOffset.UtcNow,
+                WorkerResultPresent: false));
+        Assert.Null(reviewer.LastVerification!.MergedReviewFindings);
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "GoalLifecycleTests")]);
+        var receipt = new FindingEvidenceReceipt(
+            "receipt-1",
+            "abc1234",
+            request,
+            Accepted: true,
+            Passed: true,
+            "focused evidence passed");
+
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            "truncated-finding",
+            new FindingEvidenceOutcome(Honoured: true, ReceiptId: receipt.ReceiptId),
+            receipt);
+
+        var recordedFinding = Assert.Single(reviewer.LastVerification.MergedReviewFindings!);
+        Assert.Equal("truncated-finding", recordedFinding.StableId);
+        Assert.Equal(receipt.ReceiptId, recordedFinding.EvidenceOutcome?.ReceiptId);
+        Assert.Same(receipt, Assert.Single(reviewer.LastVerification.FindingEvidenceReceipts!));
+    }
+
     [Xunit.Fact(DisplayName = "SourceBacklogItemId_roundtrips_through_snapshot")]
     public void SourceBacklogItemIdRoundtripsThoughSnapshot()
     {
