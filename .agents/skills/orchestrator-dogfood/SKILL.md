@@ -37,7 +37,7 @@ Before accepting a goal:
 - Record dogfood evidence with `dogfood-log add <goal-prefix>` and read it with `dogfood-log list --limit <n>`; durable entries live in `.orchestrator/dogfood-log.db`, not `DOGFOOD_LOG.md`.
 - Keep entries short: goal id, objective/result, verification, blocker/friction, and Model fit.
 - Close finished backlog items with `backlog-close` and add newly discovered follow-ups with `backlog-add` (the SQLite store, `.orchestrator/backlog.db`, is canonical).
-- Treat backlog items as candidates. Use filtered `backlog-intake "<heading>" --create-simple-goal` / `--create-goal` for a small reviewed active set; do not feed a stale backlog wholesale into daemon mode.
+- Treat backlog items as candidates. Use filtered `backlog-intake "<heading>" --create-simple-goal --backlog-coverage <full|slice>` or `backlog-intake "<heading>" --create-goal --backlog-coverage <full|slice>` for a small reviewed active set. Choose `full` only when the goal covers the complete source item; otherwise choose `slice` so remaining work stays Open. `goal-plan --create-*` also requires `--backlog-coverage <full|slice>`. Do not feed a stale backlog wholesale into daemon mode.
 - For long acceptance/conductor runs, prefer `scripts/Start-OrchestratorCommand.ps1` through `scripts/Invoke-RepoScript.ps1`, then poll `scripts/Get-OrchestratorSnapshot.ps1`, `next <goal> --full`, and bounded log helpers instead of blocking the operator seat.
 - Do not paste full prompts, full dashboard payloads, or long logs.
 
