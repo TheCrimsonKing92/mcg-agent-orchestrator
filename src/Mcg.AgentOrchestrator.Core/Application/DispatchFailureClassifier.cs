@@ -68,8 +68,54 @@ public static class DispatchRoleOutputCapabilities
     }
 }
 
+public static class DispatchFailureDiagnosticMarker
+{
+    public const string Prefix = "@@MCG_ORCHESTRATOR_DIAGNOSTIC_CODE@@";
+    public const string ResearcherOutputContractRejected = "researcher-output-contract-rejected";
+    public const string ResearcherArtifactPersistenceFailed = "researcher-artifact-persistence-failed";
+    public const string PlannerOutputContractRejected = "planner-output-contract-rejected";
+    public const string PlannerPlanPersistenceFailed = "planner-plan-persistence-failed";
+    public const string WorkerBuildCheckFailed = "worker-build-check-failed";
+    public const string DirtyWorktreeNotLanded = "dirty-worktree-not-landed";
+    public const string RequiredFileChangeEvidenceMissing = "required-file-change-evidence-missing";
+    public const string WorktreeInspectionFailed = "worktree-inspection-failed";
+
+    public static string Format(string code) => $"{Prefix} {code}";
+}
+
 public static class DispatchFailureClassifier
 {
+    private sealed record OrchestratorAuthoredFailure(TaskOutcomeRule Rule, string Description);
+
+    private static readonly IReadOnlyDictionary<string, OrchestratorAuthoredFailure> OrchestratorAuthoredFailures =
+        new Dictionary<string, OrchestratorAuthoredFailure>(StringComparer.Ordinal)
+        {
+            [DispatchFailureDiagnosticMarker.ResearcherOutputContractRejected] = new(
+                TaskOutcomeRules.ResearcherOutputContractRejected,
+                "Researcher output contract rejected the captured research."),
+            [DispatchFailureDiagnosticMarker.ResearcherArtifactPersistenceFailed] = new(
+                TaskOutcomeRules.ResearcherArtifactPersistenceFailed,
+                "Researcher output contract could not persist the accepted research artifact."),
+            [DispatchFailureDiagnosticMarker.PlannerOutputContractRejected] = new(
+                TaskOutcomeRules.PlannerOutputContractRejected,
+                "Planner output contract rejected the captured plan."),
+            [DispatchFailureDiagnosticMarker.PlannerPlanPersistenceFailed] = new(
+                TaskOutcomeRules.PlannerPlanPersistenceFailed,
+                "Planner output contract could not persist the accepted plan."),
+            [DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed] = new(
+                TaskOutcomeRules.WorkerBuildCheckFailed,
+                "Deterministic worker build check failed."),
+            [DispatchFailureDiagnosticMarker.DirtyWorktreeNotLanded] = new(
+                TaskOutcomeRules.DirtyWorktreeNotLanded,
+                "Orchestrator could not land the worker's dirty worktree."),
+            [DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing] = new(
+                TaskOutcomeRules.RequiredFileChangeEvidenceMissing,
+                "Developer/Tester dispatch did not produce required relevant file-change evidence."),
+            [DispatchFailureDiagnosticMarker.WorktreeInspectionFailed] = new(
+                TaskOutcomeRules.WorktreeInspectionFailed,
+                "Completed dispatch worktree inspection failed.")
+        };
+
     public const int RecoverableSubscriptionLimitReviewThreshold = 2;
     public static readonly TimeSpan SilentLaunchFailureMaxDuration = TimeSpan.FromMinutes(1);
 
@@ -748,6 +794,24 @@ public static class DispatchFailureClassifier
                 BuildEvidenceSummary(verification)));
         }
 
+        if (TryGetOrchestratorAuthoredFailure(verification, out var authoredFailure))
+        {
+            return BuildOutcome(
+                authoredFailure.Rule,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.OperatorNeeded,
+                authoredFailure.Description));
+        }
+
         return BuildOutcome(
             TaskOutcomeRules.UnknownFailure,
             task,
@@ -762,6 +826,31 @@ public static class DispatchFailureClassifier
             null,
             RecoveryRecommendation.OperatorNeeded,
             BuildUnknownFailureEvidenceSummary(verification)));
+    }
+
+    private static bool TryGetOrchestratorAuthoredFailure(
+        TaskVerificationRecord verification,
+        out OrchestratorAuthoredFailure failure)
+    {
+        var markerPrefix = DispatchFailureDiagnosticMarker.Prefix + " ";
+        foreach (var line in verification.StandardError.Split(
+                     ['\r', '\n'],
+                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith(markerPrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var code = line[markerPrefix.Length..];
+            if (OrchestratorAuthoredFailures.TryGetValue(code, out failure!))
+            {
+                return true;
+            }
+        }
+
+        failure = null!;
+        return false;
     }
 
     private static DispatchOutcome BuildOutcome(

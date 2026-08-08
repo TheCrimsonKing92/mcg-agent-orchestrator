@@ -1331,6 +1331,85 @@ public sealed class DispatchOutcomeClassifyTests
 
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Equal(TaskOutcomeClass.UnknownEra, outcome.OutcomeClass);
+        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    private static readonly (string Site, AgentRole Role, string Rule, string Reason)[] OrchestratorAuthoredFailures =
+    [
+        ("1187", AgentRole.Researcher, "researcher-output-contract-rejected", "Researcher output contract rejected the captured research."),
+        ("1197", AgentRole.Researcher, "researcher-artifact-persistence-failed", "Researcher output contract could not persist the accepted research artifact."),
+        ("1217", AgentRole.Planner, "planner-output-contract-rejected", "Planner output contract rejected the captured plan."),
+        ("1231", AgentRole.Planner, "planner-plan-persistence-failed", "Planner output contract could not persist the accepted plan."),
+        ("1280", AgentRole.Developer, "worker-build-check-failed", "Deterministic worker build check failed."),
+        ("1341", AgentRole.Tester, "dirty-worktree-not-landed", "Orchestrator could not land the worker's dirty worktree."),
+        ("1376", AgentRole.Developer, "required-file-change-evidence-missing", "Developer/Tester dispatch did not produce required relevant file-change evidence."),
+        ("1402", AgentRole.Developer, "worktree-inspection-failed", "Completed dispatch worktree inspection failed.")
+    ];
+
+    public static Xunit.TheoryData<string, AgentRole, string, string> OrchestratorAuthoredFailureCases
+    {
+        get
+        {
+            var cases = new Xunit.TheoryData<string, AgentRole, string, string>();
+            foreach (var (site, role, rule, reason) in OrchestratorAuthoredFailures)
+            {
+                cases.Add(site, role, rule, reason);
+            }
+
+            return cases;
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "Classify names each orchestrator-authored completion failure without changing behavior")]
+    [Xunit.MemberData(nameof(OrchestratorAuthoredFailureCases))]
+    public void ClassifyNamesOrchestratorAuthoredCompletionFailure(
+        string site,
+        AgentRole role,
+        string expectedRule,
+        string expectedReason)
+    {
+        var verification = Verification(
+            1,
+            "Worker output",
+            $"Existing human diagnostic for site {site}.\n{DispatchFailureDiagnosticMarker.Format(expectedRule)}");
+
+        var outcome = DispatchFailureClassifier.Classify(SimpleTask(role), verification);
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
+        Xunit.Assert.Equal(1, outcome.ExitCode);
+        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+        Xunit.Assert.Equal(TaskOutcomeClass.UnknownEra, outcome.OutcomeClass);
+        Xunit.Assert.Contains($"rule={expectedRule}", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Equal(expectedReason, outcome.EvidenceSummary);
+        Xunit.Assert.DoesNotMatch("(?i)exit code \\d+|failed with code \\d+", expectedReason);
+    }
+
+    [Xunit.Fact(DisplayName = "Orchestrator-authored markers do not displace an already-named outcome")]
+    public void OrchestratorAuthoredMarkersDoNotDisplaceAlreadyNamedOutcome()
+    {
+        Xunit.Assert.Equal(8, OrchestratorAuthoredFailures.Length);
+        Xunit.Assert.Equal(
+            OrchestratorAuthoredFailures.Length,
+            OrchestratorAuthoredFailures.Select(failure => failure.Rule).Distinct(StringComparer.Ordinal).Count());
+
+        foreach (var (_, role, expectedRule, _) in OrchestratorAuthoredFailures)
+        {
+            Xunit.Assert.Matches("^[a-z0-9]+(?:-[a-z0-9]+)*$", expectedRule);
+            var verification = Verification(
+                1,
+                "Connecting to API...",
+                "Error: unknown model 'claude-xxx-4-99'. Model not supported.\n" +
+                DispatchFailureDiagnosticMarker.Format(expectedRule));
+
+            var outcome = DispatchFailureClassifier.Classify(SimpleTask(role), verification);
+
+            Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
+            Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
+            Xunit.Assert.Equal(TaskOutcomeClass.Environmental, outcome.OutcomeClass);
+            Xunit.Assert.Contains("rule=provider-model-rejection", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain($"rule={expectedRule}", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        }
     }
 
     [Xunit.Fact(DisplayName = "Classify treats structured Tester inconclusive as first class outcome despite stale blocker")]
