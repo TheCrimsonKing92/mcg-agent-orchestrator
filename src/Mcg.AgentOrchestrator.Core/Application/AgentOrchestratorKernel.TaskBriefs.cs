@@ -71,10 +71,27 @@ public sealed partial class AgentOrchestratorKernel
                 continue;
             }
 
+            var recordedViolation = verification.ReviewFindingContractViolation;
+            if (recordedViolation is not null &&
+                !ReviewFindingConvergence.IsRejectedCapResolutionRound(recordedViolation))
+            {
+                (skipped ??= []).Add($"{recordedViolation.Code}: {recordedViolation.Message}");
+                continue;
+            }
+
             try
             {
-                state = ReviewFindingConvergence.ApplyRound(state, round);
-                foreach (var finding in round.Findings)
+                state = recordedViolation is null
+                    ? ReviewFindingConvergence.ApplyRound(state, round)
+                    : ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, recordedViolation);
+                if (recordedViolation is not null)
+                {
+                    (skipped ??= []).Add($"{recordedViolation.Code}: {recordedViolation.Message}");
+                }
+
+                foreach (var finding in round.Findings.Where(finding =>
+                             recordedViolation is null ||
+                             !ReviewFindingConvergence.IsRejectedCapResolutionTransition(recordedViolation, finding.StableId)))
                 {
                     latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
                 }

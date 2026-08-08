@@ -442,6 +442,72 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Assert.Equal(0, ReviewFindingConvergence.CountOpen(kernel.GetReviewFindingState(goal.Id)));
     }
 
+    [Xunit.Fact(DisplayName = "Review_convergence_brief_retains_cap_rejected_resolution_and_new_blocker")]
+    public void ReviewConvergenceBriefRetainsCapRejectedResolutionAndNewBlocker()
+    {
+        var carriedAnchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var newAnchor = new ReviewFindingLocation("src/B.cs", "B.Run", "validation");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Rejected cap round stays authoritative in later briefs");
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [new ReviewFinding("F-CARRIED", ReviewFindingState.Open, carriedAnchor, "Guard is missing.")],
+            []);
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "cap round");
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "pass",
+            [
+                new ReviewFinding("F-CARRIED", ReviewFindingState.Resolved, carriedAnchor, "Guard is missing."),
+                new ReviewFinding("F-NEW", ReviewFindingState.Open, newAnchor, "Validation is missing.")
+            ],
+            [],
+            new ReviewRetryCapReceipt(7, 7));
+
+        var rejectedVerification = reviewer.LastVerification!;
+        Assert.Equal(ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode, rejectedVerification.ReviewFindingContractViolation?.Code);
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Collection(
+            rejectedVerification.MergedReviewFindings!.OrderBy(finding => finding.StableId),
+            finding =>
+            {
+                Assert.Equal("F-CARRIED", finding.StableId);
+                Assert.Equal(ReviewFindingState.Open, finding.State);
+            },
+            finding =>
+            {
+                Assert.Equal("F-NEW", finding.StableId);
+                Assert.Equal(ReviewFindingState.Open, finding.State);
+            });
+
+        var replayed = kernel.GetReviewFindingState(goal.Id, out var inconsistencies);
+        Assert.Equal(2, ReviewFindingConvergence.CountOpen(replayed));
+        Assert.Contains(
+            inconsistencies,
+            message => message.Contains(ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode, StringComparison.Ordinal));
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "operator-directed follow-up");
+        var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        Assert.Contains("OPEN_ACTIVE_RECHECK count=2", brief, StringComparison.Ordinal);
+        Assert.Contains($"- F-CARRIED | severity=blocking | {carriedAnchor}", brief, StringComparison.Ordinal);
+        Assert.Contains($"- F-NEW | severity=blocking | {newAnchor}", brief, StringComparison.Ordinal);
+        var resolvedScope = brief[
+            brief.IndexOf("RESOLVED_CARRIED", StringComparison.Ordinal)..
+            brief.IndexOf("ROUND_DIFF_TOUCHED_ANCHORS", StringComparison.Ordinal)];
+        Assert.DoesNotContain("F-CARRIED", resolvedScope, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "GetReviewFindingState_skips_an_unfoldable_stored_round_instead_of_throwing")]
     public void GetReviewFindingStateSkipsUnfoldableStoredRoundInsteadOfThrowing()
     {

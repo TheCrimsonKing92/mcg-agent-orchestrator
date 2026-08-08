@@ -703,10 +703,12 @@ public sealed partial class AgentOrchestratorKernel
             .OrderBy(candidate => candidate.CompletedAt))
         {
             var isCurrentRound = ReferenceEquals(verification, currentVerification);
-            if (!isCurrentRound && verification.ReviewFindingContractViolation is not null)
+            if (!isCurrentRound &&
+                verification.ReviewFindingContractViolation is { } historicalViolation &&
+                !ReviewFindingConvergence.IsRejectedCapResolutionRound(historicalViolation))
             {
                 // The durable violation marks this worker-authored round as rejected. Replaying it would
-                // let an invalid transition (notably an unproven cap resolution) mutate the accepted ledger.
+                // let an invalid structural transition mutate the accepted ledger.
                 continue;
             }
 
@@ -723,9 +725,10 @@ public sealed partial class AgentOrchestratorKernel
 
             try
             {
-                if (isCurrentRound && role == AgentRole.Reviewer)
+                if (isCurrentRound)
                 {
-                    if (reviewRetryCap is { IsAtCap: true })
+                    var nextState = ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations);
+                    if (role == AgentRole.Reviewer && reviewRetryCap is { IsAtCap: true })
                     {
                         ReviewFindingConvergence.ValidateResolutionAtCap(
                             state,
@@ -734,7 +737,7 @@ public sealed partial class AgentOrchestratorKernel
                             currentVerification.ReviewedCommit,
                             evidenceReceipts);
                     }
-                    else if (reviewRetryCap is null)
+                    else if (role == AgentRole.Reviewer && reviewRetryCap is null)
                     {
                         ReviewFindingConvergence.ValidateResolutionWithoutCapReceipt(
                             state,
@@ -743,11 +746,15 @@ public sealed partial class AgentOrchestratorKernel
                             currentVerification.ReviewedCommit,
                             evidenceReceipts);
                     }
-                }
 
-                state = isCurrentRound
-                    ? ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations)
-                    : ReviewFindingConvergence.ApplyRound(state, round);
+                    state = nextState;
+                }
+                else
+                {
+                    state = verification.ReviewFindingContractViolation is { } rejectedCapResolution
+                        ? ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, rejectedCapResolution)
+                        : ReviewFindingConvergence.ApplyRound(state, round);
+                }
                 var conductorOutcomes = (verification.MergedReviewFindings ?? [])
                     .Where(finding => finding.EvidenceOutcome is not null)
                     .ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
@@ -760,7 +767,9 @@ public sealed partial class AgentOrchestratorKernel
                         }
                         : finding)
                     .ToArray();
-                foreach (var finding in round.Findings)
+                foreach (var finding in round.Findings.Where(finding =>
+                             verification.ReviewFindingContractViolation is not { } rejectedCapResolution ||
+                             !ReviewFindingConvergence.IsRejectedCapResolutionTransition(rejectedCapResolution, finding.StableId)))
                 {
                     latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
                 }
@@ -773,6 +782,11 @@ public sealed partial class AgentOrchestratorKernel
                 // evaluated, and must not report a stale violation as though it described the new submission.
                 if (isCurrentRound)
                 {
+                    if (ReviewFindingConvergence.IsRejectedCapResolutionRound(ex.Violation))
+                    {
+                        state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, ex.Violation);
+                    }
+
                     diagnostic = $"{ex.Code}: {ex.Message}";
                     violation = ex.Violation;
                     return false;

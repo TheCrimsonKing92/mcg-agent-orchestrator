@@ -607,6 +607,43 @@ public static class ReviewFindingConvergence
             .ToArray();
     }
 
+    internal static bool IsRejectedCapResolutionRound(ReviewFindingContractViolation violation) =>
+        violation.Code is UnprovenResolutionAtCapViolationCode or MissingReviewRetryCapReceiptViolationCode;
+
+    internal static bool IsRejectedCapResolutionTransition(
+        ReviewFindingContractViolation violation,
+        string submittedStableId) =>
+        IsRejectedCapResolutionRound(violation) &&
+        (string.Equals(violation.SubmittedStableId, submittedStableId, StringComparison.Ordinal) ||
+         (violation.IdentityMismatches ?? []).Any(mismatch =>
+             string.Equals(mismatch.SubmittedStableId, submittedStableId, StringComparison.Ordinal)));
+
+    internal static IReadOnlyList<ReviewFinding> ApplyRejectedCapResolutionRound(
+        IReadOnlyList<ReviewFinding> previous,
+        ReviewFindingRound rejectedRound,
+        ReviewFindingContractViolation violation)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(rejectedRound);
+        ArgumentNullException.ThrowIfNull(violation);
+
+        if (!IsRejectedCapResolutionRound(violation))
+        {
+            throw new ArgumentException(
+                $"Violation '{violation.Code}' is not a rejected review-cap resolution.",
+                nameof(violation));
+        }
+
+        var acceptedFindings = rejectedRound.Findings
+            .Where(finding => !IsRejectedCapResolutionTransition(violation, finding.StableId))
+            .ToArray();
+
+        // Retain the prior form of only the rejected transitions. Fresh findings and every other valid
+        // transition in the round remain authoritative, so a cap rejection cannot hide newly discovered
+        // blockers while preventing an unproven resolution from poisoning later replay.
+        return ApplyRound(previous, rejectedRound with { Findings = acceptedFindings });
+    }
+
     public static void ValidateResolutionAtCap(
         IReadOnlyList<ReviewFinding> previous,
         ReviewFindingRound nextRound,
