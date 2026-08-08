@@ -817,7 +817,9 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var feedbackEvents = goal.Timeline
-            .Where(IsAccumulatedRetryFeedbackEvent)
+            .Where(evt =>
+                IsAccumulatedRetryFeedbackEvent(evt) &&
+                (evt.Kind != ProgressKind.FindingEvidenceRunRecorded || evt.TaskId == task.Id))
             .OrderByDescending(evt => evt.OccurredAt)
             .ThenByDescending(evt => (int)evt.Kind)
             .ToList();

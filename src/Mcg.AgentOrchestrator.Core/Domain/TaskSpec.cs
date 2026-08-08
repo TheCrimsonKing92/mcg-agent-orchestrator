@@ -453,6 +453,15 @@ public sealed class TaskSpec
                     {
                         index = Array.FindIndex(findings, finding => ReferenceEquals(finding, mergedFinding));
                     }
+                    else
+                    {
+                        // An exact anchor can legitimately be shared by historical resolved and current
+                        // open findings. If convergence cannot uniquely identify the canonical merged
+                        // entry, retain the worker-reported finding as the outcome ledger entry instead
+                        // of discarding the completed evidence run.
+                        findings = [.. findings, reportedFinding];
+                        index = findings.Length - 1;
+                    }
                 }
             }
         }
@@ -626,6 +635,11 @@ public sealed class TaskSpec
 
         private static bool MustPreserveStructuredOutcome(AgentRole role, TaskVerificationRecord verification)
         {
+            if (verification.FindingEvidenceReceipts is { Count: > 0 })
+            {
+                return true;
+            }
+
             if (role is AgentRole.Planner or AgentRole.Researcher &&
                 verification.Succeeded &&
                 !string.IsNullOrWhiteSpace(verification.StandardOutputPath))

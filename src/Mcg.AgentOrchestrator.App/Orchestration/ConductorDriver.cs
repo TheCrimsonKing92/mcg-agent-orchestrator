@@ -1488,7 +1488,9 @@ internal sealed class ConductorDriver
 
         var mergedFindings = requestingTask.LastVerification?.MergedReviewFindings ?? [];
         var requestingFindings = round.Findings
-            .Where(finding => finding.EvidenceRequest is not null)
+            .Where(finding =>
+                finding.State == ReviewFindingState.Open &&
+                finding.EvidenceRequest is not null)
             .Where(finding => ReviewFindingConvergence.ResolveMergedFinding(
                 mergedFindings, round, finding.StableId)?.EvidenceOutcome is null)
             .ToArray();
@@ -1497,6 +1499,10 @@ internal sealed class ConductorDriver
             return false;
         }
 
+        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
+        var candidateShaAvailable = candidateSha is not null && CandidateShaPattern.IsMatch(candidateSha);
+        var telemetryCandidateSha = candidateShaAvailable ? candidateSha! : "unavailable";
+
         var groups = new List<(string Identity, string Request, FindingEvidenceRequest TypedRequest, List<ReviewFinding> Findings)>();
         foreach (var finding in requestingFindings)
         {
@@ -1504,7 +1510,8 @@ internal sealed class ConductorDriver
                     finding.EvidenceRequest!, out var typedRequest, out var request,
                     out var refusalReason, out var refusalDetail))
             {
-                RecordNotHonoured(goal.Id, requestingTask, finding, refusalReason, refusalDetail);
+                RecordNotHonoured(
+                    goal.Id, requestingTask, finding, refusalReason, refusalDetail, telemetryCandidateSha);
                 continue;
             }
 
@@ -1525,7 +1532,8 @@ internal sealed class ConductorDriver
         {
             RecordNotHonoured(
                 goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.PerRoundCap,
-                $"Distinct evidence request exceeded the configured per-round cap of {policy.MaxFocusedEvidenceRunsPerRound}.");
+                $"Distinct evidence request exceeded the configured per-round cap of {policy.MaxFocusedEvidenceRunsPerRound}.",
+                telemetryCandidateSha);
         }
 
         var runnable = groups.Take(policy.MaxFocusedEvidenceRunsPerRound).FirstOrDefault();
@@ -1535,15 +1543,15 @@ internal sealed class ConductorDriver
             return true;
         }
 
-        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
-        if (candidateSha is null || !CandidateShaPattern.IsMatch(candidateSha))
+        if (!candidateShaAvailable)
         {
             foreach (var group in groups.Take(policy.MaxFocusedEvidenceRunsPerRound))
             foreach (var finding in group.Findings)
             {
                 RecordNotHonoured(
                     goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.CandidateShaMissing,
-                    "No validated candidate SHA was available for the requested evidence run.");
+                    "No validated candidate SHA was available for the requested evidence run.",
+                    telemetryCandidateSha);
             }
             decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "Evidence requests could not run because the candidate SHA was unavailable.");
             return true;
@@ -1556,21 +1564,22 @@ internal sealed class ConductorDriver
             {
                 RecordNotHonoured(
                     goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.ExecutorUnavailable,
-                    "No focused evidence executor was configured.");
+                    "No focused evidence executor was configured.", telemetryCandidateSha);
             }
             decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "Evidence requests could not run because the executor was unavailable.");
             return true;
         }
 
         if (!TryReconcileFocusedEvidenceAttempt(
-                goal, policy, runnable.Request, candidateSha, "finding-requested", out var evidence, out decision))
+                goal, policy, runnable.Request, candidateSha!, "finding-requested", out var evidence, out decision))
         {
             if (decision.ShouldEscalate)
             {
                 foreach (var finding in runnable.Findings)
                 {
                     RecordNotHonoured(
-                        goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed, decision.Message);
+                        goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed,
+                        decision.Message, telemetryCandidateSha);
                 }
                 decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "The focused evidence executor failed; a typed refusal was attached.");
             }
@@ -1582,15 +1591,16 @@ internal sealed class ConductorDriver
             foreach (var finding in runnable.Findings)
             {
                 RecordNotHonoured(
-                    goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed, evidence.Summary);
+                    goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed,
+                    evidence.Summary, telemetryCandidateSha);
             }
             decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "The focused evidence executor did not accept the request.");
             return true;
         }
 
-        var receiptId = CreateFindingEvidenceReceiptId(candidateSha, runnable.Identity);
+        var receiptId = CreateFindingEvidenceReceiptId(candidateSha!, runnable.Identity);
         var receipt = new FindingEvidenceReceipt(
-            receiptId, candidateSha, runnable.TypedRequest, evidence.Accepted, evidence.Passed, evidence.Summary);
+            receiptId, candidateSha!, runnable.TypedRequest, evidence.Accepted, evidence.Passed, evidence.Summary);
         foreach (var finding in runnable.Findings)
         {
             _recordFindingEvidenceOutcome(
@@ -1618,7 +1628,8 @@ internal sealed class ConductorDriver
         TaskSpec requestingTask,
         ReviewFinding finding,
         FindingEvidenceNotHonouredReason reason,
-        string detail)
+        string detail,
+        string candidateSha)
     {
         _recordFindingEvidenceOutcome(
             goalId, requestingTask.Id, finding.StableId,
@@ -1626,7 +1637,7 @@ internal sealed class ConductorDriver
         _recordFindingEvidenceRequest(
             goalId, requestingTask.Id,
             $"finding-evidence disposition=not-honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
-            $"finding_id={finding.StableId}; candidate_sha=unavailable; receipt_id=none; " +
+            $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id=none; " +
             $"reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reason)}; detail={TrimForConductorMessage(detail)}");
     }
 

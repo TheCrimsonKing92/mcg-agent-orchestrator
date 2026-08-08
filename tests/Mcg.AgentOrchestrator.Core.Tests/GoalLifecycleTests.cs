@@ -1339,6 +1339,65 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
         Assert.Equal(receipt.ReceiptId, resolvedFromSubmittedIdentity.EvidenceOutcome?.ReceiptId);
     }
 
+    [Xunit.Fact(DisplayName = "RecordFindingEvidenceOutcome_falls_back_to_reported_finding_when_anchor_is_ambiguous")]
+    public void RecordFindingEvidenceOutcomeFallsBackToReportedFindingWhenAnchorIsAmbiguous()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var reviewer = new TaskSpec(TaskId.New(), "Review the change.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Attach evidence despite an ambiguous canonical anchor", [reviewer]);
+        var location = new ReviewFindingLocation("tests/Test.cs", "Test.Run", "focused");
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "GoalLifecycleTests")]);
+        var reported = new ReviewFinding(
+            "submitted-finding",
+            ReviewFindingState.Open,
+            location,
+            "Focused receipt required.",
+            EvidenceRequest: request);
+        var merged = new[]
+        {
+            new ReviewFinding("resolved-at-anchor", ReviewFindingState.Resolved, location, "Prior issue resolved."),
+            new ReviewFinding(
+                "canonical-open-at-anchor",
+                ReviewFindingState.Open,
+                location,
+                "Current issue remains open.",
+                EvidenceRequest: request)
+        };
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "blockers: exact-blocker - focused receipt required",
+            $"findings: {System.Text.Json.JsonSerializer.Serialize(new[] { reported })}",
+            "touched_anchors: []",
+            "END_WORKER_RESULT");
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                "C:\\repo",
+                1,
+                output,
+                "",
+                DateTimeOffset.UtcNow,
+                MergedReviewFindings: merged));
+
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            reported.StableId,
+            new FindingEvidenceOutcome(
+                Honoured: false,
+                Reason: FindingEvidenceNotHonouredReason.Unknown,
+                Detail: "Ambiguous canonical anchor; attached to reported finding."));
+
+        var recorded = Assert.Single(
+            reviewer.LastVerification!.MergedReviewFindings!,
+            finding => finding.StableId == reported.StableId);
+        Assert.Equal(FindingEvidenceNotHonouredReason.Unknown, recorded.EvidenceOutcome?.Reason);
+    }
+
     [Xunit.Fact(DisplayName = "SourceBacklogItemId_roundtrips_through_snapshot")]
     public void SourceBacklogItemIdRoundtripsThoughSnapshot()
     {

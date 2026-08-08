@@ -39,6 +39,8 @@ public sealed class ConductorAutonomyPolicyTests
                 $"{policy.Name}: MaxConcurrentPaidWorkers must be > 0");
             Assert.True(policy.MaxTotalBudget > 0,
                 $"{policy.Name}: MaxTotalBudget must be > 0");
+            Assert.True(policy.MaxFocusedEvidenceRunsPerRound > 0,
+                $"{policy.Name}: MaxFocusedEvidenceRunsPerRound must be > 0");
         }
     }
 
@@ -171,6 +173,16 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Contains(errors, e => e.Contains("maxTotalBudget", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_nonpositive_focused_evidence_cap")]
+    public void ConductorAutonomyPolicyValidationRejectsNonpositiveFocusedEvidenceCap()
+    {
+        var policy = ConductorAutonomyPolicy.Conservative with { MaxFocusedEvidenceRunsPerRound = 0 };
+        var errors = policy.Validate();
+
+        Assert.Contains(errors, error =>
+            error.Contains("maxFocusedEvidenceRunsPerRound", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_provider_cap_exceeding_total")]
     public void ConductorAutonomyPolicyValidationRejectsProviderCapExceedingTotal()
     {
@@ -216,6 +228,7 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Equal(original.EmptyOutputRetryMaxDelaySeconds, restored.EmptyOutputRetryMaxDelaySeconds);
         Assert.Equal(original.ReviewAutoRetryWarningRound, restored.ReviewAutoRetryWarningRound);
         Assert.Equal(original.ReviewAutoRetryStopRound, restored.ReviewAutoRetryStopRound);
+        Assert.Equal(original.MaxFocusedEvidenceRunsPerRound, restored.MaxFocusedEvidenceRunsPerRound);
         Assert.Equal(original.AutoPromoteRiskThreshold, restored.AutoPromoteRiskThreshold);
         foreach (var state in Enum.GetValues<GoalLifecycleState>())
         {

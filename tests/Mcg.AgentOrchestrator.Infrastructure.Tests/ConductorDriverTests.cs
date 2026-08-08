@@ -2588,7 +2588,7 @@ public sealed class ConductorDriverTests
             evt.Message.Contains("reason=unparseable-selection", StringComparison.Ordinal));
         Assert.Equal(
             FindingEvidenceNotHonouredReason.UnparseableSelection,
-            reviewer.LastVerification?.MergedReviewFindings?.Single().EvidenceOutcome?.Reason);
+            reviewer.VerificationHistory.Last().MergedReviewFindings?.Single().EvidenceOutcome?.Reason);
         var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
         Assert.Contains("verdict=not-honoured", retryBrief, StringComparison.Ordinal);
         Assert.Contains("reason=unparseable-selection", retryBrief, StringComparison.Ordinal);
@@ -3280,12 +3280,53 @@ public sealed class ConductorDriverTests
         Assert.False(invalidOutcome?.Honoured);
         Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, invalidOutcome?.Reason);
         Assert.Null(invalidOutcome?.ReceiptId);
+        Assert.Contains(goal.Timeline, evt =>
+            evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
+            evt.Message.Contains("finding_id=invalid-request", StringComparison.Ordinal) &&
+            evt.Message.Contains("candidate_sha=abc1234", StringComparison.Ordinal));
         Assert.True(validOutcome?.Honoured);
         Assert.NotNull(validOutcome?.ReceiptId);
         Assert.Null(validOutcome?.Reason);
         var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
         Assert.Contains("reason=unsupported-project", retryBrief, StringComparison.Ordinal);
         Assert.Contains("valid evidence passed", retryBrief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ResolvedFindingEvidenceRequestDoesNotRun()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var open = EvidenceFindingWithRequest(
+            "Historical request is already resolved.",
+            id: "resolved-request",
+            classes: ["ConductorDriverTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "historical finding was open", findings: [open]);
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck resolved finding");
+        var resolved = open with
+        {
+            State = ReviewFindingState.Resolved
+        };
+        FailReviewerNeedsWork(kernel, goal, reviewer, "historical finding was resolved", findings: [resolved]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "must not run", []);
+            },
+            retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Null(reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(finding => finding.StableId == "resolved-request").EvidenceOutcome);
     }
 
     [Xunit.Fact]
