@@ -309,13 +309,14 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
     public async Task PersistsTypedGoalLessReceiptAndDeduplicates()
     {
         using var fixture = new CanaryTestFixture();
+        var progress = new ConcurrentQueue<string>();
         var calls = 0;
         var runner = new FakeRunner((_, _) =>
         {
             Interlocked.Increment(ref calls);
             return Task.FromResult(PostLandingCanaryOutcome.Passed(1, "known-green receipt"));
         });
-        var (coordinator, circuit) = fixture.CreateCoordinator(runner);
+        var (coordinator, circuit) = fixture.CreateCoordinator(runner, progress: progress.Enqueue);
         var landing = new ConductorLandingReceipt(
             "goal-not-persisted",
             ["src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"],
@@ -336,6 +337,10 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Equal("canary", payload.RootElement.GetProperty("tag").GetString());
         Assert.Equal("ABC123", payload.RootElement.GetProperty("landingSha").GetString());
         Assert.Equal(1, payload.RootElement.GetProperty("executedTestCount").GetInt32());
+        Assert.DoesNotContain(progress, line =>
+            line.Contains("result=unverified", StringComparison.Ordinal) ||
+            line.Contains("escalation=", StringComparison.Ordinal));
+        Assert.Empty(await fixture.OperatorItems.GetAttentionQueueAsync());
     }
 
     [Xunit.Fact(DisplayName = "Queued landing SHAs run FIFO and each receive exactly one receipt")]
@@ -913,6 +918,53 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.Contains("run-event:", item.Body, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Three identical canary faults escalate unverified without another backoff")]
+    public async Task ThreeIdenticalFaultsEscalateWithoutAnotherBackoff()
+    {
+        using var fixture = new CanaryTestFixture();
+        var now = DateTimeOffset.UtcNow;
+        var escalationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var progress = new ConcurrentQueue<string>();
+        var (coordinator, circuit) = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => Task.FromException<PostLandingCanaryOutcome>(
+                new InvalidOperationException("repeated deterministic defect"))),
+            maxAttempts: 4,
+            utcNow: () => now,
+            delay: (requested, _) =>
+            {
+                now = now.Add(requested);
+                return Task.CompletedTask;
+            },
+            progress: line =>
+            {
+                progress.Enqueue(line);
+                if (line.Contains("escalation=repeated-identical-fault", StringComparison.Ordinal))
+                {
+                    escalationObserved.TrySetResult();
+                }
+            });
+
+        Assert.Equal(
+            PostLandingCanaryDisposition.Deferred,
+            await coordinator.RunAsync(
+                new PostLandingCanaryRequest("sha-repeated-fault", ["engine/repeated"]),
+                CancellationToken.None));
+        await escalationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var events = await fixture.Events.ReadForLandingAsync("sha-repeated-fault");
+        Assert.Equal(2, events.Count(item => item.Kind == PostLandingCanaryEventKind.Deferred));
+        var abandoned = Assert.Single(events.Where(item => item.Kind == PostLandingCanaryEventKind.Abandoned));
+        Assert.Equal(3, abandoned.Payload.AttemptCount);
+        Assert.Null(abandoned.Payload.NotBefore);
+        Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+        Assert.Contains(progress, line =>
+            line.Contains("result=unverified attempts=3", StringComparison.Ordinal) &&
+            line.Contains("InvalidOperationException: repeated deterministic defect", StringComparison.Ordinal) &&
+            line.Contains("escalation=repeated-identical-fault", StringComparison.Ordinal));
+        var item = Assert.Single(await fixture.OperatorItems.GetAttentionQueueAsync());
+        Assert.Contains("same fault repeated three times", item.Body, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Circuit failures create one receipt-rich item per unhealthy episode and clear resolves it")]
     public async Task CircuitFailureOperatorItemIsDeduplicatedAndResolvedPerEpisode()
     {
@@ -1051,6 +1103,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             Path.GetTempPath(),
             "mcg-canary-binary-tests",
             Guid.NewGuid().ToString("N"));
+        var logDirectory = Path.Combine(buildCacheRoot, "logs");
         var dirtySentinel = Path.Combine(root, $"post-landing-canary-dirty-{Guid.NewGuid():N}.sentinel");
         try
         {
@@ -1066,13 +1119,20 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 StringComparison.Ordinal);
             var outcome = await new PostLandingCanaryRunner(
                     root,
-                    buildCacheRoot: buildCacheRoot)
+                    buildCacheRoot: buildCacheRoot,
+                    logDirectory: logDirectory)
                 .RunAsync(
                     new PostLandingCanaryRequest(landingSha!, ["integration-test"]),
                     timeout.Token);
 
             Assert.True(outcome.Green, outcome.Detail);
             Assert.True(outcome.ExecutedTestCount > 0);
+            Assert.NotEmpty(Directory.GetFiles(
+                logDirectory,
+                $"post-landing-canary-{landingSha}-*.out.log"));
+            Assert.NotEmpty(Directory.GetFiles(
+                logDirectory,
+                $"post-landing-canary-{landingSha}-*.err.log"));
             Assert.Equal(
                 statusBefore,
                 GoalAcceptanceVerifier.ResolveGitText(
@@ -1085,6 +1145,50 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         {
             try { File.Delete(dirtySentinel); } catch { }
             try { Directory.Delete(buildCacheRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "A runner process fault preserves SHA-named stdout and stderr logs")]
+    public async Task RunnerFaultPreservesShaNamedStdoutAndStderrLogs()
+    {
+        var repositoryRoot = FindRepoRoot();
+        var landingSha = GoalAcceptanceVerifier.ResolveGitText(repositoryRoot, "rev-parse", "HEAD")?.Trim();
+        Assert.False(string.IsNullOrWhiteSpace(landingSha));
+        var testRoot = Path.Combine(Path.GetTempPath(), "mcg-canary-log-tests", Guid.NewGuid().ToString("N"));
+        var logDirectory = Path.Combine(testRoot, "logs");
+        var buildCacheRoot = Path.Combine(testRoot, "build");
+        Directory.CreateDirectory(testRoot);
+        var failingTool = CreateFailingCanaryTool(testRoot);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        try
+        {
+            var runner = new PostLandingCanaryRunner(
+                repositoryRoot,
+                dotnetPath: failingTool,
+                buildCacheRoot: buildCacheRoot,
+                logDirectory: logDirectory);
+
+            var exception = await Assert.ThrowsAsync<PostLandingCanaryEvaluationException>(() => runner.RunAsync(
+                new PostLandingCanaryRequest(landingSha!, ["integration-test"]),
+                timeout.Token));
+
+            Assert.Contains("induced canary stderr", exception.Message, StringComparison.Ordinal);
+            var stdoutLogs = Directory.GetFiles(
+                logDirectory,
+                $"post-landing-canary-{landingSha}-*.out.log");
+            var stderrLogs = Directory.GetFiles(
+                logDirectory,
+                $"post-landing-canary-{landingSha}-*.err.log");
+            Assert.NotEmpty(stdoutLogs);
+            Assert.NotEmpty(stderrLogs);
+            Assert.Contains(stdoutLogs, path =>
+                File.ReadAllText(path).Contains("induced canary stdout", StringComparison.Ordinal));
+            Assert.Contains(stderrLogs, path =>
+                File.ReadAllText(path).Contains("induced canary stderr", StringComparison.Ordinal));
+        }
+        finally
+        {
+            try { Directory.Delete(testRoot, recursive: true); } catch { }
         }
     }
 
@@ -1255,9 +1359,11 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         using (var unexpectedFixture = new CanaryTestFixture())
         {
             var unexpected = new InvalidOperationException("unexpected deterministic defect");
+            var progress = new ConcurrentQueue<string>();
             var (coordinator, _) = unexpectedFixture.CreateCoordinator(
                 new FakeRunner((_, _) => Task.FromException<PostLandingCanaryOutcome>(unexpected)),
-                maxAttempts: 1);
+                maxAttempts: 1,
+                progress: progress.Enqueue);
 
             Assert.Equal(
                 PostLandingCanaryDisposition.Abandoned,
@@ -1268,6 +1374,11 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                     RunEventTypes.PostLandingCanary))
                 .Where(record => record.Operation == "abandoned"));
             Assert.Equal("InvalidOperationException: unexpected deterministic defect", abandoned.Detail);
+            Assert.Contains(progress, line =>
+                line.Contains("reason=unexpected-fault", StringComparison.Ordinal) &&
+                line.Contains(
+                    "detail=InvalidOperationException: unexpected deterministic defect",
+                    StringComparison.Ordinal));
             var payload = JsonSerializer.Deserialize<PostLandingCanaryEventPayload>(
                 Assert.IsType<string>(abandoned.PayloadJson),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
@@ -1290,6 +1401,27 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         }
 
         throw new DirectoryNotFoundException("Could not locate repository root.");
+    }
+
+    private static string CreateFailingCanaryTool(string root)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var path = Path.Combine(root, "fail-canary.cmd");
+            File.WriteAllText(
+                path,
+                "@echo off\r\necho induced canary stdout\r\necho induced canary stderr 1>&2\r\nexit /b 23\r\n");
+            return path;
+        }
+
+        var scriptPath = Path.Combine(root, "fail-canary.sh");
+        File.WriteAllText(
+            scriptPath,
+            "#!/bin/sh\nprintf '%s\\n' 'induced canary stdout'\nprintf '%s\\n' 'induced canary stderr' >&2\nexit 23\n");
+        File.SetUnixFileMode(
+            scriptPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        return scriptPath;
     }
 
     private static void SeedUnrelatedRunEvents(string dbPath, int count)

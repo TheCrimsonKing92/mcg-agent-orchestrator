@@ -71,19 +71,24 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     private readonly string _repositoryRoot;
     private readonly string _dotnetPath;
     private readonly string _buildCacheRoot;
+    private readonly string _logDirectory;
     private readonly Func<PostLandingCanaryRequest, CancellationToken, Task<PostLandingCanaryOutcome>>? _override;
 
     internal PostLandingCanaryRunner(
         string repositoryRoot,
         string? dotnetPath = null,
         Func<PostLandingCanaryRequest, CancellationToken, Task<PostLandingCanaryOutcome>>? runOverride = null,
-        string? buildCacheRoot = null)
+        string? buildCacheRoot = null,
+        string? logDirectory = null)
     {
         _repositoryRoot = Path.GetFullPath(repositoryRoot);
         _dotnetPath = string.IsNullOrWhiteSpace(dotnetPath) ? "dotnet" : dotnetPath;
         _buildCacheRoot = string.IsNullOrWhiteSpace(buildCacheRoot)
             ? Path.Combine(Path.GetTempPath(), "mcg-post-landing-canary-build")
             : Path.GetFullPath(buildCacheRoot);
+        _logDirectory = string.IsNullOrWhiteSpace(logDirectory)
+            ? Path.Combine(_repositoryRoot, ".orchestrator", "logs")
+            : Path.GetFullPath(logDirectory);
         _override = runOverride;
     }
 
@@ -98,12 +103,13 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         PostLandingCanaryRequest request,
         CancellationToken cancellationToken)
     {
-        var canaryRepositoryRoot = await CreateIsolatedWorktreeAsync(request.LandingSha, cancellationToken)
+        var logs = new PostLandingCanaryLogSession(_logDirectory, request.LandingSha);
+        var canaryRepositoryRoot = await CreateIsolatedWorktreeAsync(request.LandingSha, logs, cancellationToken)
             .ConfigureAwait(false);
         Exception? runFailure = null;
         try
         {
-            var baseline = await ReadRepositoryStateAsync(canaryRepositoryRoot, cancellationToken)
+            var baseline = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
                 .ConfigureAwait(false);
             if (!baseline.HeadSha.Equals(request.LandingSha, StringComparison.OrdinalIgnoreCase))
             {
@@ -124,10 +130,11 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             }
 
             using var fixture = PostLandingCanaryFixture.Materialize(canaryRepositoryRoot, request.LandingSha);
-            await InitializeFixtureRepositoryAsync(fixture.RootPath, cancellationToken).ConfigureAwait(false);
+            await InitializeFixtureRepositoryAsync(fixture.RootPath, logs, cancellationToken).ConfigureAwait(false);
             var appDllPath = await ResolveOrBuildMainBinaryAsync(
                     canaryRepositoryRoot,
                     baseline.HeadSha,
+                    logs,
                     cancellationToken)
                 .ConfigureAwait(false);
             var process = await RunProcessAsync(
@@ -138,14 +145,17 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                     fixture.RootPath
                 ],
                 canaryRepositoryRoot,
+                logs,
+                "run-canary-probe",
                 cancellationToken).ConfigureAwait(false);
 
-            var current = await ReadRepositoryStateAsync(canaryRepositoryRoot, cancellationToken)
+            var current = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
                 .ConfigureAwait(false);
             var currentIsDescendant = await IsAncestorAsync(
                 canaryRepositoryRoot,
                 baseline.HeadSha,
                 current.HeadSha,
+                logs,
                 cancellationToken).ConfigureAwait(false);
             var repositoryVerdict = PostLandingCanaryRepositoryInvariant.Evaluate(
                 baseline.HeadSha,
@@ -202,7 +212,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         {
             try
             {
-                await RemoveIsolatedWorktreeAsync(canaryRepositoryRoot).ConfigureAwait(false);
+                await RemoveIsolatedWorktreeAsync(canaryRepositoryRoot, logs).ConfigureAwait(false);
             }
             catch when (runFailure is not null)
             {
@@ -225,6 +235,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
     private async Task<string> CreateIsolatedWorktreeAsync(
         string landingSha,
+        PostLandingCanaryLogSession logs,
         CancellationToken cancellationToken)
     {
         var worktreeRoot = Path.Combine(
@@ -238,49 +249,61 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             "git",
             ["-c", "core.longpaths=true", "-C", _repositoryRoot, "worktree", "add", "--detach", "--quiet", worktreeRoot, landingSha],
             _repositoryRoot,
+            logs,
             cancellationToken).ConfigureAwait(false);
         return worktreeRoot;
     }
 
-    private async Task RemoveIsolatedWorktreeAsync(string worktreeRoot)
+    private async Task RemoveIsolatedWorktreeAsync(
+        string worktreeRoot,
+        PostLandingCanaryLogSession logs)
     {
         await EnsureSucceededAsync(
             "remove isolated landing worktree",
             "git",
             ["-c", "core.longpaths=true", "-C", _repositoryRoot, "worktree", "remove", "--force", worktreeRoot],
             _repositoryRoot,
+            logs,
             CancellationToken.None).ConfigureAwait(false);
     }
 
-    private async Task InitializeFixtureRepositoryAsync(string fixtureRoot, CancellationToken cancellationToken)
+    private async Task InitializeFixtureRepositoryAsync(
+        string fixtureRoot,
+        PostLandingCanaryLogSession logs,
+        CancellationToken cancellationToken)
     {
         await EnsureSucceededAsync(
             "initialize fixture repository",
             "git",
-            ["init", "--quiet"],
+            ["-c", "core.longpaths=true", "init", "--quiet"],
             fixtureRoot,
+            logs,
             cancellationToken).ConfigureAwait(false);
         await EnsureSucceededAsync(
             "stage fixture repository",
             "git",
-            ["add", "--all"],
+            ["-c", "core.longpaths=true", "add", "--all"],
             fixtureRoot,
+            logs,
             cancellationToken).ConfigureAwait(false);
         await EnsureSucceededAsync(
             "commit fixture repository",
             "git",
             [
+                "-c", "core.longpaths=true",
                 "-c", "user.name=MCG Canary",
                 "-c", "user.email=canary@localhost",
                 "commit", "--quiet", "-m", "known-green canary fixture"
             ],
             fixtureRoot,
+            logs,
             cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<string> ResolveOrBuildMainBinaryAsync(
         string sourceRoot,
         string sourceSha,
+        PostLandingCanaryLogSession logs,
         CancellationToken cancellationToken)
     {
         var repositoryKey = Convert.ToHexString(
@@ -313,6 +336,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 "-clp:ErrorsOnly"
             ],
             sourceRoot,
+            logs,
             cancellationToken,
             evaluatedArtifactFailure: true).ConfigureAwait(false);
         File.WriteAllText(markerPath, sourceSha + Environment.NewLine);
@@ -321,12 +345,15 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
     private async Task<PostLandingCanaryRepositoryState> ReadRepositoryStateAsync(
         string repositoryRoot,
+        PostLandingCanaryLogSession logs,
         CancellationToken cancellationToken)
     {
         var head = await RunProcessAsync(
             "git",
-            ["-C", repositoryRoot, "rev-parse", "HEAD"],
+            ["-c", "core.longpaths=true", "-C", repositoryRoot, "rev-parse", "HEAD"],
             repositoryRoot,
+            logs,
+            "read-repository-head",
             cancellationToken).ConfigureAwait(false);
         if (head.ExitCode != 0)
         {
@@ -336,8 +363,10 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
         var status = await RunProcessAsync(
             "git",
-            ["-C", repositoryRoot, "status", "--porcelain", "--untracked-files=all"],
+            ["-c", "core.longpaths=true", "-C", repositoryRoot, "status", "--porcelain", "--untracked-files=all"],
             repositoryRoot,
+            logs,
+            "read-repository-status",
             cancellationToken).ConfigureAwait(false);
         if (status.ExitCode != 0)
         {
@@ -354,12 +383,15 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string repositoryRoot,
         string expectedAncestor,
         string currentSha,
+        PostLandingCanaryLogSession logs,
         CancellationToken cancellationToken)
     {
         var ancestry = await RunProcessAsync(
             "git",
-            ["-C", repositoryRoot, "merge-base", "--is-ancestor", expectedAncestor, currentSha],
+            ["-c", "core.longpaths=true", "-C", repositoryRoot, "merge-base", "--is-ancestor", expectedAncestor, currentSha],
             repositoryRoot,
+            logs,
+            "check-repository-ancestry",
             cancellationToken).ConfigureAwait(false);
         if (ancestry.ExitCode is 0 or 1)
         {
@@ -376,6 +408,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory,
+        PostLandingCanaryLogSession logs,
         CancellationToken cancellationToken,
         bool evaluatedArtifactFailure = false)
     {
@@ -383,6 +416,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             fileName,
             arguments,
             workingDirectory,
+            logs,
+            operation,
             cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
@@ -398,17 +433,16 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string fileName,
         IReadOnlyList<string> arguments,
         string workingDirectory,
+        PostLandingCanaryLogSession logs,
+        string operation,
         CancellationToken cancellationToken)
     {
         var captureToFiles = OperatingSystem.IsWindows();
-        var capturePrefix = Path.Combine(
-            Path.GetTempPath(),
-            $"mcg-post-landing-canary-{Guid.NewGuid():N}");
-        var stdoutPath = capturePrefix + ".out";
-        var stderrPath = capturePrefix + ".err";
+        var (stdoutPath, stderrPath) = logs.CreateCaptureFiles(operation);
         var startInfo = captureToFiles
-            ? GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
-                [fileName, .. arguments],
+            ? BuildWindowsFileCaptureStartInfo(
+                fileName,
+                arguments,
                 workingDirectory,
                 stdoutPath,
                 stderrPath)
@@ -421,6 +455,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        startInfo.RedirectStandardInput = !captureToFiles;
         if (!captureToFiles)
         {
             foreach (var argument in arguments)
@@ -433,7 +468,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         using var process = WorkerProcessJobs.StartRegisteredOrThrow(
             startInfo,
             $"post-landing-canary:{workingDirectory}");
-        if (!captureToFiles)
+        if (startInfo.RedirectStandardInput)
         {
             process.StandardInput.Close();
         }
@@ -451,16 +486,22 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             try
             {
                 await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                var stdout = captureToFiles
+                    ? await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stdoutPath, false)
+                        .ConfigureAwait(false)
+                    : await stdoutTask.ConfigureAwait(false);
+                var stderr = captureToFiles
+                    ? await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stderrPath, false)
+                        .ConfigureAwait(false)
+                    : await stderrTask.ConfigureAwait(false);
+                if (!captureToFiles)
+                {
+                    await PersistManagedCaptureAsync(stdoutPath, stdout, stderrPath, stderr).ConfigureAwait(false);
+                }
                 return new PostLandingCanaryProcessResult(
                     process.ExitCode,
-                    captureToFiles
-                        ? await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stdoutPath, false)
-                            .ConfigureAwait(false)
-                        : await stdoutTask.ConfigureAwait(false),
-                    captureToFiles
-                        ? await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(stderrPath, false)
-                            .ConfigureAwait(false)
-                        : await stderrTask.ConfigureAwait(false));
+                    stdout,
+                    stderr);
             }
             catch (OperationCanceledException)
             {
@@ -473,6 +514,15 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
                 await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
                 await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+                if (!captureToFiles)
+                {
+                    await PersistManagedCaptureAsync(
+                            stdoutPath,
+                            await stdoutTask.ConfigureAwait(false),
+                            stderrPath,
+                            await stderrTask.ConfigureAwait(false))
+                        .ConfigureAwait(false);
+                }
                 if (!process.HasExited)
                 {
                     throw new InvalidOperationException(
@@ -485,9 +535,49 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         finally
         {
             WorkerProcessJobs.Release(process.Id);
-            try { File.Delete(stdoutPath); } catch { }
-            try { File.Delete(stderrPath); } catch { }
         }
+    }
+
+    private static ProcessStartInfo BuildWindowsFileCaptureStartInfo(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        string workingDirectory,
+        string stdoutPath,
+        string stderrPath)
+    {
+        var command = string.Join(' ', new[] { fileName }
+            .Concat(arguments)
+            .Select(QuoteWindowsShellToken));
+        command = $"({command}) > {QuoteWindowsShellToken(stdoutPath)} 2> {QuoteWindowsShellToken(stderrPath)}";
+        return new ProcessStartInfo("cmd.exe")
+        {
+            Arguments = $"/d /s /c \"{command}\"",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+    }
+
+    private static string QuoteWindowsShellToken(string value)
+    {
+        if (value.Contains('"'))
+        {
+            throw new ArgumentException("Post-landing canary process arguments cannot contain double quotes.");
+        }
+
+        return value.Length == 0 || value.IndexOfAny([' ', '\t', '&', '|', '<', '>', '^', '(', ')']) >= 0
+            ? $"\"{value}\""
+            : value;
+    }
+
+    private static async Task PersistManagedCaptureAsync(
+        string stdoutPath,
+        string stdout,
+        string stderrPath,
+        string stderr)
+    {
+        await File.WriteAllTextAsync(stdoutPath, stdout, CancellationToken.None).ConfigureAwait(false);
+        await File.WriteAllTextAsync(stderrPath, stderr, CancellationToken.None).ConfigureAwait(false);
     }
 
     private static string Tail(string value)
@@ -501,4 +591,39 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     private sealed record PostLandingCanaryRepositoryState(
         string HeadSha,
         IReadOnlyList<string> DirtyPaths);
+
+    private sealed class PostLandingCanaryLogSession
+    {
+        private readonly string _capturePrefix;
+        private int _ordinal;
+
+        internal PostLandingCanaryLogSession(string logDirectory, string landingSha)
+        {
+            Directory.CreateDirectory(logDirectory);
+            _capturePrefix = Path.Combine(
+                logDirectory,
+                $"post-landing-canary-{SanitizeSegment(landingSha)}-" +
+                Guid.NewGuid().ToString("N")[..12]);
+        }
+
+        internal (string StdoutPath, string StderrPath) CreateCaptureFiles(string operation)
+        {
+            var ordinal = Interlocked.Increment(ref _ordinal);
+            var captureStem = $"{_capturePrefix}-{ordinal:D2}-{SanitizeSegment(operation)}";
+            var stdoutPath = captureStem + ".out.log";
+            var stderrPath = captureStem + ".err.log";
+            using (File.Create(stdoutPath)) { }
+            using (File.Create(stderrPath)) { }
+            return (stdoutPath, stderrPath);
+        }
+
+        private static string SanitizeSegment(string value)
+        {
+            var invalid = Path.GetInvalidFileNameChars();
+            var sanitized = new string(value
+                .Select(character => invalid.Contains(character) || char.IsWhiteSpace(character) ? '-' : character)
+                .ToArray());
+            return string.IsNullOrWhiteSpace(sanitized) ? "unknown" : sanitized;
+        }
+    }
 }
