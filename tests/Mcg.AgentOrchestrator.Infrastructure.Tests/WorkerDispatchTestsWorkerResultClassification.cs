@@ -1355,8 +1355,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
     File.WriteAllText(stdout, string.Empty);
     File.WriteAllText(stderr, string.Empty);
-    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", "claude prompt", root, now.AddMinutes(-40)));
-    var process = new TaskProcessRecord(999999, "claude prompt", root, stdout, stderr, exit, now.AddMinutes(-40), null, null);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-40)));
+    var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-40), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
 
@@ -3532,8 +3532,9 @@ private static (
             childPid: null);
     }
 
-    var outcome = new BackgroundDispatchRunner(new TestClock(now), TimeSpan.FromMinutes(2), _ => true)
-        .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+    var runner = new BackgroundDispatchRunner(new TestClock(now), TimeSpan.FromMinutes(2), _ => true);
+    var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+    runner.ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
     return (task, process, outcome);
 }
 
