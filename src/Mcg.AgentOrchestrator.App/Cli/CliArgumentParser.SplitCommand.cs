@@ -157,6 +157,13 @@ public static IReadOnlyList<string> SplitCommand(string line)
 
     if (command.Equals("backlog-add", StringComparison.OrdinalIgnoreCase))
     {
+        if (IndexOfStandaloneFlag(remainder, "--title") >= 0)
+        {
+            return NormalizeCommandWithValueFlags(
+                [command, .. remainder.Split(' ', StringSplitOptions.RemoveEmptyEntries)],
+                "--title");
+        }
+
         return SplitTargetTextCommandWithFileFlags(command, remainder, "--body-file", "--text-file");
     }
 

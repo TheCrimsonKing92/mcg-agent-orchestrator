@@ -21,6 +21,20 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
             parts);
     }
 
+    [Xunit.Fact]
+    public void CliBacklogAddGroupsFlaggedMultiWordTitleForBothParserEntryPoints()
+    {
+        var interactive = CliArgumentParser.SplitCommand(
+            "backlog-add --title Parser regression title --text-file body.md --depends-on abc12345");
+        var oneShot = CliArgumentParser.NormalizeArgs(
+            ["backlog-add", "--title", "Parser", "regression", "title", "--text-file", "body.md", "--depends-on", "abc12345"]);
+
+        Xunit.Assert.Equal(
+            ["backlog-add", "--title", "Parser regression title", "--text-file", "body.md", "--depends-on", "abc12345"],
+            interactive);
+        Xunit.Assert.Equal(interactive, oneShot);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_backlog_list_splits_limit_status_and_text_flags")]
     public void CliBacklogListSplitsLimitStatusAndTextFlags()
@@ -779,6 +793,54 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         var item = Xunit.Assert.Single(await store.ListAsync(includeAll: true));
         Xunit.Assert.Equal("File-backed item", item.Title);
         Xunit.Assert.Equal(bodyContent, item.Body);
+    }
+
+    [Xunit.Fact]
+    public async Task CliBacklogAddFlaggedAndPositionalTitlesPersistEquivalentRecords()
+    {
+        var root = CreateTempDirectory();
+        var bodyContent = "Equivalent backlog body.\n\nPreserve all text.";
+        var bodyPath = Path.Combine(root, "body.md");
+        File.WriteAllText(bodyPath, bodyContent, System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+
+        ExecuteCliAndCapture(
+            ["backlog-add", "Equivalent title", "Equivalent backlog body.\n\nPreserve all text."],
+            kernel,
+            workspace);
+        ExecuteCliAndCapture(
+            CliArgumentParser.NormalizeArgs(
+                ["backlog-add", "--title", "Equivalent", "title", "--text-file", bodyPath]),
+            kernel,
+            workspace);
+
+        var items = await new BacklogStore(workspace.BacklogStorePath).ListAsync(includeAll: true);
+        Xunit.Assert.Equal(2, items.Count);
+        Xunit.Assert.All(items, item => Xunit.Assert.Equal("Equivalent title", item.Title));
+        Xunit.Assert.All(items, item => Xunit.Assert.Equal(bodyContent, item.Body));
+    }
+
+    [Xunit.Fact]
+    public async Task CliBacklogAddRejectsInvalidTitleShapesWithoutPersistence()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<IReadOnlyList<string>> invalidCommands =
+        [
+            ["backlog-add"],
+            ["backlog-add", "--title", ""],
+            ["backlog-add", "--title", "First", "--title", "Second"],
+            ["backlog-add", "Positional title", "--title", "Flagged title"]
+        ];
+
+        foreach (var command in invalidCommands)
+        {
+            _ = Xunit.Assert.Throws<ArgumentException>(() => ExecuteCliAndCapture(command, kernel, workspace));
+        }
+
+        Xunit.Assert.Empty(await new BacklogStore(workspace.BacklogStorePath).ListAsync(includeAll: true));
     }
 
 

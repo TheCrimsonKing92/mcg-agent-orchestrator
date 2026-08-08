@@ -334,6 +334,23 @@ public sealed class CliHelpTests
         Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("--help")]
+    [Xunit.InlineData("-h")]
+    public void CliRootHelpPrintsCommandListBeforeStateCreation(string helpFlag)
+    {
+        var root = CreateTempDirectory();
+
+        var result = RunAppCli(root, [helpFlag]);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains("Usage:", result.StandardOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Commands:", result.StandardOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains("backlog-add", result.StandardOutput, StringComparison.Ordinal);
+        Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardError), result.StandardError);
+        Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
+    }
+
     [Xunit.Fact(DisplayName = "Cli_startup_help_skips_invalid_worktree_cleanup_config_and_commands_format_the_error")]
     public void CliStartupHelpSkipsInvalidWorktreeCleanupConfigAndCommandsFormatTheError()
     {
