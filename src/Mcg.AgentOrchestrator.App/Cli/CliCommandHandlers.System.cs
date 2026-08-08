@@ -1007,7 +1007,8 @@ internal static partial class CliCommandHandlers
                 context.Providers,
                 ref workerProfiles,
                 ref currentGoal,
-                DiscordDecisionOperatorChannel.Instance);
+                DiscordDecisionOperatorChannel.Instance,
+                operatorIntentSubmissionSource: CliPersistentStateRunner.OperatorIntentSubmissionSource.Discord);
         }, cancellationToken);
     }
 

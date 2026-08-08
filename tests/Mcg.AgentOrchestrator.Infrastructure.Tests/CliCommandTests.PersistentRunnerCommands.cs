@@ -342,6 +342,27 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(expected, CliPersistentStateRunner.IsInboxBackedGoalScopedTaskMutationCommand(args));
     }
 
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_operator_intent_attribution_enumerates_every_submission_source")]
+    [Xunit.InlineData("Cli", "local:operator", "cli", "local-process")]
+    [Xunit.InlineData("Discord", "discord:user1", "discord", "discord-operator-allowlist")]
+    public void PersistentRunnerOperatorIntentAttributionEnumeratesEverySubmissionSource(
+        string sourceName,
+        string actor,
+        string expectedChannel,
+        string expectedAuthenticationAssurance)
+    {
+        Xunit.Assert.Equal(2, Enum.GetValues<CliPersistentStateRunner.OperatorIntentSubmissionSource>().Length);
+        var source = Enum.Parse<CliPersistentStateRunner.OperatorIntentSubmissionSource>(sourceName);
+
+        var attribution = CliPersistentStateRunner.ResolveOperatorIntentAttribution(
+            ["retry", "1", "again", "--operator-actor", actor],
+            source);
+
+        Xunit.Assert.Equal(actor, attribution.Actor);
+        Xunit.Assert.Equal(expectedChannel, attribution.Channel);
+        Xunit.Assert.Equal(expectedAuthenticationAssurance, attribution.AuthenticationAssurance);
+    }
+
     [Xunit.Theory(DisplayName = "CliPersistentStateRunner_retry_reports_conductor_liveness_without_state_transaction")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
@@ -359,6 +380,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = goal;
+        var configuredChannel = new DiscordOperatorChannel(
+            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
         using var conductorLease = conductorActive
             ? ConductorLoopLease.Acquire(workspace.OrchestratorDirectory)
             : null;
@@ -371,7 +394,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 ref agents,
                 providers,
                 ref profiles,
-                ref currentGoal);
+                ref currentGoal,
+                configuredChannel);
             Xunit.Assert.False(changed);
         });
 
@@ -390,6 +414,9 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(task.Id.Value, intent.TaskId);
         Xunit.Assert.Equal("retry-test-key", intent.IdempotencyKey);
         Xunit.Assert.Equal(OperatorIntentStatus.Pending, intent.Status);
+        Xunit.Assert.Equal("operator", intent.Actor);
+        Xunit.Assert.Equal("cli", intent.Channel);
+        Xunit.Assert.Equal("local-process", intent.AuthenticationAssurance);
         Xunit.Assert.Contains("Operator intent queued", output, StringComparison.Ordinal);
         const string inactiveWarning =
             "WARNING: intent queued but NO conduct loop is running - it will not apply until a loop starts.";
