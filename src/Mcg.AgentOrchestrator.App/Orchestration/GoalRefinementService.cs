@@ -70,12 +70,16 @@ internal sealed class GoalRefinementService
         var existingOpenQuestions = goal.RefinedSpec?.OpenQuestions
             .Where(question => string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase))
             .ToList() ?? [];
+        var clarificationAnswerHistory = goal.RefinedSpec?.ClarificationAnswerHistory ?? [];
         var output = await RunRefinerAsync(goal.Objective, resolvedClarifications, cancellationToken);
 
         if (!output.IsValid)
         {
-            var fallback = BuildFallbackSpec(goal.Objective);
-            kernel.SetGoalRefinedSpec(goalId, fallback);
+            var fallback = BuildFallbackSpec(goal.Objective) with
+            {
+                ClarificationAnswerHistory = clarificationAnswerHistory
+            };
+            kernel.RecordGoalRefinement(goalId, fallback);
             return RefinementResult.AutoRefined(fallback);
         }
 
@@ -272,10 +276,11 @@ internal sealed class GoalRefinementService
             decisions,
             openQuestions)
         {
-            OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria
+            OperatorOwnedAcceptanceCriteria = operatorOwnedCriteria,
+            ClarificationAnswerHistory = clarificationAnswerHistory
         };
 
-        kernel.SetGoalRefinedSpec(goalId, spec);
+        kernel.RecordGoalRefinement(goalId, spec);
         if (raisedClarificationRound)
             kernel.RecordGoalClarificationRound(goalId);
 
@@ -290,6 +295,32 @@ internal sealed class GoalRefinementService
         string answer,
         CancellationToken cancellationToken = default)
     {
+        return await TryResolveOpenClarificationAsync(
+            correlationKey,
+            answer,
+            briefVersion: null,
+            cancellationToken);
+    }
+
+    public async Task<bool> TryResolveOpenClarificationAsync(
+        string correlationKey,
+        string answer,
+        int briefVersion,
+        CancellationToken cancellationToken = default)
+    {
+        return await TryResolveOpenClarificationAsync(
+            correlationKey,
+            answer,
+            (int?)briefVersion,
+            cancellationToken);
+    }
+
+    private async Task<bool> TryResolveOpenClarificationAsync(
+        string correlationKey,
+        string answer,
+        int? briefVersion,
+        CancellationToken cancellationToken)
+    {
         var goalId = ExtractGoalId(correlationKey);
         var matchingItem = (await _collaboration.ListAsync(goalId, cancellationToken))
             .FirstOrDefault(item =>
@@ -302,7 +333,11 @@ internal sealed class GoalRefinementService
             return false;
         }
 
-        var resolved = await _collaboration.TryResolveAsync(correlationKey, answer, cancellationToken);
+        var resolved = await _collaboration.TryResolveAsync(
+            correlationKey,
+            answer,
+            cancellationToken,
+            briefVersion);
         if (!resolved)
             return false;
 
@@ -370,7 +405,11 @@ internal sealed class GoalRefinementService
         if (!matched)
             return false;
 
-        var resolved = await TryResolveOpenClarificationAsync(correlationKey, answer, cancellationToken);
+        var resolved = await TryResolveOpenClarificationAsync(
+            correlationKey,
+            answer,
+            goal.AuthoritativeBrief.Version,
+            cancellationToken);
         if (!resolved)
             return false;
 

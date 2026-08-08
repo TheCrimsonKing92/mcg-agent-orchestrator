@@ -479,9 +479,16 @@ internal static partial class CliCommandHandlers
                         ModelFunctionCatalog.Empty,
                         store,
                         new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
-                    var resolved = refinementService.TryResolveOpenClarificationAsync(
-                        clarification.CorrelationKey!,
-                        answer).GetAwaiter().GetResult();
+                    var answerGoal = goal ?? context.Kernel.Goals.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Id.Value, clarification.GoalId, StringComparison.OrdinalIgnoreCase));
+                    var resolved = answerGoal is null
+                        ? refinementService.TryResolveOpenClarificationAsync(
+                            clarification.CorrelationKey!,
+                            answer).GetAwaiter().GetResult()
+                        : refinementService.TryResolveOpenClarificationAsync(
+                            clarification.CorrelationKey!,
+                            answer,
+                            answerGoal.AuthoritativeBrief.Version).GetAwaiter().GetResult();
                     Console.WriteLine(resolved
                         ? goal is null
                             ? $"Answered clarification '{id}'."
@@ -678,23 +685,42 @@ internal static partial class CliCommandHandlers
                         botToken,
                         store,
                         context.Workspace.OrchestratorDirectory,
-                        (correlationKey, answer, cancellationToken) =>
+                        async (correlationKey, answer, cancellationToken) =>
                         {
-                            // operator-listen runs with an EMPTY kernel and no write lock (SkipsKernelState)
-                            // so it stays concurrent with a running conductor. Resolve purely against the
-                            // collaboration store (no kernel needed): this clears the clarification in Discord
-                            // and records the precedent. The conductor's AwaitingClarification gate reads the
-                            // store, so the goal resumes on its next tick, and EnsureRefined then writes the
-                            // answer into the goal's RefinedSpec.
+                            // operator-listen owns no state write lock (SkipsKernelState), so read the latest
+                            // goal snapshot only to stamp answer provenance. The collaboration-store update
+                            // clears the clarification in Discord; the conductor applies it to the RefinedSpec.
                             var service = new GoalRefinementService(
                                 context.Providers,
                                 ModelFunctionCatalogStore.Load(context.Workspace.ModelFunctionCatalogPath),
                                 store,
                                 new SpecRefinerPrecedentStore(context.Workspace.SpecRefinerPrecedentsPath));
-                            return service.TryResolveOpenClarificationAsync(
-                                correlationKey,
-                                answer,
-                                cancellationToken);
+                            var item = (await store.ListAsync(null, cancellationToken))
+                                .FirstOrDefault(candidate => string.Equals(
+                                    candidate.CorrelationKey,
+                                    correlationKey,
+                                    StringComparison.Ordinal));
+                            GoalSnapshot? snapshot = null;
+                            if (!string.IsNullOrWhiteSpace(item?.GoalId))
+                            {
+                                snapshot = await SqliteOrchestratorStateRepository
+                                    .OpenReadOnly(context.Workspace.SqliteStatePath)
+                                    .LoadGoalAsync(new GoalId(item.GoalId), cancellationToken);
+                            }
+
+                            var briefVersion = snapshot?.BriefVersions?
+                                .SingleOrDefault(version => version.IsAuthoritative)
+                                ?.Version ?? (snapshot is null ? null : 1);
+                            return briefVersion is { } knownBriefVersion
+                                ? await service.TryResolveOpenClarificationAsync(
+                                    correlationKey,
+                                    answer,
+                                    knownBriefVersion,
+                                    cancellationToken)
+                                : await service.TryResolveOpenClarificationAsync(
+                                    correlationKey,
+                                    answer,
+                                    cancellationToken);
                         },
                         (command, cancellationToken) =>
                             DispatchOperatorDecisionCommandAsync(command, context, cancellationToken),

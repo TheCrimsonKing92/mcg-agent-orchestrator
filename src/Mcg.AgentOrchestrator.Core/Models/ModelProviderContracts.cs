@@ -101,7 +101,14 @@ public sealed record TaskDispatchRecord(
     string? WorktreeHeadSha = null,
     string? DirtyStateHash = null,
     DateTimeOffset? ProviderSessionRetiredAt = null,
-    IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null);
+    IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
+    int BriefVersion = 1,
+    string? BriefSnapshot = null)
+{
+    public int BriefVersion { get; internal set; } = BriefVersion;
+
+    public string? BriefSnapshot { get; internal set; } = BriefSnapshot;
+}
 
 public enum DispatchResumeAdmissionKind
 {

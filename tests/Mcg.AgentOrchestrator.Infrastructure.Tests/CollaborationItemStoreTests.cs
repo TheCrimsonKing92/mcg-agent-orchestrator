@@ -122,6 +122,34 @@ public sealed class CollaborationItemStoreTests
         Xunit.Assert.NotNull(items[0].ResolvedAt);
     }
 
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_resolve_records_explicit_brief_version")]
+    public async Task ResolveRecordsExplicitBriefVersion()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseAsync(CollaborationItemType.Clarification, "g1", "s", "b", "corr-versioned");
+
+        var resolved = await store.TryResolveAsync(
+            "corr-versioned",
+            "use the revised contract",
+            briefVersion: 2);
+
+        Xunit.Assert.True(resolved);
+        var answer = Xunit.Assert.Single((await store.ListAsync()).Single().AnswerHistory!);
+        Xunit.Assert.Equal(2, answer.BriefVersion);
+    }
+
+    [Xunit.Fact(DisplayName = "CollaborationItemStore_resolve_without_brief_context_records_unknown_provenance")]
+    public async Task ResolveWithoutBriefContextRecordsUnknownProvenance()
+    {
+        var store = new CollaborationItemStore(DbPath());
+        await store.RaiseAsync(CollaborationItemType.Clarification, "g1", "s", "b", "corr-unversioned");
+
+        Xunit.Assert.True(await store.TryResolveAsync("corr-unversioned", "legacy listener answer"));
+
+        var answer = Xunit.Assert.Single((await store.ListAsync()).Single().AnswerHistory!);
+        Xunit.Assert.Null(answer.BriefVersion);
+    }
+
     [Xunit.Fact(DisplayName = "CollaborationItemStore_resolve_is_idempotent_returns_false_on_second_call")]
     public async Task ResolveIsIdempotent()
     {
@@ -673,6 +701,8 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     public ManualResetEventSlim? RaiseStarted { get; init; }
     public Task<CollaborationItem>? PendingRaise { get; init; }
 
+    public void Add(CollaborationItem item) => _items.Add(item);
+
     public Task<CollaborationItem> RaiseAsync(
         CollaborationItemType type,
         string? goalId,
@@ -726,14 +756,27 @@ internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
     public Task<bool> TryResolveAsync(
         string correlationKey,
         string resolution,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? briefVersion = null)
     {
         for (var i = 0; i < _items.Count; i++)
         {
             var item = _items[i];
             if (item.CorrelationKey == correlationKey && !CollaborationItemLifecycle.IsTerminal(item.Status))
             {
-                _items[i] = item with { Status = CollaborationItemStatus.Resolved, Resolution = resolution, ResolvedAt = DateTimeOffset.UtcNow };
+                var answeredAt = DateTimeOffset.UtcNow;
+                var answer = new HumanInputAnswerRecord(
+                    Guid.NewGuid().ToString("n"),
+                    resolution,
+                    answeredAt,
+                    BriefVersion: briefVersion);
+                _items[i] = item with
+                {
+                    Status = CollaborationItemStatus.Resolved,
+                    Resolution = resolution,
+                    ResolvedAt = answeredAt,
+                    AnswerHistory = [answer]
+                };
                 return Task.FromResult(true);
             }
         }

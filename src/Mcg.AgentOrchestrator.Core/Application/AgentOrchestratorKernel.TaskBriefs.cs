@@ -255,6 +255,23 @@ public sealed partial class AgentOrchestratorKernel
                 foreach (var decision in refinedSpec.Decisions)
                     specLines.Add($"- {decision.Question} → {decision.Choice} ({decision.Rationale})");
             }
+            var authoritativeClarifications = refinedSpec.ClarificationAnswerHistory
+                .Where(answer => !answer.IsRetracted)
+                .ToArray();
+            if (authoritativeClarifications.Length > 0)
+            {
+                specLines.Add(string.Empty);
+                specLines.Add("Clarification answer provenance:");
+                foreach (var answer in authoritativeClarifications)
+                {
+                    var answeredUnder = answer.BriefVersion is { } briefVersion
+                        ? $"brief v{briefVersion}"
+                        : "an unknown brief version";
+                    specLines.Add(
+                        $"- {answer.Id} (answered under {answeredUnder}; " +
+                        $"current brief v{goal.AuthoritativeBrief.Version}): {PromptContextFormatter.TrimPromptBlock(answer.Text)}");
+                }
+            }
             specLines.Add(string.Empty);
             segments.Add(TaskBriefSegment.Fixed(specLines));
         }
@@ -366,9 +383,14 @@ public sealed partial class AgentOrchestratorKernel
             };
             foreach (var request in resolvedInput)
             {
+                var answer = request.AuthoritativeAnswer!;
+                var answeredUnder = answer.BriefVersion is { } briefVersion
+                    ? $"brief v{briefVersion}"
+                    : "an unknown brief version";
                 resolvedInputLines.Add(
                     $"- {request.Id}: {PromptContextFormatter.TrimPromptBlock(request.Question)} " +
-                    $"→ {PromptContextFormatter.TrimPromptBlock(request.Answer!)}");
+                    $"→ {PromptContextFormatter.TrimPromptBlock(answer.Text)} " +
+                    $"(answered under {answeredUnder}; current brief v{goal.AuthoritativeBrief.Version})");
             }
             resolvedInputLines.Add(string.Empty);
             segments.Add(TaskBriefSegment.Fixed(resolvedInputLines));

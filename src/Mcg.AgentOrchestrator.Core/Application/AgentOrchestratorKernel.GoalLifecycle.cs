@@ -7,7 +7,7 @@ public sealed partial class AgentOrchestratorKernel
 
     public Goal CreateGoal(string objective, IReadOnlyList<TaskSpec>? tasks = null)
     {
-        var goal = new Goal(GoalId.New(), objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks());
+        var goal = new Goal(GoalId.New(), objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks(), _clock.UtcNow);
         _goals.Add(goal.Id, goal);
         Append(goal, null, ProgressKind.GoalCreated, "Goal created.");
         return goal;
@@ -15,7 +15,7 @@ public sealed partial class AgentOrchestratorKernel
 
     public Goal CreateGoal(GoalId id, string objective, IReadOnlyList<TaskSpec>? tasks = null)
     {
-        var goal = new Goal(id, objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks());
+        var goal = new Goal(id, objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks(), _clock.UtcNow);
         _goals.Add(goal.Id, goal);
         Append(goal, null, ProgressKind.GoalCreated, "Goal created.");
         return goal;
@@ -46,6 +46,88 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         return new DelegationPlan(goal.Id, assignments);
+    }
+
+    public GoalBriefRevisionResult ReviseGoalBrief(
+        GoalId goalId,
+        string newBrief,
+        string? reason = null,
+        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions = null)
+    {
+        lock (_humanInputRequestLock)
+        {
+            return ReviseGoalBriefCore(goalId, newBrief, reason, answerSupersessions);
+        }
+    }
+
+    private GoalBriefRevisionResult ReviseGoalBriefCore(
+        GoalId goalId,
+        string newBrief,
+        string? reason,
+        IReadOnlyList<GoalBriefAnswerSupersession>? answerSupersessions)
+    {
+        var goal = GetGoal(goalId);
+        var supersessions = answerSupersessions ?? [];
+        var duplicateSupersession = supersessions
+            .GroupBy(supersession => supersession.RequestId)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateSupersession is not null)
+        {
+            throw new ArgumentException(
+                $"Clarification '{duplicateSupersession.Key}' can be superseded only once per brief revision.",
+                nameof(answerSupersessions));
+        }
+
+        foreach (var supersession in supersessions)
+        {
+            if (!_humanInputRequests.TryGetValue(supersession.RequestId, out var request) || request.GoalId != goal.Id)
+            {
+                throw new KeyNotFoundException(
+                    $"Human input request '{supersession.RequestId}' was not found on goal '{goal.Id.Value}'.");
+            }
+
+            if (!request.IsCompleted || request.WasDismissed || request.AuthoritativeAnswer is null)
+            {
+                throw new InvalidOperationException(
+                    $"Human input request '{supersession.RequestId}' has no answered clarification to supersede.");
+            }
+
+            if (string.IsNullOrWhiteSpace(supersession.ReplacementAnswer))
+            {
+                throw new ArgumentException("Replacement clarification answer cannot be empty.", nameof(answerSupersessions));
+            }
+        }
+
+        var version = goal.ReviseBrief(newBrief, reason, _clock.UtcNow);
+        foreach (var supersession in supersessions)
+        {
+            SupersedeHumanInput(
+                goal.Id,
+                supersession.RequestId,
+                supersession.ReplacementAnswer,
+                HumanInputAnswerOrigin.Operator);
+        }
+
+        var notYetStarted = goal.Tasks
+            .Where(task => task.Status is WorkTaskStatus.Pending or WorkTaskStatus.Assigned)
+            .Select(task => task.Id)
+            .ToArray();
+        var inFlight = goal.Tasks
+            .Where(task => task.Status is WorkTaskStatus.Running or WorkTaskStatus.WaitingForHuman)
+            .Select(task => task.Id)
+            .ToArray();
+        var completed = goal.Tasks
+            .Where(task => task.Status == WorkTaskStatus.Completed)
+            .Select(task => task.Id)
+            .ToArray();
+        var reasonSuffix = version.Reason is null ? string.Empty : $" reason={version.Reason}";
+        Append(
+            goal,
+            null,
+            ProgressKind.GoalBriefRevised,
+            $"Goal brief revised: v{version.Version - 1} superseded by v{version.Version}; " +
+            $"notYetStarted={notYetStarted.Length}; inFlight={inFlight.Length}; completed={completed.Length}.{reasonSuffix}");
+        return new GoalBriefRevisionResult(goal.Id, version, notYetStarted, inFlight, completed);
     }
 
     public TaskSpec AddTask(
@@ -1407,7 +1489,11 @@ public sealed partial class AgentOrchestratorKernel
 
             var goal = GetGoal(request.GoalId);
             var answeredAt = _clock.UtcNow;
-            request.Complete(answer, answeredAt, gatedDeliverableIds);
+            request.Complete(
+                answer,
+                answeredAt,
+                gatedDeliverableIds,
+                briefVersion: goal.AuthoritativeBrief.Version);
             var siblings = _humanInputRequests.Values
                 .Where(candidate =>
                     candidate.Id != request.Id &&
@@ -1419,7 +1505,11 @@ public sealed partial class AgentOrchestratorKernel
                 .ToList();
             foreach (var sibling in siblings)
             {
-                sibling.CompleteAsSuperseded(answer, answeredAt, request.Id);
+                sibling.CompleteAsSuperseded(
+                    answer,
+                    answeredAt,
+                    request.Id,
+                    goal.AuthoritativeBrief.Version);
             }
 
             if (request.TaskId is not null)
@@ -1495,11 +1585,19 @@ public sealed partial class AgentOrchestratorKernel
                 .Where(candidate => candidate.TaskId is not null)
                 .Select(candidate => candidate.TaskId!)
                 .ToArray();
-            var replacement = request.Supersede(replacementAnswer, supersededAt, origin);
+            var replacement = request.Supersede(
+                replacementAnswer,
+                supersededAt,
+                origin,
+                goal.AuthoritativeBrief.Version);
             var resolvedRequests = matchingRequests.Where(candidate => !candidate.IsCompleted).ToArray();
             foreach (var related in resolvedRequests)
             {
-                related.CompleteAsSuperseded(replacement.Text, supersededAt, request.Id);
+                related.CompleteAsSuperseded(
+                    replacement.Text,
+                    supersededAt,
+                    request.Id,
+                    goal.AuthoritativeBrief.Version);
             }
 
             var affectedTasks = resolvedRequests
@@ -1734,7 +1832,7 @@ public sealed partial class AgentOrchestratorKernel
             .OrderBy(request => request.RequestedAt)
             .ToList())
         {
-            request.Complete(resolution, _clock.UtcNow);
+            request.Complete(resolution, _clock.UtcNow, briefVersion: goal.AuthoritativeBrief.Version);
             completed++;
             Append(goal, request.TaskId, ProgressKind.HumanInputReceived, resolution);
         }
@@ -1848,7 +1946,12 @@ public sealed partial class AgentOrchestratorKernel
 
     public void SetGoalRefinedSpec(GoalId goalId, RefinedSpec spec)
     {
-        GetGoal(goalId).SetRefinedSpec(spec);
+        GetGoal(goalId).SetRefinedSpec(spec, _clock.UtcNow);
+    }
+
+    public RefinedSpecVersion RecordGoalRefinement(GoalId goalId, RefinedSpec spec)
+    {
+        return GetGoal(goalId).RecordRefinedSpec(spec, _clock.UtcNow);
     }
 
     public void RecordGoalClarificationRound(GoalId goalId)

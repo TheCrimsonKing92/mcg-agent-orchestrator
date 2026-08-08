@@ -170,6 +170,18 @@ public static IReadOnlyList<string> SplitCommand(string line)
         return SplitTargetCommandWithValueFlags(command, remainder, "--waive", "--reason", "--reason-file", "--text-file", "--actor");
     }
 
+    if (command.Equals("revise", StringComparison.OrdinalIgnoreCase))
+    {
+        return SplitTargetCommandWithValueFlags(
+            command,
+            remainder,
+            "--brief-file",
+            "--text-file",
+            "--reason",
+            "--reason-file",
+            "--supersede-answer");
+    }
+
     if (command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
     {
         return SplitTargetTextCommandWithFileFlags(command, remainder, "--reason-file", "--text-file");

@@ -1654,7 +1654,11 @@ public sealed class ProgressiveReviewGlanceTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<bool> TryResolveAsync(string correlationKey, string resolution, CancellationToken cancellationToken = default) =>
+        public Task<bool> TryResolveAsync(
+            string correlationKey,
+            string resolution,
+            CancellationToken cancellationToken = default,
+            int? briefVersion = null) =>
             throw new NotSupportedException();
 
         public Task<int> ResolveOpenForGoalAsync(string goalId, string resolution, CancellationToken cancellationToken = default) =>

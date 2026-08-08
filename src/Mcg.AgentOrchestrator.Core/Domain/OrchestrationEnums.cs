@@ -108,7 +108,8 @@ public enum ProgressKind
     HumanInputRoundEvaluationInconclusive = 33,
     HumanInputWorkerResultContradiction = 34,
     FindingEvidenceRequestRecorded = 35,
-    FindingEvidenceRunRecorded = 36
+    FindingEvidenceRunRecorded = 36,
+    GoalBriefRevised = 37
 }
 
 public enum HumanInputAnswerOrigin

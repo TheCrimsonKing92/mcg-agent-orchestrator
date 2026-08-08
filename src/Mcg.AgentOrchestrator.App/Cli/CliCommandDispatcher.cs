@@ -29,7 +29,9 @@ public static bool ExecuteCommand(
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null,
     Action<OrchestratorStateOutboxMessage>? registerStateOutboxMessage = null,
     Func<IReadOnlyCollection<string>, AgentOrchestratorKernel>? reloadKernelForGoals = null,
-    Action<string>? registerPostCommitFailure = null)
+    Action<string>? registerPostCommitFailure = null,
+    TextReader? standardInput = null,
+    bool? isStandardInputRedirected = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
@@ -52,7 +54,9 @@ public static bool ExecuteCommand(
         reloadParkedGoalSafetyNetKernel: reloadParkedGoalSafetyNetKernel,
         registerStateOutboxMessage: registerStateOutboxMessage,
         reloadKernelForGoals: reloadKernelForGoals,
-        registerPostCommitFailure: registerPostCommitFailure)
+        registerPostCommitFailure: registerPostCommitFailure,
+        standardInput: standardInput,
+        isStandardInputRedirected: isStandardInputRedirected)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),

@@ -6,18 +6,26 @@ public sealed class Goal
 
     private readonly List<TaskSpec> _tasks;
     private readonly List<ProgressEvent> _timeline = [];
+    private readonly List<GoalBriefVersion> _briefVersions = [];
+    private readonly List<RefinedSpecVersion> _refinedSpecVersions = [];
     private readonly List<EffectiveAcceptanceCriteriaCorrection> _effectiveAcceptanceCriteriaCorrections = [];
     private readonly HashSet<GoalId> _dependsOn = [];
 
     public Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks)
-        : this(id, objective, tasks, isMetadataOnly: false)
+        : this(id, objective, tasks, isMetadataOnly: false, DateTimeOffset.MinValue)
     {
     }
 
-    private Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks, bool isMetadataOnly)
+    internal Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks, DateTimeOffset createdAt)
+        : this(id, objective, tasks, isMetadataOnly: false, createdAt)
+    {
+    }
+
+    private Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks, bool isMetadataOnly, DateTimeOffset createdAt)
     {
         Id = id;
-        Objective = RequireText(objective, nameof(objective));
+        var initialBrief = RequireText(objective, nameof(objective));
+        _briefVersions.Add(new GoalBriefVersion(1, initialBrief, createdAt));
         if (!isMetadataOnly && tasks.Count == 0)
         {
             throw new ArgumentException("A goal must have at least one task.", nameof(tasks));
@@ -31,11 +39,21 @@ public sealed class Goal
 
     public GoalId Id { get; }
 
-    public string Objective { get; }
+    public string Objective => AuthoritativeBrief.Text;
+
+    public GoalBriefVersion AuthoritativeBrief =>
+        _briefVersions.Single(version => version.IsAuthoritative);
+
+    public IReadOnlyList<GoalBriefVersion> BriefVersions => _briefVersions;
 
     public GoalStatus Status { get; private set; } = GoalStatus.Draft;
 
-    public RefinedSpec? RefinedSpec { get; private set; }
+    public RefinedSpec? RefinedSpec => AuthoritativeRefinedSpecVersion?.Spec;
+
+    public RefinedSpecVersion? AuthoritativeRefinedSpecVersion =>
+        _refinedSpecVersions.LastOrDefault(version => version.IsAuthoritative);
+
+    public IReadOnlyList<RefinedSpecVersion> RefinedSpecVersions => _refinedSpecVersions;
 
     public AcceptanceFailureSummary? LatestAcceptanceFailure { get; private set; }
 
@@ -74,7 +92,12 @@ public sealed class Goal
             throw new ArgumentException($"Status '{metadata.Status}' is not terminal.", nameof(metadata));
         }
 
-        var goal = new Goal(metadata.Id, BuildMetadataTitle(metadata.Title), [], isMetadataOnly: true);
+        var goal = new Goal(
+            metadata.Id,
+            BuildMetadataTitle(metadata.Title),
+            [],
+            isMetadataOnly: true,
+            metadata.CreatedAt ?? DateTimeOffset.MinValue);
         goal.SetStatus(metadata.Status);
         goal.MetadataResultCommit = NormalizeSha(metadata.ResultCommit);
         goal.MetadataCreatedAt = metadata.CreatedAt;
@@ -116,7 +139,44 @@ public sealed class Goal
 
     internal void SetStatus(GoalStatus status) => Status = status;
 
-    internal void SetRefinedSpec(RefinedSpec spec) => RefinedSpec = spec;
+    internal void SetRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt)
+    {
+        var current = AuthoritativeRefinedSpecVersion;
+        if (current is null)
+        {
+            _refinedSpecVersions.Add(new RefinedSpecVersion(
+                1,
+                spec,
+                recordedAt,
+                AuthoritativeBrief.Version));
+            return;
+        }
+
+        var currentIndex = _refinedSpecVersions.FindIndex(version => version.Version == current.Version);
+        _refinedSpecVersions[currentIndex] = current with { Spec = spec };
+    }
+
+    internal RefinedSpecVersion RecordRefinedSpec(RefinedSpec spec, DateTimeOffset recordedAt)
+    {
+        var current = AuthoritativeRefinedSpecVersion;
+        if (current is null)
+        {
+            var initial = new RefinedSpecVersion(1, spec, recordedAt, AuthoritativeBrief.Version);
+            _refinedSpecVersions.Add(initial);
+            return initial;
+        }
+
+        var nextVersion = current.Version + 1;
+        var currentIndex = _refinedSpecVersions.FindIndex(version => version.Version == current.Version);
+        _refinedSpecVersions[currentIndex] = current with { SupersededByVersion = nextVersion };
+        var replacement = new RefinedSpecVersion(
+            nextVersion,
+            spec,
+            recordedAt,
+            AuthoritativeBrief.Version);
+        _refinedSpecVersions.Add(replacement);
+        return replacement;
+    }
 
     internal void RecordClarificationRound() => ClarificationRoundCount++;
 
@@ -220,6 +280,38 @@ public sealed class Goal
 
     internal void Append(ProgressEvent progressEvent) => _timeline.Add(progressEvent);
 
+    internal GoalBriefVersion ReviseBrief(string newBrief, string? reason, DateTimeOffset recordedAt)
+    {
+        if (IsTerminal)
+        {
+            throw new GoalBriefRevisionNotAllowedException(
+                $"Goal '{Id.Value}' is {Status} and terminal goals cannot be revised.");
+        }
+
+        if (string.IsNullOrWhiteSpace(newBrief))
+        {
+            throw new ArgumentException("Goal brief cannot be empty.", nameof(newBrief));
+        }
+
+        var current = AuthoritativeBrief;
+        if (string.Equals(NormalizeLineEndings(current.Text), NormalizeLineEndings(newBrief), StringComparison.Ordinal))
+        {
+            throw new GoalBriefRevisionNoChangeException(
+                $"Submitted brief is identical to authoritative brief v{current.Version} after line-ending normalization.");
+        }
+
+        var nextVersionNumber = current.Version + 1;
+        var currentIndex = _briefVersions.FindIndex(version => version.Version == current.Version);
+        _briefVersions[currentIndex] = current with { SupersededByVersion = nextVersionNumber };
+        var next = new GoalBriefVersion(
+            nextVersionNumber,
+            newBrief,
+            recordedAt,
+            NormalizeOptionalText(reason));
+        _briefVersions.Add(next);
+        return next;
+    }
+
     internal void AddTask(TaskSpec task) => _tasks.Add(task);
 
     internal void AddTaskBeforeRole(TaskSpec task, AgentRole beforeRole)
@@ -310,23 +402,7 @@ public sealed class Goal
                 evt.OperatorGates)).ToList(),
             _dependsOn.Count > 0 ? _dependsOn.Select(id => id.Value).ToList() : null,
             SourceBacklogItemId,
-            RefinedSpec is null ? null : new RefinedSpecSnapshot(
-                RefinedSpec.BehavioralContract,
-                RefinedSpec.AcceptanceCriteria.ToList(),
-                RefinedSpec.VerificationClass.ToString(),
-                RefinedSpec.Decisions.Select(d => new RefinedSpecDecisionSnapshot(d.Question, d.Choice, d.Rationale)).ToList(),
-                RefinedSpec.OpenQuestions.Select(q => new RefinedSpecOpenQuestionSnapshot(
-                    q.Id,
-                    q.Question,
-                    q.ForkKind,
-                    q.Status,
-                    q.Answer,
-                    q.TopicKey,
-                    q.NormalizedQuestionKey,
-                    q.Criterion,
-                    q.BlastRadius)).ToList(),
-                RefinedSpec.OperatorOwnedAcceptanceCriteria.ToList(),
-                RefinedSpec.ClarificationAnswerHistory.ToList()),
+            RefinedSpec is null ? null : ToRefinedSpecSnapshot(RefinedSpec),
             LatestAcceptanceFailure is null
                 ? null
                 : new AcceptanceFailureSnapshot(
@@ -357,7 +433,16 @@ public sealed class Goal
                     CurrentHold.Blocker,
                     CurrentHold.StartedAt,
                     CurrentHold.StalledAt),
-            ClarificationRoundCount: ClarificationRoundCount);
+            ClarificationRoundCount: ClarificationRoundCount,
+            BriefVersions: _briefVersions.ToArray(),
+            RefinedSpecVersions: _refinedSpecVersions
+                .Select(version => new RefinedSpecVersionSnapshot(
+                    version.Version,
+                    ToRefinedSpecSnapshot(version.Spec),
+                    version.RecordedAt,
+                    version.BriefVersion,
+                    version.SupersededByVersion))
+                .ToArray());
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -373,7 +458,15 @@ public sealed class Goal
                 snapshot.TerminatedAt));
         }
 
-        var goal = new Goal(new GoalId(snapshot.Id), snapshot.Objective, snapshot.Tasks.Select(TaskSpec.FromSnapshot).ToList());
+        var initialRecordedAt = snapshot.CreatedAt ??
+            snapshot.Timeline.OrderBy(item => item.OccurredAt).FirstOrDefault()?.OccurredAt ??
+            DateTimeOffset.MinValue;
+        var goal = new Goal(
+            new GoalId(snapshot.Id),
+            snapshot.Objective,
+            snapshot.Tasks.Select(TaskSpec.FromSnapshot).ToList(),
+            initialRecordedAt);
+        goal.RestoreBriefVersions(snapshot.BriefVersions);
         goal.SetStatus(snapshot.Status);
         goal.RestoreClarificationRoundCount(snapshot.ClarificationRoundCount);
 
@@ -397,27 +490,13 @@ public sealed class Goal
         if (snapshot.SourceBacklogItemId is not null)
             goal.SetSourceBacklogItemId(snapshot.SourceBacklogItemId);
 
-        if (snapshot.RefinedSpec is { } rs)
+        if (snapshot.RefinedSpecVersions is { Count: > 0 } refinedSpecVersions)
         {
-            goal.SetRefinedSpec(new RefinedSpec(
-                rs.BehavioralContract,
-                rs.AcceptanceCriteria,
-                Enum.TryParse<VerificationClass>(rs.VerificationClass, out var vc) ? vc : VerificationClass.TestVerifiable,
-                rs.Decisions.Select(d => new RefinedSpecDecision(d.Question, d.Choice, d.Rationale)).ToList(),
-                rs.OpenQuestions.Select(q => new RefinedSpecOpenQuestion(
-                    q.Id,
-                    q.Question,
-                    q.ForkKind,
-                    q.Status,
-                    q.Answer,
-                    q.TopicKey,
-                    q.NormalizedQuestionKey,
-                    q.Criterion,
-                    q.BlastRadius)).ToList())
-            {
-                OperatorOwnedAcceptanceCriteria = rs.OperatorOwnedAcceptanceCriteria ?? [],
-                ClarificationAnswerHistory = rs.ClarificationAnswerHistory ?? []
-            });
+            goal.RestoreRefinedSpecVersions(refinedSpecVersions);
+        }
+        else if (snapshot.RefinedSpec is { } legacyRefinedSpec)
+        {
+            goal.SetRefinedSpec(FromRefinedSpecSnapshot(legacyRefinedSpec), initialRecordedAt);
         }
 
         if (snapshot.LatestAcceptanceFailure is { } failure)
@@ -468,12 +547,127 @@ public sealed class Goal
         return value.Trim();
     }
 
+    private void RestoreRefinedSpecVersions(IReadOnlyList<RefinedSpecVersionSnapshot> snapshots)
+    {
+        var versions = snapshots
+            .OrderBy(snapshot => snapshot.Version)
+            .Select(snapshot => new RefinedSpecVersion(
+                snapshot.Version,
+                FromRefinedSpecSnapshot(snapshot.Spec),
+                snapshot.RecordedAt,
+                snapshot.BriefVersion,
+                snapshot.SupersededByVersion))
+            .ToArray();
+        if (versions.Select(version => version.Version).SequenceEqual(Enumerable.Range(1, versions.Length)) is false ||
+            versions.Count(version => version.IsAuthoritative) != 1 ||
+            versions[^1].IsAuthoritative is false ||
+            versions.Take(versions.Length - 1).Any(version => version.SupersededByVersion != version.Version + 1))
+        {
+            throw new InvalidOperationException($"Goal '{Id.Value}' has an invalid refined-spec version chain.");
+        }
+
+        _refinedSpecVersions.Clear();
+        _refinedSpecVersions.AddRange(versions);
+    }
+
+    private static RefinedSpecSnapshot ToRefinedSpecSnapshot(RefinedSpec spec) =>
+        new(
+            spec.BehavioralContract,
+            spec.AcceptanceCriteria.ToList(),
+            spec.VerificationClass.ToString(),
+            spec.Decisions.Select(decision => new RefinedSpecDecisionSnapshot(
+                decision.Question,
+                decision.Choice,
+                decision.Rationale)).ToList(),
+            spec.OpenQuestions.Select(question => new RefinedSpecOpenQuestionSnapshot(
+                question.Id,
+                question.Question,
+                question.ForkKind,
+                question.Status,
+                question.Answer,
+                question.TopicKey,
+                question.NormalizedQuestionKey,
+                question.Criterion,
+                question.BlastRadius)).ToList(),
+            spec.OperatorOwnedAcceptanceCriteria.ToList(),
+            spec.ClarificationAnswerHistory.ToList());
+
+    private static RefinedSpec FromRefinedSpecSnapshot(RefinedSpecSnapshot snapshot) =>
+        new(
+            snapshot.BehavioralContract,
+            snapshot.AcceptanceCriteria,
+            Enum.TryParse<VerificationClass>(snapshot.VerificationClass, out var verificationClass)
+                ? verificationClass
+                : VerificationClass.TestVerifiable,
+            snapshot.Decisions.Select(decision => new RefinedSpecDecision(
+                decision.Question,
+                decision.Choice,
+                decision.Rationale)).ToList(),
+            snapshot.OpenQuestions.Select(question => new RefinedSpecOpenQuestion(
+                question.Id,
+                question.Question,
+                question.ForkKind,
+                question.Status,
+                question.Answer,
+                question.TopicKey,
+                question.NormalizedQuestionKey,
+                question.Criterion,
+                question.BlastRadius)).ToList())
+        {
+            OperatorOwnedAcceptanceCriteria = snapshot.OperatorOwnedAcceptanceCriteria ?? [],
+            ClarificationAnswerHistory = snapshot.ClarificationAnswerHistory ?? []
+        };
+
     private static string NormalizeSingleLine(string value, string parameterName) =>
         string.Join(' ', RequireText(value, parameterName)
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private static string? NormalizeOptionalText(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private void RestoreBriefVersions(IReadOnlyList<GoalBriefVersion>? versions)
+    {
+        if (versions is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var ordered = versions.OrderBy(version => version.Version).ToArray();
+        if (ordered.Length == 1 &&
+            !string.Equals(ordered[0].Text, Objective, StringComparison.Ordinal))
+        {
+            // A single-version snapshot may have been written by a legacy scalar-only
+            // mutation path. Preserve that update while keeping revised chains strict.
+            ordered[0] = ordered[0] with { Text = Objective };
+        }
+        else if (ordered.Length > 1 &&
+                 !string.Equals(ordered[^1].Text, Objective, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Goal '{Id.Value}' has divergent objective and brief-version state.");
+        }
+
+        if (ordered.Select(version => version.Version).Where((version, index) => version != index + 1).Any() ||
+            ordered.Count(version => version.IsAuthoritative) != 1 ||
+            !ordered[^1].IsAuthoritative)
+        {
+            throw new InvalidOperationException($"Goal '{Id.Value}' has an invalid brief-version chain.");
+        }
+
+        for (var index = 0; index < ordered.Length - 1; index++)
+        {
+            if (ordered[index].SupersededByVersion != ordered[index + 1].Version)
+            {
+                throw new InvalidOperationException($"Goal '{Id.Value}' has a broken brief-version successor link.");
+            }
+        }
+
+        _briefVersions.Clear();
+        _briefVersions.AddRange(ordered);
+    }
+
+    private static string NormalizeLineEndings(string value) =>
+        value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
 
     private static string? NormalizeSha(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

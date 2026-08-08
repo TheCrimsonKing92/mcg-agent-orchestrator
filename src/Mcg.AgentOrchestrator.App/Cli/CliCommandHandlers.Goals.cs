@@ -310,6 +310,87 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return true;
         }
 
+        case "revise":
+        {
+            CliArgumentParser.RequirePartCount(parts, 2, CliCommandHelp.ReviseUsage["Usage: ".Length..]);
+            var goal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            context.CurrentGoal = goal;
+            if (HasCliConfirmation(parts, "--history"))
+            {
+                Console.WriteLine($"Brief history: goal={goal.Id.Value}");
+                foreach (var version in goal.BriefVersions.OrderBy(version => version.Version))
+                {
+                    var standing = version.IsAuthoritative
+                        ? "authoritative"
+                        : $"superseded-by=v{version.SupersededByVersion}";
+                    Console.WriteLine($"--- v{version.Version} {standing} recorded={version.RecordedAt:u} reason={version.Reason ?? "none"} ---");
+                    Console.WriteLine(version.Text);
+                }
+
+                return false;
+            }
+
+            var newBrief = ResolveTextArgumentAllowStandardInput(
+                context,
+                parts,
+                inlineIndex: 2,
+                CliCommandHelp.ReviseUsage["Usage: ".Length..],
+                "--brief-file",
+                "--text-file");
+            var inlineReason = GetFlagValue(parts, "--reason");
+            var reasonFromFile = ResolveTextArgumentOrDefaultAllowStandardInput(
+                context,
+                parts,
+                inlineIndex: parts.Count,
+                defaultValue: null,
+                "--reason-file");
+            if (inlineReason is not null && reasonFromFile is not null)
+            {
+                throw new ArgumentException("Provide either --reason <reason> or --reason-file <path>, not both.");
+            }
+
+            var answerSupersessions = new List<GoalBriefAnswerSupersession>();
+            for (var index = 0; index < parts.Count; index++)
+            {
+                if (!parts[index].Equals("--supersede-answer", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (index + 1 >= parts.Count || parts[index + 1].StartsWith("--", StringComparison.Ordinal))
+                {
+                    throw new ArgumentException("--supersede-answer requires <clarification-id>=<replacement>.");
+                }
+
+                var value = parts[++index];
+                var separator = value.IndexOf('=');
+                if (separator <= 0 || separator == value.Length - 1)
+                {
+                    throw new ArgumentException("--supersede-answer requires <clarification-id>=<replacement>.");
+                }
+
+                var request = OrchestratorEntityResolver.ResolveHumanInputRequest(
+                    context.Kernel,
+                    goal.Id,
+                    value[..separator]);
+                answerSupersessions.Add(new GoalBriefAnswerSupersession(request.Id, value[(separator + 1)..]));
+            }
+
+            var result = context.Kernel.ReviseGoalBrief(
+                goal.Id,
+                newBrief,
+                inlineReason ?? reasonFromFile,
+                answerSupersessions);
+            Console.WriteLine(
+                $"Goal brief revised: goal={result.GoalId.Value} authoritative=v{result.AuthoritativeVersion.Version} " +
+                $"not-yet-started={result.NotYetStartedTaskIds.Count} in-flight={result.InFlightTaskIds.Count} " +
+                $"completed-unchanged={result.CompletedTaskIds.Count}");
+            Console.WriteLine($"  not-yet-started tasks: {FormatRevisionTaskIds(result.NotYetStartedTaskIds)}");
+            Console.WriteLine($"  in-flight tasks (continue on prior dispatch snapshot): {FormatRevisionTaskIds(result.InFlightTaskIds)}");
+            Console.WriteLine($"  completed tasks (unchanged): {FormatRevisionTaskIds(result.CompletedTaskIds)}");
+            return true;
+        }
+
         case "goal-plan":
             return HandleGoalPlan(context, parts);
 
@@ -1510,4 +1591,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return null;
     }
 }
+
+private static string FormatRevisionTaskIds(IReadOnlyList<TaskId> taskIds) =>
+    taskIds.Count == 0
+        ? "none"
+        : string.Join(", ", taskIds.Select(taskId => taskId.Value[..Math.Min(8, taskId.Value.Length)]));
 }

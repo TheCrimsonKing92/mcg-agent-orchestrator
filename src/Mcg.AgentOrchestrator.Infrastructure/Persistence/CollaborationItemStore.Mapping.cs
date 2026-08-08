@@ -63,7 +63,11 @@ public sealed partial class CollaborationItemStore
         DateTimeOffset answeredAt) =>
         string.IsNullOrWhiteSpace(resolution)
             ? []
-            : [new HumanInputAnswerRecord($"legacy:{itemId}", resolution, answeredAt)];
+            : [new HumanInputAnswerRecord(
+                $"legacy:{itemId}",
+                resolution,
+                answeredAt,
+                BriefVersion: null)];
 
     private static CollaborationBoundAction ReadAction(SqliteDataReader reader) =>
         new(

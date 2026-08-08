@@ -14,7 +14,13 @@ public sealed class DispatchExecutionTests
 
     kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
 
-    Assert.Equal(dispatch, task.LastDispatch);
+    Assert.Equal(
+        dispatch with
+        {
+            BriefVersion = goal.AuthoritativeBrief.Version,
+            BriefSnapshot = goal.Objective
+        },
+        task.LastDispatch);
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.Equal(GoalStatus.Active, goal.Status);
     Assert.Contains(goal.Timeline, evt =>

@@ -22,7 +22,9 @@ public sealed record GoalSnapshot(
     int AutomaticAcceptanceRetryCount = 0,
     int OperatorAcceptanceRegateCount = 0,
     GoalHoldSnapshot? CurrentHold = null,
-    int ClarificationRoundCount = 0);
+    int ClarificationRoundCount = 0,
+    IReadOnlyList<GoalBriefVersion>? BriefVersions = null,
+    IReadOnlyList<RefinedSpecVersionSnapshot>? RefinedSpecVersions = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,
@@ -65,6 +67,13 @@ public sealed record RefinedSpecSnapshot(
     IReadOnlyList<RefinedSpecOpenQuestionSnapshot> OpenQuestions,
     IReadOnlyList<string>? OperatorOwnedAcceptanceCriteria = null,
     IReadOnlyList<HumanInputAnswerRecord>? ClarificationAnswerHistory = null);
+
+public sealed record RefinedSpecVersionSnapshot(
+    int Version,
+    RefinedSpecSnapshot Spec,
+    DateTimeOffset RecordedAt,
+    int BriefVersion,
+    int? SupersededByVersion = null);
 
 public sealed record RefinedSpecDecisionSnapshot(string Question, string Choice, string Rationale);
 
@@ -170,7 +179,9 @@ public sealed record TaskDispatchSnapshot(
     string? WorktreeHeadSha = null,
     string? DirtyStateHash = null,
     DateTimeOffset? ProviderSessionRetiredAt = null,
-    IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null);
+    IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
+    int BriefVersion = 1,
+    string? BriefSnapshot = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

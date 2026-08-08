@@ -772,6 +772,8 @@ public sealed partial class AgentOrchestratorKernel
             throw new InvalidOperationException($"Task '{taskId}' status is {task.Status}; retry or assign it before dispatching it again.");
         }
 
+        dispatch.BriefVersion = goal.AuthoritativeBrief.Version;
+        dispatch.BriefSnapshot = goal.Objective;
         task.RecordDispatch(dispatch);
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);

@@ -588,7 +588,8 @@ private static bool? TryExecuteTaskCommand(string command, IReadOnlyList<string>
                     supersedeGoal.Id.Value,
                     clarification.Id,
                     supersedeText,
-                    HumanInputAnswerOrigin.Operator).GetAwaiter().GetResult();
+                    HumanInputAnswerOrigin.Operator,
+                    supersedeGoal.AuthoritativeBrief.Version).GetAwaiter().GetResult();
                 var refinementService = new GoalRefinementService(
                     context.Providers,
                     ModelFunctionCatalog.Empty,

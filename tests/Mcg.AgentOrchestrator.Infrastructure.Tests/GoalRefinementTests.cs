@@ -1493,6 +1493,74 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Empty(result.Spec.OpenQuestions);
     }
 
+    [Xunit.Fact]
+    public void SyncAnsweredClarificationsPreservesRecordedBriefVersionAcrossClockSkew()
+    {
+        var scenario = BuildScenario();
+        var goal = scenario.Kernel.GetGoal(scenario.GoalId);
+        scenario.Kernel.ReviseGoalBrief(goal.Id, "Revised brief");
+        const string questionId = "spec-clarification:clock-skew";
+        scenario.Kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Contract",
+            ["Criterion"],
+            VerificationClass.TestVerifiable,
+            [],
+            [new RefinedSpecOpenQuestion(questionId, "Which contract?", "external-contract", "Open")]));
+        var recordedAnswer = new HumanInputAnswerRecord(
+            "answer-v2",
+            "Use the revised contract",
+            DateTimeOffset.MinValue,
+            BriefVersion: 2);
+        scenario.Collaboration.Add(new CollaborationItem(
+            "clarification-v2",
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            CollaborationItemStatus.Resolved,
+            "Contract choice",
+            "Choose the contract",
+            questionId,
+            DateTimeOffset.MinValue,
+            DateTimeOffset.MinValue,
+            recordedAnswer.Text,
+            [recordedAnswer]));
+
+        var updated = scenario.Service.SyncAnsweredClarifications(scenario.Kernel, goal.Id);
+
+        var answer = Xunit.Assert.Single(updated!.ClarificationAnswerHistory);
+        Xunit.Assert.Equal("answer-v2", answer.Id);
+        Xunit.Assert.Equal(2, answer.BriefVersion);
+    }
+
+    [Xunit.Fact]
+    public async Task ResolveOpenClarificationStampsCurrentAuthoritativeBriefVersion()
+    {
+        var scenario = BuildScenario();
+        var goal = scenario.Kernel.GetGoal(scenario.GoalId);
+        scenario.Kernel.ReviseGoalBrief(goal.Id, "Revised brief");
+        const string questionId = "spec-clarification:versioned-answer";
+        scenario.Kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
+            "Contract",
+            ["Criterion"],
+            VerificationClass.TestVerifiable,
+            [],
+            [new RefinedSpecOpenQuestion(questionId, "Which contract?", "external-contract", "Open")]));
+        await scenario.Collaboration.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Contract choice",
+            "Choose the contract",
+            questionId);
+
+        var resolved = await scenario.Service.TryResolveOpenClarificationAsync(
+            scenario.Kernel,
+            questionId,
+            "Use the revised contract");
+
+        Xunit.Assert.True(resolved);
+        var item = Xunit.Assert.Single(scenario.Collaboration.Items);
+        Xunit.Assert.Equal(2, Xunit.Assert.Single(item.AnswerHistory!).BriefVersion);
+    }
+
     // --- Helpers ---
 
     private static string BuildFeasibilityJson(string criterion, string forks = "[]") => $$"""
