@@ -515,6 +515,17 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string workingDirectory,
         bool redirectStandardStreams = true)
     {
+        if (OperatingSystem.IsWindows() &&
+            Path.GetExtension(fileName) is var extension &&
+            (extension.Equals(".cmd", StringComparison.OrdinalIgnoreCase) ||
+             extension.Equals(".bat", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException(
+                $"Post-landing canary cannot launch batch-file target '{fileName}' with extension " +
+                $"'{extension}' through the shell-free owned-process path. Configure " +
+                "MCG_ORCHESTRATOR_DOTNET_PATH to the underlying executable instead.");
+        }
+
         var startInfo = new ProcessStartInfo(fileName)
         {
             WorkingDirectory = workingDirectory,

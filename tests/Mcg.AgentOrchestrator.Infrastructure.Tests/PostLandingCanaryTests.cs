@@ -1123,7 +1123,9 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             File.WriteAllText(
                 scriptPath,
                 "$received = @($args | Select-Object -Skip 1)\r\n" +
-                "[IO.File]::WriteAllText($args[0], (ConvertTo-Json -InputObject $received -Compress))\r\n");
+                "[IO.File]::WriteAllText($args[0], (ConvertTo-Json -InputObject $received -Compress))\r\n" +
+                "[Console]::Out.WriteLine('native stdout marker')\r\n" +
+                "[Console]::Error.WriteLine('native stderr marker')\r\n");
             var arguments = new[]
             {
                 "-NoProfile",
@@ -1158,6 +1160,12 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                     $"stdout: {File.ReadAllText(stdoutPath)}{Environment.NewLine}" +
                     $"stderr: {File.ReadAllText(stderrPath)}");
                 Assert.Equal(expectedArguments, JsonSerializer.Deserialize<string[]>(File.ReadAllText(outputPath)));
+                var stdout = File.ReadAllText(stdoutPath);
+                var stderr = File.ReadAllText(stderrPath);
+                Assert.Contains("native stdout marker", stdout, StringComparison.Ordinal);
+                Assert.DoesNotContain("native stderr marker", stdout, StringComparison.Ordinal);
+                Assert.Contains("native stderr marker", stderr, StringComparison.Ordinal);
+                Assert.DoesNotContain("native stdout marker", stderr, StringComparison.Ordinal);
             }
             finally
             {
@@ -1168,6 +1176,30 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         {
             try { Directory.Delete(testRoot, recursive: true); } catch { }
         }
+    }
+
+    [Xunit.Theory(DisplayName = "Windows post-landing capture rejects batch targets with actionable configuration guidance")]
+    [InlineData("dotnet.cmd")]
+    [InlineData("fake-dotnet.bat")]
+    public void WindowsFileCaptureRejectsBatchTargets(string fileName)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var targetPath = Path.Combine("C:\\tools with spaces", fileName);
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            PostLandingCanaryRunner.BuildFileCaptureStartInfo(
+                targetPath,
+                ["--info"],
+                Environment.CurrentDirectory,
+                redirectStandardStreams: false));
+
+        Assert.Contains(targetPath, exception.Message, StringComparison.Ordinal);
+        Assert.Contains(Path.GetExtension(targetPath), exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("MCG_ORCHESTRATOR_DOTNET_PATH", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("underlying executable", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Xunit.Fact(DisplayName = "Known-green fixture runs from an isolated landed worktree despite a dirty operator checkout")]
