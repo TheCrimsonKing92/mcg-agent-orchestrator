@@ -291,7 +291,7 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             Assert.All(round3State, finding => Assert.Equal(ReviewFindingState.Resolved, finding.State));
             Assert.Contains("verdict: pass", reviewer.LastVerification!.StandardOutput);
             Assert.Equal(round3Commit, reviewer.LastVerification.ReviewedCommit);
-            Assert.Empty(reviewer.LastVerification.ReviewFindingTouchedAnchors!);
+            Assert.Equal(anchorB, Assert.Single(reviewer.LastVerification.ReviewFindingTouchedAnchors!));
         }
         finally
         {
