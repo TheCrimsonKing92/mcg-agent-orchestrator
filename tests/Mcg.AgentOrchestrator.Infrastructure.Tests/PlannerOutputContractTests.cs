@@ -15,7 +15,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     [Xunit.Fact]
     public void PlannerContract_ExactRejectedE5c18520NewStoreMarker_Passes()
     {
-        var fixtureBytes = ReadExactLiveFixtureBytes(E5c18520FixtureName);
+        var fixtureBytes = ReadCanonicalLiveFixtureBytes(E5c18520FixtureName);
         Xunit.Assert.Equal(
             "86A0C693C22296BC7E6517EB7A36384B99057288E057237278F364B3B65844F1",
             Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(fixtureBytes)));
@@ -299,8 +299,9 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             "PlannerOutputContract",
             fileName);
 
-    private static byte[] ReadExactLiveFixtureBytes(string fileName) =>
-        File.ReadAllBytes(PlannerFixturePath(fileName));
+    private static byte[] ReadCanonicalLiveFixtureBytes(string fileName) =>
+        System.Text.Encoding.UTF8.GetBytes(
+            File.ReadAllText(PlannerFixturePath(fileName)).ReplaceLineEndings("\n"));
 
     private static string ReadExactLiveFixture(string fileName) =>
         File.ReadAllText(PlannerFixturePath(fileName));

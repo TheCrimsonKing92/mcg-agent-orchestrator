@@ -17,7 +17,7 @@ No production fix was applied. Choosing whether an orchestrator-authored Planner
 
 ## Follow-up: Planner contract diagnosis (`903cee50`)
 
-The retained Planner stdout for `e5c18520` is available at `.orchestrator/logs/e5c18520-316cfc5a-20260805154436.out.log`: 12,778 bytes, SHA-256 `86A0C693C22296BC7E6517EB7A36384B99057288E057237278F364B3B65844F1`. The test fixture `e5c18520-316cfc5a-20260805154436.out.txt` is byte-identical and asserts that hash.
+The retained Planner stdout for `e5c18520` is available at `.orchestrator/logs/e5c18520-316cfc5a-20260805154436.out.log`: 12,778 bytes, SHA-256 `86A0C693C22296BC7E6517EB7A36384B99057288E057237278F364B3B65844F1`. The test fixture `e5c18520-316cfc5a-20260805154436.out.txt` is byte-identical in its canonical LF form and asserts that hash after undoing any checkout-time line-ending conversion.
 
 The determination is **contract-defect**, not Planner inadequacy. Two retained Planner outputs were substantively complete but rejected on presentation:
 
@@ -52,9 +52,9 @@ Unaddressed follow-up: root-relative basename citations remain a separate presen
 
 The two line-1217/line-1231 labels and the exit-artifact policy remain out of scope here and owned by backlog `ba3e1bde`. The current task explicitly prohibited orchestrator-state access, so persisted `TaskVerificationRecord.StandardError` values were not queried; rows above say unattributable where stored files cannot substitute for that record.
 
-The model correlation is retired. The retained dispatch metadata selected `codex exec --model 'gpt-5.6-sol'` with `model_reasoning_effort='high'`, but `AgentCatalog.Default()` binds the Planner to subscription model `gpt-5.5` at low effort, allows alternate catalogs, and applies complexity selection separately. The failing model/effort pair is therefore not a static property of the Planner role and carries no discriminating signal for this contract defect.
+The model correlation is retired. The retained dispatch metadata selected `codex exec --model 'gpt-5.6-sol'` with `model_reasoning_effort='high'`, but `AgentCatalogStore.Default()` binds the Planner to subscription model `gpt-5.5` at low effort, allows alternate catalogs, and applies complexity selection separately. The failing model/effort pair is therefore not a static property of the Planner role and carries no discriminating signal for this contract defect.
 
-Verification state: the characterization test asserts the current divergent behavior (it is not skipped). The subscription lane's sanctioned `Invoke-WorkerBuildCheck.ps1` completed with zero errors. Test execution and the RED/GREEN negative control are explicitly deferred to the test-capable acceptance lane by `docs/negative-controls/707d4244.md`; no test-pass claim is inferred from compilation.
+Verification state: the characterization test asserts the current divergent behavior (it is not skipped). The subscription lane's sanctioned `Invoke-WorkerBuildCheck.ps1` completed with zero errors, and the focused `PlannerOutputContractTests` run passed all 18 tests, including the real-artifact acceptance test and fixture-derived negative control.
 
 ## Exhaustive `exitCode` write inventory
 
