@@ -24,7 +24,9 @@ internal sealed class CliExecutionContext(
     Func<AgentOrchestratorKernel>? reloadParkedGoalSafetyNetKernel = null,
     Action<OrchestratorStateOutboxMessage>? registerStateOutboxMessage = null,
     Func<IReadOnlyCollection<string>, AgentOrchestratorKernel>? reloadKernelForGoals = null,
-    Action<string>? registerPostCommitFailure = null)
+    Action<string>? registerPostCommitFailure = null,
+    TextReader? standardInput = null,
+    bool? isStandardInputRedirected = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -90,6 +92,10 @@ public IReadOnlyList<AgentDefinition> Agents { get; set; } = agents;
 public WorkerProfileCatalog WorkerProfiles { get; set; } = workerProfiles;
 
 public Goal? CurrentGoal { get; set; } = currentGoal;
+
+public TextReader StandardInput { get; } = standardInput ?? Console.In;
+
+public bool IsStandardInputRedirected { get; } = isStandardInputRedirected ?? Console.IsInputRedirected;
 
 public IGoalAcceptanceVerifier AcceptanceVerifier { get; init; } = new GoalAcceptanceVerifier();
 

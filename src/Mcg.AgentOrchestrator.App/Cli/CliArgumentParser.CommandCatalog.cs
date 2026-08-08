@@ -70,6 +70,7 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "lifecycle-simple-goal",
     "lifecycle-goal",
     "goal-depends",
+    "revise",
     "goal-amend",
     "goal-plan",
     "plan",

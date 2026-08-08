@@ -171,7 +171,9 @@ public sealed class TaskSpec
                     LastDispatch.WorktreeHeadSha,
                     LastDispatch.DirtyStateHash,
                     LastDispatch.ProviderSessionRetiredAt,
-                    LastDispatch.ReviewFindingTouchedAnchors),
+                    LastDispatch.ReviewFindingTouchedAnchors,
+                    LastDispatch.BriefVersion,
+                    LastDispatch.BriefSnapshot),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -325,7 +327,9 @@ public sealed class TaskSpec
                 WorktreeHeadSha: snapshot.LastDispatch.WorktreeHeadSha,
                 DirtyStateHash: snapshot.LastDispatch.DirtyStateHash,
                 ProviderSessionRetiredAt: snapshot.LastDispatch.ProviderSessionRetiredAt,
-                ReviewFindingTouchedAnchors: snapshot.LastDispatch.ReviewFindingTouchedAnchors));
+                ReviewFindingTouchedAnchors: snapshot.LastDispatch.ReviewFindingTouchedAnchors,
+                BriefVersion: snapshot.LastDispatch.BriefVersion,
+                BriefSnapshot: snapshot.LastDispatch.BriefSnapshot));
         }
 
         if (snapshot.LastProcess is not null)

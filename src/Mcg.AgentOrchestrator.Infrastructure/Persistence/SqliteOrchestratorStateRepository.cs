@@ -1314,6 +1314,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         merged = stored with
         {
             Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),
+            BriefVersions = PickStoreOwnedList(baseline.BriefVersions, stored.BriefVersions, current.BriefVersions),
             Status = PickTickOwned(baseline.Status, stored.Status, current.Status),
             Tasks = mergedTasks,
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
@@ -1324,6 +1325,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 baseline.ClarificationRoundCount,
                 stored.ClarificationRoundCount,
                 current.ClarificationRoundCount),
+            RefinedSpecVersions = PickStoreOwnedList(
+                baseline.RefinedSpecVersions,
+                stored.RefinedSpecVersions,
+                current.RefinedSpecVersions),
             LatestAcceptanceFailure = PickStoreOwned(baseline.LatestAcceptanceFailure, stored.LatestAcceptanceFailure, current.LatestAcceptanceFailure),
             AutomaticAcceptanceRetryCount = PickStoreOwned(
                 baseline.AutomaticAcceptanceRetryCount,

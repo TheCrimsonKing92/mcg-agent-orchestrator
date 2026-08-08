@@ -33,3 +33,15 @@ public sealed record RefinedSpec(
     public bool HasOpenQuestions => OpenQuestions.Any(q =>
         string.Equals(q.Status, "Open", StringComparison.OrdinalIgnoreCase));
 }
+
+public sealed record RefinedSpecVersion(
+    int Version,
+    RefinedSpec Spec,
+    DateTimeOffset RecordedAt,
+    int BriefVersion,
+    int? SupersededByVersion = null)
+{
+    public bool IsSuperseded => SupersededByVersion is not null;
+
+    public bool IsAuthoritative => !IsSuperseded;
+}

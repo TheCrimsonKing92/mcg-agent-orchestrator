@@ -21,10 +21,15 @@ public interface ICollaborationItemStore
         IReadOnlyList<CollaborationActionBinding> actions,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Resolves an item and records answer provenance. <paramref name="briefVersion"/> is null when the
+    /// caller cannot authoritatively hydrate the goal; the store does not infer a version.
+    /// </summary>
     Task<bool> TryResolveAsync(
         string correlationKey,
         string resolution,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        int? briefVersion = null);
 
     Task<int> ResolveOpenForGoalAsync(
         string goalId,

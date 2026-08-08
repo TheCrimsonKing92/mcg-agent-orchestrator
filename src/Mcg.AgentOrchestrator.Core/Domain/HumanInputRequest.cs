@@ -131,7 +131,8 @@ public sealed class HumanInputRequest
         string answer,
         DateTimeOffset answeredAt,
         IReadOnlyList<string>? gatedDeliverableIds = null,
-        HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator)
+        HumanInputAnswerOrigin origin = HumanInputAnswerOrigin.Operator,
+        int briefVersion = 1)
     {
         if (string.IsNullOrWhiteSpace(answer))
         {
@@ -144,7 +145,8 @@ public sealed class HumanInputRequest
             $"{Id.Value}:answer:0",
             answer.Trim(),
             answeredAt,
-            origin));
+            origin,
+            BriefVersion: briefVersion));
         WasDismissed = false;
         ResetSuppressionCountForAnswerRevision();
         foreach (var deliverableId in gatedDeliverableIds ?? [])
@@ -174,7 +176,8 @@ public sealed class HumanInputRequest
     internal HumanInputAnswerRecord Supersede(
         string answer,
         DateTimeOffset answeredAt,
-        HumanInputAnswerOrigin origin)
+        HumanInputAnswerOrigin origin,
+        int briefVersion = 1)
     {
         if (origin != HumanInputAnswerOrigin.Operator)
         {
@@ -195,7 +198,12 @@ public sealed class HumanInputRequest
         var currentIndex = _answerHistory.FindLastIndex(candidate => !candidate.IsRetracted);
         var current = _answerHistory[currentIndex];
         _answerHistory[currentIndex] = current with { SupersededByAnswerId = answerId };
-        var replacement = new HumanInputAnswerRecord(answerId, answer.Trim(), answeredAt, origin);
+        var replacement = new HumanInputAnswerRecord(
+            answerId,
+            answer.Trim(),
+            answeredAt,
+            origin,
+            BriefVersion: briefVersion);
         _answerHistory.Add(replacement);
         ResetSuppressionCountForAnswerRevision();
         return replacement;
@@ -265,9 +273,10 @@ public sealed class HumanInputRequest
     internal void CompleteAsSuperseded(
         string answer,
         DateTimeOffset answeredAt,
-        HumanInputRequestId answeredRequestId)
+        HumanInputRequestId answeredRequestId,
+        int briefVersion = 1)
     {
-        Complete(answer, answeredAt);
+        Complete(answer, answeredAt, briefVersion: briefVersion);
         SupersededByRequestId = answeredRequestId;
     }
 
@@ -372,12 +381,18 @@ public sealed class HumanInputRequest
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedValue))).ToLowerInvariant();
 }
 
+/// <summary>Records an answer and, when known, the authoritative brief version that governed it.</summary>
+/// <param name="BriefVersion">
+/// The authoritative brief version at write time, or <see langword="null"/> when the persistence caller
+/// does not have authoritative goal context. The store never fabricates provenance.
+/// </param>
 public sealed record HumanInputAnswerRecord(
     string Id,
     string Text,
     DateTimeOffset AnsweredAt,
     HumanInputAnswerOrigin Origin = HumanInputAnswerOrigin.Operator,
-    string? SupersededByAnswerId = null)
+    string? SupersededByAnswerId = null,
+    int? BriefVersion = null)
 {
     public bool IsRetracted => SupersededByAnswerId is not null;
 }

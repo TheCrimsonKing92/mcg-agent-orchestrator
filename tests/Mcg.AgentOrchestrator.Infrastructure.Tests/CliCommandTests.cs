@@ -50,7 +50,9 @@ public abstract class CliCommandTestBase
     private protected static string ExecuteCliAndCapture(
         IReadOnlyList<string> parts,
         AgentOrchestratorKernel kernel,
-        OrchestratorWorkspace workspace)
+        OrchestratorWorkspace workspace,
+        TextReader? standardInput = null,
+        bool? isStandardInputRedirected = null)
     {
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var providers = new InMemoryModelProviderRegistry([]);
@@ -64,7 +66,9 @@ public abstract class CliCommandTestBase
             ref agents,
             providers,
             ref profiles,
-            ref currentGoal));
+            ref currentGoal,
+            standardInput: standardInput,
+            isStandardInputRedirected: isStandardInputRedirected));
     }
 
     private protected static void AssertHelpCommandDoesNotResolveGoal(IReadOnlyList<string> parts, string expectedUsage)

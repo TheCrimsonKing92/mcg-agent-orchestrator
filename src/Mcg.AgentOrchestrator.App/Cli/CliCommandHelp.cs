@@ -14,6 +14,7 @@ internal static class CliCommandHelp
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
     public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
+    public const string ReviseUsage = "Usage: revise <goal-prefix> <new-brief> [--reason <reason>] [--supersede-answer <clarification-id>=<replacement>...] | revise <goal-prefix> --brief-file <path|-> [--reason <reason>|--reason-file <path|->] [--supersede-answer <clarification-id>=<replacement>...] | revise <goal-prefix> --history (- reads stdin for revise file flags)";
     public const string AnswerUsage = "Usage: answer <request-id> <answer> [--gate-deliverable <id>...] | answer <request-id> --text-file <path> [--gate-deliverable <id>...]";
     public const string SupersedeUsage = "Usage: supersede <goal-id> <clarification-id> <answer> | supersede <goal-id> <clarification-id> --text-file <path>";
     public const string GateSatisfiedUsage = "Usage: gate-satisfied <request-id|task-note-record-id> <deliverable-id> <evidence> | gate-satisfied <request-id|task-note-record-id> <deliverable-id> --text-file <path>";
@@ -133,6 +134,11 @@ internal static class CliCommandHelp
         GoalAmendUsage,
         "Waive one acceptance criterion on an in-flight goal with durable audit provenance.",
         ["--waive", "--reason", "--reason-file", "--text-file", "--actor", "--help", "-h"]);
+
+    private static readonly CommandHelpEntry Revise = new(
+        ReviseUsage,
+        "Replace an active goal's authoritative brief while retaining its version history.",
+        ["--brief-file", "--text-file", "--reason", "--reason-file", "--supersede-answer", "--history", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Answer = new(
         AnswerUsage,
@@ -482,6 +488,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("goal-amend", StringComparison.OrdinalIgnoreCase))
         {
             entry = GoalAmend;
+            return true;
+        }
+
+        if (args[0].Equals("revise", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = Revise;
             return true;
         }
 
@@ -902,6 +914,7 @@ internal static class CliCommandHelp
         arg.Equals("-h", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsFlag(string arg) =>
+        !arg.Equals("-", StringComparison.Ordinal) &&
         arg.StartsWith("-", StringComparison.Ordinal) &&
         !int.TryParse(arg, System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out _);
 

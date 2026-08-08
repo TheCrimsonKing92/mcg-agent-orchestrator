@@ -260,7 +260,13 @@ private static string ResolveBriefObjective(IReadOnlyList<string> parts, string 
 
 private static string ResolveTextArgument(IReadOnlyList<string> parts, int inlineIndex, string usage, params string[] fileFlags)
 {
-    var value = ResolveTextArgumentOrDefault(parts, inlineIndex, defaultValue: null, fileFlags);
+    var value = ResolveTextArgumentOrDefaultCore(
+        parts,
+        inlineIndex,
+        defaultValue: null,
+        allowStandardInput: false,
+        context: null,
+        fileFlags);
     if (value is null)
     {
         throw new ArgumentException($"Usage: {usage}");
@@ -270,6 +276,56 @@ private static string ResolveTextArgument(IReadOnlyList<string> parts, int inlin
 }
 
 private static string? ResolveTextArgumentOrDefault(IReadOnlyList<string> parts, int inlineIndex, string? defaultValue, params string[] fileFlags)
+{
+    return ResolveTextArgumentOrDefaultCore(
+        parts,
+        inlineIndex,
+        defaultValue,
+        allowStandardInput: false,
+        context: null,
+        fileFlags);
+}
+
+private static string ResolveTextArgumentAllowStandardInput(
+    CliExecutionContext context,
+    IReadOnlyList<string> parts,
+    int inlineIndex,
+    string usage,
+    params string[] fileFlags)
+{
+    var value = ResolveTextArgumentOrDefaultCore(
+        parts,
+        inlineIndex,
+        defaultValue: null,
+        allowStandardInput: true,
+        context,
+        fileFlags);
+    return value ?? throw new ArgumentException($"Usage: {usage}");
+}
+
+private static string? ResolveTextArgumentOrDefaultAllowStandardInput(
+    CliExecutionContext context,
+    IReadOnlyList<string> parts,
+    int inlineIndex,
+    string? defaultValue,
+    params string[] fileFlags)
+{
+    return ResolveTextArgumentOrDefaultCore(
+        parts,
+        inlineIndex,
+        defaultValue,
+        allowStandardInput: true,
+        context,
+        fileFlags);
+}
+
+private static string? ResolveTextArgumentOrDefaultCore(
+    IReadOnlyList<string> parts,
+    int inlineIndex,
+    string? defaultValue,
+    bool allowStandardInput,
+    CliExecutionContext? context,
+    params string[] fileFlags)
 {
     var presentFlags = fileFlags
         .Where(flag => parts.Any(part => part.Equals(flag, StringComparison.OrdinalIgnoreCase)))
@@ -301,6 +357,16 @@ private static string? ResolveTextArgumentOrDefault(IReadOnlyList<string> parts,
     var flag = presentFlags[0];
     var path = GetFlagValue(parts, flag)
         ?? throw new ArgumentException($"{flag} requires <path>.");
+    if (allowStandardInput && path.Equals("-", StringComparison.Ordinal))
+    {
+        if (context is null || !context.IsStandardInputRedirected)
+        {
+            throw new InvalidOperationException("Standard input is not redirected; pipe content or provide a file.");
+        }
+
+        return context.StandardInput.ReadToEnd();
+    }
+
     if (!File.Exists(path))
     {
         throw new InvalidOperationException($"{flag} not found: {path}");

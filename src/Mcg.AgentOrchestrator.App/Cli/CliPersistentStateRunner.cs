@@ -579,6 +579,7 @@ internal static class CliPersistentStateRunner
         return args[0].ToLowerInvariant() switch
         {
             "timeline" or "task-timeline" => true,
+            "revise" => HasFlag(args, "--history"),
             "goal-timing" => args.Count > 1 && !args[1].Equals("--all", StringComparison.OrdinalIgnoreCase),
             _ => false
         };
@@ -2118,6 +2119,11 @@ internal static class CliPersistentStateRunner
         }
 
         if (parts[0].Equals("timeline", StringComparison.OrdinalIgnoreCase))
+        {
+            return parts.Count > 1 ? parts[1] : null;
+        }
+
+        if (parts[0].Equals("revise", StringComparison.OrdinalIgnoreCase))
         {
             return parts.Count > 1 ? parts[1] : null;
         }

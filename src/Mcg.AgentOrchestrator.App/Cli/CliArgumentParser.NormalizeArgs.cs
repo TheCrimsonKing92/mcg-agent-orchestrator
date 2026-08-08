@@ -122,6 +122,18 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return NormalizeTargetCommandWithValueFlags(args, 1, "--waive", "--reason", "--reason-file", "--text-file", "--actor");
     }
 
+    if (command.Equals("revise", StringComparison.OrdinalIgnoreCase))
+    {
+        return NormalizeTargetCommandWithValueFlags(
+            args,
+            1,
+            "--brief-file",
+            "--text-file",
+            "--reason",
+            "--reason-file",
+            "--supersede-answer");
+    }
+
     if (command.Equals("backlog-close", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeTargetTextCommandWithFileFlags(args, 1, "--reason-file", "--text-file");

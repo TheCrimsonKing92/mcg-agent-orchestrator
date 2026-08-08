@@ -118,7 +118,8 @@ public sealed partial class CollaborationItemStore
     public async Task<bool> TryResolveAsync(
         string correlationKey,
         string resolution,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int? briefVersion = null)
     {
         return await WithBusyRetryAsync(async () =>
         {
@@ -131,7 +132,11 @@ public sealed partial class CollaborationItemStore
                 var resolvedAt = answeredAt.ToString("O");
                 var answerHistory = new[]
                 {
-                    new HumanInputAnswerRecord(Guid.NewGuid().ToString("n"), resolution, answeredAt)
+                    new HumanInputAnswerRecord(
+                        Guid.NewGuid().ToString("n"),
+                        resolution,
+                        answeredAt,
+                        BriefVersion: briefVersion)
                 };
                 await using var cmd = conn.CreateCommand();
                 // Idempotent: only update if currently in a non-terminal state.
@@ -163,6 +168,7 @@ public sealed partial class CollaborationItemStore
         string itemId,
         string replacementAnswer,
         HumanInputAnswerOrigin origin,
+        int? briefVersion = null,
         CancellationToken cancellationToken = default)
     {
         if (origin != HumanInputAnswerOrigin.Operator)
@@ -216,7 +222,8 @@ public sealed partial class CollaborationItemStore
                     Guid.NewGuid().ToString("n"),
                     replacementAnswer.Trim(),
                     DateTimeOffset.UtcNow,
-                    origin);
+                    origin,
+                    BriefVersion: briefVersion);
                 history[priorIndex] = history[priorIndex] with { SupersededByAnswerId = replacement.Id };
                 history.Add(replacement);
 
