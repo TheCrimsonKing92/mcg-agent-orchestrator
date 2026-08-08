@@ -398,6 +398,7 @@ public sealed class GoalWorktreeTests
             string request,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
+            bool runBaselineArm = false,
             CancellationToken cancellationToken = default)
         {
             if (exception is not null)

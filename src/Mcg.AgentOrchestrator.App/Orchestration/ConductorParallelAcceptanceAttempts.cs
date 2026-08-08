@@ -2010,7 +2010,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (run.FocusedEvidence is not null)
         {
-            return run.FocusedEvidence.Accepted && run.FocusedEvidence.Passed
+            return run.FocusedEvidence.Passed
                 ? ConductorParallelAcceptanceAttemptOutcome.Passed
                 : ConductorParallelAcceptanceAttemptOutcome.Failed;
         }

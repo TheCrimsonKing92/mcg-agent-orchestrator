@@ -147,6 +147,85 @@ public sealed record FindingEvidenceSelection(
 public sealed record FindingEvidenceRequest(
     [property: JsonPropertyName("selections")] IReadOnlyList<FindingEvidenceSelection> Selections);
 
+[JsonConverter(typeof(JsonStringEnumConverter<FindingEvidenceArm>))]
+public enum FindingEvidenceArm
+{
+    Candidate,
+    Baseline
+}
+
+[JsonConverter(typeof(FindingEvidenceArmDispositionJsonConverter))]
+public enum FindingEvidenceArmDisposition
+{
+    Inconclusive,
+    Green,
+    Red
+}
+
+public sealed class FindingEvidenceArmDispositionJsonConverter : JsonConverter<FindingEvidenceArmDisposition>
+{
+    public override FindingEvidenceArmDisposition Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.TokenType == JsonTokenType.String && reader.GetString() is { } value
+            ? value.ToLowerInvariant() switch
+            {
+                "green" => FindingEvidenceArmDisposition.Green,
+                "red" => FindingEvidenceArmDisposition.Red,
+                _ => FindingEvidenceArmDisposition.Inconclusive
+            }
+            : FindingEvidenceArmDisposition.Inconclusive;
+
+    public override void Write(Utf8JsonWriter writer, FindingEvidenceArmDisposition value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value switch
+        {
+            FindingEvidenceArmDisposition.Green => "green",
+            FindingEvidenceArmDisposition.Red => "red",
+            _ => "inconclusive"
+        });
+}
+
+[JsonConverter(typeof(FindingEvidenceOutcomeReasonJsonConverter))]
+public enum FindingEvidenceOutcomeReason
+{
+    Unknown,
+    ValidEvidence,
+    VacuousEvidence,
+    CandidateRed,
+    CandidateInconclusive,
+    BaselineInconclusive
+}
+
+public sealed class FindingEvidenceOutcomeReasonJsonConverter : JsonConverter<FindingEvidenceOutcomeReason>
+{
+    private static readonly IReadOnlyDictionary<string, FindingEvidenceOutcomeReason> Reasons =
+        new Dictionary<string, FindingEvidenceOutcomeReason>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["valid-evidence"] = FindingEvidenceOutcomeReason.ValidEvidence,
+            ["vacuous-evidence"] = FindingEvidenceOutcomeReason.VacuousEvidence,
+            ["candidate-red"] = FindingEvidenceOutcomeReason.CandidateRed,
+            ["candidate-inconclusive"] = FindingEvidenceOutcomeReason.CandidateInconclusive,
+            ["baseline-inconclusive"] = FindingEvidenceOutcomeReason.BaselineInconclusive,
+            ["unknown"] = FindingEvidenceOutcomeReason.Unknown
+        };
+
+    public override FindingEvidenceOutcomeReason Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.TokenType == JsonTokenType.String && Reasons.TryGetValue(reader.GetString() ?? string.Empty, out var reason)
+            ? reason
+            : FindingEvidenceOutcomeReason.Unknown;
+
+    public override void Write(Utf8JsonWriter writer, FindingEvidenceOutcomeReason value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(ToWireValue(value));
+
+    public static string ToWireValue(FindingEvidenceOutcomeReason value) => value switch
+    {
+        FindingEvidenceOutcomeReason.ValidEvidence => "valid-evidence",
+        FindingEvidenceOutcomeReason.VacuousEvidence => "vacuous-evidence",
+        FindingEvidenceOutcomeReason.CandidateRed => "candidate-red",
+        FindingEvidenceOutcomeReason.CandidateInconclusive => "candidate-inconclusive",
+        FindingEvidenceOutcomeReason.BaselineInconclusive => "baseline-inconclusive",
+        _ => "unknown"
+    };
+}
+
 [JsonConverter(typeof(FindingEvidenceNotHonouredReasonJsonConverter))]
 public enum FindingEvidenceNotHonouredReason
 {
@@ -197,7 +276,18 @@ public sealed record FindingEvidenceOutcome(
     [property: JsonPropertyName("honoured")] bool Honoured,
     [property: JsonPropertyName("receipt_id")] string? ReceiptId = null,
     [property: JsonPropertyName("reason")] FindingEvidenceNotHonouredReason? Reason = null,
-    [property: JsonPropertyName("detail")] string? Detail = null);
+    [property: JsonPropertyName("detail")] string? Detail = null,
+    [property: JsonPropertyName("result_reason")] FindingEvidenceOutcomeReason? ResultReason = null);
+
+public sealed record FindingEvidenceArmReceipt(
+    FindingEvidenceArm Arm,
+    string Sha,
+    FindingEvidenceArmDisposition Disposition,
+    bool Accepted,
+    bool Passed,
+    string Summary,
+    IReadOnlyList<string>? ReceiptPaths = null,
+    IReadOnlyList<string>? FailingTestIdentities = null);
 
 public sealed record FindingEvidenceReceipt(
     string ReceiptId,
@@ -205,7 +295,8 @@ public sealed record FindingEvidenceReceipt(
     FindingEvidenceRequest Request,
     bool Accepted,
     bool Passed,
-    string Summary);
+    string Summary,
+    IReadOnlyList<FindingEvidenceArmReceipt>? Arms = null);
 
 public sealed record ReviewFinding(
     [property: JsonPropertyName("stable_id")] string StableId,

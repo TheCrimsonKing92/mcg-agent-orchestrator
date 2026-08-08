@@ -39,6 +39,7 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
 
             Assert.True(result.Accepted);
             Assert.True(result.Passed);
+            Assert.Equal(FindingEvidenceArm.Candidate, Assert.Single(result.Arms!).Arm);
             var coreCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
             Assert.DoesNotContain("--filter-class", coreCall);
             var infrastructureCall = calls.Single(call =>

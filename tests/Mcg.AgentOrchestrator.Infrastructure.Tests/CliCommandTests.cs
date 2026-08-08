@@ -937,6 +937,7 @@ public abstract class CliCommandTestBase
             string request,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
+            bool runBaselineArm = false,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new FocusedEvidenceRunResult(
                 request,
