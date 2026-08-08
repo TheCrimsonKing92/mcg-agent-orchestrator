@@ -302,7 +302,19 @@ public sealed partial class AgentOrchestratorKernel
                      $"Dispatch completed successfully: {task.LastDispatch.Command}",
                      task,
                      verification)
-                : $"Dispatch failed with exit code {verification.ExitCode}: {task.LastDispatch.Command}");
+                : BuildDispatchFailureMessage(outcome, task.LastDispatch.Command));
+    }
+
+    private static string BuildDispatchFailureMessage(DispatchOutcome outcome, string command)
+    {
+        var rule = TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt) ??
+            TaskOutcomeRules.UnknownFailure.Token;
+        var exitCode = outcome.ExitCode != 0 &&
+            (string.Equals(rule, TaskOutcomeRules.SilentLaunchFailure.Token, StringComparison.Ordinal) ||
+             string.Equals(rule, TaskOutcomeRules.UnknownFailure.Token, StringComparison.Ordinal))
+                ? $"; exit code {outcome.ExitCode}"
+                : string.Empty;
+        return $"Dispatch failed: rule={rule}{exitCode}: {command}";
     }
 
     private static TimeSpan BuildProviderConnectivityBackoff(int attempt)

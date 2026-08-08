@@ -3242,7 +3242,7 @@ internal sealed class ConductorBatchLoop
         {
             ConductorAdvanceOutcome.Executed e  => $"GOAL goal={label} result=executed state={e.FromState}{slot}",
             ConductorAdvanceOutcome.Held h      => $"GOAL goal={label} result=held state={h.State}{slot} reason={SanitizeReason(h.Reason)}",
-            ConductorAdvanceOutcome.Escalated e => $"GOAL goal={label} result=escalated state={e.State}{slot} reason={Sanitize(e.Reason)}",
+            ConductorAdvanceOutcome.Escalated e => $"GOAL goal={label} result=escalated state={e.State}{slot} reason={SanitizeReason(e.Reason)}",
             ConductorAdvanceOutcome.Done d      => $"GOAL goal={label} result=done state={d.State}{slot}",
             _                                   => $"GOAL goal={label} result=unknown{slot}"
         };
