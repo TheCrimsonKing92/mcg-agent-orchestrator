@@ -183,8 +183,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 "Structured review finding convergence");
             var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
             var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-            var anchorA = new ReviewFindingLocation("src/A.cs", "A.Run", "guard-a");
-            var anchorB = new ReviewFindingLocation("src/B.cs", "B.Run", "guard-b");
+            var anchorA = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+            var anchorB = new ReviewFindingLocation("src/B.cs", "B.Run", "guard");
 
             RecordReviewerRoundFromGitDiff(
                 kernel,
@@ -256,8 +256,9 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 reviewer,
                 repositoryRoot,
                 round3Commit);
+            Assert.Null(reviewer.LastDispatch!.ReviewFindingTouchProofDiagnostic);
             Assert.Equal(anchorB, Assert.Single(round3Touched));
-            Assert.Equal(anchorB, Assert.Single(reviewer.LastDispatch!.ReviewFindingTouchedAnchors!));
+            Assert.Equal(anchorB, Assert.Single(reviewer.LastDispatch.ReviewFindingTouchedAnchors!));
             var reviewerBrief = kernel.BuildTaskBrief(
                 goal.Id,
                 reviewer.Id,

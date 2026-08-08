@@ -3223,6 +3223,15 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
                 tester.Id,
                 $"review-finding contract-repair: attempt {attempt}/2",
                 retryRoundKind: RetryRoundKind.Mechanical);
+            WorkerProfileDispatcher.PrepareTask(
+                kernel,
+                goal,
+                tester,
+                profile,
+                promptRoot,
+                worktree,
+                DateTimeOffset.Parse($"2026-08-08T10:03:0{attempt}Z"));
+            kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, movedCommit);
             kernel.RecordTaskVerification(
                 goal.Id,
                 tester.Id,
@@ -3235,9 +3244,10 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
                     DateTimeOffset.Parse($"2026-08-08T10:03:0{attempt}Z"),
                     WorkerResultPresent: true));
             Assert.Equal(WorkTaskStatus.Failed, tester.Status);
+            Assert.Equal(movedCommit, tester.LastVerification!.ReviewedCommit);
             Assert.Equal(
                 ReviewFindingConvergence.IdentityMovedViolationCode,
-                tester.LastVerification!.ReviewFindingContractViolation!.Code);
+                tester.LastVerification.ReviewFindingContractViolation!.Code);
         }
 
         kernel.RetryTask(goal.Id, tester.Id, "Recheck after Developer moved the affected code.");

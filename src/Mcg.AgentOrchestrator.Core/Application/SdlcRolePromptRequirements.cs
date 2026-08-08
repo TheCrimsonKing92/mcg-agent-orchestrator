@@ -198,7 +198,7 @@ internal static class SdlcRolePromptRequirements
                 "- Run or attempt exact commands; include exit code and concise output summary.",
                 "- Cover edge/negative cases when practical and avoid treating bin/obj output as changed source.",
                 "- Put actionable failures in structured `findings` JSON with stable IDs and locations; carry distinct prior findings until resolved. A finding may include `evidence_request:{selections:[{test_project,test_class}]}` when a focused Conductor-side run would settle it.",
-                "- Reuse carried stable IDs. Retain the prior location unless the system-derived round diff touched that anchor; then keep the stable ID at the defect's current location. Reuse the canonical stable ID for the same open anchor.",
+                "- Reuse a carried finding's stable_id. Keep its original location unless the code moved: when the system-derived round diff touched the prior anchor, keep the stable_id and report the defect's current location. Otherwise a different location is rejected. If a new stable_id describes the same open anchor, reuse the canonical stable_id instead.",
                 "- A killed/timed-out/no-results verification is an environment outcome, not a failure: report `tests: inconclusive - <current-round evidence>` with `blockers: none`, and do not reuse a prior round's conclusion as evidence.",
                 "- Keep each command bounded: build once, then run narrow no-rebuild test filters; never bundle a build and a broad test run in one command.",
                 "- You may build and run tests but must not modify source files."
