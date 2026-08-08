@@ -15,6 +15,9 @@ internal enum PostLandingCanaryDisposition
 
 internal sealed class PostLandingCanaryCoordinator
 {
+    private const int RepeatedIdenticalFaultThreshold = 3;
+    private const int ProgressDetailLimit = 500;
+
     private readonly PostLandingCanaryConfiguration _configuration;
     private readonly IPostLandingCanaryRunner _runner;
     private readonly PostLandingCanaryEventStore _events;
@@ -244,7 +247,8 @@ internal sealed class PostLandingCanaryCoordinator
                     PostLandingCanaryFaultDisposition.EnvironmentFault,
                     "InvalidOperationException: canary attempt start was already recorded without a terminal outcome.",
                     startedAt,
-                    _utcNow())
+                    _utcNow(),
+                    priorEvents)
                 .ConfigureAwait(false);
         }
         ReportProgress(
@@ -319,7 +323,8 @@ internal sealed class PostLandingCanaryCoordinator
                         faultDisposition,
                         outcome.Detail,
                         startedAt,
-                        completedAt)
+                        completedAt,
+                        priorEvents)
                     .ConfigureAwait(false);
             }
         }
@@ -433,12 +438,14 @@ internal sealed class PostLandingCanaryCoordinator
         PostLandingCanaryFaultDisposition faultDisposition,
         string detail,
         DateTimeOffset startedAt,
-        DateTimeOffset completedAt)
+        DateTimeOffset completedAt,
+        IReadOnlyList<PostLandingCanaryEvent> priorEvents)
     {
         var reason = FaultReasonToken(faultDisposition);
         var consumesAttempt = faultDisposition != PostLandingCanaryFaultDisposition.PreconditionFailure;
         var completedAttemptCount = consumesAttempt ? attempt : attempt - 1;
-        if (consumesAttempt && attempt >= _configuration.MaxAttempts)
+        var repeatedIdenticalFault = consumesAttempt && HasRepeatedIdenticalFault(priorEvents, reason, detail);
+        if (consumesAttempt && (attempt >= _configuration.MaxAttempts || repeatedIdenticalFault))
         {
             var abandoned = await _events.AppendOnceAsync(
                     PostLandingCanaryEventKind.Abandoned,
@@ -463,7 +470,8 @@ internal sealed class PostLandingCanaryCoordinator
                             goalId: null,
                             subject: $"Post-landing canary never evaluated {request.LandingSha}",
                             body:
-                                $"Landing {request.LandingSha} remains UNVERIFIED after {attempt} attempts.\n" +
+                                $"Landing {request.LandingSha} remains UNVERIFIED after {attempt} attempts" +
+                                $"{(repeatedIdenticalFault ? " because the same fault repeated three times" : string.Empty)}.\n" +
                                 $"{detail}\n{receiptReference}",
                             correlationKey: $"post-landing-canary:unverified:{request.LandingSha.ToLowerInvariant()}",
                             cancellationToken: CancellationToken.None)
@@ -484,7 +492,9 @@ internal sealed class PostLandingCanaryCoordinator
             }
 
             ReportProgress(
-                $"CANARY_GATE sha={request.LandingSha} result=unverified attempts={attempt} reason={reason} receipt={receiptReference}");
+                $"CANARY_GATE sha={request.LandingSha} result=unverified attempts={attempt} reason={reason} " +
+                $"detail={FormatProgressDetail(detail)} receipt={receiptReference}" +
+                $"{(repeatedIdenticalFault ? " escalation=repeated-identical-fault" : string.Empty)}");
             return PostLandingCanaryDisposition.Abandoned;
         }
 
@@ -527,7 +537,7 @@ internal sealed class PostLandingCanaryCoordinator
         }
         ReportProgress(
             $"CANARY_GATE sha={request.LandingSha} result=deferred attempt={completedAttemptCount} reason={reason} " +
-            $"not-before={notBefore:O} receipt=run-event:{deferred.Event.Sequence}");
+            $"detail={FormatProgressDetail(detail)} not-before={notBefore:O} receipt=run-event:{deferred.Event.Sequence}");
         ScheduleDeferredRetry(request);
         return PostLandingCanaryDisposition.Deferred;
     }
@@ -612,7 +622,8 @@ internal sealed class PostLandingCanaryCoordinator
                     faultDisposition,
                     detail,
                     now,
-                    now)
+                    now,
+                    priorEvents)
                 .GetAwaiter()
                 .GetResult();
         }
@@ -635,7 +646,7 @@ internal sealed class PostLandingCanaryCoordinator
                 .GetResult();
             _progress(
                 $"CANARY_GATE sha={durableLandingSha} result=deferred reason={reason} " +
-                $"detail={detail}");
+                $"detail={FormatProgressDetail(detail)}");
         }
         catch
         {
@@ -684,6 +695,49 @@ internal sealed class PostLandingCanaryCoordinator
             .DefaultIfEmpty(0)
             .Max();
 
+    private static bool HasRepeatedIdenticalFault(
+        IReadOnlyList<PostLandingCanaryEvent> priorEvents,
+        string reason,
+        string detail)
+    {
+        var signatureDetail = NormalizeFaultDetail(detail);
+        var matchingCount = 1;
+        foreach (var prior in priorEvents
+                     .Where(item =>
+                         item.Kind == PostLandingCanaryEventKind.Deferred &&
+                         item.Payload.AttemptCount > 0)
+                     .Reverse())
+        {
+            if (!string.Equals(prior.Payload.FailureReason, reason, StringComparison.Ordinal) ||
+                !string.Equals(
+                    NormalizeFaultDetail(prior.Payload.Detail),
+                    signatureDetail,
+                    StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            matchingCount++;
+            if (matchingCount >= RepeatedIdenticalFaultThreshold)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizeFaultDetail(string detail) =>
+        string.Join(' ', detail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    private static string FormatProgressDetail(string detail)
+    {
+        var normalized = NormalizeFaultDetail(detail);
+        return normalized.Length <= ProgressDetailLimit
+            ? normalized
+            : normalized[..ProgressDetailLimit] + "...";
+    }
+
     private static string FaultReasonToken(PostLandingCanaryFaultDisposition disposition) => disposition switch
     {
         PostLandingCanaryFaultDisposition.ResourceBusy => "resource-busy",
@@ -728,7 +782,8 @@ internal static class PostLandingCanaryFactory
             PostLandingCanaryConfiguration.Load(AppContext.BaseDirectory),
             new PostLandingCanaryRunner(
                 workspace.ExecutionDirectory,
-                Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH")),
+                Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_DOTNET_PATH"),
+                logDirectory: workspace.LogDirectory),
             events,
             circuit,
             operatorItems,
