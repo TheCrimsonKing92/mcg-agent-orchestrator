@@ -1374,6 +1374,90 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("ownedCpuMs=0", task.LastVerification.StandardError, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_completes_read_only_role_with_valid_worker_result")]
+    public void BackgroundDispatchRunnerStartupHangCompletesReadOnlyRoleWithValidWorkerResult()
+{
+    var scenario = RunSuspectedHangScenario(
+        AgentRole.Planner,
+        startupHang: true,
+        BuildSuccessfulReadOnlyOutput(AgentRole.Planner),
+        observedExitCode: 0);
+
+    Assert.Equal(WorkTaskStatus.Completed, scenario.Task.Status);
+    Assert.True(scenario.Task.LastVerification!.Succeeded);
+    Assert.Equal(0, scenario.Outcome.ProcessRecord.ExitCode);
+    Assert.Equal(0, scenario.Outcome.Verification!.ExitCode);
+    AssertExitCode(scenario.Process.ExitCodePath, 0);
+    Assert.Contains("complete, non-blocked WORKER_RESULT", scenario.Task.LastVerification.StandardError, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_progress_stall_completes_read_only_role_with_valid_worker_result")]
+    public void BackgroundDispatchRunnerProgressStallCompletesReadOnlyRoleWithValidWorkerResult()
+{
+    var scenario = RunSuspectedHangScenario(
+        AgentRole.Planner,
+        startupHang: false,
+        BuildSuccessfulReadOnlyOutput(AgentRole.Planner),
+        observedExitCode: 0);
+
+    Assert.Equal(WorkTaskStatus.Completed, scenario.Task.Status);
+    Assert.True(scenario.Task.LastVerification!.Succeeded);
+    Assert.Equal(0, scenario.Outcome.ProcessRecord.ExitCode);
+    Assert.Equal(0, scenario.Outcome.Verification!.ExitCode);
+    AssertExitCode(scenario.Process.ExitCodePath, 0);
+    Assert.Contains("complete, non-blocked WORKER_RESULT", scenario.Task.LastVerification.StandardError, StringComparison.Ordinal);
+}
+
+    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_suspected_hang_fails_read_only_role_without_valid_worker_result")]
+    [Xunit.InlineData(true, "empty")]
+    [Xunit.InlineData(true, "malformed")]
+    [Xunit.InlineData(false, "empty")]
+    [Xunit.InlineData(false, "malformed")]
+    public void BackgroundDispatchRunnerSuspectedHangFailsReadOnlyRoleWithoutValidWorkerResult(
+        bool startupHang,
+        string evidenceKind)
+{
+    var output = evidenceKind == "empty"
+        ? string.Empty
+        : "WORKER_RESULT:\nblockers: none";
+    var scenario = RunSuspectedHangScenario(
+        AgentRole.Planner,
+        startupHang,
+        output,
+        observedExitCode: 0);
+
+    Assert.Equal(WorkTaskStatus.Failed, scenario.Task.Status);
+    Assert.False(scenario.Task.LastVerification!.Succeeded);
+    Assert.NotNull(scenario.Task.LastVerification.OrchestratorFailureReason);
+    Assert.Equal(0, scenario.Outcome.ProcessRecord.ExitCode);
+    Assert.Equal(0, scenario.Outcome.Verification!.ExitCode);
+    AssertExitCode(scenario.Process.ExitCodePath, 0);
+    Assert.Contains("rescue denied", scenario.Task.LastVerification.StandardError, StringComparison.OrdinalIgnoreCase);
+}
+
+    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_suspected_hang_does_not_rescue_file_roles")]
+    [Xunit.InlineData(true, AgentRole.Developer)]
+    [Xunit.InlineData(true, AgentRole.Tester)]
+    [Xunit.InlineData(false, AgentRole.Developer)]
+    [Xunit.InlineData(false, AgentRole.Tester)]
+    public void BackgroundDispatchRunnerSuspectedHangDoesNotRescueFileRoles(
+        bool startupHang,
+        AgentRole role)
+{
+    var scenario = RunSuspectedHangScenario(
+        role,
+        startupHang,
+        WorkerResultBlock("none", "focused verification", "pass - structured result complete", blockers: "none"),
+        observedExitCode: 0);
+
+    Assert.Equal(WorkTaskStatus.Failed, scenario.Task.Status);
+    Assert.False(scenario.Task.LastVerification!.Succeeded);
+    Assert.NotNull(scenario.Task.LastVerification.OrchestratorFailureReason);
+    Assert.Equal(0, scenario.Outcome.ProcessRecord.ExitCode);
+    Assert.Equal(0, scenario.Outcome.Verification!.ExitCode);
+    AssertExitCode(scenario.Process.ExitCodePath, 0);
+}
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_suppressed_when_child_alive_and_idle")]
     public void BackgroundDispatchRunnerStartupHangSuppressedWhenChildAliveAndIdle()
 {
@@ -3561,6 +3645,84 @@ private static string BuildSuccessfulReadOnlyOutput(AgentRole role)
     }
 
     return roleOutput + workerResult;
+}
+
+private static (
+    TaskSpec Task,
+    TaskProcessRecord Process,
+    DispatchRefreshOutcome Outcome) RunSuspectedHangScenario(
+        AgentRole role,
+        bool startupHang,
+        string standardOutput,
+        int? observedExitCode)
+{
+    var root = CreateTempDirectory();
+    var stdout = Path.Combine(root, "worker.out.log");
+    var stderr = Path.Combine(root, "worker.err.log");
+    var exit = Path.Combine(root, "worker.exit.txt");
+    var now = DateTimeOffset.Parse("2026-08-08T09:00:00Z");
+    var startedAt = now.AddMinutes(-40);
+    File.WriteAllText(stdout, standardOutput);
+    File.WriteAllText(stderr, string.Empty);
+    File.SetLastWriteTimeUtc(stdout, now.UtcDateTime);
+    File.SetLastWriteTimeUtc(stderr, now.UtcDateTime);
+
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Suspected hang role rescue", [new TaskSpec(TaskId.New(), $"{role} task.", role)]);
+    var agent = new AgentDefinition(
+        new AgentId($"test-{role.ToString().ToLowerInvariant()}"),
+        $"Test {role}",
+        role,
+        new ModelProfile("Test", "test-model", ModelCapability.Text, SubscriptionMode.ApiKey));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var workerName = startupHang ? "codex-cli" : "claude-cli";
+    var command = startupHang ? "codex exec prompt" : "claude prompt";
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(workerName, command, root, startedAt));
+    var process = new TaskProcessRecord(
+        999999,
+        command,
+        root,
+        stdout,
+        stderr,
+        exit,
+        startedAt,
+        null,
+        null);
+    kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
+    WriteHeartbeat(
+        process,
+        now.AddMinutes(-31),
+        now.AddMinutes(-31),
+        "running",
+        startupHang ? 0 : new FileInfo(stdout).Length,
+        0,
+        ownedCpuMs: startupHang ? 0L : 2000L,
+        childPid: startupHang ? null : 4242);
+
+    var running = true;
+    var artifactWritten = false;
+    var runner = new BackgroundDispatchRunner(
+        new TestClock(now),
+        isStillRunning: _ => running,
+        tryKillOwnedProcess: _ =>
+        {
+            running = false;
+            if (!artifactWritten && observedExitCode is { } hostExitCode)
+            {
+                DispatchExitArtifacts.Write(
+                    exit,
+                    DispatchExitArtifacts.Native(hostExitCode, "dispatch host observed worker termination", now));
+                artifactWritten = true;
+            }
+
+            return true;
+        },
+        progressStallTimeout: TimeSpan.FromMinutes(10),
+        startupHangTimeout: TimeSpan.FromMinutes(4));
+    var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+    runner.ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
+    return (task, process, outcome);
 }
 
 private static void AssertExitCode(string path, int expected)
