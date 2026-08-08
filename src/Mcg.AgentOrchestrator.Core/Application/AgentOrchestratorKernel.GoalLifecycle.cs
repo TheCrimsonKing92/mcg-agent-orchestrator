@@ -1944,6 +1944,14 @@ public sealed partial class AgentOrchestratorKernel
         GetGoal(goalId).SetSourceBacklogItemId(backlogItemId);
     }
 
+    public void SetGoalSourceBacklogItemLink(
+        GoalId goalId,
+        string backlogItemId,
+        SourceBacklogCoverage coverage)
+    {
+        GetGoal(goalId).SetSourceBacklogItemLink(backlogItemId, coverage);
+    }
+
     public void SetGoalRefinedSpec(GoalId goalId, RefinedSpec spec)
     {
         GetGoal(goalId).SetRefinedSpec(spec, _clock.UtcNow);

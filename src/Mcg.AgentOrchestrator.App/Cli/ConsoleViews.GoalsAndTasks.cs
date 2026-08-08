@@ -38,6 +38,7 @@ public static void PrintGoal(Goal goal, string? friendlyLabel = null, string? st
     if (!string.IsNullOrWhiteSpace(goal.SourceBacklogItemId))
     {
         Console.WriteLine($"Source backlog: {goal.SourceBacklogItemId}");
+        Console.WriteLine($"Source backlog coverage: {goal.SourceBacklogCoverage?.ToString().ToLowerInvariant() ?? "legacy-full"}");
     }
 
     if (portfolio is not null)

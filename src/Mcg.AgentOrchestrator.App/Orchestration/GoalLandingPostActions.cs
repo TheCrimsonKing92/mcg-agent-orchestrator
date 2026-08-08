@@ -109,6 +109,31 @@ internal static class GoalLandingPostActions
             var commitSha = string.IsNullOrWhiteSpace(integrateCommitSha)
                 ? TryResolveHeadCommit(executionDirectory) ?? "unknown"
                 : integrateCommitSha.Trim();
+            if (goal.SourceBacklogCoverage == SourceBacklogCoverage.Slice)
+            {
+                var landingNote = $"Recorded slice landing for goal {goal.Id.Value}. integrateCommit={commitSha}";
+                var landingResult = store.TryRecordOpenItemLandingAsync(goal.SourceBacklogItemId, landingNote).GetAwaiter().GetResult();
+                switch (landingResult.Disposition)
+                {
+                    case BacklogLandingDisposition.Recorded:
+                        writeLine?.Invoke($"Recorded slice landing on backlog item {goal.SourceBacklogItemId} (goal {goal.Id.Value[..8]}, commit {ShortSha(commitSha)}); item remains Open.");
+                        return false;
+                    case BacklogLandingDisposition.AlreadyRecorded:
+                        writeLine?.Invoke($"Slice landing already recorded on backlog item {goal.SourceBacklogItemId} (goal {goal.Id.Value[..8]}, no-op).");
+                        return false;
+                    case BacklogLandingDisposition.AlreadyDone:
+                        writeLine?.Invoke($"Backlog item {goal.SourceBacklogItemId} already closed (goal {goal.Id.Value[..8]} slice landed, no-op).");
+                        return false;
+                    case BacklogLandingDisposition.NotFound:
+                        var sliceWarning = $"Warning: goal {goal.Id.Value[..8]} landed, but linked backlog item {goal.SourceBacklogItemId} was not found; slice landing was not recorded.";
+                        kernel?.RecordGoalPolicyDecision(goal.Id, sliceWarning);
+                        writeLine?.Invoke(sliceWarning);
+                        return false;
+                    default:
+                        return false;
+                }
+            }
+
             var note = $"Auto-closed after goal {goal.Id.Value} landed. integrateCommit={commitSha}";
             var result = store.TryCloseByIdWithResultAsync(goal.SourceBacklogItemId, note: note).GetAwaiter().GetResult();
             switch (result.Disposition)
@@ -130,7 +155,10 @@ internal static class GoalLandingPostActions
         }
         catch (Exception ex)
         {
-            var warning = $"Warning: goal {goal.Id.Value[..8]} landed, but linked backlog item {goal.SourceBacklogItemId} was not closed: {ex.Message}";
+            var failure = goal.SourceBacklogCoverage == SourceBacklogCoverage.Slice
+                ? "slice landing was not recorded"
+                : "was not closed";
+            var warning = $"Warning: goal {goal.Id.Value[..8]} landed, but linked backlog item {goal.SourceBacklogItemId} {failure}: {ex.Message}";
             kernel?.RecordGoalPolicyDecision(goal.Id, warning);
             writeLine?.Invoke(warning);
             return false;

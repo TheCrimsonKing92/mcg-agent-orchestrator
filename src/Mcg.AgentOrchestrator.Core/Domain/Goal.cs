@@ -1,5 +1,7 @@
 namespace Mcg.AgentOrchestrator.Core;
 
+public enum SourceBacklogCoverage { Full, Slice }
+
 public sealed class Goal
 {
     public const int OperatorAcceptanceRegateCap = 3;
@@ -64,6 +66,8 @@ public sealed class Goal
     public int ClarificationRoundCount { get; private set; }
 
     public string? SourceBacklogItemId { get; private set; }
+
+    public SourceBacklogCoverage? SourceBacklogCoverage { get; private set; }
 
     public IReadOnlyList<TaskSpec> Tasks => _tasks;
 
@@ -183,7 +187,17 @@ public sealed class Goal
     internal void RestoreClarificationRoundCount(int count) =>
         ClarificationRoundCount = Math.Max(0, count);
 
-    internal void SetSourceBacklogItemId(string id) => SourceBacklogItemId = id;
+    internal void SetSourceBacklogItemId(string id)
+    {
+        SourceBacklogItemId = RequireText(id, nameof(id));
+        SourceBacklogCoverage = null;
+    }
+
+    internal void SetSourceBacklogItemLink(string id, SourceBacklogCoverage coverage)
+    {
+        SourceBacklogItemId = RequireText(id, nameof(id));
+        SourceBacklogCoverage = coverage;
+    }
 
     internal void RecordAcceptanceFailure(
         IReadOnlyList<string> failedChecks,
@@ -443,7 +457,8 @@ public sealed class Goal
                     version.RecordedAt,
                     version.BriefVersion,
                     version.SupersededByVersion))
-                .ToArray());
+                .ToArray(),
+            SourceBacklogCoverage: SourceBacklogCoverage);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -489,7 +504,16 @@ public sealed class Goal
         }
 
         if (snapshot.SourceBacklogItemId is not null)
-            goal.SetSourceBacklogItemId(snapshot.SourceBacklogItemId);
+        {
+            if (snapshot.SourceBacklogCoverage is { } coverage)
+                goal.SetSourceBacklogItemLink(snapshot.SourceBacklogItemId, coverage);
+            else
+                goal.SetSourceBacklogItemId(snapshot.SourceBacklogItemId);
+        }
+        else if (snapshot.SourceBacklogCoverage is not null)
+        {
+            throw new InvalidOperationException("A source backlog coverage declaration requires a source backlog item id.");
+        }
 
         if (snapshot.RefinedSpecVersions is { Count: > 0 } refinedSpecVersions)
         {

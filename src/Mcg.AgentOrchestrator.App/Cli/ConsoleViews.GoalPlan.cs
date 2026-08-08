@@ -77,8 +77,8 @@ public static void PrintGoalDependencyPlan(GoalDependencyPlan plan)
 
     Console.WriteLine();
     Console.WriteLine("Create commands:");
-    Console.WriteLine("  goal-plan --create-goals");
-    Console.WriteLine("  goal-plan --create-simple-goals");
+    Console.WriteLine("  goal-plan --create-goals --backlog-coverage <full|slice>");
+    Console.WriteLine("  goal-plan --create-simple-goals --backlog-coverage <full|slice>");
     Console.WriteLine();
 }
 }

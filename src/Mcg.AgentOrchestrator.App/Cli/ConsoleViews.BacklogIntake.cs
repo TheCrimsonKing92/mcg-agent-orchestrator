@@ -45,8 +45,8 @@ public static void PrintBacklogIntakePlan(BacklogIntakePlan plan)
         Console.WriteLine($"Acceptance: {item.AcceptanceChecks}");
         Console.WriteLine($"Follow-up: {item.FollowUpUpdates}");
         Console.WriteLine("Create commands:");
-        Console.WriteLine($"  backlog-intake \"{EscapeDoubleQuoted(item.Heading)}\" --create-goal");
-        Console.WriteLine($"  backlog-intake \"{EscapeDoubleQuoted(item.Heading)}\" --create-simple-goal");
+        Console.WriteLine($"  backlog-intake \"{EscapeDoubleQuoted(item.Heading)}\" --create-goal --backlog-coverage <full|slice>");
+        Console.WriteLine($"  backlog-intake \"{EscapeDoubleQuoted(item.Heading)}\" --create-simple-goal --backlog-coverage <full|slice>");
         Console.WriteLine("Ready objective:");
         Console.WriteLine(item.SuggestedObjective);
     }

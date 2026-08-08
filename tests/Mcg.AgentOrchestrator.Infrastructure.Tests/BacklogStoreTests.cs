@@ -297,6 +297,30 @@ public sealed class BacklogStoreTests
         Assert.False(result);
     }
 
+    [Xunit.Fact(DisplayName = "BacklogStore_record_open_item_landing_is_atomic_idempotent_and_status_aware")]
+    public async Task RecordOpenItemLandingIsAtomicIdempotentAndStatusAware()
+    {
+        var store = new BacklogStore(TempDb());
+        var item = await store.AddAsync("Record a slice landing");
+
+        var first = await store.TryRecordOpenItemLandingAsync(item.Id, "goal=abc commit=def");
+        var repeated = await store.TryRecordOpenItemLandingAsync(item.Id, "goal=abc commit=def");
+
+        Assert.Equal(BacklogLandingDisposition.Recorded, first.Disposition);
+        Assert.Equal(BacklogLandingDisposition.AlreadyRecorded, repeated.Disposition);
+        var openItem = await store.GetByExactIdAsync(item.Id);
+        Assert.Equal(BacklogItemStatus.Open, openItem!.Status);
+        Assert.Single(openItem.Notes);
+
+        await store.CloseAsync(item.Id);
+        var alreadyDone = await store.TryRecordOpenItemLandingAsync(item.Id, "goal=other commit=ghi");
+        var missing = await store.TryRecordOpenItemLandingAsync("missing", "goal=other commit=ghi");
+
+        Assert.Equal(BacklogLandingDisposition.AlreadyDone, alreadyDone.Disposition);
+        Assert.Equal(BacklogLandingDisposition.NotFound, missing.Disposition);
+        Assert.Single((await store.GetByExactIdAsync(item.Id))!.Notes);
+    }
+
     // ── Upsert / idempotency ─────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "BacklogStore_upsert_inserts_new_item")]

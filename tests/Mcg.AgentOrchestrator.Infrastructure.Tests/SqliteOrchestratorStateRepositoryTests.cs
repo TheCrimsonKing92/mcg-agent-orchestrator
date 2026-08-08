@@ -2139,6 +2139,37 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal("operator-authored retry feedback", feedback);
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_keeps_source_link_id_and_coverage_atomic")]
+    public async Task TickMergeKeepsSourceLinkIdAndCoverageAtomic()
+    {
+        var db = TempDb();
+        var repo = new SqliteOrchestratorStateRepository(db);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Keep source link atomic");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.SetGoalSourceBacklogItemId(goal.Id, "baseline-item");
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportSnapshot().Goals.Single(snapshot => snapshot.Id == goal.Id.Value);
+        var tickSnapshot = baseline with { SourceBacklogCoverage = SourceBacklogCoverage.Slice };
+
+        await repo.TransactGoalAsync<bool>(
+            goal.Id,
+            (stored, _) =>
+            {
+                var transactionKernel = AgentOrchestratorKernel.FromSnapshot(new OrchestratorSnapshot([stored!], []));
+                transactionKernel.SetGoalSourceBacklogItemId(goal.Id, "operator-item");
+                return Task.FromResult((true, transactionKernel.ExportSnapshot().Goals.Single(), true));
+            });
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync([new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restoredGoal = (await repo.LoadAsync()).GetGoal(goal.Id);
+        Assert.Equal("operator-item", restoredGoal.SourceBacklogItemId);
+        Assert.Null(restoredGoal.SourceBacklogCoverage);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_preserves_operator_criteria_corrections")]
     public async Task TickMergePreservesOperatorCriteriaCorrections()
     {

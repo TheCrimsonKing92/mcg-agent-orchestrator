@@ -247,7 +247,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         var output = CaptureConsole(() =>
         {
             changed = CliCommandDispatcher.ExecuteCommand(
-                ["backlog-intake", "build/test broker", "--create-simple-goal"],
+                ["backlog-intake", "build/test broker", "--create-simple-goal", "--backlog-coverage", "full"],
                 kernel,
                 workspace,
                 ref agents,
@@ -537,7 +537,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         var output = CaptureConsole(() =>
         {
             changed = CliCommandDispatcher.ExecuteCommand(
-                ["goal-plan", "--create-simple-goals"],
+                ["goal-plan", "--create-simple-goals", "--backlog-coverage", "full"],
                 kernel,
                 workspace,
                 ref agents,
@@ -562,10 +562,10 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     public void CliBacklogIntakeSplitsHeadingBeforeCreateFlags()
     {
         var parts = CliArgumentParser.SplitCommand(
-            "backlog-intake Add dashboard operator inbox --create-goal");
+            "backlog-intake Add dashboard operator inbox --create-goal --backlog-coverage full");
 
         Xunit.Assert.Equal(
-            ["backlog-intake", "Add dashboard operator inbox", "--create-goal"],
+            ["backlog-intake", "Add dashboard operator inbox", "--create-goal", "--backlog-coverage", "full"],
             parts);
     }
 
@@ -574,10 +574,10 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
     public void CliGoalPlanSplitsFilterBeforeCreateFlags()
     {
         var parts = CliArgumentParser.SplitCommand(
-            "goal-plan unattended supervisor --create-goals");
+            "goal-plan unattended supervisor --create-goals --backlog-coverage full");
 
         Xunit.Assert.Equal(
-            ["goal-plan", "unattended supervisor", "--create-goals"],
+            ["goal-plan", "unattended supervisor", "--create-goals", "--backlog-coverage", "full"],
             parts);
     }
 
@@ -1239,7 +1239,7 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         await store.CloseAsync(items[6].Id);
         var kernel = new AgentOrchestratorKernel();
         ExecuteCliAndCapture(
-            ["backlog-intake", items[2].Title, "--create-simple-goal"],
+            ["backlog-intake", items[2].Title, "--create-simple-goal", "--backlog-coverage", "full"],
             kernel,
             workspace);
         var linkedGoal = Xunit.Assert.Single(kernel.Goals);

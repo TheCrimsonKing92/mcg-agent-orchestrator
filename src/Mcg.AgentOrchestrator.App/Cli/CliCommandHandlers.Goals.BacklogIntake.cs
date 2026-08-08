@@ -59,19 +59,60 @@ private static SourceBacklogItemLink? ResolveSourceBacklogItemLink(
     {
         var explicitItem = ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, explicitPrefix, explicitFlag: true)!;
         ValidateBacklogPromotionPrerequisites(context, explicitItem);
-        return new SourceBacklogItemLink(explicitItem, FromExplicitFlag: true);
+        return new SourceBacklogItemLink(
+            explicitItem,
+            FromExplicitFlag: true,
+            ResolveSourceBacklogCoverage(parts, sourceLinkDeclared: true)!.Value);
     }
 
     var match = OpeningBacklogObjectiveReferenceRegex.Match(objective);
     if (!match.Success)
     {
+        ResolveSourceBacklogCoverage(parts, sourceLinkDeclared: false);
         return null;
     }
 
     var item = ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, match.Groups[1].Value, explicitFlag: false);
     if (item is not null)
         ValidateBacklogPromotionPrerequisites(context, item);
-    return item is null ? null : new SourceBacklogItemLink(item, FromExplicitFlag: false);
+    if (item is null)
+    {
+        ResolveSourceBacklogCoverage(parts, sourceLinkDeclared: false);
+        return null;
+    }
+
+    return new SourceBacklogItemLink(
+        item,
+        FromExplicitFlag: false,
+        ResolveSourceBacklogCoverage(parts, sourceLinkDeclared: true)!.Value);
+}
+
+private static SourceBacklogCoverage? ResolveSourceBacklogCoverage(
+    IReadOnlyList<string> parts,
+    bool sourceLinkDeclared)
+{
+    const string flag = "--backlog-coverage";
+    var flagPresent = HasCliConfirmation(parts, flag);
+    var value = GetFlagValue(parts, flag);
+    if (flagPresent && (string.IsNullOrWhiteSpace(value) || value.StartsWith("--", StringComparison.Ordinal)))
+        throw new ArgumentException("--backlog-coverage requires full or slice.");
+
+    if (!sourceLinkDeclared)
+    {
+        if (flagPresent)
+            throw new ArgumentException("--backlog-coverage requires a source backlog item link.");
+        return null;
+    }
+
+    if (!flagPresent)
+        throw new ArgumentException("A source backlog item link requires --backlog-coverage full or slice.");
+
+    return value!.Trim().ToLowerInvariant() switch
+    {
+        "full" => SourceBacklogCoverage.Full,
+        "slice" => SourceBacklogCoverage.Slice,
+        _ => throw new ArgumentException("--backlog-coverage must be full or slice.")
+    };
 }
 
 private static BacklogItem? ResolveBacklogItemIdPrefix(string backlogStorePath, string idPrefix, bool explicitFlag)
@@ -117,7 +158,7 @@ private static void ApplySourceBacklogItemLink(CliExecutionContext context, Goal
         return;
     }
 
-    context.Kernel.SetGoalSourceBacklogItemId(goal.Id, link.Item.Id);
+    context.Kernel.SetGoalSourceBacklogItemLink(goal.Id, link.Item.Id, link.Coverage);
     ApplyBacklogPromotionDependencies(context, goal, link.Item);
 }
 
@@ -217,6 +258,10 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         throw new ArgumentException("Use either --create-goal or --create-simple-goal, not both.");
     }
 
+    var sourceBacklogCoverage = ResolveSourceBacklogCoverage(
+        parts,
+        sourceLinkDeclared: createGoal || createSimpleGoal);
+
     // Batch submission (a3f6b536): multiple positional filters each create one goal in a single command.
     // Single-filter behaviour below is unchanged; batch only engages with 2+ filters and a create flag.
     var batchFilters = GetBacklogIntakeFilters(context, parts);
@@ -270,7 +315,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
             if (!string.IsNullOrEmpty(batchItem.Id))
             {
-                context.Kernel.SetGoalSourceBacklogItemId(batchGoal.Id, batchItem.Id);
+                context.Kernel.SetGoalSourceBacklogItemLink(batchGoal.Id, batchItem.Id, sourceBacklogCoverage!.Value);
                 ApplyBacklogPromotionDependencies(context, batchGoal, batchBacklogItem);
             }
 
@@ -354,7 +399,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
     if (!string.IsNullOrEmpty(backlogItemId))
     {
-        context.Kernel.SetGoalSourceBacklogItemId(context.CurrentGoal.Id, backlogItemId);
+        context.Kernel.SetGoalSourceBacklogItemLink(context.CurrentGoal.Id, backlogItemId, sourceBacklogCoverage!.Value);
         ApplyBacklogPromotionDependencies(context, context.CurrentGoal, sourceBacklogItem);
     }
 

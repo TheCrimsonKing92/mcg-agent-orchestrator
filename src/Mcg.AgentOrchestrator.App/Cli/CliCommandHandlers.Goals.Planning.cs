@@ -86,9 +86,11 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
         throw new ArgumentException("Use either --create-goals or --create-simple-goals, not both.");
     }
 
-    var headingFilter = parts
-        .Skip(1)
-        .FirstOrDefault(part => !part.StartsWith("--", StringComparison.Ordinal));
+    var sourceBacklogCoverage = ResolveSourceBacklogCoverage(
+        parts,
+        sourceLinkDeclared: createGoals || createSimpleGoals);
+
+    var headingFilter = GetFirstNonFlagArgument(parts, 1);
     var intake = BacklogIntakePlanner.Build(
         context.Workspace.BacklogStorePath,
         string.IsNullOrWhiteSpace(headingFilter) ? null : headingFilter,
@@ -120,7 +122,7 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
         context.CurrentGoal = createSimpleGoals
             ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers, context.EventWriter)
             : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers, context.EventWriter);
-        context.Kernel.SetGoalSourceBacklogItemId(context.CurrentGoal.Id, node.Intake.Id);
+        context.Kernel.SetGoalSourceBacklogItemLink(context.CurrentGoal.Id, node.Intake.Id, sourceBacklogCoverage!.Value);
         Console.WriteLine(createSimpleGoals
             ? $"Created simple goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}."
             : $"Created five-role goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}.");
