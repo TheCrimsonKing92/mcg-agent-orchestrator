@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
 
@@ -422,6 +423,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
 
         // Round 3 resolves the finding at its ORIGINAL anchor. Replaying the rejected round 2 must not
         // block it, nor report round 2's stale violation as though it described this submission.
+        // The hand-built dispatch still needs the system-owned cap receipt; missing policy context fails
+        // closed by design and would make this a receipt-contract test instead of a history-replay test.
         kernel.RetryTask(goal.Id, reviewer.Id, "round 3");
         RecordReviewerRound(
             kernel,
@@ -429,7 +432,10 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             reviewer,
             "pass",
             [new ReviewFinding("F-1", ReviewFindingState.Resolved, openedAt, "Guard added.")],
-            [openedAt]);
+            [openedAt],
+            new ReviewRetryCapReceipt(
+                3,
+                ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound));
 
         var recorded = kernel.GetGoal(goal.Id).Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         Assert.Equal(WorkTaskStatus.Completed, recorded.Status);
@@ -907,7 +913,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         string command = "test.exe",
         string? reviewedCommit = null,
         IReadOnlyList<ReviewFindingLocation>? touchedAnchors = null,
-        string? touchProofDiagnostic = null)
+        string? touchProofDiagnostic = null,
+        ReviewRetryCapReceipt? reviewRetryCap = null)
     {
         var dispatch = new TaskDispatchRecord(
             "test-worker",
@@ -916,7 +923,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             DateTimeOffset.UtcNow,
             BaseCommit: reviewedCommit,
             ReviewFindingTouchedAnchors: touchedAnchors,
-            ReviewFindingTouchProofDiagnostic: touchProofDiagnostic);
+            ReviewFindingTouchProofDiagnostic: touchProofDiagnostic,
+            ReviewRetryCap: reviewRetryCap);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
 
@@ -1007,9 +1015,16 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         TaskSpec reviewer,
         string verdict,
         IReadOnlyList<ReviewFinding> findings,
-        IReadOnlyList<ReviewFindingLocation> touchedAnchors)
+        IReadOnlyList<ReviewFindingLocation> touchedAnchors,
+        ReviewRetryCapReceipt? reviewRetryCap = null)
     {
-        DispatchTask(kernel, goal, reviewer, "review", touchedAnchors: touchedAnchors);
+        DispatchTask(
+            kernel,
+            goal,
+            reviewer,
+            "review",
+            touchedAnchors: touchedAnchors,
+            reviewRetryCap: reviewRetryCap);
         RecordPreparedReviewerRound(kernel, goal, reviewer, verdict, findings);
     }
 
