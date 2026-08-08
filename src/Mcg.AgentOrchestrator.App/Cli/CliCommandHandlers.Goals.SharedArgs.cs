@@ -244,6 +244,7 @@ private static bool IsCliValueFlag(string part)
     return GoalRoleAgentFlags.ContainsKey(part) ||
         part.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--autonomy-policy", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--backlog-coverage", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--brief-file", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--complex-model", StringComparison.OrdinalIgnoreCase) ||

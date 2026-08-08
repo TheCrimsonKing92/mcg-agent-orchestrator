@@ -22,7 +22,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         CliCommandDispatcher.ExecuteCommand(
-            ["backlog-intake", "My Feature", "--create-simple-goal"],
+            ["backlog-intake", "My Feature", "--create-simple-goal", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Assert.True(currentGoal is not null);
@@ -49,15 +49,111 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
-            ["simple-goal", "Implement explicit direct link", "--backlog-item", item.Id[..8]],
+            ["simple-goal", "Implement explicit direct link", "--backlog-item", item.Id[..8], "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
         Assert.NotNull(currentGoal);
         Assert.Equal(item.Id, currentGoal!.SourceBacklogItemId);
+        Assert.Equal(SourceBacklogCoverage.Full, currentGoal.SourceBacklogCoverage);
         Assert.Contains($"Source backlog: {item.Id}", output);
         await CreateMigratedStateRepository(workspace.SqliteStatePath).SaveAsync(kernel);
         var restored = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
-        Assert.Equal(item.Id, restored.GetGoal(currentGoal.Id).SourceBacklogItemId);
+        var restoredGoal = restored.GetGoal(currentGoal.Id);
+        Assert.Equal(item.Id, restoredGoal.SourceBacklogItemId);
+        Assert.Equal(SourceBacklogCoverage.Full, restoredGoal.SourceBacklogCoverage);
+
+        GoalLandingPostActions.AutoCloseSourceBacklogItem(
+            restoredGoal,
+            workspace.BacklogStorePath,
+            integrateCommitSha: "abcdef1234567890");
+        var landedItem = await new BacklogStore(workspace.BacklogStorePath).GetByExactIdAsync(item.Id);
+        Assert.Equal(BacklogItemStatus.Done, landedItem!.Status);
+        Assert.Contains(restoredGoal.Id.Value, Assert.Single(landedItem.Notes).Text);
+        Assert.Contains("integrateCommit=abcdef1234567890", landedItem.Notes[0].Text);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_slice_landing_records_once_and_leaves_item_open")]
+    public async Task SliceLandingRecordsOnceAndLeavesItemOpen()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Slice direct link");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "Implement one slice", "--backlog-item", item.Id[..8], "--backlog-coverage", "slice"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+
+        Assert.NotNull(currentGoal);
+        Assert.Equal(SourceBacklogCoverage.Slice, currentGoal!.SourceBacklogCoverage);
+        var messages = new List<string>();
+        Assert.False(GoalLandingPostActions.AutoCloseSourceBacklogItem(
+            currentGoal,
+            workspace.BacklogStorePath,
+            messages.Add,
+            integrateCommitSha: "1234567890abcdef"));
+        Assert.False(GoalLandingPostActions.AutoCloseSourceBacklogItem(
+            currentGoal,
+            workspace.BacklogStorePath,
+            messages.Add,
+            integrateCommitSha: "1234567890abcdef"));
+
+        var landedItem = await store.GetByExactIdAsync(item.Id);
+        Assert.Equal(BacklogItemStatus.Open, landedItem!.Status);
+        var note = Assert.Single(landedItem.Notes);
+        Assert.Contains(currentGoal.Id.Value, note.Text);
+        Assert.Contains("integrateCommit=1234567890abcdef", note.Text);
+        Assert.Contains(messages, message => message.Contains("remains Open", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory(DisplayName = "GoalBacklogLink_new_link_rejects_missing_empty_or_invalid_coverage")]
+    [Xunit.InlineData(null)]
+    [Xunit.InlineData("")]
+    [Xunit.InlineData("partial")]
+    public async Task NewLinkRejectsMissingEmptyOrInvalidCoverage(string? coverage)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Coverage required");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var parts = new List<string> { "simple-goal", "Require coverage", "--backlog-item", item.Id[..8] };
+        if (coverage is not null)
+        {
+            parts.Add("--backlog-coverage");
+            parts.Add(coverage);
+        }
+
+        Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            parts,
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        Assert.Empty(kernel.Goals);
+        Assert.Null(currentGoal);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalBacklogLink_coverage_without_source_is_rejected")]
+    public void CoverageWithoutSourceIsRejected()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        Assert.Throws<ArgumentException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["simple-goal", "No source", "--backlog-coverage", "slice"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        Assert.Empty(kernel.Goals);
     }
 
     [Xunit.Fact(DisplayName = "GoalBacklogLink_promotion_wires_existing_promoted_prerequisite")]
@@ -83,7 +179,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
-            ["simple-goal", "Promote dependent", "--backlog-item", dependentItem.Id[..8]],
+            ["simple-goal", "Promote dependent", "--backlog-item", dependentItem.Id[..8], "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
         Assert.NotNull(currentGoal);
@@ -109,7 +205,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var error = Assert.Throws<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
-            ["simple-goal", "Promote dependent", "--backlog-item", dependentItem.Id[..8]],
+            ["simple-goal", "Promote dependent", "--backlog-item", dependentItem.Id[..8], "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
         Assert.Contains("waiting on open prerequisite", error.Message, StringComparison.Ordinal);
@@ -131,7 +227,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var changed = CliCommandDispatcher.ExecuteCommand(
-            ["backlog-intake", decoy.Title, "--backlog-item", item.Id[..8], "--create-simple-goal"],
+            ["backlog-intake", decoy.Title, "--backlog-item", item.Id[..8], "--create-simple-goal", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Assert.True(changed);
@@ -156,7 +252,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var changed = CliCommandDispatcher.ExecuteCommand(
-            ["goal", "Wrong alias link", "--from-backlog", "--backlog-item", item.Id[..8], "--create-simple-goal"],
+            ["goal", "Wrong alias link", "--from-backlog", "--backlog-item", item.Id[..8], "--create-simple-goal", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Assert.True(changed);
@@ -179,7 +275,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         CliCommandDispatcher.ExecuteCommand(
-            ["simple-goal", $"(backlog {item.Id[..8]}) Implement prose direct link"],
+            ["simple-goal", $"(backlog {item.Id[..8]}) Implement prose direct link", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Assert.NotNull(currentGoal);
@@ -220,7 +316,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
-            ["simple-goal", "Implement done direct link", "--backlog-item", item.Id[..8]],
+            ["simple-goal", "Implement done direct link", "--backlog-item", item.Id[..8], "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
         Assert.NotNull(currentGoal);
@@ -242,7 +338,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var changed = CliCommandDispatcher.ExecuteCommand(
-            ["backlog-intake", "Five Role Feature", "--create-goal"],
+            ["backlog-intake", "Five Role Feature", "--create-goal", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         var seededId = new BacklogStore(workspace.BacklogStorePath)
@@ -298,7 +394,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var ex = Xunit.Assert.ThrowsAny<FileNotFoundException>(() => CliCommandDispatcher.ExecuteCommand(
-            ["backlog-intake", "Legacy Feature", "--create-simple-goal"],
+            ["backlog-intake", "Legacy Feature", "--create-simple-goal", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
         Assert.Contains("backlog.db", ex.Message);
@@ -321,7 +417,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var ex = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
-            ["backlog-intake", "Ambiguous", "--create-simple-goal"],
+            ["backlog-intake", "Ambiguous", "--create-simple-goal", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
 
         Assert.Contains("matched multiple items", ex.Message);
@@ -344,7 +440,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var changed = CliCommandDispatcher.ExecuteCommand(
-            ["backlog-intake", "Indexed Feature", "--create-simple-goal"],
+            ["backlog-intake", "Indexed Feature", "--create-simple-goal", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Assert.True(changed);
@@ -392,14 +488,14 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var firstChanged = CliCommandDispatcher.ExecuteCommand(
-            ["backlog-intake", "Retry Feature", "--create-simple-goal"],
+            ["backlog-intake", "Retry Feature", "--create-simple-goal", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         var firstGoal = currentGoal!;
 
         var output = CaptureConsole(() =>
         {
             var secondChanged = CliCommandDispatcher.ExecuteCommand(
-                ["backlog-intake", "Retry Feature", "--create-simple-goal"],
+                ["backlog-intake", "Retry Feature", "--create-simple-goal", "--backlog-coverage", "full"],
                 kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
             Assert.False(secondChanged);
         });
@@ -424,14 +520,14 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         var firstChanged = CliPersistentStateRunner.ExecuteCommand(
-            ["backlog-intake", "Persistent Retry Feature", "--create-simple-goal"],
+            ["backlog-intake", "Persistent Retry Feature", "--create-simple-goal", "--backlog-coverage", "full"],
             repository, workspace, ref agents, providers, ref profiles, ref currentGoal);
         var firstGoalId = currentGoal!.Id.Value;
 
         var secondOutput = CaptureConsole(() =>
         {
             var secondChanged = CliPersistentStateRunner.ExecuteCommand(
-                ["backlog-intake", "Persistent Retry Feature", "--create-simple-goal"],
+                ["backlog-intake", "Persistent Retry Feature", "--create-simple-goal", "--backlog-coverage", "full"],
                 repository, workspace, ref agents, providers, ref profiles, ref currentGoal);
             Assert.False(secondChanged);
         });
@@ -465,7 +561,7 @@ public sealed class GoalBacklogLinkTests
         var output = CaptureConsole(() =>
         {
             var changed = CliCommandDispatcher.ExecuteCommand(
-                ["backlog-intake", "Active Retry Feature", "--create-simple-goal"],
+                ["backlog-intake", "Active Retry Feature", "--create-simple-goal", "--backlog-coverage", "full"],
                 kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
             Assert.False(changed);
         });
@@ -540,7 +636,7 @@ public sealed class GoalBacklogLinkTests
         var output = CaptureConsole(() =>
         {
             var changed = CliCommandDispatcher.ExecuteCommand(
-                ["backlog-intake", "Logged Retry Feature", "--create-simple-goal"],
+                ["backlog-intake", "Logged Retry Feature", "--create-simple-goal", "--backlog-coverage", "full"],
                 kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
             Assert.False(changed);
         });
@@ -565,7 +661,7 @@ public sealed class GoalBacklogLinkTests
         Goal? currentGoal = null;
 
         CliCommandDispatcher.ExecuteCommand(
-            ["backlog-intake", "Alpha Feature", "Beta Feature", "--create-simple-goal"],
+            ["backlog-intake", "Alpha Feature", "Beta Feature", "--create-simple-goal", "--backlog-coverage", "full"],
             kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
 
         Assert.Equal(2, kernel.Goals.Count);
@@ -600,7 +696,7 @@ public sealed class GoalBacklogLinkTests
         var output = CaptureConsole(() =>
         {
             CliCommandDispatcher.ExecuteCommand(
-                ["backlog-intake", "Done Feature", "--create-simple-goal"],
+                ["backlog-intake", "Done Feature", "--create-simple-goal", "--backlog-coverage", "full"],
                 kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
         });
 
@@ -621,6 +717,7 @@ public sealed class GoalBacklogLinkTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Land this", [new TaskSpec(TaskId.New(), "Do it", AgentRole.Developer)]);
         kernel.SetGoalSourceBacklogItemId(goal.Id, item.Id);
+        Assert.Null(goal.SourceBacklogCoverage);
 
         GoalLandingPostActions.AutoCloseSourceBacklogItem(goal, dbPath, kernel: kernel);
 

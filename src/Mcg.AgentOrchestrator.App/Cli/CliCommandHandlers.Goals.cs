@@ -82,7 +82,10 @@ private static void PrintConductorPolicyWarnings(ConductorPolicyResolution resol
     }
 }
 
-private sealed record SourceBacklogItemLink(BacklogItem Item, bool FromExplicitFlag);
+private sealed record SourceBacklogItemLink(
+    BacklogItem Item,
+    bool FromExplicitFlag,
+    SourceBacklogCoverage Coverage);
 
 private static int PersistResolvedParkedHumanWaitsForNextTick(
     CliExecutionContext context,

@@ -64,6 +64,10 @@ public sealed record BacklogCloseResult(BacklogCloseDisposition Disposition, Bac
     public bool Closed => Disposition == BacklogCloseDisposition.Closed;
 }
 
+public enum BacklogLandingDisposition { Recorded, AlreadyRecorded, AlreadyDone, NotFound }
+
+public sealed record BacklogLandingResult(BacklogLandingDisposition Disposition, BacklogItem? Item);
+
 public sealed record BacklogItemUpdate(
     string? Title = null,
     string? Body = null,
@@ -889,6 +893,76 @@ public sealed class BacklogStore
         {
             return new BacklogCloseResult(BacklogCloseDisposition.NotFound, null);
         }
+    }
+
+    // Records an idempotent landing note only while the item is Open.
+    public async Task<BacklogLandingResult> TryRecordOpenItemLandingAsync(
+        string id,
+        string note,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(note))
+            throw new ArgumentException("Backlog landing note cannot be empty.", nameof(note));
+
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
+            {
+                var existing = await LoadItemByIdAsync(conn, id, cancellationToken, includeNotes: false);
+                if (existing is null)
+                {
+                    await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                    return new BacklogLandingResult(BacklogLandingDisposition.NotFound, null);
+                }
+
+                if (existing.Status != BacklogItemStatus.Open)
+                {
+                    await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                    return new BacklogLandingResult(BacklogLandingDisposition.AlreadyDone, existing);
+                }
+
+                var createdAt = DateTimeOffset.UtcNow.ToString("O");
+                int inserted;
+                await using (var insert = conn.CreateCommand())
+                {
+                    insert.CommandText = """
+                        INSERT INTO backlog_notes (backlog_item_id, created_at, text)
+                        SELECT $backlog_item_id, $created_at, $text
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM backlog_notes
+                            WHERE backlog_item_id = $backlog_item_id AND text = $text)
+                        """;
+                    insert.Parameters.AddWithValue("$backlog_item_id", id);
+                    insert.Parameters.AddWithValue("$created_at", createdAt);
+                    insert.Parameters.AddWithValue("$text", note.Trim());
+                    inserted = await insert.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                if (inserted > 0)
+                {
+                    await using var update = conn.CreateCommand();
+                    update.CommandText = "UPDATE backlog SET updated_at = $updated_at WHERE id = $id AND status = 'Open'";
+                    update.Parameters.AddWithValue("$updated_at", createdAt);
+                    update.Parameters.AddWithValue("$id", id);
+                    await update.ExecuteNonQueryAsync(cancellationToken);
+                }
+
+                var resultItem = await LoadItemByIdAsync(conn, id, cancellationToken);
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return new BacklogLandingResult(
+                    inserted > 0 ? BacklogLandingDisposition.Recorded : BacklogLandingDisposition.AlreadyRecorded,
+                    resultItem);
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
     }
 
     // Returns true if inserted, false if the item already existed (idempotent for import).

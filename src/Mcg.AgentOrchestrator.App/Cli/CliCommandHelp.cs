@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix>] | goal --brief-file <path> | goal --text-file <path>";
+    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] | goal --brief-file <path> | goal --text-file <path>";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
     public const string RetryUsage = "Usage: retry <task-number> <message> [--mechanical] | retry <goal-prefix> <task-number> <message> [--mechanical] | retry --goal <goal-prefix> <task-number> <message> [--mechanical] | retry <task-number> --text-file <path> [--mechanical]";
     public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
@@ -86,7 +86,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Goal = new(
         GoalUsage,
         "Create a goal.",
-        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--brief-file", "--text-file", "--help", "-h" }
+        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--backlog-coverage", "--brief-file", "--text-file", "--help", "-h" }
             .ToHashSet(StringComparer.OrdinalIgnoreCase),
         ValidateFlags: false);
 

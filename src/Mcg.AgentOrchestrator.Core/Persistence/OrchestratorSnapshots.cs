@@ -24,7 +24,8 @@ public sealed record GoalSnapshot(
     GoalHoldSnapshot? CurrentHold = null,
     int ClarificationRoundCount = 0,
     IReadOnlyList<GoalBriefVersion>? BriefVersions = null,
-    IReadOnlyList<RefinedSpecVersionSnapshot>? RefinedSpecVersions = null);
+    IReadOnlyList<RefinedSpecVersionSnapshot>? RefinedSpecVersions = null,
+    SourceBacklogCoverage? SourceBacklogCoverage = null);
 
 public sealed record GoalHoldSnapshot(
     string Identity,

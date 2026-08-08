@@ -1311,6 +1311,11 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             return false;
         }
 
+        var mergedSourceBacklogLink = PickStoreOwned(
+            (baseline.SourceBacklogItemId, baseline.SourceBacklogCoverage),
+            (stored.SourceBacklogItemId, stored.SourceBacklogCoverage),
+            (current.SourceBacklogItemId, current.SourceBacklogCoverage));
+
         merged = stored with
         {
             Objective = PickStoreOwned(baseline.Objective, stored.Objective, current.Objective),
@@ -1319,7 +1324,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             Tasks = mergedTasks,
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
-            SourceBacklogItemId = PickStoreOwned(baseline.SourceBacklogItemId, stored.SourceBacklogItemId, current.SourceBacklogItemId),
+            SourceBacklogItemId = mergedSourceBacklogLink.SourceBacklogItemId,
+            SourceBacklogCoverage = mergedSourceBacklogLink.SourceBacklogCoverage,
             RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),
             ClarificationRoundCount = PickTickOwned(
                 baseline.ClarificationRoundCount,
