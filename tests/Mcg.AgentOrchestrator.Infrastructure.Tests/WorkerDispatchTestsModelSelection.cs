@@ -3129,7 +3129,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     {
         var root = CreateSeededDispatchRepository();
         var promptRoot = Path.Combine(root, "prompts");
-        var kernel = new AgentOrchestratorKernel();
+        var kernel = new AgentOrchestratorKernel(
+            new TestClock(DateTimeOffset.Parse("2026-08-08T10:02:30Z")));
         var testerSpec = new TaskSpec(TaskId.New(), "Recheck the persistent timeline-evidence finding.", AgentRole.Tester);
         var goal = kernel.CreateGoal("Validate afc62d88 moved finding convergence.", [testerSpec]);
         var testerAgent = TestSubscriptionAgent("tester", "Tester", AgentRole.Tester);
@@ -3251,7 +3252,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     {
         var root = CreateSeededDispatchRepository();
         var promptRoot = Path.Combine(root, "prompts");
-        var kernel = new AgentOrchestratorKernel();
+        var kernel = new AgentOrchestratorKernel(
+            new TestClock(DateTimeOffset.Parse("2026-08-08T11:02:30Z")));
         var testerSpec = new TaskSpec(TaskId.New(), "Recheck a finding without a changed anchor.", AgentRole.Tester);
         var goal = kernel.CreateGoal("Reject an unproved finding relocation.", [testerSpec]);
         kernel.ActivateGoal(goal.Id, [TestSubscriptionAgent("tester", "Tester", AgentRole.Tester)]);
