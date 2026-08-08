@@ -663,7 +663,7 @@ internal sealed class GoalRefinementService
 
     private static RefinedSpec BuildFallbackSpec(string objective)
     {
-        var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(objective);
+        var declaredCriteria = ParseDeclaredAcceptanceCriteria(objective);
         return new RefinedSpec(
             $"Implement: {objective}",
             declaredCriteria.Count > 0 ? declaredCriteria : [$"The objective is achieved: {objective}"],
@@ -676,12 +676,19 @@ internal sealed class GoalRefinementService
         string objective,
         IReadOnlyList<string> refinedCriteria)
     {
-        var declaredCriteria = AcceptanceCriteriaParser.ParseDeclared(objective);
-        return declaredCriteria
-            .Concat(refinedCriteria)
+        var declaredCriteria = ParseDeclaredAcceptanceCriteria(objective);
+        if (declaredCriteria.Count > 0)
+            return declaredCriteria;
+
+        return refinedCriteria
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
+
+    private static List<string> ParseDeclaredAcceptanceCriteria(string objective) =>
+        AcceptanceCriteriaParser.ParseDeclared(objective)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     private static string BuildCorrelationKey(GoalId goalId, string topicKey)
     {
