@@ -92,6 +92,8 @@ public sealed class ConductorContinuitySupervisorTests
     [Xunit.Fact]
     public async Task LaunchFailure_RestartsThenAcceptsIntentionalStop()
     {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-continuity-launch-{Guid.NewGuid():N}");
+        var logDirectory = Path.Combine(root, "logs");
         var store = new RecordingRunEventStore();
         var host = new ScriptedSupervisorProcessHost(
             (_, _) => throw new InvalidOperationException("spawn failed"),
@@ -107,16 +109,70 @@ public sealed class ConductorContinuitySupervisorTests
             store,
             delay: (_, _) => Task.CompletedTask);
 
-        var exitCode = await supervisor.RunAsync(
-            ["conduct", "--loop"],
-            "C:\\repo",
-            Path.Combine(Path.GetTempPath(), $"mcg-continuity-{Guid.NewGuid():N}"),
-            "default",
-            "default");
+        try
+        {
+            var exitCode = await supervisor.RunAsync(
+                ["conduct", "--loop"],
+                "C:\\repo",
+                Path.Combine(root, "artifacts"),
+                "default",
+                "default",
+                logDirectory);
 
-        Assert.Equal(0, exitCode);
-        Assert.Equal(2, host.Requests.Count);
-        Assert.Contains("launch=InvalidOperationException:spawn failed", store.Events[0].Detail, StringComparison.Ordinal);
+            Assert.Equal(0, exitCode);
+            Assert.Equal(2, host.Requests.Count);
+            Assert.Contains("launch=InvalidOperationException:spawn failed", store.Events[0].Detail, StringComparison.Ordinal);
+            Assert.All(host.Requests, request =>
+            {
+                Assert.True(Path.IsPathFullyQualified(request.StdoutPath));
+                Assert.True(Path.IsPathFullyQualified(request.StderrPath));
+                Assert.True(File.Exists(request.StdoutPath));
+                Assert.True(File.Exists(request.StderrPath));
+            });
+            var payload = JsonDocument.Parse(store.Events[0].PayloadJson!).RootElement;
+            Assert.Equal(host.Requests[0].StdoutPath, payload.GetProperty("stdoutPath").GetString());
+            Assert.Equal(host.Requests[0].StderrPath, payload.GetProperty("stderrPath").GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task ProcessHost_TeesChildOutputAndPublishesEnvironmentPaths()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-continuity-output-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var stdoutPath = Path.Combine(root, "child.out.log");
+        var stderrPath = Path.Combine(root, "child.err.log");
+        var request = new ConductorSupervisorProcessRequest(
+            [],
+            root,
+            Path.Combine(root, "exit.json"),
+            stdoutPath,
+            stderrPath);
+        var host = new SystemConductorSupervisorProcessHost(_ => BuildOutputProbeStartInfo());
+
+        try
+        {
+            var result = await host.RunAsync(request, CancellationToken.None);
+
+            Assert.Equal(7, result.ExitCode);
+            Assert.True(result.ProcessId > 0);
+            Assert.Equal(stdoutPath, result.StdoutPath);
+            Assert.Equal(stderrPath, result.StderrPath);
+            var stdout = File.ReadAllText(stdoutPath);
+            var stderr = File.ReadAllText(stderrPath);
+            Assert.Contains("child-out", stdout, StringComparison.Ordinal);
+            Assert.Contains(stdoutPath, stdout, StringComparison.Ordinal);
+            Assert.Contains("child-err", stderr, StringComparison.Ordinal);
+            Assert.Contains(stderrPath, stderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
     }
 
     [Xunit.Fact]
@@ -197,6 +253,29 @@ public sealed class ConductorContinuitySupervisorTests
             var step = steps[Math.Min(index, steps.Length - 1)];
             return Task.FromResult(step(request, index));
         }
+    }
+
+    private static System.Diagnostics.ProcessStartInfo BuildOutputProbeStartInfo()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var startInfo = new System.Diagnostics.ProcessStartInfo(
+                Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe");
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/s");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(
+                "echo child-out & echo %MCG_ORCHESTRATOR_STDOUT_LOG_PATH% & " +
+                "echo child-err 1>&2 & echo %MCG_ORCHESTRATOR_STDERR_LOG_PATH% 1>&2 & exit /b 7");
+            return startInfo;
+        }
+
+        var shell = new System.Diagnostics.ProcessStartInfo("/bin/sh");
+        shell.ArgumentList.Add("-c");
+        shell.ArgumentList.Add(
+            "printf '%s\\n' child-out \"$MCG_ORCHESTRATOR_STDOUT_LOG_PATH\"; " +
+            "printf '%s\\n' child-err \"$MCG_ORCHESTRATOR_STDERR_LOG_PATH\" >&2; exit 7");
+        return shell;
     }
 
     private sealed class RecordingRunEventStore : IRunEventStore

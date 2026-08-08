@@ -133,6 +133,69 @@ public sealed class ConductorBatchLoopTests
         return goal;
     }
 
+    private static (AgentOrchestratorKernel Kernel, Goal InconsistentGoal, Goal HealthyGoal)
+        SeedInconsistentVerifiedGoalWithHealthyNeighbor()
+    {
+        var seed = new AgentOrchestratorKernel();
+        var inconsistentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            seed,
+            DefaultAgents(),
+            "Seed inconsistent verified goal");
+        var healthyGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            seed,
+            DefaultAgents(),
+            "Seed healthy dispatchable neighbor");
+        var snapshot = seed.ExportSnapshot();
+        var blockerOutput = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: seeded verification",
+            "tests: pass - process exited successfully",
+            "commit: none",
+            "blockers: exact-blocker - authoritative gate remains unsatisfied",
+            "model_fit: test/test - adequate - fixture - fixture",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        var blockerVerification = new TaskVerificationSnapshot(
+            "seeded verification",
+            "C:\\tmp",
+            0,
+            blockerOutput,
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-08T02:10:00Z"),
+            WorkerResultPresent: true);
+        var inconsistentSnapshot = snapshot.Goals.Single(goal => goal.Id == inconsistentGoal.Id.Value);
+        var inconsistentTask = inconsistentSnapshot.Tasks.Single();
+        var seededKernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Select(goal => goal.Id == inconsistentGoal.Id.Value
+                    ? goal with
+                    {
+                        Status = GoalStatus.Verified,
+                        Tasks =
+                        [
+                            inconsistentTask with
+                            {
+                                RequiredRole = AgentRole.Reviewer,
+                                Status = WorkTaskStatus.Completed,
+                                LastVerification = blockerVerification,
+                                VerificationHistory = [blockerVerification]
+                            }
+                        ]
+                    }
+                    : goal)
+                .ToArray()
+        });
+
+        return (
+            seededKernel,
+            seededKernel.GetGoal(inconsistentGoal.Id),
+            seededKernel.GetGoal(healthyGoal.Id));
+    }
+
     [Xunit.Theory(DisplayName = "BatchLoop_self_relaunch_activation_switch_defaults_off_and_requires_true")]
     [Xunit.InlineData(null, false)]
     [Xunit.InlineData("", false)]
@@ -7361,6 +7424,80 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_VerifyManualRepairsInconsistentVerifiedGateBeforeAcceptance")]
+    public async Task BatchLoopVerifyManualRepairsInconsistentVerifiedGateBeforeAcceptance()
+    {
+        var root = CreateTempDirectory("mcg-loop-inconsistent-verify-manual");
+        try
+        {
+            var (kernel, inconsistentGoal, _) = SeedInconsistentVerifiedGoalWithHealthyNeighbor();
+            var task = inconsistentGoal.Tasks.Single();
+            var store = new SqliteOperatorIntentStore(
+                Path.Combine(root, "operator-intents.db"),
+                Path.Combine(root, "logs"));
+            var intent = new OperatorIntentRecord(
+                "repair-inconsistent-gate",
+                "repair-inconsistent-gate-key",
+                OperatorIntentVerbs.VerifyManual,
+                inconsistentGoal.Id.Value,
+                task.Id.Value,
+                JsonSerializer.Serialize(
+                    new ManualVerificationOperatorIntentPayload(new TaskVerificationRecord(
+                        "verify-manual",
+                        root,
+                        0,
+                        "operator verified the completed task",
+                        string.Empty,
+                        DateTimeOffset.Parse("2026-08-08T02:24:00Z"))),
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+                [],
+                "operator",
+                "cli",
+                "local-process",
+                DateTimeOffset.Parse("2026-08-08T02:24:00Z"));
+            await store.EnqueueAsync(intent);
+
+            var acceptanceRuns = 0;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"),
+                runInline: true);
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (goal, _) =>
+                {
+                    if (goal.Id == inconsistentGoal.Id)
+                    {
+                        acceptanceRuns++;
+                    }
+
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs"],
+                parallelAcceptanceAttemptCoordinator: coordinator);
+
+            var summary = new ConductorBatchLoop(
+                operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    persistGoalTick: (_, _) => { });
+
+            Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
+            Assert.True(kernel.BuildVerificationGate(inconsistentGoal.Id).IsSatisfied);
+            Assert.Equal(1, acceptanceRuns);
+            Assert.True(summary.Advanced > 0);
+            Assert.DoesNotContain(
+                kernel.Goals,
+                goal => goal.Id == inconsistentGoal.Id && goal.Status == GoalStatus.Cancelled);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "OperatorIntentCoordinator_recovers_claimed_intent_without_duplicate_state_mutation")]
     public async Task OperatorIntentCoordinatorRecoversClaimedIntentWithoutDuplicateStateMutation()
     {
@@ -10085,6 +10222,47 @@ public sealed class ConductorBatchLoopTests
 
     // ── Fault isolation: a throwing goal is escalated, others still advance ─
 
+    [Xunit.Fact(DisplayName = "BatchLoop_InconsistentVerifiedGate_IsolatedAndHealthyGoalDispatchedSameTick")]
+    public void BatchLoopInconsistentVerifiedGateIsolatedAndHealthyGoalDispatchedSameTick()
+    {
+        var (kernel, inconsistentGoal, healthyGoal) = SeedInconsistentVerifiedGoalWithHealthyNeighbor();
+        var dispatchedGoalIds = new List<GoalId>();
+        var acceptanceRuns = 0;
+        var escalations = new List<string>();
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: goal =>
+            {
+                dispatchedGoalIds.Add(goal.Id);
+                return DispatchStartOutcome.Started();
+            },
+            runAcceptance: _ =>
+            {
+                acceptanceRuns++;
+                return true;
+            },
+            writeEscalation: (_, _, reason) => escalations.Add(reason));
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(1, summary.Ticks);
+        Assert.Equal(1, summary.Escalated);
+        Assert.Contains(healthyGoal.Id, dispatchedGoalIds);
+        Assert.Equal(0, acceptanceRuns);
+        Assert.Equal(GoalStatus.Verified, kernel.GetGoal(inconsistentGoal.Id).Status);
+        Assert.False(kernel.BuildVerificationGate(inconsistentGoal.Id).IsSatisfied);
+        Assert.Contains(escalations, reason =>
+            reason.Contains("authoritative task verification gate unsatisfied", StringComparison.Ordinal));
+        Assert.Contains(kernel.GetGoal(inconsistentGoal.Id).Timeline, item =>
+            item.Kind == ProgressKind.GoalPolicyDecision &&
+            item.Message.Contains("authoritative task verification gate unsatisfied", StringComparison.Ordinal));
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_FaultIsolation_ThrowingGoalEscalated_HealthyGoalStillAdvanced")]
     public void BatchLoop_FaultIsolation_ThrowingGoalEscalated_HealthyGoalStillAdvanced()
     {
@@ -11149,6 +11327,41 @@ public sealed class ConductorBatchLoopTests
                 line,
                 new JsonSerializerOptions(JsonSerializerDefaults.Web))!),
             record => record.EventKind == "goal-stalled");
+    }
+
+    [Xunit.Fact]
+    public void UnintendedExit_RecordsLoopStopWithExceptionAndRethrowsOriginal()
+    {
+        var events = new List<RunEventAppend>();
+        var recorder = new ConductorLifecycleRecorder(
+            new DelegateRunEventStore(evt => events.Add(evt)),
+            generationId: () => "crashing-loop");
+        var (kernel, _) = SimpleGoal("crash after one completed tick");
+        var expected = new InvalidOperationException("seeded loop crash\nwith a second line");
+        Exception? actual = null;
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+        {
+            actual = Assert.Throws<InvalidOperationException>(() =>
+                new ConductorBatchLoop(lifecycleRecorder: recorder).Run(
+                    kernel,
+                    MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1,
+                    onTick: _ => throw expected));
+        });
+
+        Assert.Same(expected, actual);
+        Assert.Contains(
+            "LOOP_STOP tick=1 rechecks=0 reason=unintended-exit exception=InvalidOperationException",
+            output,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("second line", output, StringComparison.Ordinal);
+        var stop = Assert.Single(events, evt => evt.Operation == "stop");
+        Assert.Equal("unintended-exit", stop.Status);
+        Assert.Contains("exception=InvalidOperationException", stop.Detail, StringComparison.Ordinal);
+        Assert.Contains("message=seeded_loop_crash_with_a_second_line", stop.Detail, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
