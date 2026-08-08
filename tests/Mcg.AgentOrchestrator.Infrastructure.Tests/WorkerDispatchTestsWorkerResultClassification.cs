@@ -3543,11 +3543,24 @@ private static string BuildSuccessfulReadOnlyOutput(AgentRole role)
     var roleOutput = role == AgentRole.Planner
         ? PlannerContractPlanFixture() + Environment.NewLine
         : $"Completed {role} analysis." + Environment.NewLine;
-    return roleOutput + WorkerResultBlock(
+    var workerResult = WorkerResultBlock(
         "none",
         "source inspection",
         "pass - structured result complete",
         blockers: "none");
+    if (role == AgentRole.Reviewer)
+    {
+        workerResult = workerResult.Replace(
+            "END_WORKER_RESULT",
+            "findings: []\n" +
+            "touched_anchors: []\n" +
+            "criteria_verdicts: []\n" +
+            "verdict: pass\n" +
+            "END_WORKER_RESULT",
+            StringComparison.Ordinal);
+    }
+
+    return roleOutput + workerResult;
 }
 
 private static void AssertExitCode(string path, int expected)
