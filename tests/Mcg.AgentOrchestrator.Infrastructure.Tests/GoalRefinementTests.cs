@@ -1537,7 +1537,7 @@ public sealed class GoalRefinementTests
         var scenario = BuildScenario();
         var goal = scenario.Kernel.GetGoal(scenario.GoalId);
         scenario.Kernel.ReviseGoalBrief(goal.Id, "Revised brief");
-        const string questionId = "spec-clarification:versioned-answer";
+        var questionId = $"spec-clarification:{goal.Id.Value}:versioned-answer";
         scenario.Kernel.SetGoalRefinedSpec(goal.Id, new RefinedSpec(
             "Contract",
             ["Criterion"],
