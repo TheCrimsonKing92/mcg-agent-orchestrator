@@ -106,7 +106,9 @@ public enum ProgressKind
     HumanInputSuperseded = 31,
     ContradictoryRecordDetected = 32,
     HumanInputRoundEvaluationInconclusive = 33,
-    HumanInputWorkerResultContradiction = 34
+    HumanInputWorkerResultContradiction = 34,
+    FindingEvidenceRequestRecorded = 35,
+    FindingEvidenceRunRecorded = 36
 }
 
 public enum HumanInputAnswerOrigin

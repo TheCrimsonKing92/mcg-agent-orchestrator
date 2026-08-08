@@ -209,6 +209,47 @@ public sealed partial class AgentOrchestratorKernel
         return task;
     }
 
+    public TaskSpec RecordFindingEvidenceRequest(GoalId goalId, TaskId taskId, string message)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        var trimmed = message.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            throw new ArgumentException("Finding evidence request message cannot be empty.", nameof(message));
+        }
+
+        Append(goal, taskId, ProgressKind.FindingEvidenceRequestRecorded, trimmed);
+        return task;
+    }
+
+    public TaskSpec RecordFindingEvidenceRun(GoalId goalId, TaskId taskId, string message)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        var trimmed = message.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            throw new ArgumentException("Finding evidence run message cannot be empty.", nameof(message));
+        }
+
+        Append(goal, taskId, ProgressKind.FindingEvidenceRunRecorded, trimmed);
+        return task;
+    }
+
+    public TaskSpec RecordFindingEvidenceOutcome(
+        GoalId goalId,
+        TaskId taskId,
+        string stableId,
+        FindingEvidenceOutcome outcome,
+        FindingEvidenceReceipt? receipt = null)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        task.RecordFindingEvidenceOutcome(stableId, outcome, receipt);
+        return task;
+    }
+
     public TaskSpec RecordPreReviewEvidence(
         GoalId goalId,
         TaskId reviewerTaskId,

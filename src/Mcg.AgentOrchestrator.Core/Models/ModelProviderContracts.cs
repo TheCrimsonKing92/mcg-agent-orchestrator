@@ -63,7 +63,8 @@ public sealed record TaskVerificationRecord(
     ReviewFindingContractViolation? ReviewFindingContractViolation = null,
     DateTimeOffset? DispatchStartedAt = null,
     int? ChildProcessId = null,
-    int? ChildExitCode = null)
+    int? ChildExitCode = null,
+    IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

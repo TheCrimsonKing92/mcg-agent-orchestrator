@@ -152,7 +152,8 @@ public sealed class GoalLifecycleTests
     AssertBriefContains(kernel, goal, AgentRole.Tester, "Tester Requirements", "avoid treating bin/obj output as changed source");
     AssertBriefContains(kernel, goal, AgentRole.Reviewer, "Reviewer Requirements", "Challenge generic summaries");
     AssertBriefContains(kernel, goal, AgentRole.Reviewer, "Reviewer Requirements", "Ignore generated bin/obj output");
-    AssertBriefContains(kernel, goal, AgentRole.Reviewer, "Reviewer Requirements", "evidence-request: <ProjectAlias>");
+    AssertBriefContains(kernel, goal, AgentRole.Reviewer, "Reviewer Requirements", "evidence_request:{selections:");
+    AssertBriefContains(kernel, goal, AgentRole.Tester, "Tester Requirements", "evidence_request:{selections:");
 }
     [Xunit.Fact(DisplayName = "SetTaskVerificationPlan_persists_plan_and_timeline_event")]
     public void SetTaskVerificationPlanPersistsPlanAndTimelineEvent()
@@ -1188,6 +1189,215 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
         evt.TaskId == task.Id &&
         evt.Message.Contains("restored task status to Assigned", StringComparison.Ordinal));
 }
+    [Xunit.Fact(DisplayName = "RecordFindingEvidenceOutcome_recovers_requesting_finding_from_unmerged_worker_output")]
+    public void RecordFindingEvidenceOutcomeRecoversRequestingFindingFromUnmergedWorkerOutput()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var reviewer = new TaskSpec(TaskId.New(), "Review the change.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Preserve typed evidence outcomes after truncated output", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            reviewer.Id,
+            new TaskDispatchRecord("reviewer", "review", "C:\\repo", DateTimeOffset.UtcNow));
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "blockers: exact-blocker - focused receipt required",
+            """findings: [{"stable_id":"truncated-finding","state":"open","location":{"file":"tests/Test.cs","region":"Test.Run"},"description":"Focused receipt required.","evidence_request":{"selections":[{"test_project":"Core.Tests","test_class":"GoalLifecycleTests"}]}}]""",
+            "touched_anchors: []",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                "C:\\repo",
+                1,
+                output,
+                "",
+                DateTimeOffset.UtcNow,
+                WorkerResultPresent: false));
+        Assert.Null(reviewer.LastVerification!.MergedReviewFindings);
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "GoalLifecycleTests")]);
+        var receipt = new FindingEvidenceReceipt(
+            "receipt-1",
+            "abc1234",
+            request,
+            Accepted: true,
+            Passed: true,
+            "focused evidence passed");
+
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            "truncated-finding",
+            new FindingEvidenceOutcome(Honoured: true, ReceiptId: receipt.ReceiptId),
+            receipt);
+
+        var recordedFinding = Assert.Single(reviewer.LastVerification.MergedReviewFindings!);
+        Assert.Equal("truncated-finding", recordedFinding.StableId);
+        Assert.Equal(receipt.ReceiptId, recordedFinding.EvidenceOutcome?.ReceiptId);
+        Assert.Same(receipt, Assert.Single(reviewer.LastVerification.FindingEvidenceReceipts!));
+    }
+
+    [Xunit.Fact(DisplayName = "RecordFindingEvidenceOutcome_resolves_canonicalized_requesting_finding_identity")]
+    public void RecordFindingEvidenceOutcomeResolvesCanonicalizedRequestingFindingIdentity()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review the change.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Attach evidence after finding identity canonicalization", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        static string Result(string stableId, bool includeRequest)
+        {
+            var request = includeRequest
+                ? ""","evidence_request":{"selections":[{"test_project":"Core.Tests","test_class":"GoalLifecycleTests"}]}"""
+                : string.Empty;
+            return string.Join(
+                Environment.NewLine,
+                "WORKER_RESULT:",
+                "files: none",
+                "commands: review",
+                "tests: pass - deterministic fixture",
+                "commit: none",
+                "blockers: exact-blocker - focused receipt required",
+                $"findings: [{{\"stable_id\":\"{stableId}\",\"state\":\"open\",\"location\":{{\"file\":\"tests/Test.cs\",\"region\":\"Test.Run\",\"hunk\":\"focused\"}},\"description\":\"Focused receipt required.\"{request}}}]",
+                "touched_anchors: []",
+                "criteria_verdicts: []",
+                "verdict: needs-work",
+                "model_fit: fixture/model - adequate - deterministic review",
+                "skills: none",
+                "confidence: high",
+                "END_WORKER_RESULT");
+        }
+
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            reviewer.Id,
+            new TaskDispatchRecord("reviewer", "review-1", "C:\\repo", clock.UtcNow));
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review-1",
+                "C:\\repo",
+                0,
+                Result("prior-finding", includeRequest: false),
+                "",
+                clock.UtcNow,
+                WorkerResultPresent: true));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            reviewer.Id,
+            new TaskDispatchRecord("reviewer", "review-2", "C:\\repo", clock.UtcNow));
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review-2",
+                "C:\\repo",
+                0,
+                Result("submitted-finding", includeRequest: true),
+                "",
+                clock.UtcNow,
+                WorkerResultPresent: true));
+
+        var canonicalized = Assert.Single(reviewer.LastVerification!.MergedReviewFindings!);
+        Assert.Equal("prior-finding", canonicalized.StableId);
+        Assert.NotNull(canonicalized.EvidenceRequest);
+        var receipt = new FindingEvidenceReceipt(
+            "receipt-canonical",
+            "abc1234",
+            canonicalized.EvidenceRequest!,
+            Accepted: true,
+            Passed: true,
+            "focused evidence passed");
+
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            "submitted-finding",
+            new FindingEvidenceOutcome(Honoured: true, ReceiptId: receipt.ReceiptId),
+            receipt);
+
+        var recordedFinding = Assert.Single(reviewer.LastVerification.MergedReviewFindings!);
+        Assert.Equal("prior-finding", recordedFinding.StableId);
+        Assert.Equal(receipt.ReceiptId, recordedFinding.EvidenceOutcome?.ReceiptId);
+        Assert.Same(receipt, Assert.Single(reviewer.LastVerification.FindingEvidenceReceipts!));
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(
+            reviewer.LastVerification, out var reportedRound, out _));
+        var resolvedFromSubmittedIdentity = Assert.IsType<ReviewFinding>(
+            ReviewFindingConvergence.ResolveMergedFinding(
+                reviewer.LastVerification.MergedReviewFindings!, reportedRound, "submitted-finding"));
+        Assert.Same(recordedFinding, resolvedFromSubmittedIdentity);
+        Assert.Equal(receipt.ReceiptId, resolvedFromSubmittedIdentity.EvidenceOutcome?.ReceiptId);
+    }
+
+    [Xunit.Fact(DisplayName = "RecordFindingEvidenceOutcome_falls_back_to_reported_finding_when_anchor_is_ambiguous")]
+    public void RecordFindingEvidenceOutcomeFallsBackToReportedFindingWhenAnchorIsAmbiguous()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var reviewer = new TaskSpec(TaskId.New(), "Review the change.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Attach evidence despite an ambiguous canonical anchor", [reviewer]);
+        var location = new ReviewFindingLocation("tests/Test.cs", "Test.Run", "focused");
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "GoalLifecycleTests")]);
+        var reported = new ReviewFinding(
+            "submitted-finding",
+            ReviewFindingState.Open,
+            location,
+            "Focused receipt required.",
+            EvidenceRequest: request);
+        var merged = new[]
+        {
+            new ReviewFinding("resolved-at-anchor", ReviewFindingState.Resolved, location, "Prior issue resolved."),
+            new ReviewFinding(
+                "canonical-open-at-anchor",
+                ReviewFindingState.Open,
+                location,
+                "Current issue remains open.",
+                EvidenceRequest: request)
+        };
+        var output = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "blockers: exact-blocker - focused receipt required",
+            $"findings: {System.Text.Json.JsonSerializer.Serialize(new[] { reported })}",
+            "touched_anchors: []",
+            "END_WORKER_RESULT");
+        kernel.RecordTaskVerification(
+            goal.Id,
+            reviewer.Id,
+            new TaskVerificationRecord(
+                "review",
+                "C:\\repo",
+                1,
+                output,
+                "",
+                DateTimeOffset.UtcNow,
+                MergedReviewFindings: merged));
+
+        kernel.RecordFindingEvidenceOutcome(
+            goal.Id,
+            reviewer.Id,
+            reported.StableId,
+            new FindingEvidenceOutcome(
+                Honoured: false,
+                Reason: FindingEvidenceNotHonouredReason.Unknown,
+                Detail: "Ambiguous canonical anchor; attached to reported finding."));
+
+        var recorded = Assert.Single(
+            reviewer.LastVerification!.MergedReviewFindings!,
+            finding => finding.StableId == reported.StableId);
+        Assert.Equal(FindingEvidenceNotHonouredReason.Unknown, recorded.EvidenceOutcome?.Reason);
+    }
+
     [Xunit.Fact(DisplayName = "SourceBacklogItemId_roundtrips_through_snapshot")]
     public void SourceBacklogItemIdRoundtripsThoughSnapshot()
     {

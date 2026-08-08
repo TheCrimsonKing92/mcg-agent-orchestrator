@@ -642,6 +642,18 @@ public sealed partial class AgentOrchestratorKernel
                 state = isCurrentRound
                     ? ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations)
                     : ReviewFindingConvergence.ApplyRound(state, round);
+                var conductorOutcomes = (verification.MergedReviewFindings ?? [])
+                    .Where(finding => finding.EvidenceOutcome is not null)
+                    .ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
+                state = state
+                    .Select(finding => conductorOutcomes.TryGetValue(finding.StableId, out var authoritative)
+                        ? finding with
+                        {
+                            EvidenceRequest = authoritative.EvidenceRequest ?? finding.EvidenceRequest,
+                            EvidenceOutcome = authoritative.EvidenceOutcome
+                        }
+                        : finding)
+                    .ToArray();
                 foreach (var finding in round.Findings)
                 {
                     latestFindingOccurrences[finding.StableId] = verification.CompletedAt;

@@ -306,6 +306,50 @@ public sealed class TaskVerificationTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TaskSpec_excludes_finding_evidence_receipts_from_history_trimming")]
+    public void TaskSpecExcludesFindingEvidenceReceiptsFromHistoryTrimming()
+    {
+        var task = new TaskSpec(TaskId.New(), "Test the change.", AgentRole.Tester);
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "TaskVerificationTests")]);
+        var durable = new TaskVerificationRecord(
+            "focused evidence",
+            "C:\\repo",
+            0,
+            "focused evidence passed",
+            "",
+            DateTimeOffset.UtcNow,
+            FindingEvidenceReceipts:
+            [
+                new FindingEvidenceReceipt(
+                    "receipt-durable",
+                    "abc1234",
+                    request,
+                    Accepted: true,
+                    Passed: true,
+                    "focused evidence passed")
+            ]);
+        task.RecordVerification(durable);
+
+        for (var index = 0; index < TaskSpec.VerificationHistoryLimit + 5; index++)
+        {
+            task.RecordVerification(new TaskVerificationRecord(
+                "retry",
+                "C:\\repo",
+                1,
+                $"retry-noise-{index}",
+                "",
+                DateTimeOffset.UtcNow.AddMinutes(index + 1)));
+        }
+
+        Assert.Contains(durable, task.VerificationHistory);
+        Assert.Equal(TaskSpec.VerificationHistoryLimit, task.VerificationHistory.Count);
+        Assert.Same(
+            durable.FindingEvidenceReceipts!.Single(),
+            task.VerificationHistory.Single(verification => ReferenceEquals(verification, durable))
+                .FindingEvidenceReceipts!.Single());
+    }
+
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]
     public void RecordTaskVerificationCompletesGoalOnlyWhenAllGatesPass()
 {

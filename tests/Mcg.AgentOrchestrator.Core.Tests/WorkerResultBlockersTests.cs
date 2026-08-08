@@ -759,8 +759,8 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal("Missing guard.", blocker);
     }
 
-    [Xunit.Fact(DisplayName = "TryFindEvidenceRequest_reads_latest_worker_result_field")]
-    public void TryFindEvidenceRequestReadsLatestWorkerResultField()
+    [Xunit.Fact(DisplayName = "Finding evidence request is parsed only from the typed finding field")]
+    public void FindingEvidenceRequestIsParsedFromTypedFindingField()
     {
         var verification = new TaskVerificationRecord(
             "review",
@@ -768,13 +768,9 @@ public sealed class WorkerResultBlockersTests
             1,
             """
             WORKER_RESULT:
-            blockers: stale blocker
-            evidence-request: Core.Tests: OldTests
-            verdict: needs-work
-            END_WORKER_RESULT
-            WORKER_RESULT:
             blockers: missing focused evidence
-            evidence-request: Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests
+            findings: [{"stable_id":"evidence-1","state":"open","severity":"blocking","category":"correctness","location":{"file":"ConductorDriver.cs","region":"routing"},"description":"Run Infrastructure.Tests ConductorDriverTests","evidence_request":{"selections":[{"test_project":"Infrastructure.Tests","test_class":"ConductorDriverTests"}]}}]
+            touched_anchors: []
             verdict: needs-work
             END_WORKER_RESULT
             """,
@@ -782,7 +778,10 @@ public sealed class WorkerResultBlockersTests
             DateTimeOffset.UtcNow,
             WorkerResultPresent: true);
 
-        Assert.True(WorkerResultBlockers.TryFindEvidenceRequest(verification, out var request));
-        Assert.Equal("Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests", request);
+        Assert.True(WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out _));
+        var request = Assert.Single(round.Findings).EvidenceRequest;
+        var selection = Assert.Single(Assert.IsType<FindingEvidenceRequest>(request).Selections);
+        Assert.Equal("Infrastructure.Tests", selection.TestProject);
+        Assert.Equal("ConductorDriverTests", selection.TestClass);
     }
 }

@@ -817,7 +817,9 @@ public sealed partial class AgentOrchestratorKernel
         }
 
         var feedbackEvents = goal.Timeline
-            .Where(IsAccumulatedRetryFeedbackEvent)
+            .Where(evt =>
+                IsAccumulatedRetryFeedbackEvent(evt) &&
+                (evt.Kind != ProgressKind.FindingEvidenceRunRecorded || evt.TaskId == task.Id))
             .OrderByDescending(evt => evt.OccurredAt)
             .ThenByDescending(evt => (int)evt.Kind)
             .ToList();
@@ -899,6 +901,40 @@ public sealed partial class AgentOrchestratorKernel
                 lines.Add(
                     $"- role={item.RequiredRole}; stable_id={item.Finding.StableId}; severity={item.Finding.Severity}; " +
                     $"location={item.Finding.Location}; description={PromptContextFormatter.TrimPromptBlock(item.Finding.Description)}");
+                if (item.Finding.EvidenceRequest is { } evidenceRequest)
+                {
+                    var selection = string.Join(",", (evidenceRequest.Selections ?? []).Select(value =>
+                        $"{value.TestProject}:{value.TestClass}"));
+                    var outcome = item.Finding.EvidenceOutcome;
+                    var disposition = outcome is null
+                        ? "pending"
+                        : outcome.Honoured ? "honoured" : "not-honoured";
+                    var reason = outcome?.Reason is { } reasonCode
+                        ? $"; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reasonCode)}"
+                        : string.Empty;
+                    lines.Add(
+                        $"  evidence_index: selection={selection}; verdict={disposition}; " +
+                        $"receipt={outcome?.ReceiptId ?? "none"}{reason}");
+
+                    if (task.RequiredRole == item.RequiredRole && outcome?.ReceiptId is { } receiptId)
+                    {
+                        var receipt = goal.Tasks
+                            .Where(candidate => candidate.RequiredRole == item.RequiredRole)
+                            .SelectMany(candidate => candidate.VerificationHistory)
+                            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+                            .FirstOrDefault(candidate => string.Equals(candidate.ReceiptId, receiptId, StringComparison.Ordinal));
+                        if (receipt is not null)
+                        {
+                            lines.Add(
+                                $"  evidence_receipt: id={receipt.ReceiptId}; candidate_sha={receipt.CandidateSha}; " +
+                                $"accepted={receipt.Accepted}; passed={receipt.Passed}; summary={PromptContextFormatter.TrimPromptBlock(receipt.Summary)}");
+                        }
+                    }
+                    else if (task.RequiredRole == item.RequiredRole && outcome is { Honoured: false })
+                    {
+                        lines.Add($"  evidence_not_honoured: detail={PromptContextFormatter.TrimPromptBlock(outcome.Detail ?? "none")}");
+                    }
+                }
             }
         }
 
@@ -1334,7 +1370,9 @@ public sealed partial class AgentOrchestratorKernel
                evt.Kind is (
                    ProgressKind.TaskSubscriptionLimitReviewAcknowledged or
                    ProgressKind.ReviewerEvidenceRequestReceived or
-                   ProgressKind.ReviewerEvidenceRunRecorded) ||
+                   ProgressKind.ReviewerEvidenceRunRecorded or
+                   ProgressKind.FindingEvidenceRequestRecorded or
+                   ProgressKind.FindingEvidenceRunRecorded) ||
                (evt.Kind is ProgressKind.TaskNote or ProgressKind.OperatorTaskNote &&
                    IsAccumulatedRetryFeedbackTaskNote(evt.Message));
     }

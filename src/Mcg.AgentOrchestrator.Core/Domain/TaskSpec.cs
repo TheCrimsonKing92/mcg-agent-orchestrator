@@ -122,7 +122,8 @@ public sealed class TaskSpec
                     LastVerification.ReviewFindingContractViolation,
                     LastVerification.DispatchStartedAt,
                     LastVerification.ChildProcessId,
-                    LastVerification.ChildExitCode),
+                    LastVerification.ChildExitCode,
+                    LastVerification.FindingEvidenceReceipts),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -142,7 +143,8 @@ public sealed class TaskSpec
                     verification.ReviewFindingContractViolation,
                     verification.DispatchStartedAt,
                     verification.ChildProcessId,
-                    verification.ChildExitCode))
+                    verification.ChildExitCode,
+                    verification.FindingEvidenceReceipts))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -263,7 +265,8 @@ public sealed class TaskSpec
                     ReviewFindingContractViolation: verification.ReviewFindingContractViolation,
                     DispatchStartedAt: verification.DispatchStartedAt,
                     ChildProcessId: verification.ChildProcessId,
-                    ChildExitCode: verification.ChildExitCode));
+                    ChildExitCode: verification.ChildExitCode,
+                    FindingEvidenceReceipts: verification.FindingEvidenceReceipts));
             }
         }
 
@@ -287,7 +290,8 @@ public sealed class TaskSpec
                 ReviewFindingContractViolation: snapshot.LastVerification.ReviewFindingContractViolation,
                 DispatchStartedAt: snapshot.LastVerification.DispatchStartedAt,
                 ChildProcessId: snapshot.LastVerification.ChildProcessId,
-                ChildExitCode: snapshot.LastVerification.ChildExitCode);
+                ChildExitCode: snapshot.LastVerification.ChildExitCode,
+                FindingEvidenceReceipts: snapshot.LastVerification.FindingEvidenceReceipts);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);
@@ -415,6 +419,78 @@ public sealed class TaskSpec
         _verificationHistory.Add(verification, RequiredRole);
 
     internal void ClearLatestVerification() => LastVerification = null;
+
+    internal void RecordFindingEvidenceOutcome(
+        string stableId,
+        FindingEvidenceOutcome outcome,
+        FindingEvidenceReceipt? receipt)
+    {
+        if (LastVerification is null)
+        {
+            throw new InvalidOperationException("A finding evidence outcome requires an existing verification.");
+        }
+
+        var findings = LastVerification.MergedReviewFindings?.ToArray() ?? [];
+        var index = Array.FindIndex(findings, finding =>
+            string.Equals(finding.StableId, stableId, StringComparison.Ordinal));
+        if (index < 0 &&
+            WorkerResultBlockers.TryFindReviewFindingRound(LastVerification, out var reportedRound, out _))
+        {
+            var reportedFinding = reportedRound.Findings.FirstOrDefault(finding =>
+                string.Equals(finding.StableId, stableId, StringComparison.Ordinal));
+            if (reportedFinding is not null)
+            {
+                if (LastVerification.MergedReviewFindings is null)
+                {
+                    findings = [.. findings, reportedFinding];
+                    index = findings.Length - 1;
+                }
+                else
+                {
+                    var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
+                        findings, reportedRound, stableId);
+                    if (mergedFinding is not null)
+                    {
+                        index = Array.FindIndex(findings, finding => ReferenceEquals(finding, mergedFinding));
+                    }
+                    else
+                    {
+                        // An exact anchor can legitimately be shared by historical resolved and current
+                        // open findings. If convergence cannot uniquely identify the canonical merged
+                        // entry, retain the worker-reported finding as the outcome ledger entry instead
+                        // of discarding the completed evidence run.
+                        findings = [.. findings, reportedFinding];
+                        index = findings.Length - 1;
+                    }
+                }
+            }
+        }
+        if (index < 0)
+        {
+            throw new InvalidOperationException($"Finding '{stableId}' is not present in the latest verification.");
+        }
+
+        findings[index] = findings[index] with { EvidenceOutcome = outcome };
+        var receipts = (LastVerification.FindingEvidenceReceipts ?? []).ToList();
+        if (receipt is not null && receipts.All(existing =>
+                !string.Equals(existing.ReceiptId, receipt.ReceiptId, StringComparison.Ordinal)))
+        {
+            receipts.Add(receipt);
+        }
+
+        var prior = LastVerification;
+        var updated = prior with
+        {
+            MergedReviewFindings = findings,
+            FindingEvidenceReceipts = receipts
+        };
+        var historyIndex = _verificationHistory.FindLastIndex(item => ReferenceEquals(item, prior));
+        if (historyIndex >= 0)
+        {
+            _verificationHistory[historyIndex] = updated;
+        }
+        LastVerification = updated;
+    }
 
     internal void SetSubscriptionRetryAfter(DateTimeOffset? retryAfter) => SubscriptionRetryAfter = retryAfter;
 
@@ -559,6 +635,11 @@ public sealed class TaskSpec
 
         private static bool MustPreserveStructuredOutcome(AgentRole role, TaskVerificationRecord verification)
         {
+            if (verification.FindingEvidenceReceipts is { Count: > 0 })
+            {
+                return true;
+            }
+
             if (role is AgentRole.Planner or AgentRole.Researcher &&
                 verification.Succeeded &&
                 !string.IsNullOrWhiteSpace(verification.StandardOutputPath))

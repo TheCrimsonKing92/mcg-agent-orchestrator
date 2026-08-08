@@ -140,6 +140,73 @@ public sealed record ReviewFindingLocation(
             : $"{File}::{Region} [{Hunk}]";
 }
 
+public sealed record FindingEvidenceSelection(
+    [property: JsonPropertyName("test_project")] string TestProject,
+    [property: JsonPropertyName("test_class")] string TestClass);
+
+public sealed record FindingEvidenceRequest(
+    [property: JsonPropertyName("selections")] IReadOnlyList<FindingEvidenceSelection> Selections);
+
+[JsonConverter(typeof(FindingEvidenceNotHonouredReasonJsonConverter))]
+public enum FindingEvidenceNotHonouredReason
+{
+    Unknown,
+    UnsupportedProject,
+    UnparseableSelection,
+    PerRoundCap,
+    CandidateShaMissing,
+    ExecutorUnavailable,
+    RunFailed
+}
+
+public sealed class FindingEvidenceNotHonouredReasonJsonConverter : JsonConverter<FindingEvidenceNotHonouredReason>
+{
+    private static readonly IReadOnlyDictionary<string, FindingEvidenceNotHonouredReason> Reasons =
+        new Dictionary<string, FindingEvidenceNotHonouredReason>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["unknown"] = FindingEvidenceNotHonouredReason.Unknown,
+            ["unsupported-project"] = FindingEvidenceNotHonouredReason.UnsupportedProject,
+            ["unparseable-selection"] = FindingEvidenceNotHonouredReason.UnparseableSelection,
+            ["per-round-cap"] = FindingEvidenceNotHonouredReason.PerRoundCap,
+            ["candidate-sha-missing"] = FindingEvidenceNotHonouredReason.CandidateShaMissing,
+            ["executor-unavailable"] = FindingEvidenceNotHonouredReason.ExecutorUnavailable,
+            ["run-failed"] = FindingEvidenceNotHonouredReason.RunFailed
+        };
+
+    public override FindingEvidenceNotHonouredReason Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        reader.TokenType == JsonTokenType.String && Reasons.TryGetValue(reader.GetString() ?? string.Empty, out var reason)
+            ? reason
+            : FindingEvidenceNotHonouredReason.Unknown;
+
+    public override void Write(Utf8JsonWriter writer, FindingEvidenceNotHonouredReason value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(ToWireValue(value));
+
+    public static string ToWireValue(FindingEvidenceNotHonouredReason value) => value switch
+    {
+        FindingEvidenceNotHonouredReason.UnsupportedProject => "unsupported-project",
+        FindingEvidenceNotHonouredReason.UnparseableSelection => "unparseable-selection",
+        FindingEvidenceNotHonouredReason.PerRoundCap => "per-round-cap",
+        FindingEvidenceNotHonouredReason.CandidateShaMissing => "candidate-sha-missing",
+        FindingEvidenceNotHonouredReason.ExecutorUnavailable => "executor-unavailable",
+        FindingEvidenceNotHonouredReason.RunFailed => "run-failed",
+        _ => "unknown"
+    };
+}
+
+public sealed record FindingEvidenceOutcome(
+    [property: JsonPropertyName("honoured")] bool Honoured,
+    [property: JsonPropertyName("receipt_id")] string? ReceiptId = null,
+    [property: JsonPropertyName("reason")] FindingEvidenceNotHonouredReason? Reason = null,
+    [property: JsonPropertyName("detail")] string? Detail = null);
+
+public sealed record FindingEvidenceReceipt(
+    string ReceiptId,
+    string CandidateSha,
+    FindingEvidenceRequest Request,
+    bool Accepted,
+    bool Passed,
+    string Summary);
+
 public sealed record ReviewFinding(
     [property: JsonPropertyName("stable_id")] string StableId,
     [property: JsonPropertyName("state")] ReviewFindingState State,
@@ -150,7 +217,9 @@ public sealed record ReviewFinding(
     FindingSeverity Severity = FindingSeverity.Blocking,
     [property: JsonPropertyName("category")]
     [property: JsonConverter(typeof(FindingCategoryJsonConverter))]
-    FindingCategory Category = FindingCategory.Unspecified);
+    FindingCategory Category = FindingCategory.Unspecified,
+    [property: JsonPropertyName("evidence_request")] FindingEvidenceRequest? EvidenceRequest = null,
+    [property: JsonPropertyName("evidence_outcome")] FindingEvidenceOutcome? EvidenceOutcome = null);
 
 public sealed record ReviewFindingRound(
     IReadOnlyList<ReviewFinding> Findings,
@@ -398,9 +467,19 @@ public static class ReviewFindingConvergence
                 }
             }
 
-            merged.Add(anchorMoved
+            var mergedFinding = anchorMoved
                 ? submitted with { Location = prior.Location }
-                : submitted);
+                : submitted;
+            if (prior.EvidenceOutcome is not null &&
+                (submitted.EvidenceRequest is null || SameRequest(prior.EvidenceRequest, submitted.EvidenceRequest)))
+            {
+                mergedFinding = mergedFinding with
+                {
+                    EvidenceRequest = submitted.EvidenceRequest ?? prior.EvidenceRequest,
+                    EvidenceOutcome = prior.EvidenceOutcome
+                };
+            }
+            merged.Add(mergedFinding);
         }
 
         foreach (var newFinding in nextById.Values)
@@ -422,6 +501,63 @@ public static class ReviewFindingConvergence
         return merged
             .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    public static ReviewFinding? ResolveMergedFinding(
+        IReadOnlyList<ReviewFinding> mergedFindings,
+        ReviewFindingRound reportedRound,
+        string submittedStableId)
+    {
+        ArgumentNullException.ThrowIfNull(mergedFindings);
+        ArgumentNullException.ThrowIfNull(reportedRound);
+        ArgumentException.ThrowIfNullOrWhiteSpace(submittedStableId);
+
+        var exact = mergedFindings.FirstOrDefault(finding =>
+            string.Equals(finding.StableId, submittedStableId, StringComparison.Ordinal));
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        var reportedFinding = reportedRound.Findings.FirstOrDefault(finding =>
+            string.Equals(finding.StableId, submittedStableId, StringComparison.Ordinal));
+        if (reportedFinding is null)
+        {
+            return null;
+        }
+
+        // CanonicalizeLoneNewIdentity is the only convergence path that intentionally changes an id.
+        // It replaces the submitted id with the one omitted from the raw round at the exact same anchor.
+        var submittedIds = reportedRound.Findings
+            .Select(finding => finding.StableId)
+            .ToHashSet(StringComparer.Ordinal);
+        var canonicalizedMatches = mergedFindings
+            .Where(finding =>
+                !submittedIds.Contains(finding.StableId) &&
+                ExactAnchor(finding.Location, reportedFinding.Location))
+            .Take(2)
+            .ToArray();
+        return canonicalizedMatches.Length == 1 ? canonicalizedMatches[0] : null;
+    }
+
+    private static bool SameRequest(FindingEvidenceRequest? left, FindingEvidenceRequest? right)
+    {
+        if (left?.Selections is null || right?.Selections is null)
+        {
+            return false;
+        }
+
+        static string[] Keys(FindingEvidenceRequest request) => request.Selections
+            .Where(selection =>
+                selection is not null &&
+                !string.IsNullOrWhiteSpace(selection.TestProject) &&
+                !string.IsNullOrWhiteSpace(selection.TestClass))
+            .Select(selection => $"{selection.TestProject.Trim().ToUpperInvariant()}:{selection.TestClass.Trim()}")
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+
+        return Keys(left).SequenceEqual(Keys(right), StringComparer.Ordinal);
     }
 
     private static IReadOnlyList<ReviewFindingIdentityMismatch> CollectIdentityMismatches(
