@@ -1349,9 +1349,6 @@ public sealed class BackgroundDispatchRunner
                 // Exited 0 but left uncommitted edits the orchestrator could not land (no verification
                 // evidence, or the commit failed) — not acceptable.
                 exitCode = 1;
-                standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.DirtyWorktreeNotLanded));
                 if (task.LastDispatch.SandboxLowIntegrity && !lowIntegrityConfinementEvidence)
                 {
                     standardErrorDiagnostic = AppendDiagnostic(

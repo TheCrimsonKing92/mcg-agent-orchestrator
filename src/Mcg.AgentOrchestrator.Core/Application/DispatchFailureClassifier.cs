@@ -76,7 +76,6 @@ public static class DispatchFailureDiagnosticMarker
     public const string PlannerOutputContractRejected = "planner-output-contract-rejected";
     public const string PlannerPlanPersistenceFailed = "planner-plan-persistence-failed";
     public const string WorkerBuildCheckFailed = "worker-build-check-failed";
-    public const string DirtyWorktreeNotLanded = "dirty-worktree-not-landed";
     public const string RequiredFileChangeEvidenceMissing = "required-file-change-evidence-missing";
     public const string WorktreeInspectionFailed = "worktree-inspection-failed";
 
@@ -105,9 +104,6 @@ public static class DispatchFailureClassifier
             [DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed] = new(
                 TaskOutcomeRules.WorkerBuildCheckFailed,
                 "Deterministic worker build check failed."),
-            [DispatchFailureDiagnosticMarker.DirtyWorktreeNotLanded] = new(
-                TaskOutcomeRules.DirtyWorktreeNotLanded,
-                "Orchestrator could not land the worker's dirty worktree."),
             [DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing] = new(
                 TaskOutcomeRules.RequiredFileChangeEvidenceMissing,
                 "Developer/Tester dispatch did not produce required relevant file-change evidence."),
@@ -380,6 +376,7 @@ public static class DispatchFailureClassifier
     private static bool IsRunnerBookkeepingLine(string line) =>
         line.StartsWith("RESOURCE ", StringComparison.Ordinal) ||
         line.StartsWith("CLASSIFIER ", StringComparison.Ordinal) ||
+        line.StartsWith(DispatchFailureDiagnosticMarker.Prefix, StringComparison.Ordinal) ||
         line.StartsWith("Dispatch recovery policy action=", StringComparison.Ordinal) ||
         line.StartsWith("Developer/Tester dispatch did not produce required relevant file-change evidence.", StringComparison.Ordinal);
 
@@ -809,7 +806,7 @@ public static class DispatchFailureClassifier
                 null,
                 null,
                 RecoveryRecommendation.OperatorNeeded,
-                authoredFailure.Description));
+                BuildOrchestratorAuthoredFailureEvidenceSummary(authoredFailure.Description, verification)));
         }
 
         return BuildOutcome(
@@ -833,6 +830,8 @@ public static class DispatchFailureClassifier
         out OrchestratorAuthoredFailure failure)
     {
         var markerPrefix = DispatchFailureDiagnosticMarker.Prefix + " ";
+        // Markers are appended in causal order by the completion path. When more than one site
+        // fires, the first marker is the proximate authored failure and therefore owns the label.
         foreach (var line in verification.StandardError.Split(
                      ['\r', '\n'],
                      StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -851,6 +850,18 @@ public static class DispatchFailureClassifier
 
         failure = null!;
         return false;
+    }
+
+    private static string BuildOrchestratorAuthoredFailureEvidenceSummary(
+        string description,
+        TaskVerificationRecord verification)
+    {
+        var substantiveLines = GetSubstantiveStandardErrorLines(verification)
+            .TakeLast(3)
+            .ToArray();
+        return substantiveLines.Length == 0
+            ? description
+            : $"{description} diagnostic stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
     }
 
     private static DispatchOutcome BuildOutcome(

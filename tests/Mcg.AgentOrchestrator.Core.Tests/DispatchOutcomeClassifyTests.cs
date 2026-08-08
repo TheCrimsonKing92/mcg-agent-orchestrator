@@ -1327,14 +1327,22 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SimpleTask(),
-            Verification(1, "Something unexpected happened.", "Internal error details."));
+            Verification(
+                1,
+                "Something unexpected happened.",
+                "Internal error details.\n" +
+                DispatchFailureDiagnosticMarker.Format("unregistered-extension-code")));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
         Xunit.Assert.Equal(TaskOutcomeClass.UnknownEra, outcome.OutcomeClass);
         Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Internal error details.", outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain(DispatchFailureDiagnosticMarker.Prefix, outcome.EvidenceSummary, StringComparison.Ordinal);
     }
 
+    // Seven completion sites carry markers. Site 1341 is intentionally absent: every real dirty-worktree
+    // diagnostic is claimed earlier by dirty-dispatch-recovery, which preserves its existing behavior.
     private static readonly (string Site, AgentRole Role, string Rule, string Reason)[] OrchestratorAuthoredFailures =
     [
         ("1187", AgentRole.Researcher, "researcher-output-contract-rejected", "Researcher output contract rejected the captured research."),
@@ -1342,7 +1350,6 @@ public sealed class DispatchOutcomeClassifyTests
         ("1217", AgentRole.Planner, "planner-output-contract-rejected", "Planner output contract rejected the captured plan."),
         ("1231", AgentRole.Planner, "planner-plan-persistence-failed", "Planner output contract could not persist the accepted plan."),
         ("1280", AgentRole.Developer, "worker-build-check-failed", "Deterministic worker build check failed."),
-        ("1341", AgentRole.Tester, "dirty-worktree-not-landed", "Orchestrator could not land the worker's dirty worktree."),
         ("1376", AgentRole.Developer, "required-file-change-evidence-missing", "Developer/Tester dispatch did not produce required relevant file-change evidence."),
         ("1402", AgentRole.Developer, "worktree-inspection-failed", "Completed dispatch worktree inspection failed.")
     ];
@@ -1381,14 +1388,36 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
         Xunit.Assert.Equal(TaskOutcomeClass.UnknownEra, outcome.OutcomeClass);
         Xunit.Assert.Contains($"rule={expectedRule}", outcome.ClassifierReceipt, StringComparison.Ordinal);
-        Xunit.Assert.Equal(expectedReason, outcome.EvidenceSummary);
+        Xunit.Assert.StartsWith(expectedReason, outcome.EvidenceSummary, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Existing human diagnostic for site {site}.", outcome.EvidenceSummary, StringComparison.Ordinal);
         Xunit.Assert.DoesNotMatch("(?i)exit code \\d+|failed with code \\d+", expectedReason);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify uses the first orchestrator-authored marker when multiple markers coexist")]
+    public void ClassifyUsesFirstOrchestratorAuthoredMarker()
+    {
+        var first = OrchestratorAuthoredFailures.Single(
+            failure => failure.Rule == DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed);
+        var second = OrchestratorAuthoredFailures.Single(
+            failure => failure.Rule == DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing);
+        var verification = Verification(
+            1,
+            "Worker output",
+            "The build check failed before file-change evidence was evaluated.\n" +
+            DispatchFailureDiagnosticMarker.Format(first.Rule) + "\n" +
+            DispatchFailureDiagnosticMarker.Format(second.Rule));
+
+        var outcome = DispatchFailureClassifier.Classify(SimpleTask(first.Role), verification);
+
+        Xunit.Assert.Contains($"rule={first.Rule}", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain($"rule={second.Rule}", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.StartsWith(first.Reason, outcome.EvidenceSummary, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Orchestrator-authored markers do not displace an already-named outcome")]
     public void OrchestratorAuthoredMarkersDoNotDisplaceAlreadyNamedOutcome()
     {
-        Xunit.Assert.Equal(8, OrchestratorAuthoredFailures.Length);
+        Xunit.Assert.Equal(7, OrchestratorAuthoredFailures.Length);
         Xunit.Assert.Equal(
             OrchestratorAuthoredFailures.Length,
             OrchestratorAuthoredFailures.Select(failure => failure.Rule).Distinct(StringComparer.Ordinal).Count());

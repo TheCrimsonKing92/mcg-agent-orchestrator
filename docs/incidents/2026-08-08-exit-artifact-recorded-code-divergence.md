@@ -85,6 +85,8 @@ Writes after the artifact-derived initialization at line 818:
 
 The non-zero main-completion writes not covered by the restore are 1187, 1197, 1217, 1231, 1280, 1341, 1376, and 1402. For a Planner dispatch, `RequiresFileChangeEvidence` at lines 1584-1588 is false, so the worktree block containing 1280, 1315, 1341, 1376, and 1402 is unreachable. The Researcher-only block excludes 1187 and 1197. That leaves 1217 and 1231.
 
+Implementation inventory for goal `06409f18`: seven of these sites emit dedicated machine-readable diagnostic codes (1187, 1197, 1217, 1231, 1280, 1376, and 1402). Site 1341 is deliberately omitted. Every path out of its dirty-worktree branch appends a diagnostic recognized by the pre-existing `dirty-dispatch-recovery` rule, so that named recovery outcome returns before the authored-diagnostic fallback can run. The positive Infrastructure test for a dirty completion asserts that receipt and the unchanged failed disposition; adding an eighth marker there would be inert and would misstate the classifier surface.
+
 ## Re-check of the proposed eliminations
 
 ### Worktree inspection failure (line 1402): confirmed, but by reachability
