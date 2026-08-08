@@ -588,8 +588,59 @@ public sealed class DispatchExecutionTests
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(42, task.LastVerification!.ExitCode);
-    Assert.Contains(goal.Timeline, evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
+    Assert.Contains(goal.Timeline, evt =>
+        evt.TaskId == task.Id &&
+        evt.Kind == ProgressKind.TaskFailed &&
+        evt.Message.Contains("rule=unknown-failure", StringComparison.Ordinal) &&
+        evt.Message.Contains("exit code 42", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reports_classifier_rule_for_exit_zero_failing_tests")]
+    public void RecordDispatchExecutionResultReportsClassifierRuleForExitZeroFailingTests()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Reconstruct archived Tester failure");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Tester);
+        const string command = "codex exec tester";
+        var stdout = string.Join(Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: dotnet test",
+            "tests: fail - Core 67/67 and Infrastructure 196/196 passed; substantive finding blocks acceptance",
+            "commit: none",
+            "blockers: none",
+            "model_fit: OpenAI/gpt-5.5 - adequate - verification",
+            "skills: dotnet-windows-build-hygiene",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", command, "C:\\repo", clock.UtcNow));
+
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                command,
+                "C:\\repo",
+                0,
+                stdout,
+                string.Empty,
+                clock.UtcNow,
+                WorkerResultPresent: true,
+                HasCommittedChanges: false));
+
+        var failure = Assert.Single(goal.Timeline.Where(evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Contains("rule=succeeded-worker-result-failing-tests", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("exit code", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("exit code 0", failure.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_reopens_task_on_subscription_usage_limit")]
     public void RecordDispatchExecutionResultReopensTaskOnSubscriptionUsageLimit()
 {

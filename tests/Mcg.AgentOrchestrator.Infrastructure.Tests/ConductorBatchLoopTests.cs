@@ -9484,6 +9484,84 @@ public sealed class ConductorBatchLoopTests
             record.Detail.Contains("reason=Acceptance_verification_failed", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "ConductEvents_shared_stream_distinguishes_task_failure_rules")]
+    public void ConductEventsSharedStreamDistinguishesTaskFailureRules()
+    {
+        var root = CreateTempDirectory("mcg-conduct-events-task-failure-rules");
+        var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
+        var writer = new ConductEventLogWriter(logPath);
+        var kernel = new AgentOrchestratorKernel();
+        var testsFailureGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Worker-declared failing tests");
+        var testsFailureTask = testsFailureGoal.Tasks.Single();
+        var testsFailureOutput = string.Join(Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: dotnet test",
+            "tests: fail - focused suites reported green but worker declared a blocking finding",
+            "commit: none",
+            "blockers: none",
+            "model_fit: fixture/model - adequate - deterministic fixture",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        kernel.RecordTaskDispatch(
+            testsFailureGoal.Id,
+            testsFailureTask.Id,
+            new TaskDispatchRecord("codex-cli", "codex exec tests", "C:\\repo", DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(
+            testsFailureGoal.Id,
+            testsFailureTask.Id,
+            new TaskVerificationRecord(
+                "codex exec tests",
+                "C:\\repo",
+                0,
+                testsFailureOutput,
+                string.Empty,
+                DateTimeOffset.UtcNow,
+                WorkerResultPresent: true));
+
+        var exitFailureGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Nonzero process exit");
+        var exitFailureTask = exitFailureGoal.Tasks.Single();
+        kernel.RecordTaskDispatch(
+            exitFailureGoal.Id,
+            exitFailureTask.Id,
+            new TaskDispatchRecord("local", "exit 42", "C:\\repo", DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(
+            exitFailureGoal.Id,
+            exitFailureTask.Id,
+            new TaskVerificationRecord(
+                "exit 42",
+                "C:\\repo",
+                42,
+                string.Empty,
+                "failed",
+                DateTimeOffset.UtcNow));
+
+        var summary = new ConductorBatchLoop(conductEventLogWriter: writer).Run(
+            kernel,
+            MakeDriver(getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true)),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(2, summary.Escalated);
+        var escalations = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .Where(record => record.EventKind == "goal-escalation")
+            .ToArray();
+        var testsFailure = Assert.Single(escalations.Where(record => record.GoalId == testsFailureGoal.Id.Value[..8]));
+        var exitFailure = Assert.Single(escalations.Where(record => record.GoalId == exitFailureGoal.Id.Value[..8]));
+        Assert.Contains("succeeded-worker-result-failing-tests", testsFailure.Detail, StringComparison.Ordinal);
+        Assert.Contains("unknown-failure", exitFailure.Detail, StringComparison.Ordinal);
+        Assert.NotEqual(testsFailure.Detail, exitFailure.Detail);
+    }
+
     [Xunit.Fact(DisplayName = "ConductEvents_rollover_preserves_stable_current_filename")]
     public void ConductEventsRolloverPreservesStableCurrentFilename()
     {
