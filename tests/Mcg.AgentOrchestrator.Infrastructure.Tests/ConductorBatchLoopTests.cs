@@ -7481,7 +7481,7 @@ public sealed class ConductorBatchLoopTests
                     driver,
                     ConductorAutonomyPolicy.Conservative,
                     NoStopPath(),
-                    maxIterations: 1,
+                    maxIterations: 2,
                     persistGoalTick: (_, _) => { });
 
             Assert.Equal(OperatorIntentStatus.Applied, (await store.GetAsync(intent.Id))!.Status);
@@ -10236,10 +10236,10 @@ public sealed class ConductorBatchLoopTests
                 dispatchedGoalIds.Add(goal.Id);
                 return DispatchStartOutcome.Started();
             },
-            runAcceptance: _ =>
+            runAcceptanceWithSlot: (_, _) =>
             {
                 acceptanceRuns++;
-                return true;
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
             },
             writeEscalation: (_, _, reason) => escalations.Add(reason));
 
