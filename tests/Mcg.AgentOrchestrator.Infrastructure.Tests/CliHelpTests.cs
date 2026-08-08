@@ -548,7 +548,7 @@ public sealed class CliHelpTests
                 RedirectStandardError = true
             }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 9999"])))
                 ?? throw new InvalidOperationException("Failed to start sentinel worker.");
-            Xunit.Assert.True(SpawnProcessIdentityReader.TryRead(worker, out var workerIdentity));
+            Xunit.Assert.True(SpawnProcessIdentityReader.TryReadForRegistration(worker, out var workerIdentity));
             new SpawnRegistry(workspace.SqliteStatePath).Register("external-conductor-dispatch", workerIdentity);
 
             var result = RunAppCli(root, ["attention", "show"]);
