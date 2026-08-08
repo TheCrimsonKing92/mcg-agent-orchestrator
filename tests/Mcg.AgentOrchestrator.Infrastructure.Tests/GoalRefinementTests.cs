@@ -44,6 +44,17 @@ public sealed class GoalRefinementTests
             2. Second declared outcome is preserved.
             3. Third declared outcome is preserved.
             4. Fourth declared outcome is preserved.
+
+            Target files/scopes:
+            Scope confidence: unknown
+            Includes:
+            - none
+            Exclusions:
+            - none
+
+            Verification:
+            - Run the focused refinement test.
+            - Inspect the rendered Planner brief.
             """;
 
         var goal = GoalLifecycleCommands.CreateAndActivateGoal(
@@ -55,11 +66,21 @@ public sealed class GoalRefinementTests
 
         Xunit.Assert.NotNull(goal.RefinedSpec);
         Xunit.Assert.Contains("Implement:", goal.RefinedSpec!.BehavioralContract);
-        Xunit.Assert.Equal(4, goal.RefinedSpec.AcceptanceCriteria.Count);
+        Xunit.Assert.Equal(
+            [
+                "First declared outcome is preserved.",
+                "Second declared outcome is preserved.",
+                "Third declared outcome is preserved.",
+                "Fourth declared outcome is preserved."
+            ],
+            goal.RefinedSpec.AcceptanceCriteria);
         var planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var brief = kernel.BuildTaskBrief(goal.Id, planner.Id).Content;
         Xunit.Assert.Contains("Refined Spec", brief);
         Xunit.Assert.Contains(goal.RefinedSpec.BehavioralContract, brief);
+        Xunit.Assert.Equal(
+            goal.RefinedSpec.AcceptanceCriteria.Select(criterion => $"- {criterion}"),
+            ExtractRenderedAcceptanceCriteria(brief));
     }
 
     [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_auto_pipeline_decision_and_creates_reviewer_lane")]
@@ -661,6 +682,17 @@ public sealed class GoalRefinementTests
             2. Extra attestations are recorded as informational.
             3. Every declared criterion is registered.
             4. The conductor reports the task failure reason.
+
+            Target files/scopes:
+            Scope confidence: unknown
+            Includes:
+            - none
+            Exclusions:
+            - none
+
+            Verification:
+            - Run the focused refinement test.
+            - Inspect the rendered Planner brief.
             """;
         var response = """
             ```json
@@ -699,12 +731,10 @@ public sealed class GoalRefinementTests
             criterion => string.Equals(criterion.Trim(), "none", StringComparison.OrdinalIgnoreCase));
 
         var planner = kernel.GetGoal(goalId).Tasks.First(task => task.RequiredRole == AgentRole.Planner);
-        var brief = kernel.BuildTaskBrief(goalId, planner.Id).Content.ReplaceLineEndings("\n");
-        const string acceptanceHeading = "Acceptance criteria:\n";
-        var acceptanceStart = brief.IndexOf(acceptanceHeading, StringComparison.Ordinal) + acceptanceHeading.Length;
-        var acceptanceEnd = brief.IndexOf("\n\n", acceptanceStart, StringComparison.Ordinal);
-        var renderedCriteria = brief[acceptanceStart..acceptanceEnd].Split('\n');
-        Xunit.Assert.Equal(declaredCriteria.Select(criterion => $"- {criterion}"), renderedCriteria);
+        var brief = kernel.BuildTaskBrief(goalId, planner.Id).Content;
+        Xunit.Assert.Equal(
+            declaredCriteria.Select(criterion => $"- {criterion}"),
+            ExtractRenderedAcceptanceCriteria(brief));
 
         var contractRoot = CreateTempDirectory();
         File.WriteAllText(Path.Combine(contractRoot, "seed.txt"), "seed");
@@ -724,6 +754,38 @@ public sealed class GoalRefinementTests
             contractRoot,
             acceptanceCriteria: persistedCriteria);
         Xunit.Assert.True(contractResult.Succeeded, contractResult.Diagnostic);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalRefinementService_deduplicates_refiner_criteria_when_none_are_declared")]
+    public async Task GoalRefinementServiceDeduplicatesRefinerCriteriaWhenNoneAreDeclared()
+    {
+        var response = """
+            ```json
+            {
+              "behavioralContract": "Add deterministic benchmark support.",
+              "acceptanceCriteria": [
+                "The benchmark result is deterministic.",
+                "THE BENCHMARK RESULT IS DETERMINISTIC.",
+                "The focused benchmark test passes."
+              ],
+              "verificationClass": "TestVerifiable",
+              "decisions": [],
+              "forks": []
+            }
+            ```
+            """;
+        var (service, kernel, goalId, _) = BuildScenario(
+            responseJson: response,
+            objective: "Add deterministic benchmark support.");
+
+        var result = await service.RefineAsync(kernel, goalId);
+
+        Xunit.Assert.Equal(
+            [
+                "The benchmark result is deterministic.",
+                "The focused benchmark test passes."
+            ],
+            result.Spec.AcceptanceCriteria);
     }
 
     [Xunit.Fact(DisplayName = "SpecRefinerPlanner_Parse_RealWorldDependent_verificationClass_parsed")]
@@ -1600,6 +1662,18 @@ public sealed class GoalRefinementTests
     }
 
     // --- Helpers ---
+
+    private static string[] ExtractRenderedAcceptanceCriteria(string brief)
+    {
+        var normalizedBrief = brief.ReplaceLineEndings("\n");
+        const string acceptanceHeading = "Acceptance criteria:\n";
+        var acceptanceHeadingIndex = normalizedBrief.IndexOf(acceptanceHeading, StringComparison.Ordinal);
+        Xunit.Assert.True(acceptanceHeadingIndex >= 0, "Planner brief is missing its acceptance criteria heading.");
+        var acceptanceStart = acceptanceHeadingIndex + acceptanceHeading.Length;
+        var acceptanceEnd = normalizedBrief.IndexOf("\n\n", acceptanceStart, StringComparison.Ordinal);
+        Xunit.Assert.True(acceptanceEnd >= 0, "Planner brief acceptance criteria block is not terminated.");
+        return normalizedBrief[acceptanceStart..acceptanceEnd].Split('\n');
+    }
 
     private static string BuildFeasibilityJson(string criterion, string forks = "[]") => $$"""
         ```json

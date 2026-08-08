@@ -9,6 +9,14 @@ public sealed record AcceptanceCriterion(
 
 public static class AcceptanceCriteriaParser
 {
+    private static readonly HashSet<string> ObjectiveTrailerHeadings = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Target files/scopes:",
+        "Includes:",
+        "Exclusions:",
+        "Verification:"
+    };
+
     private static readonly string[] KnownExecutables =
     [
         "dotnet", "git", "npm", "go", "cargo", "make",
@@ -45,6 +53,9 @@ public static class AcceptanceCriteriaParser
                 break;
 
             var trimmed = line.Trim();
+            if (ObjectiveTrailerHeadings.Contains(trimmed))
+                break;
+
             if (TryStripListPrefix(trimmed, out var criterionText))
             {
                 AddCurrent();

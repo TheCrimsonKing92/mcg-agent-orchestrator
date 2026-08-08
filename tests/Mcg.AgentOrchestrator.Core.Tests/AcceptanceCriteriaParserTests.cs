@@ -180,4 +180,38 @@ public sealed class AcceptanceCriteriaParserTests
             ],
             criteria);
     }
+
+    [Xunit.Fact(DisplayName = "AcceptanceCriteriaParser_stops_at_plain_text_intake_trailer")]
+    public void AcceptanceCriteriaParserStopsAtPlainTextIntakeTrailer()
+    {
+        var text = """
+            ## Acceptance
+            1. First declared outcome is preserved.
+            2. Second declared outcome is preserved.
+            3. Third declared outcome is preserved.
+            4. Fourth declared outcome is preserved.
+
+            Target files/scopes:
+            Scope confidence: unknown
+            Includes:
+            - none
+            Exclusions:
+            - none
+
+            Verification:
+            - Run the focused refinement test.
+            - Inspect the rendered Planner brief.
+            """;
+
+        var criteria = AcceptanceCriteriaParser.ParseDeclared(text);
+
+        Assert.Equal(
+            [
+                "First declared outcome is preserved.",
+                "Second declared outcome is preserved.",
+                "Third declared outcome is preserved.",
+                "Fourth declared outcome is preserved."
+            ],
+            criteria);
+    }
 }
