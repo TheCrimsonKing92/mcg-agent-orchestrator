@@ -92,6 +92,61 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
+    public async Task CliAttentionListingItemIdRoundTripsThroughScopedAnswer()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("aa11bb22cccccccccccccccccccccccc"), "Listed identifier");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var raised = await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Printed identifier",
+            "Answer the identifier printed by bare attention.",
+            $"spec-clarification:{goal.Id.Value}:scope:printed-id");
+
+        var listing = ExecuteCliAndCapture(["attention"], kernel, workspace);
+        var listingLine = listing.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+            .Single(line => line.Contains("[Clarification]", StringComparison.Ordinal));
+        var printedId = listingLine.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries)[1];
+        var output = ExecuteCliAndCapture(
+            ["attention", "answer", goal.Id.Value[..8], printedId, "Use the printed identifier."],
+            kernel,
+            workspace);
+        var resolved = (await store.ListAsync()).Single(item => item.Id == raised.Id);
+
+        Xunit.Assert.Equal(raised.Id[..8], printedId);
+        Xunit.Assert.Contains($"Answered clarification '{printedId}'", output, StringComparison.Ordinal);
+        Xunit.Assert.Equal("Use the printed identifier.", resolved.Resolution);
+    }
+
+    [Xunit.Fact]
+    public async Task CliAttentionListingItemIdAlsoResolvesGlobally()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("bb22cc33dddddddddddddddddddddddd"), "Global listed identifier");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var raised = await store.RaiseAsync(
+            CollaborationItemType.Clarification,
+            goal.Id.Value,
+            "Global printed identifier",
+            "Answer globally.",
+            $"spec-clarification:{goal.Id.Value}:scope:global-printed-id");
+
+        var output = ExecuteCliAndCapture(
+            ["attention", "answer", raised.Id[..8], "Use the global printed identifier."],
+            kernel,
+            workspace);
+        var resolved = (await store.ListAsync()).Single(item => item.Id == raised.Id);
+
+        Xunit.Assert.Contains($"Answered clarification '{raised.Id[..8]}'", output, StringComparison.Ordinal);
+        Xunit.Assert.Equal("Use the global printed identifier.", resolved.Resolution);
+    }
+
+    [Xunit.Fact]
     public async Task CliAttentionCollidingPrefixesRoundTripShownIds()
     {
         var root = CreateTempDirectory();
@@ -345,7 +400,8 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         var ex = Xunit.Assert.ThrowsAny<ArgumentException>(() =>
             ExecuteCliAndCapture(["attention", "answer", "12345678", "55555555", "Do not cross streams."], kernel, workspace));
 
-        Xunit.Assert.Contains($"does not belong to goal '{target.Id.Value}'", ex.Message);
+        Xunit.Assert.Contains($"Clarification id '55555555' was not found for goal '{target.Id.Value}'", ex.Message);
+        Xunit.Assert.Contains($"attention show {target.Id.Value[..8]}", ex.Message);
     }
 
 

@@ -57,9 +57,35 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
 
         case "backlog-add":
         {
-            CliArgumentParser.RequirePartCount(parts, 2, "backlog-add <title> [body] | backlog-add <title> --body-file <path> | backlog-add <title> --text-file <path>");
-            var title = parts[1];
-            var body = ResolveTextArgumentOrDefault(parts, inlineIndex: 2, defaultValue: "", "--body-file", "--text-file") ?? "";
+            var titleFlagCount = parts.Count(part => part.Equals("--title", StringComparison.OrdinalIgnoreCase));
+            var hasPositionalTitle = parts.Count > 1 && !parts[1].StartsWith("--", StringComparison.Ordinal);
+            if (titleFlagCount > 1)
+                throw new ArgumentException("Provide --title only once.");
+            if (titleFlagCount == 1 && hasPositionalTitle)
+                throw new ArgumentException("Provide the backlog title either positionally or with --title, not both.");
+
+            var flaggedTitle = titleFlagCount == 1 ? GetFlagValue(parts, "--title") : null;
+            if (titleFlagCount == 1 &&
+                (string.IsNullOrWhiteSpace(flaggedTitle) || flaggedTitle.StartsWith("--", StringComparison.Ordinal)))
+            {
+                throw new ArgumentException("--title requires a non-empty title.");
+            }
+            if (titleFlagCount == 0 && !hasPositionalTitle)
+                throw new ArgumentException(CliCommandHelp.BacklogAddUsage);
+
+            var bodyParts = titleFlagCount == 1 ? RemoveFlagWithValue(parts, "--title") : parts;
+            if (titleFlagCount == 1 && bodyParts.Count > 1 && !bodyParts[1].StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException("When using --title, provide the body with --text-file or --body-file.");
+            }
+
+            var title = flaggedTitle ?? parts[1];
+            var body = ResolveTextArgumentOrDefault(
+                bodyParts,
+                inlineIndex: titleFlagCount == 1 ? 1 : 2,
+                defaultValue: "",
+                "--body-file",
+                "--text-file") ?? "";
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
             var dependencies = GetFlagValues(parts, "--depends-on")
                 .Select(prefix => ResolveBacklogDependencyTarget(context, store, prefix))
