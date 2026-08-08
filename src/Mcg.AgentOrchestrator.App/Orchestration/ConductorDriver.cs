@@ -1486,11 +1486,11 @@ internal sealed class ConductorDriver
             return false;
         }
 
-        var mergedById = (requestingTask.LastVerification?.MergedReviewFindings ?? [])
-            .ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
+        var mergedFindings = requestingTask.LastVerification?.MergedReviewFindings ?? [];
         var requestingFindings = round.Findings
             .Where(finding => finding.EvidenceRequest is not null)
-            .Where(finding => !mergedById.TryGetValue(finding.StableId, out var merged) || merged.EvidenceOutcome is null)
+            .Where(finding => ReviewFindingConvergence.ResolveMergedFinding(
+                mergedFindings, round, finding.StableId)?.EvidenceOutcome is null)
             .ToArray();
         if (requestingFindings.Length == 0)
         {

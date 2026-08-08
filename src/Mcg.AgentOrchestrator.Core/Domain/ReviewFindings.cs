@@ -503,6 +503,43 @@ public static class ReviewFindingConvergence
             .ToArray();
     }
 
+    public static ReviewFinding? ResolveMergedFinding(
+        IReadOnlyList<ReviewFinding> mergedFindings,
+        ReviewFindingRound reportedRound,
+        string submittedStableId)
+    {
+        ArgumentNullException.ThrowIfNull(mergedFindings);
+        ArgumentNullException.ThrowIfNull(reportedRound);
+        ArgumentException.ThrowIfNullOrWhiteSpace(submittedStableId);
+
+        var exact = mergedFindings.FirstOrDefault(finding =>
+            string.Equals(finding.StableId, submittedStableId, StringComparison.Ordinal));
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        var reportedFinding = reportedRound.Findings.FirstOrDefault(finding =>
+            string.Equals(finding.StableId, submittedStableId, StringComparison.Ordinal));
+        if (reportedFinding is null)
+        {
+            return null;
+        }
+
+        // CanonicalizeLoneNewIdentity is the only convergence path that intentionally changes an id.
+        // It replaces the submitted id with the one omitted from the raw round at the exact same anchor.
+        var submittedIds = reportedRound.Findings
+            .Select(finding => finding.StableId)
+            .ToHashSet(StringComparer.Ordinal);
+        var canonicalizedMatches = mergedFindings
+            .Where(finding =>
+                !submittedIds.Contains(finding.StableId) &&
+                ExactAnchor(finding.Location, reportedFinding.Location))
+            .Take(2)
+            .ToArray();
+        return canonicalizedMatches.Length == 1 ? canonicalizedMatches[0] : null;
+    }
+
     private static bool SameRequest(FindingEvidenceRequest? left, FindingEvidenceRequest? right)
     {
         if (left?.Selections is null || right?.Selections is null)

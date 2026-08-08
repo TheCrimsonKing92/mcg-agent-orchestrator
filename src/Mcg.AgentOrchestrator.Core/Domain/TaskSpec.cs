@@ -434,15 +434,26 @@ public sealed class TaskSpec
         var index = Array.FindIndex(findings, finding =>
             string.Equals(finding.StableId, stableId, StringComparison.Ordinal));
         if (index < 0 &&
-            LastVerification.MergedReviewFindings is null &&
             WorkerResultBlockers.TryFindReviewFindingRound(LastVerification, out var reportedRound, out _))
         {
             var reportedFinding = reportedRound.Findings.FirstOrDefault(finding =>
                 string.Equals(finding.StableId, stableId, StringComparison.Ordinal));
             if (reportedFinding is not null)
             {
-                findings = [.. findings, reportedFinding];
-                index = findings.Length - 1;
+                if (LastVerification.MergedReviewFindings is null)
+                {
+                    findings = [.. findings, reportedFinding];
+                    index = findings.Length - 1;
+                }
+                else
+                {
+                    var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
+                        findings, reportedRound, stableId);
+                    if (mergedFinding is not null)
+                    {
+                        index = Array.FindIndex(findings, finding => ReferenceEquals(finding, mergedFinding));
+                    }
+                }
             }
         }
         if (index < 0)
