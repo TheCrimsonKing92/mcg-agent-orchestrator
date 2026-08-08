@@ -239,8 +239,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         CancellationToken cancellationToken)
     {
         var worktreeRoot = Path.Combine(
-            _repositoryRoot,
-            ".orchestrator",
+            Path.GetTempPath(),
             "mcg-post-landing-canary-worktrees",
             landingSha[..Math.Min(12, landingSha.Length)],
             Guid.NewGuid().ToString("N"));
@@ -276,14 +275,14 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         await EnsureSucceededAsync(
             "initialize fixture repository",
             "git",
-            ["init", "--quiet"],
+            ["-c", "core.longpaths=true", "init", "--quiet"],
             fixtureRoot,
             logs,
             cancellationToken).ConfigureAwait(false);
         await EnsureSucceededAsync(
             "stage fixture repository",
             "git",
-            ["add", "--all"],
+            ["-c", "core.longpaths=true", "add", "--all"],
             fixtureRoot,
             logs,
             cancellationToken).ConfigureAwait(false);
@@ -291,6 +290,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             "commit fixture repository",
             "git",
             [
+                "-c", "core.longpaths=true",
                 "-c", "user.name=MCG Canary",
                 "-c", "user.email=canary@localhost",
                 "commit", "--quiet", "-m", "known-green canary fixture"
@@ -350,7 +350,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     {
         var head = await RunProcessAsync(
             "git",
-            ["-C", repositoryRoot, "rev-parse", "HEAD"],
+            ["-c", "core.longpaths=true", "-C", repositoryRoot, "rev-parse", "HEAD"],
             repositoryRoot,
             logs,
             "read-repository-head",
@@ -363,7 +363,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
 
         var status = await RunProcessAsync(
             "git",
-            ["-C", repositoryRoot, "status", "--porcelain", "--untracked-files=all"],
+            ["-c", "core.longpaths=true", "-C", repositoryRoot, "status", "--porcelain", "--untracked-files=all"],
             repositoryRoot,
             logs,
             "read-repository-status",
@@ -388,7 +388,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
     {
         var ancestry = await RunProcessAsync(
             "git",
-            ["-C", repositoryRoot, "merge-base", "--is-ancestor", expectedAncestor, currentSha],
+            ["-c", "core.longpaths=true", "-C", repositoryRoot, "merge-base", "--is-ancestor", expectedAncestor, currentSha],
             repositoryRoot,
             logs,
             "check-repository-ancestry",
@@ -548,7 +548,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         var command = string.Join(' ', new[] { fileName }
             .Concat(arguments)
             .Select(QuoteWindowsShellToken));
-        command += $" > {QuoteWindowsShellToken(stdoutPath)} 2> {QuoteWindowsShellToken(stderrPath)}";
+        command = $"({command}) > {QuoteWindowsShellToken(stdoutPath)} 2> {QuoteWindowsShellToken(stderrPath)}";
         return new ProcessStartInfo("cmd.exe")
         {
             Arguments = $"/d /s /c \"{command}\"",
@@ -603,7 +603,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             _capturePrefix = Path.Combine(
                 logDirectory,
                 $"post-landing-canary-{SanitizeSegment(landingSha)}-" +
-                $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}");
+                Guid.NewGuid().ToString("N")[..12]);
         }
 
         internal (string StdoutPath, string StderrPath) CreateCaptureFiles(string operation)
@@ -621,7 +621,7 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         {
             var invalid = Path.GetInvalidFileNameChars();
             var sanitized = new string(value
-                .Select(character => invalid.Contains(character) ? '-' : character)
+                .Select(character => invalid.Contains(character) || char.IsWhiteSpace(character) ? '-' : character)
                 .ToArray());
             return string.IsNullOrWhiteSpace(sanitized) ? "unknown" : sanitized;
         }
