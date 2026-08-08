@@ -1240,6 +1240,17 @@ internal sealed class ConductorDriver
             return true;
         }
 
+        if (violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
+                ReviewFindingConvergence.UntouchedReopenViolationCode &&
+            reviewerTask.LastVerification?.ReviewFindingTouchProofDiagnostic is { Length: > 0 } touchProofDiagnostic)
+        {
+            decision = VerifyingFindingAutoRetryDecision.Hold(
+                $"{reviewerTask.RequiredRole} review-finding contract cannot classify touch-dependent violation {violation.Code} " +
+                $"for task {reviewerTask.Id.Value[..8]} because system-derived round-diff proof is unavailable; " +
+                $"the mechanical repair budget was not consumed. Diagnostic: {TrimForConductorMessage(touchProofDiagnostic)}");
+            return true;
+        }
+
         var priorRepairs = CountReviewerContractRepairsInCurrentRound(goal, reviewerTask);
         if (priorRepairs >= MaxReviewFindingContractRepairsPerRound)
         {

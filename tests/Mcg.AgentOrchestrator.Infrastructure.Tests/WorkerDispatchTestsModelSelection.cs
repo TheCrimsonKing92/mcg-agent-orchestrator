@@ -3256,6 +3256,11 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
             "when the system-derived round diff touched the prior anchor",
             File.ReadAllText(prepared.PromptPath),
             StringComparison.Ordinal);
+        Assert.Contains(
+            "ROUND_DIFF_TOUCHED_ANCHORS (system-derived; authoritative for regression reopening and identity relocation):",
+            File.ReadAllText(prepared.PromptPath),
+            StringComparison.Ordinal);
+        Assert.Contains(priorLocation.ToString(), File.ReadAllText(prepared.PromptPath), StringComparison.Ordinal);
         Assert.Null(tester.LastProcess);
         kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, movedCommit);
         kernel.RecordDispatchExecutionResult(

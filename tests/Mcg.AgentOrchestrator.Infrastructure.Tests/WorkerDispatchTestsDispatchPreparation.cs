@@ -209,28 +209,46 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         // repopulate the baseline. Goal 5f59b0d6 sat in that state, and it is reachable from the ordinary
         // review-retry cycle.
         //
-        // The list is only used to PROVE a resolved anchor was touched again, so empty means "cannot prove",
-        // which errs toward not reopening resolved findings - the safe direction.
+        // The list is only used to PROVE a resolved anchor was touched again. A typed diagnostic keeps
+        // "cannot prove" distinct from a successful diff that proved the anchor was untouched.
         var root = CreateSeededDispatchRepository();
         try
         {
             var current = ReadGit(root, ["rev-parse", "HEAD"]).Trim();
             var anchor = new ReviewFindingLocation("src/Example.cs", "Example.Run", "guard");
 
-            var missingPrevious = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+            var missingPrevious = new WorkerGitContext().ReadReviewerRoundTouchScope(
                 root,
                 previousReviewedCommit: null,
                 currentCommit: current,
                 [anchor]);
 
-            var missingCurrent = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+            var missingCurrent = new WorkerGitContext().ReadReviewerRoundTouchScope(
                 root,
                 previousReviewedCommit: current,
                 currentCommit: "   ",
                 [anchor]);
 
-            Assert.Empty(missingPrevious);
-            Assert.Empty(missingCurrent);
+            var equalCommits = new WorkerGitContext().ReadReviewerRoundTouchScope(
+                root,
+                previousReviewedCommit: current,
+                currentCommit: current,
+                [anchor]);
+
+            var noAnchors = new WorkerGitContext().ReadReviewerRoundTouchScope(
+                root,
+                previousReviewedCommit: current,
+                currentCommit: current,
+                []);
+
+            Assert.Empty(missingPrevious.TouchedAnchors);
+            Assert.Contains("no reviewed-commit baseline", missingPrevious.Diagnostic, StringComparison.Ordinal);
+            Assert.Empty(missingCurrent.TouchedAnchors);
+            Assert.Contains("current target commit is missing", missingCurrent.Diagnostic, StringComparison.Ordinal);
+            Assert.Empty(equalCommits.TouchedAnchors);
+            Assert.Contains("commits are identical", equalCommits.Diagnostic, StringComparison.Ordinal);
+            Assert.Empty(noAnchors.TouchedAnchors);
+            Assert.Contains("ledger has no structural anchors", noAnchors.Diagnostic, StringComparison.Ordinal);
         }
         finally
         {

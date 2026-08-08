@@ -567,6 +567,7 @@ public sealed partial class AgentOrchestratorKernel
         return verification with
         {
             ReviewFindingTouchedAnchors = task.LastDispatch?.ReviewFindingTouchedAnchors ?? [],
+            ReviewFindingTouchProofDiagnostic = task.LastDispatch?.ReviewFindingTouchProofDiagnostic,
             ReviewedCommit = task.LastDispatch?.BaseCommit
         };
     }

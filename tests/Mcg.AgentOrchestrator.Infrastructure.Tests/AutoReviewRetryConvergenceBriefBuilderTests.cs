@@ -191,7 +191,6 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 goal,
                 reviewer,
                 repositoryRoot,
-                previousReviewedCommit: null,
                 round1Commit,
                 "needs-work",
                 [
@@ -206,6 +205,10 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
 
             var round1State = AutoReviewRetryConvergenceBriefBuilder.ReadStructuredReviewFindingState(goal, reviewer);
             Assert.Equal(2, ReviewFindingConvergence.CountOpen(round1State));
+            Assert.Contains(
+                "carried finding ledger has no structural anchors",
+                reviewer.LastVerification!.ReviewFindingTouchProofDiagnostic,
+                StringComparison.Ordinal);
             var round1Brief = AutoReviewRetryConvergenceBriefBuilder.BuildConvergenceBrief(
                 goal, developer, reviewer, "A and B remain open.", "verdict=needs-work",
                 AgentRole.Developer, 1, "round1.out", ["src/A.cs", "src/B.cs"]);
@@ -220,7 +223,6 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 goal,
                 reviewer,
                 repositoryRoot,
-                round1Commit,
                 round2Commit,
                 "needs-work",
                 [
@@ -253,10 +255,9 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 goal,
                 reviewer,
                 repositoryRoot,
-                round2Commit,
                 round3Commit);
-            Assert.Empty(round3Touched);
-            Assert.Empty(reviewer.LastDispatch!.ReviewFindingTouchedAnchors!);
+            Assert.Equal(anchorB, Assert.Single(round3Touched));
+            Assert.Equal(anchorB, Assert.Single(reviewer.LastDispatch!.ReviewFindingTouchedAnchors!));
             var reviewerBrief = kernel.BuildTaskBrief(
                 goal.Id,
                 reviewer.Id,
@@ -331,7 +332,6 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 goal,
                 reviewer,
                 repositoryRoot,
-                previousReviewedCommit: null,
                 round1Commit,
                 "needs-work",
                 [new ReviewFinding("F-A", ReviewFindingState.Open, anchor, "A is missing its guard.")]);
@@ -344,7 +344,6 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 goal,
                 reviewer,
                 repositoryRoot,
-                round1Commit,
                 round2Commit,
                 "pass",
                 [new ReviewFinding("F-A", ReviewFindingState.Resolved, anchor, "A is missing its guard.")]);
@@ -362,7 +361,6 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
                 goal,
                 reviewer,
                 repositoryRoot,
-                round2Commit,
                 round3Commit,
                 "needs-work",
                 [new ReviewFinding("F-A", ReviewFindingState.Open, anchor, "A guard regressed.")]);
@@ -907,7 +905,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         TaskSpec task,
         string command = "test.exe",
         string? reviewedCommit = null,
-        IReadOnlyList<ReviewFindingLocation>? touchedAnchors = null)
+        IReadOnlyList<ReviewFindingLocation>? touchedAnchors = null,
+        string? touchProofDiagnostic = null)
     {
         var dispatch = new TaskDispatchRecord(
             "test-worker",
@@ -915,7 +914,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             @"C:\tmp",
             DateTimeOffset.UtcNow,
             BaseCommit: reviewedCommit,
-            ReviewFindingTouchedAnchors: touchedAnchors);
+            ReviewFindingTouchedAnchors: touchedAnchors,
+            ReviewFindingTouchProofDiagnostic: touchProofDiagnostic);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
 
@@ -1017,7 +1017,6 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Goal goal,
         TaskSpec reviewer,
         string repositoryRoot,
-        string? previousReviewedCommit,
         string currentCommit,
         string verdict,
         IReadOnlyList<ReviewFinding> findings)
@@ -1027,7 +1026,6 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             goal,
             reviewer,
             repositoryRoot,
-            previousReviewedCommit,
             currentCommit);
         RecordPreparedReviewerRound(kernel, goal, reviewer, verdict, findings);
         return touchedAnchors;
@@ -1038,26 +1036,22 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         Goal goal,
         TaskSpec reviewer,
         string repositoryRoot,
-        string? previousReviewedCommit,
         string currentCommit)
     {
-        var resolvedAnchors = kernel.GetReviewFindingState(goal.Id)
-            .Where(finding => finding.State == ReviewFindingState.Resolved)
-            .Select(finding => finding.Location)
-            .ToArray();
-        var touchedAnchors = new WorkerGitContext().ReadReviewerRoundTouchedAnchors(
+        var touchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
+            goal,
+            reviewer,
             repositoryRoot,
-            previousReviewedCommit,
-            currentCommit,
-            resolvedAnchors);
+            currentCommit);
         DispatchTask(
             kernel,
             goal,
             reviewer,
             "review",
             reviewedCommit: currentCommit,
-            touchedAnchors: touchedAnchors);
-        return touchedAnchors;
+            touchedAnchors: touchScope.TouchedAnchors,
+            touchProofDiagnostic: touchScope.Diagnostic);
+        return touchScope.TouchedAnchors;
     }
 
     private static void RecordPreparedReviewerRound(

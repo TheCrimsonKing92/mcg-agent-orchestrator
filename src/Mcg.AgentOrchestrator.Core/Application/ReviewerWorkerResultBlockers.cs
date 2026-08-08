@@ -180,7 +180,8 @@ public static class WorkerResultBlockers
             // Worker-authored touched_anchors remains a required, validated receipt, but is not
             // authoritative for regression reopening or identity relocation. Only dispatch-
             // preparation's round diff may prove that a structural anchor was touched.
-            TouchedAnchors = verification.ReviewFindingTouchedAnchors ?? []
+            TouchedAnchors = verification.ReviewFindingTouchedAnchors ?? [],
+            TouchProofDiagnostic = verification.ReviewFindingTouchProofDiagnostic
         };
         return true;
     }

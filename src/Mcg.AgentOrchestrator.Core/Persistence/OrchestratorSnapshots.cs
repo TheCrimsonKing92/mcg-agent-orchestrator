@@ -150,7 +150,8 @@ public sealed record TaskVerificationSnapshot(
     DateTimeOffset? DispatchStartedAt = null,
     int? ChildProcessId = null,
     int? ChildExitCode = null,
-    IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts = null)
+    IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts = null,
+    string? ReviewFindingTouchProofDiagnostic = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -182,7 +183,8 @@ public sealed record TaskDispatchSnapshot(
     DateTimeOffset? ProviderSessionRetiredAt = null,
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
     int BriefVersion = 1,
-    string? BriefSnapshot = null);
+    string? BriefSnapshot = null,
+    string? ReviewFindingTouchProofDiagnostic = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

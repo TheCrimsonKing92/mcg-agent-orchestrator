@@ -314,7 +314,8 @@ public sealed record ReviewFinding(
 
 public sealed record ReviewFindingRound(
     IReadOnlyList<ReviewFinding> Findings,
-    IReadOnlyList<ReviewFindingLocation> TouchedAnchors);
+    IReadOnlyList<ReviewFindingLocation> TouchedAnchors,
+    string? TouchProofDiagnostic = null);
 
 public sealed record ReviewFindingIdentityMismatch(
     string Code,
@@ -510,7 +511,8 @@ public static class ReviewFindingConvergence
         var identityMismatches = CollectIdentityMismatches(
             previous,
             submittedFindings,
-            nextRound.TouchedAnchors);
+            nextRound.TouchedAnchors,
+            nextRound.TouchProofDiagnostic);
         if (identityMismatches.Count > 0)
         {
             var first = identityMismatches[0];
@@ -550,10 +552,10 @@ public static class ReviewFindingConvergence
                         UntouchedReopenViolationCode,
                         CountOpen(previous),
                         CountOpen(submittedFindings),
-                        $"Resolved finding '{prior.StableId}' was re-opened without its structural anchor being touched.",
+                        BuildUntouchedReopenMessage(prior.StableId, nextRound.TouchProofDiagnostic),
                         new ReviewFindingContractViolation(
                             UntouchedReopenViolationCode,
-                            $"Resolved finding '{prior.StableId}' was re-opened without its structural anchor being touched.",
+                            BuildUntouchedReopenMessage(prior.StableId, nextRound.TouchProofDiagnostic),
                             prior.StableId,
                             prior.StableId,
                             prior.Location,
@@ -662,7 +664,8 @@ public static class ReviewFindingConvergence
     private static IReadOnlyList<ReviewFindingIdentityMismatch> CollectIdentityMismatches(
         IReadOnlyList<ReviewFinding> previous,
         IReadOnlyList<ReviewFinding> submitted,
-        IReadOnlyList<ReviewFindingLocation> touchedAnchors)
+        IReadOnlyList<ReviewFindingLocation> touchedAnchors,
+        string? touchProofDiagnostic)
     {
         var submittedById = submitted.ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
         var previousIds = previous
@@ -680,7 +683,11 @@ public static class ReviewFindingConvergence
                 continue;
             }
 
-            var message = BuildIdentityMovedMessage(prior.StableId, prior.Location, next.Location);
+            var message = BuildIdentityMovedMessage(
+                prior.StableId,
+                prior.Location,
+                next.Location,
+                touchProofDiagnostic);
             mismatches.Add(new ReviewFindingIdentityMismatch(
                 IdentityMovedViolationCode,
                 message,
@@ -876,10 +883,12 @@ public static class ReviewFindingConvergence
     private static string BuildIdentityMovedMessage(
         string stableId,
         ReviewFindingLocation prior,
-        ReviewFindingLocation submitted)
+        ReviewFindingLocation submitted,
+        string? touchProofDiagnostic)
     {
         var message =
-            $"Finding '{stableId}' is still open but was reported at a different structural anchor without system-derived proof that its prior anchor was touched; report it at its original anchor, or reuse the stable_id at the new location after a round diff touches the prior anchor.";
+            $"Finding '{stableId}' is still open but was reported at a different structural anchor without system-derived proof that its prior anchor was touched; report it at its original anchor, or resolve it and open a new stable_id for a distinct defect." +
+            FormatTouchProofDiagnostic(touchProofDiagnostic);
         if (!string.Equals(prior.ToString(), submitted.ToString(), StringComparison.Ordinal))
         {
             return message;
@@ -889,6 +898,15 @@ public static class ReviewFindingConvergence
             $" Raw locations render identically; normalized_prior_region='{NormalizeRegion(prior.Region)}'; " +
             $"normalized_submitted_region='{NormalizeRegion(submitted.Region)}'.";
     }
+
+    private static string BuildUntouchedReopenMessage(string stableId, string? touchProofDiagnostic) =>
+        $"Resolved finding '{stableId}' was re-opened without system-derived proof that its structural anchor was touched." +
+        FormatTouchProofDiagnostic(touchProofDiagnostic);
+
+    private static string FormatTouchProofDiagnostic(string? touchProofDiagnostic) =>
+        string.IsNullOrWhiteSpace(touchProofDiagnostic)
+            ? string.Empty
+            : $" Touch-proof diagnostic: {touchProofDiagnostic}";
 
     // Exact anchor equality (including hunk) — used only by the recycle guard so that a second,
     // distinct defect in the same region but a different hunk stays reportable under a new id.

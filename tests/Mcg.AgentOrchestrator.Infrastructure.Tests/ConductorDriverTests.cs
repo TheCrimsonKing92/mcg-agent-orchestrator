@@ -45,9 +45,15 @@ public sealed class ConductorDriverTests
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec task,
-        string command = "test.exe")
+        string command = "test.exe",
+        string? reviewFindingTouchProofDiagnostic = null)
     {
-        var dispatch = new TaskDispatchRecord("test-worker", command, "C:\\tmp", DateTimeOffset.UtcNow);
+        var dispatch = new TaskDispatchRecord(
+            "test-worker",
+            command,
+            "C:\\tmp",
+            DateTimeOffset.UtcNow,
+            ReviewFindingTouchProofDiagnostic: reviewFindingTouchProofDiagnostic);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
 
@@ -139,7 +145,8 @@ public sealed class ConductorDriverTests
     private static void SeedReviewerIdentityViolation(
         AgentOrchestratorKernel kernel,
         Goal goal,
-        TaskSpec reviewer)
+        TaskSpec reviewer,
+        string? touchProofDiagnostic = null)
     {
         DispatchTask(kernel, goal, reviewer, "review-seed");
         var location = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
@@ -152,15 +159,16 @@ public sealed class ConductorDriverTests
             DateTimeOffset.UtcNow,
             WorkerResultPresent: true));
         kernel.RetryTask(goal.Id, reviewer.Id, "fresh review");
-        RecordMovedReviewerIdentityViolation(kernel, goal, reviewer);
+        RecordMovedReviewerIdentityViolation(kernel, goal, reviewer, touchProofDiagnostic);
     }
 
     private static void RecordMovedReviewerIdentityViolation(
         AgentOrchestratorKernel kernel,
         Goal goal,
-        TaskSpec reviewer)
+        TaskSpec reviewer,
+        string? touchProofDiagnostic = null)
     {
-        DispatchTask(kernel, goal, reviewer, "review-moved");
+        DispatchTask(kernel, goal, reviewer, "review-moved", touchProofDiagnostic);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-moved",
             "C:\\tmp",
@@ -5155,6 +5163,49 @@ public sealed class ConductorDriverTests
         Assert.Contains("canonical_open_count=1", escalation, StringComparison.Ordinal);
         Assert.Contains("verify-manual", escalation, StringComparison.Ordinal);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_unavailable_touch_proof_holds_without_consuming_exhausted_repair_budget")]
+    public void ConductorDriverUnavailableTouchProofHoldsWithoutConsumingExhaustedRepairBudget()
+    {
+        const string diagnostic =
+            "Round-diff touch proof unavailable because the carried finding round has no reviewed-commit baseline.";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        SeedReviewerIdentityViolation(kernel, goal, reviewer, diagnostic);
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            kernel.RetryTask(
+                goal.Id,
+                reviewer.Id,
+                $"review-finding contract-repair: attempt {attempt}/2",
+                retryRoundKind: RetryRoundKind.Mechanical);
+            RecordMovedReviewerIdentityViolation(kernel, goal, reviewer, diagnostic);
+        }
+
+        var retried = false;
+        var escalated = false;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTaskWithRoundKind: (_, _, _, _) =>
+            {
+                retried = true;
+                return reviewer;
+            },
+            writeEscalation: (_, _, _) => escalated = true);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
+        Assert.False(escalated);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("mechanical repair budget was not consumed", held.Reason, StringComparison.Ordinal);
+        Assert.Contains(diagnostic, held.Reason, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_legacy_reviewer_evidence_counters_do_not_cap_structured_requests")]
