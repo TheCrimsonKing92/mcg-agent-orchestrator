@@ -703,6 +703,13 @@ public sealed partial class AgentOrchestratorKernel
             .OrderBy(candidate => candidate.CompletedAt))
         {
             var isCurrentRound = ReferenceEquals(verification, currentVerification);
+            if (!isCurrentRound && verification.ReviewFindingContractViolation is not null)
+            {
+                // The durable violation marks this worker-authored round as rejected. Replaying it would
+                // let an invalid transition (notably an unproven cap resolution) mutate the accepted ledger.
+                continue;
+            }
+
             if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var parseDiagnostic))
             {
                 if (isCurrentRound)
