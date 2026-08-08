@@ -129,7 +129,8 @@ if (ConductorContinuitySupervisor.ShouldSupervise(
             workspace.ExecutionDirectory,
             Path.Combine(workspace.OrchestratorDirectory, "continuity"),
             activeProject.Name,
-            tenantSelection.TenantName);
+            tenantSelection.TenantName,
+            workspace.LogDirectory);
     }
     catch (Exception ex)
     {

@@ -161,6 +161,15 @@ internal sealed class ConductorBatchLoop
         DateTimeOffset? lastBlockedRecheckHeartbeatAt = null;
         string? stopReason = null;
         ConductorLifecycleSession? lifecycleSession = null;
+
+        void StopLoop(string reason, string? detail = null)
+        {
+            stopReason ??= reason;
+            lifecycleSession?.Stop(reason, totalTicks, detail);
+            EmitProgress($"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason={reason}" +
+                         (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
+        }
+
         driver.DispatchRecordWriteSucceededSink = goalId =>
         {
             dispatchRecordWriteSkips.Remove(goalId.Value);
@@ -225,14 +234,6 @@ internal sealed class ConductorBatchLoop
             started,
             maxIterations,
             maxDuration);
-
-        void StopLoop(string reason, string? detail = null)
-        {
-            stopReason ??= reason;
-            lifecycleSession?.Stop(reason, totalTicks, detail);
-            EmitProgress($"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason={reason}" +
-                         (string.IsNullOrWhiteSpace(detail) ? string.Empty : $" {detail}"));
-        }
 
         TimeSpan ConsumeWatchInterval(TimeSpan configuredInterval, int recheckableBlockedGoals)
         {
@@ -1400,9 +1401,33 @@ internal sealed class ConductorBatchLoop
         }
         return new BatchLoopSummary(totalTicks, totalAdvanced, totalHeld, totalEscalated, totalRetried, totalDone, stopRequested, handoff, stopReason, totalBlockedRechecks);
         }
+        catch (Exception ex)
+        {
+            stopReason ??= "unintended-exit";
+            var detail = $"exception={Sanitize(ex.GetType().Name)} message={SanitizeReason(ex.Message)}";
+            try
+            {
+                lifecycleSession?.Stop("unintended-exit", totalTicks, detail);
+            }
+            catch (Exception diagnosticException)
+            {
+                TryWriteAbnormalExitDiagnosticFailure("lifecycle", diagnosticException);
+            }
+
+            try
+            {
+                EmitProgress(
+                    $"LOOP_STOP tick={totalTicks} rechecks={totalBlockedRechecks} reason=unintended-exit {detail}");
+            }
+            catch (Exception diagnosticException)
+            {
+                TryWriteAbnormalExitDiagnosticFailure("event", diagnosticException);
+            }
+
+            throw;
+        }
         finally
         {
-            lifecycleSession?.Stop("unintended-exit", totalTicks);
             DrainCanaryTasks(canaryTasks, canaryTasksGate);
             driver.SuccessfulLandingSink = previousSuccessfulLandingSink;
             driver.DispatchRecordWriteSucceededSink = previousDispatchRecordWriteSucceededSink;
@@ -1411,6 +1436,19 @@ internal sealed class ConductorBatchLoop
                 EmitProgress(line);
             CurrentRetryDiagnostics.Value = previousRetryDiagnostics;
             CurrentConductEventLogWriter.Value = previousConductEventLogWriter;
+        }
+    }
+
+    private static void TryWriteAbnormalExitDiagnosticFailure(string sink, Exception exception)
+    {
+        try
+        {
+            Console.Error.WriteLine(
+                $"[conduct --loop] Failed to record unintended exit in {sink}: " +
+                $"{exception.GetType().Name}: {SanitizeReason(exception.Message)}");
+        }
+        catch
+        {
         }
     }
 
@@ -2322,6 +2360,28 @@ internal sealed class ConductorBatchLoop
         var oldestServedThisTick = false;
         foreach (var goal in orderedEligible)
         {
+            try
+            {
+            var verificationGate = kernel.BuildVerificationGate(goal.Id);
+            if (!verificationGate.IsSatisfied)
+            {
+                var blockingReasons = string.Join(
+                    ',',
+                    verificationGate.Tasks
+                        .Where(task => task.GateStatus != VerificationGateStatus.Passed)
+                        .Select(task => $"{task.Role}:{task.Reason}"));
+                var reason = BoundSingleLine(
+                    $"inconsistent {goal.Status} state: authoritative task verification gate unsatisfied ({blockingReasons}); " +
+                    "apply verify-manual or retry before acceptance");
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    EscalateParallelAcceptanceSafely(driver, goal, policy, reason),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=escalated reason=authoritative-verification-gate-unsatisfied goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
+                    changedGoalLines);
+                continue;
+            }
+
             var engineHealth = _acceptanceEngineCircuit?.Read();
             if (IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth))
             {
@@ -2577,6 +2637,18 @@ internal sealed class ConductorBatchLoop
                         changedGoalLines);
                     break;
             }
+            }
+            catch (Exception ex)
+            {
+                var reason = BoundSingleLine(
+                    $"parallel acceptance fault isolated before goal advance: {ex.GetType().Name}: {ex.Message}");
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    EscalateParallelAcceptanceSafely(driver, goal, policy, reason),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=escalated reason=parallel-acceptance-fault goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
+                    changedGoalLines);
+            }
         }
 
         if (deferredByAdmission > 0)
@@ -2799,6 +2871,35 @@ internal sealed class ConductorBatchLoop
             task.Status == WorkTaskStatus.Cancelled ||
             (task.Status == WorkTaskStatus.Completed &&
              task.LastVerification is { Succeeded: true }));
+
+    private static string BoundSingleLine(string value)
+    {
+        const int maxLength = 512;
+        var singleLine = value.Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' ');
+        return singleLine.Length > maxLength ? singleLine[..maxLength] : singleLine;
+    }
+
+    private static ConductorAdvanceResult EscalateParallelAcceptanceSafely(
+        ConductorDriver driver,
+        Goal goal,
+        ConductorAutonomyPolicy policy,
+        string reason)
+    {
+        try
+        {
+            return driver.EscalateParallelLandingAcceptance(goal, policy, reason);
+        }
+        catch (Exception escalationException)
+        {
+            var fallbackReason = BoundSingleLine(
+                $"{reason}; escalation recording failed: {escalationException.GetType().Name}: {escalationException.Message}");
+            return new ConductorAdvanceResult(
+                goal.Id.Value,
+                goal.Id.Value[..8],
+                policy.Name,
+                new ConductorAdvanceOutcome.Escalated(GoalLifecycleState.Verified, fallbackReason));
+        }
+    }
 
     internal static bool ShouldDeferForParallelAcceptanceFairness(string oldestGoalId)
     {
