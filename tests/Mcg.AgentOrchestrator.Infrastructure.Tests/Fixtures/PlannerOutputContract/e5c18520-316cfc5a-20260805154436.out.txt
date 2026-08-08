@@ -1,0 +1,148 @@
+## Premise validity
+
+Valid at HEAD `fa2b83df9a54aaba2d4a20f3968415a153616125`.
+
+- Durable attempt metadata lacks child start/image identity and conductor ownership: `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorParallelAcceptanceAttempts.cs` / `ConductorParallelAcceptanceAttempt`.
+- `IsLiveAttempt` validates only PID and heartbeat.
+- `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs` / `RunParallelLandingAcceptance` rebuilds `activeCandidates` per tick and derives slots from `activeCandidates.Count`, not persisted `SlotIndex`.
+- `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorLoopHandoff.cs` / `TryStartSuccessor` transfers conductor authority without acceptance ownership reconciliation.
+- No existing test combines a live gate, max-duration handoff, successor adoption, terminal reconciliation, and logical-slot exclusion.
+
+## Acceptance criteria mapping
+
+1. Add a Windows real-process regression in `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorAcceptanceHandoffProcessTests.cs` (new file). Start one fixture-owned acceptance child, trigger the production max-duration handoff path, release the controlled gate only after adoption, and assert:
+
+   - The original PID/start/image identity remains the sole gate identity.
+   - No replacement attempt or second gate is created.
+   - The successor records and consumes the original terminal receipt.
+   - The goal transitions from `Verifying` through the existing reconciliation path to its correct terminal state.
+   - All observations come from fixture-owned handles, attempt artifacts, and ownership rows—never machine-wide process enumeration.
+
+2. Rebuild occupied logical slots from durable active claims before candidate admission in `ConductorBatchLoop.RunParallelLandingAcceptance`. Extend `ConductorCrossTickTests.ParallelAcceptanceFairness_LiveOldest_AllowsDeclaredCapacityAcrossTicks` to assert the inherited attempt retains its recorded slot and the next goal receives the first distinct free slot or is held when none exists. A unique active-slot constraint must reject any cross-process collision before launch.
+
+3. Persist child PID/start/image, attempt and candidate identity, logical slot, and current conductor PID/start/image. Recovery classifies identity as `LiveMatch`, `DeadOrRecycled`, or `Unknown` using `SpawnProcessIdentityReader` semantics:
+
+   - Adopt only `LiveMatch` plus exact goal/attempt/branch SHA/main SHA.
+   - Reclaim `DeadOrRecycled` rows transactionally.
+   - Quarantine `Unknown`, malformed, mismatched, or legacy PID-only records while their slot remains occupied.
+   - Heartbeat age alone never authorizes adoption or reclamation.
+   - Crash recovery may transfer from a dead conductor without a handoff manifest, but never from a live or unprovable owner.
+
+4. Emit `ACCEPTANCE_ADOPTED goal=… attempt=… slot=… oldConductor=… newConductor=…` after the ownership transaction commits. Emit `ACCEPTANCE_ADOPTION_WAIT` before any handoff wait caused by unprovable identity. Extend `ConductorBatchLoop.TryClassifyConductEvent` so adoption maps to `acceptance-adopted` and wait maps to `acceptance-adoption-decision`.
+
+5. Integrate transfer preparation and adoption into the existing max-duration path, not a test-only restart path. The real-process test must reach `ConductorBatchLoop`’s `_handoffOnMaxDuration`, `ConductorLoopHandoff.TryStartSuccessor`, activation, adoption, and successor loop start. A direct coordinator reconstruction test is supplemental, not sufficient.
+
+## Target seams and symbols
+
+- `src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AcceptanceOwnershipStore.cs` — new SQLite-backed cross-process store. Add active claims, transfer manifests, transactional compare-and-swap adoption, terminal release, and a unique active logical-slot constraint.
+- `src/Mcg.AgentOrchestrator.Infrastructure/Processes/SpawnRegistry.cs` — expose a reusable identity-classification overload accepting `SpawnProcessIdentity`; retain the existing live/recycled/unknown semantics.
+- `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorParallelAcceptanceAttempts.cs`:
+
+  - Extend `ConductorParallelAcceptanceAttempt` with child start/image identity.
+  - Extend `ConductorParallelAcceptanceOwnedProcessLaunchResult` to return the verified process identity.
+  - Add coordinator-wide active-attempt discovery, legacy quarantine, claim registration/release, and recovery/adoption APIs.
+  - Replace PID-only `IsLiveAttempt` checks.
+  - Preserve backward JSON readability; missing identity becomes `Unknown`, not dead.
+
+- `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorBatchLoop.cs`:
+
+  - Replace list-position slot assignment with an occupied-slot map and first-free-slot allocation.
+  - Use `decision.Attempt.SlotIndex`, scope, and candidate SHAs when monitoring inherited attempts.
+  - Hold admission on an atomic slot collision.
+  - Add event classification and ensure terminal reconciliation releases the durable claim.
+
+- `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorLoopHandoff.cs`:
+
+  - Bind a transfer manifest to the handoff token and old/new conductor identities.
+  - Require successor identity attestation before readiness.
+  - Transfer all claims atomically after activation and before reporting loop start.
+  - Keep incumbent authority while adoption is unprovable.
+
+- `src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs` and `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHandlers.Goals.cs` — construct the shared store under `.orchestrator`, provide current conductor identity, and wire transfer callbacks into `ConductLoopHandoffOptions`.
+- Tests:
+
+  - `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorAcceptanceOwnershipTests.cs` — new file.
+  - `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorAcceptanceHandoffProcessTests.cs` — new file.
+  - `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorCrossTickTests.cs`.
+  - `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorLoopHandoffTests.cs`.
+  - `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ConductorBatchLoopTests.cs`.
+  - `docs/negative-controls/e5c18520.md` — new RED/GREEN receipt.
+
+## Ownership and lifecycle
+
+The acceptance attempt owns the logical slot for its entire active lifetime. OS parentage does not define scheduler ownership.
+
+1. Before launch, atomically reserve the slot and persist attempt/candidate/current-conductor identity.
+2. Launch the child, read PID/start/image from its exact handle, and atomically attach that immutable identity to the claim. Launch failure closes the claim.
+3. The child continues independently writing heartbeat/result/exit artifacts.
+4. Handoff freezes new admission, snapshots every active claim into a token-bound manifest, and launches the successor.
+5. The successor validates every manifest row and child identity before readiness.
+6. After incumbent lease release and activation, one SQLite transaction changes all claim owners from the exact old conductor identity to the exact successor identity.
+7. The successor emits adoption events and begins monitoring the existing attempts.
+8. Only a terminal receipt, explicit typed cancellation, or `DeadOrRecycled` proof releases the slot. `Unknown` retains the claim.
+9. This slice chooses waiting over cancellation because no typed acceptance cancellation path exists. `InvalidateCurrent` must not be treated as cancellation.
+
+## External and edge contracts
+
+- SQLite commit is the authority boundary. Metadata JSON remains the child/result artifact; process-local `MetadataWriteGate` is not used for ownership transfer.
+- The transfer manifest includes handoff token, old/new conductor identities, attempt ID, goal ID, slot, child identity, and candidate SHAs. Missing or mismatched fields reject readiness.
+- A terminal artifact racing adoption is resolved inside the same reconciliation transaction: mark terminal/reclaim rather than adopt.
+- A live old conductor without a matching activated handoff token cannot be displaced.
+- A recycled PID is never killed or adopted.
+- Legacy live records lacking start/image identity occupy their persisted slot and cause an explicit wait until terminal/dead proof.
+- If successor launch or adoption fails while a live claim exists, the incumbent reacquires/retains authority and remains in drain-and-monitor mode; it must not return while leaving a live gate unowned.
+- Transfer-manifest cleanup occurs only after committed adoption, terminal reclamation, or a confirmed rollback.
+
+## Integration seams
+
+1. Add the durable ownership schema and generic process-identity classifier.
+2. Extend launch persistence so every newly started gate has complete immutable identity and an active slot claim.
+3. Add startup discovery/recovery, including legacy quarantine and dead-record reclamation.
+4. Change scheduler reconstruction and allocation to consume durable occupied slots.
+5. Add handoff manifest preparation, readiness validation, activated compare-and-swap adoption, and rollback/drain behavior.
+6. Wire the shared store and conductor identity through CLI construction.
+7. Add conduct events only after ownership state commits.
+8. Add focused coordinator/cross-tick tests, then the real-process max-duration regression and negative-control receipt.
+
+## Verification commands and classes
+
+- TEST-VERIFIABLE — focused ownership, scheduler, handoff, event, and real-process tests:
+
+  `dotnet test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --filter 'FullyQualifiedName~ConductorAcceptanceOwnershipTests|FullyQualifiedName~ConductorAcceptanceHandoffProcessTests|FullyQualifiedName~ConductorCrossTickTests|FullyQualifiedName~ConductorLoopHandoffTests' --verbosity minimal`
+
+- TEST-VERIFIABLE — isolated build-slot regression:
+
+  `dotnet test tests\Mcg.AgentOrchestrator.Infrastructure.Tests\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --filter 'FullyQualifiedName~DotnetBuildEnvironmentManagerTests|FullyQualifiedName~BatchLoopLiveOldestAttemptDoesNotBlockSecondSlotAcrossTicks' --verbosity minimal`
+
+- TEST-VERIFIABLE — compile the complete changed boundary in isolated build roots:
+
+  `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-WorkerBuildCheck.ps1 src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`
+
+- TEST-VERIFIABLE — demonstrate the real-process and cross-tick tests go RED with adoption/occupied-slot reconstruction locally disabled, restore production behavior, rerun GREEN, and record both receipts in `docs/negative-controls/e5c18520.md`. Do not add a permanent bypass switch.
+
+The real-process fixture must use explicit child environments, injected process-host seams, signal-based synchronization, generous hang-only timeouts, fixture-owned paths/handles, and an asserted max-duration/handoff precondition.
+
+## Risks and stop conditions
+
+- Stop if child start time/image cannot be read from the launched handle; do not fall back to PID-only ownership.
+- Stop if the chosen store cannot atomically transfer all claims and enforce unique active slots across processes.
+- Stop and request scope expansion if bounded handoff is mandatory: that requires a new typed cancellation protocol. Do not substitute `InvalidateCurrent` or raw process termination.
+- Stop if legacy or mismatched identity is reclaimed from heartbeat age rather than terminal/dead proof.
+- Stop if the successor can publish `LOOP_START` before adoption commits.
+- Stop if the real-process test observes global processes, inherits uncontrolled environment, depends on elapsed wall time, or cannot produce the required RED negative control.
+- Physical build-slot leases remain unchanged; they are downstream protection and cannot substitute for logical acceptance-slot ownership.
+
+Changed files: none. Worktree remains clean.
+
+Model fit: OpenAI/gpt-5.6-sol - adequate - cross-cutting conductor lifecycle planning - sufficient for mapping durable ownership, handoff ordering, scheduler admission, and falsifiable process tests.
+
+WORKER_RESULT:
+files: none
+commands: `Get-Content -Raw` on role artifacts, selected skill, and test-design discipline; targeted `rg --files`/`rg -n`; `Show-RepoFileSlice.ps1` on cited symbols; `Invoke-Git.ps1 status --short`
+tests: not-run - Planner-only source/artifact inspection; no repository changes
+commit: none
+blockers: none
+model_fit: OpenAI/gpt-5.6-sol - adequate - cross-cutting conductor lifecycle planning - sufficient for a criterion-mapped implementation and verification design
+skills: orchestrator-dogfood
+confidence: high
+END_WORKER_RESULT

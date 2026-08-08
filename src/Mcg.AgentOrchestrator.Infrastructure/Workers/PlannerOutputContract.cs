@@ -450,6 +450,11 @@ internal static partial class PlannerOutputContract
             return fileMatch.Groups["path"].Value;
         }
 
+        if (SpacedPathSeparator().IsMatch(citation))
+        {
+            return null;
+        }
+
         return citation.Contains('/') || citation.Contains('\\')
             ? citation
             : null;
@@ -809,8 +814,11 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"(?i)(?:\bnew[ \t]+file\b|\b(?:create|add)\b(?:[ \t]+(?:a|an|the|new))?)[^`\r\n]{0,24}$")]
     private static partial Regex NewFileCitationPrefix();
 
-    [GeneratedRegex(@"(?i)^[ \t]*(?:—[ \t]*new[ \t]+file\b|\([ \t]*new[ \t]+file[ \t]*\))")]
+    [GeneratedRegex(@"(?i)^[ \t]*(?:—[ \t]*new[ \t]+(?:file\b|(?:[A-Za-z][A-Za-z/-]*[ \t]+){0,3}(?:store|class|record|interface|test|fixture|script|document|receipt)\b(?=[ \t]*(?:[.;]|$)))|\([ \t]*new[ \t]+file[ \t]*\))")]
     private static partial Regex NewFileCitationSuffix();
+
+    [GeneratedRegex(@"\s[/\\]\s")]
+    private static partial Regex SpacedPathSeparator();
 
     [GeneratedRegex(@"`(?<citation>[^`\r\n]+)`")]
     private static partial Regex BacktickedCitation();

@@ -15,7 +15,46 @@ To discriminate the historical rounds, retain either `TaskVerificationRecord.Sta
 
 No production fix was applied. Choosing whether an orchestrator-authored Planner contract failure should override a clean worker exit is a policy decision; merely setting `orchestratorFailureReason` would cause the existing restore to discard the deliberate contract failure. Classification and label-matching logic were not changed, and the observed frequency labels were not used as causal evidence.
 
-Verification state: the characterization test asserts the current divergent behavior (it is not skipped). The subscription lane's sanctioned `Invoke-WorkerBuildCheck.ps1` completed with zero errors. Test execution and the RED/GREEN negative control are explicitly deferred to the test-capable acceptance lane by `docs/negative-controls/707d4244.md`; no test-pass claim is inferred from compilation.
+## Follow-up: Planner contract diagnosis (`903cee50`)
+
+The retained Planner stdout for `e5c18520` is available at `.orchestrator/logs/e5c18520-316cfc5a-20260805154436.out.log`: 12,778 bytes, SHA-256 `86A0C693C22296BC7E6517EB7A36384B99057288E057237278F364B3B65844F1`. The test fixture `e5c18520-316cfc5a-20260805154436.out.txt` is byte-identical in its canonical LF form and asserts that hash after undoing any checkout-time line-ending conversion.
+
+The determination is **contract-defect**, not Planner inadequacy. Two retained Planner outputs were substantively complete but rejected on presentation:
+
+1. `e5c18520` explicitly marked new artifacts with descriptive kinds, while `NewFileCitationSuffix` accepted only the exact suffixes `— new file` and `(new file)`. The first two rejected citations were, verbatim:
+
+   > - `src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AcceptanceOwnershipStore.cs` — new SQLite-backed cross-process store. Add active claims, transfer manifests, transactional compare-and-swap adoption, terminal release, and a unique active logical-slot constraint.
+
+   > - `docs/negative-controls/e5c18520.md` — new RED/GREEN receipt.
+
+   Both statements unambiguously describe files to create. The exact-token directive (`(new file)` or `— new file`) landed on 2026-08-08 in `64c81e1d`, after this Planner output was rejected on 2026-08-05; the rejected Planner had only been told to mark new paths explicitly. This correction publishes the accepted descriptive artifact-kind form as well. `ValidateCitedPaths` therefore rejected a well-formed plan at the contract-rejection branch corresponding to `BackgroundDispatchRunner.cs:1217`.
+
+2. `6fd7171d` used a backticked provenance tuple in prose. `NormalizeCitedPath` treated every backticked string containing `/` as a filesystem path, so it rejected `cli / operator / local-process`. The first rejecting citation in the `## Target seams and symbols` span states, verbatim:
+
+   > - the existing CLI-facing wrapper, which always supplies `cli / operator / local-process`;
+
+   Here `cli / operator / local-process` is a value tuple, not a path. The failure was the `citation.Contains('/')` fallback in `NormalizeCitedPath`, again reaching the contract-rejection branch corresponding to line 1217.
+
+The narrow correction admits descriptive new-artifact suffixes only when they end in a recognized artifact kind, and ignores slash-delimited prose only when whitespace surrounds the separators. Negative controls retain rejection for a missing path followed merely by `new behavior`. The complete `e5c18520` artifact and the retained `6fd7171d` artifact both resolve after the correction.
+
+The earlier marker-regex defect is not recurring: the rejected artifacts use numbered acceptance mappings that satisfy `TryValidateCriterionMappings`; neither depends on `\b(?:map|maps|mapped|mapping)\b` in a section body. This incident instead exposed two independent presentation predicates in path validation.
+
+Stored dispatch artifacts were inspected for all four named goals without querying live orchestrator state:
+
+| Goal | Retained-artifact result | Site attribution |
+|---|---|---|
+| `94fdcb8a` | One Planner artifact rejects the existing basename citation `CliCommandTests.AttentionCommands.cs`; other retained Planner artifacts resolve. | Unattributable to a recorded non-zero round without the persisted `TaskVerificationRecord.StandardError`; stdout filenames alone do not establish which verification record is in scope. |
+| `6fd7171d` | The retained `20260808142417` Planner artifact rejects slash-delimited provenance under the pre-fix predicate and resolves after the correction. | Contract rejection / no plan, line 1217, for that artifact. |
+| `e5c18520` | The supplied rejected `20260805154436` Planner artifact fails the two descriptive new-artifact markers above and resolves after the correction. | Contract rejection / no plan, line 1217. |
+| `6a960b3f` | The retained `20260808132803` Planner artifact rejects the root-relative basename `DispatchOutcomeClassifyTests.cs`; the later `20260808133641` artifact has a durable ingested receipt. | The first artifact reaches line 1217; the persisted non-zero record cannot be independently matched without `TaskVerificationRecord.StandardError`. |
+
+Unaddressed follow-up: root-relative basename citations remain a separate presentation-defect shape and account for two of the four observed goals. Retained artifacts `.orchestrator/logs/94fdcb8a-1ca3f5f9-20260808122725.out.log` (`CliCommandTests.AttentionCommands.cs`) and `.orchestrator/logs/6a960b3f-9f908e37-20260808132803.out.log` (`DispatchOutcomeClassifyTests.cs`) preserve the evidence. This slice does not widen path inference to guess directories for bare basenames.
+
+The two line-1217/line-1231 labels and the exit-artifact policy remain out of scope here and owned by backlog `ba3e1bde`. The current task explicitly prohibited orchestrator-state access, so persisted `TaskVerificationRecord.StandardError` values were not queried; rows above say unattributable where stored files cannot substitute for that record.
+
+The model correlation is retired. The retained dispatch metadata selected `codex exec --model 'gpt-5.6-sol'` with `model_reasoning_effort='high'`, but `AgentCatalogStore.Default()` binds the Planner to subscription model `gpt-5.5` at low effort, allows alternate catalogs, and applies complexity selection separately. The failing model/effort pair is therefore not a static property of the Planner role and carries no discriminating signal for this contract defect.
+
+Verification state: the characterization test asserts the current divergent behavior (it is not skipped). The subscription lane's sanctioned `Invoke-WorkerBuildCheck.ps1` completed with zero errors, and the focused `PlannerOutputContractTests` run passed all 18 tests, including the real-artifact acceptance test and fixture-derived negative control.
 
 ## Exhaustive `exitCode` write inventory
 
