@@ -8,6 +8,17 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static class CliPersistentStateRunner
 {
+    internal enum OperatorIntentSubmissionSource
+    {
+        Cli,
+        Discord
+    }
+
+    internal readonly record struct OperatorIntentAttribution(
+        string Actor,
+        string Channel,
+        string AuthenticationAssurance);
+
     // The conduct-loop fast path queries goal metadata every tick. Every fourth tick, hydrate
     // currently Parked goals as a safety-net sweep so non-metadata unpark side effects cannot strand
     // a parked goal indefinitely; at the default 15s watch cadence this is roughly one minute.
@@ -33,7 +44,8 @@ internal static class CliPersistentStateRunner
         ref WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
         IOperatorChannel? channel = null,
-        IGoalAcceptanceVerifier? acceptanceVerifier = null)
+        IGoalAcceptanceVerifier? acceptanceVerifier = null,
+        OperatorIntentSubmissionSource operatorIntentSubmissionSource = OperatorIntentSubmissionSource.Cli)
     {
         using var writeOperationTag = SqliteOrchestratorStateRepository.UseWriteOperationTag(
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
@@ -176,7 +188,8 @@ internal static class CliPersistentStateRunner
                     providers,
                     workerProfiles,
                     ref currentGoal,
-                    channel);
+                    channel,
+                    operatorIntentSubmissionSource);
             }
 
             return ExecuteGoalScopedTaskMutationCommand(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -1270,7 +1283,8 @@ internal static class CliPersistentStateRunner
         IModelProviderRegistry providers,
         WorkerProfileCatalog workerProfiles,
         ref Goal? currentGoal,
-        IOperatorChannel? channel)
+        IOperatorChannel? channel,
+        OperatorIntentSubmissionSource submissionSource)
     {
         var goalId = ResolveGoalScopedTaskMutationGoalId(stateRepository, currentGoal?.Id.Value, args);
         var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, args);
@@ -1309,17 +1323,7 @@ internal static class CliPersistentStateRunner
         var payloadFiles = ResolveFlagValue(args, "--text-file") is { } payloadFile
             ? new[] { Path.GetFullPath(payloadFile) }
             : [];
-        var channelName = channel is null or NullOperatorChannel
-            ? "cli"
-            : channel.ChannelType;
-        var actor = channelName.Equals("discord", StringComparison.OrdinalIgnoreCase)
-            ? ResolveFlagValue(args, "--operator-actor") ?? "discord:unknown"
-            : "operator";
-        var authenticationAssurance = channelName.Equals("discord", StringComparison.OrdinalIgnoreCase)
-            ? "discord-operator-allowlist"
-            : channel is null or NullOperatorChannel
-                ? "local-process"
-                : "configured-operator-channel";
+        var attribution = ResolveOperatorIntentAttribution(args, submissionSource);
         var intent = new OperatorIntentRecord(
             intentId,
             idempotencyKey,
@@ -1328,9 +1332,9 @@ internal static class CliPersistentStateRunner
             task.Id.Value,
             JsonSerializer.Serialize(payload, payload.GetType(), OperatorIntentJson.Options),
             payloadFiles,
-            Actor: actor,
-            Channel: channelName,
-            AuthenticationAssurance: authenticationAssurance,
+            Actor: attribution.Actor,
+            Channel: attribution.Channel,
+            AuthenticationAssurance: attribution.AuthenticationAssurance,
             CreatedAt: DateTimeOffset.UtcNow);
         var persisted = SqliteOperatorIntentStore
             .ForDirectories(workspace.OrchestratorDirectory, workspace.LogDirectory)
@@ -1347,6 +1351,29 @@ internal static class CliPersistentStateRunner
         }
 
         return false;
+    }
+
+    internal static OperatorIntentAttribution ResolveOperatorIntentAttribution(
+        IReadOnlyList<string> args,
+        OperatorIntentSubmissionSource submissionSource)
+    {
+        var actor = ResolveFlagValue(args, "--operator-actor");
+        return submissionSource switch
+        {
+            OperatorIntentSubmissionSource.Cli => new OperatorIntentAttribution(
+                actor ?? "operator",
+                "cli",
+                "local-process"),
+            OperatorIntentSubmissionSource.Discord => new OperatorIntentAttribution(
+                actor ?? throw new ArgumentException(
+                    "Discord operator intent submissions require an authenticated --operator-actor."),
+                "discord",
+                "discord-operator-allowlist"),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(submissionSource),
+                submissionSource,
+                "Unsupported operator intent submission source.")
+        };
     }
 
     private static RetryOperatorIntentPayload BuildRetryPayload(

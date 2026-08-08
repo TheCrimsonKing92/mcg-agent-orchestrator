@@ -2889,6 +2889,33 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Equal(briefContent, currentGoal!.Objective);
     }
 
+    [Xunit.Fact]
+    public void CliGoalTextFileCreatesGoalWithFileContent()
+    {
+        var root = CreateTempDirectory();
+        var briefContent = "Create a goal with the canonical --text-file option.\n\nKeep multiline content intact.";
+        var briefPath = Path.Combine(root, "brief.md");
+        File.WriteAllText(briefPath, briefContent, System.Text.Encoding.UTF8);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["goal", "--text-file", briefPath, "--simple"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.Equal(briefContent, currentGoal!.Objective);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_simple_goal_text_file_rejects_inline_objective")]
     public void CliSimpleGoalTextFileRejectsInlineObjective()

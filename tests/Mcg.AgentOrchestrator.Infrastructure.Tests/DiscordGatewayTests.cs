@@ -231,7 +231,8 @@ public sealed class DiscordGatewayTests
                     providers,
                     ref profiles,
                     ref currentGoal,
-                    DiscordTestOperatorChannel.Instance);
+                    DiscordTestOperatorChannel.Instance,
+                    operatorIntentSubmissionSource: CliPersistentStateRunner.OperatorIntentSubmissionSource.Discord);
                 return Task.CompletedTask;
             },
             collaborationStore,

@@ -5,7 +5,7 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] | goal --brief-file <path> | goal --text-file <path>";
+    public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] | goal --text-file <path> | goal --brief-file <path>";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
     public const string RetryUsage = "Usage: retry <task-number> <message> [--mechanical] | retry <goal-prefix> <task-number> <message> [--mechanical] | retry --goal <goal-prefix> <task-number> <message> [--mechanical] | retry <task-number> --text-file <path> [--mechanical]";
     public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
@@ -36,7 +36,7 @@ internal static class CliCommandHelp
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
     public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
-    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--depends-on <id-prefix>] | backlog-add <title> --body-file <path> [--depends-on <id-prefix>]";
+    public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--depends-on <id-prefix>] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--depends-on <id-prefix>] | backlog-add <title> --text-file <path> [--depends-on <id-prefix>] | backlog-add <title> --body-file <path> [--depends-on <id-prefix>]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
     public const string BacklogShowUsage = "Usage: backlog-show <id-prefix>";
     public const string BacklogAnnotateUsage = "Usage: backlog-annotate <id-prefix> <note> | backlog-annotate <id-prefix> --text-file <path>";
@@ -86,7 +86,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Goal = new(
         GoalUsage,
         "Create a goal.",
-        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--backlog-coverage", "--brief-file", "--text-file", "--help", "-h" }
+        new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--backlog-coverage", "--text-file", "--brief-file", "--help", "-h" }
             .ToHashSet(StringComparer.OrdinalIgnoreCase),
         ValidateFlags: false);
 
@@ -243,7 +243,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogAdd = new(
         BacklogAddUsage,
         "Add a backlog item.",
-        ["--body-file", "--text-file", "--depends-on", "--help", "-h"]);
+        ["--title", "--text-file", "--body-file", "--depends-on", "--help", "-h"]);
 
     private static readonly CommandHelpEntry BacklogUpdate = new(
         BacklogUpdateUsage,
@@ -377,6 +377,12 @@ internal static class CliCommandHelp
 
     public static bool TryPrintStartupHelp(IReadOnlyList<string> args)
     {
+        if (args.Count == 1 && IsHelpFlag(args[0]))
+        {
+            PrintRootHelp();
+            return true;
+        }
+
         if (TryPrintHelpCommand(args))
         {
             return true;
@@ -389,6 +395,23 @@ internal static class CliCommandHelp
 
         Print(entry);
         return true;
+    }
+
+    private static void PrintRootHelp()
+    {
+        Console.WriteLine("Usage: mcg-orchestrator <command> [options]");
+        Console.WriteLine();
+        Console.WriteLine("Commands:");
+        Console.WriteLine("  goal              Create a goal.");
+        Console.WriteLine("  goals             List goals.");
+        Console.WriteLine("  status            Show goal or orchestrator status.");
+        Console.WriteLine("  attention         List or answer operator attention items.");
+        Console.WriteLine("  backlog-list      List backlog items.");
+        Console.WriteLine("  backlog-add       Add a backlog item.");
+        Console.WriteLine("  retry             Retry a task with operator feedback.");
+        Console.WriteLine("  recover           Recover a goal with an operator note.");
+        Console.WriteLine("  conduct           Drive one goal or the autonomous loop.");
+        Console.WriteLine("  help <command>    Show command-specific help.");
     }
 
     internal static bool IsCommandSpecificHelp(IReadOnlyList<string> args)

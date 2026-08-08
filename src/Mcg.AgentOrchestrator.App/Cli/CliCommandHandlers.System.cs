@@ -149,6 +149,7 @@ internal static partial class CliCommandHandlers
 
         var matches = clarifications
             .Where(c =>
+                c.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase) ||
                 ClarificationId(c, identityUniverse).StartsWith(id, StringComparison.OrdinalIgnoreCase) ||
                 ClarificationTopicId(c.CorrelationKey!).StartsWith(id, StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -170,7 +171,8 @@ internal static partial class CliCommandHandlers
         var matches = clarifications
             .Where(c =>
                 string.Equals(c.CorrelationKey, id, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(ClarificationId(c, identityUniverse), id, StringComparison.OrdinalIgnoreCase))
+                string.Equals(ClarificationId(c, identityUniverse), id, StringComparison.OrdinalIgnoreCase) ||
+                c.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         if (matches.Count > 1)
@@ -464,7 +466,7 @@ internal static partial class CliCommandHandlers
                                 .Where(item => string.Equals(item.GoalId, goal!.Id.Value, StringComparison.OrdinalIgnoreCase))
                                 .ToList(),
                             id,
-                            $"Clarification id '{id}' does not belong to goal '{goal!.Id.Value}'.",
+                            $"Clarification id '{id}' was not found for goal '{goal!.Id.Value}'. Run `attention show {goal.Id.Value[..8]}` to list valid identifiers.",
                             $"Id '{id}' is ambiguous ({{0}} matches); copy a full id from `attention show {goal!.Id.Value[..8]}` or use a full correlation key.")
                         : globalClarification!;
 
@@ -1005,7 +1007,8 @@ internal static partial class CliCommandHandlers
                 context.Providers,
                 ref workerProfiles,
                 ref currentGoal,
-                DiscordDecisionOperatorChannel.Instance);
+                DiscordDecisionOperatorChannel.Instance,
+                operatorIntentSubmissionSource: CliPersistentStateRunner.OperatorIntentSubmissionSource.Discord);
         }, cancellationToken);
     }
 

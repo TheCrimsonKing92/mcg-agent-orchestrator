@@ -334,6 +334,23 @@ public sealed class CliHelpTests
         Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("--help")]
+    [Xunit.InlineData("-h")]
+    public void CliRootHelpPrintsCommandListBeforeStateCreation(string helpFlag)
+    {
+        var root = CreateTempDirectory();
+
+        var result = RunAppCli(root, [helpFlag]);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.Contains("Usage:", result.StandardOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Commands:", result.StandardOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains("backlog-add", result.StandardOutput, StringComparison.Ordinal);
+        Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardError), result.StandardError);
+        Xunit.Assert.False(Directory.Exists(Path.Combine(root, ".orchestrator")));
+    }
+
     [Xunit.Fact(DisplayName = "Cli_startup_help_skips_invalid_worktree_cleanup_config_and_commands_format_the_error")]
     public void CliStartupHelpSkipsInvalidWorktreeCleanupConfigAndCommandsFormatTheError()
     {
@@ -531,7 +548,7 @@ public sealed class CliHelpTests
                 RedirectStandardError = true
             }.WithArguments(WorkerShell.BaseArguments().Concat(["Start-Sleep -Seconds 9999"])))
                 ?? throw new InvalidOperationException("Failed to start sentinel worker.");
-            Xunit.Assert.True(SpawnProcessIdentityReader.TryRead(worker, out var workerIdentity));
+            Xunit.Assert.True(SpawnProcessIdentityReader.TryReadForRegistration(worker, out var workerIdentity));
             new SpawnRegistry(workspace.SqliteStatePath).Register("external-conductor-dispatch", workerIdentity);
 
             var result = RunAppCli(root, ["attention", "show"]);
