@@ -278,6 +278,38 @@ public sealed class HermeticVerificationEnvironmentTests
             $"Unexpected verification environment variable survived: {name}"));
     }
 
+    [Xunit.Fact(DisplayName = "Hermetic_verification_scopes_the_NuGet_HTTP_cache_to_the_build_environment")]
+    public void HermeticVerificationScopesTheNuGetHttpCacheToTheBuildEnvironment()
+    {
+        var buildEnvironmentRoot = Path.Combine(
+            Path.GetTempPath(),
+            "mcg-hermetic-nuget-cache-tests",
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            var environment = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["NUGET_HTTP_CACHE_PATH"] = Path.Combine(Path.GetTempPath(), "shared-nuget-http-cache")
+            };
+
+            GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(
+                environment,
+                Path.GetTempPath(),
+                buildEnvironmentRoot);
+
+            var expected = Path.Combine(buildEnvironmentRoot, "nuget-http-cache");
+            Assert.Equal(expected, environment["NUGET_HTTP_CACHE_PATH"]);
+            Assert.True(Directory.Exists(expected));
+        }
+        finally
+        {
+            if (Directory.Exists(buildEnvironmentRoot))
+            {
+                Directory.Delete(buildEnvironmentRoot, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Hermetic_verification_keeps_the_build_system_file_full_solution_rule_observable")]
     public async Task HermeticVerificationKeepsTheBuildSystemFileFullSolutionRuleObservable()
     {
@@ -470,6 +502,47 @@ public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
         finally
         {
             LockAttribution.AttributeForTests = null;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_does_not_treat_missing_build_artifact_as_a_lock")]
+    public async Task GoalAcceptanceVerifierDoesNotTreatMissingBuildArtifactAsALock()
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "checks": [
+                { "name": "app build", "type": "command", "command": "dotnet", "arguments": ["build", "Fake.csproj"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var missingPath = Path.Combine(root, "artifacts", "obj", "apphost.exe");
+        var calls = new List<string[]>();
+        var responses = new Queue<GoalAcceptanceVerifier.CommandResult>([
+            new(0, ""),
+            new(1, $"error MSB3030: Could not copy the file '{missingPath}' because it was not found.")
+        ]);
+
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(responses.Dequeue());
+            });
+
+            var result = await verifier.RunAsync(root);
+
+            Assert.False(result.Passed);
+            Assert.Equal(2, calls.Count);
+            var check = Assert.Single(result.Checks!);
+            Assert.False(check.LockRemediationApplied);
+            Assert.Contains("was not found", check.OutputTail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
         }
     }
 
@@ -1177,11 +1250,29 @@ public abstract class GoalAcceptanceVerifierTestBase
             }
             catch (UnauthorizedAccessException) when (attempt < 9)
             {
+                ClearReadOnlyAttributes(path);
                 System.Threading.Thread.Sleep(100);
             }
         }
 
         Directory.Delete(path, recursive: true);
+    }
+
+    private static void ClearReadOnlyAttributes(string path)
+    {
+        try
+        {
+            var root = new DirectoryInfo(path);
+            root.Attributes &= ~FileAttributes.ReadOnly;
+            foreach (var entry in root.EnumerateFileSystemInfos("*", SearchOption.AllDirectories))
+            {
+                entry.Attributes &= ~FileAttributes.ReadOnly;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort; the next delete attempt surfaces any remaining failure.
+        }
     }
 }
 
@@ -2259,6 +2350,194 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.False(check.Passed);
         Assert.Contains("collapsed-from-5-focused-targets", check.Name);
         Assert.Contains("collapsed-from-5-focused-targets", result.Summary);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_RealCheckThatPassesOnBothArmsIsVacuous()
+    {
+        var vacuous = await RunRealDualArmProbeAsync(
+            baselineFeature: "public static class Feature { public static bool Enabled => true; }",
+            candidateFeature: "public static class Feature { public static bool Enabled => true; }",
+            candidateMarker: "vacuous candidate change");
+        Assert.Equal(FindingEvidenceOutcomeReason.VacuousEvidence, vacuous.OutcomeReason);
+        Assert.Equal(
+            [FindingEvidenceArmDisposition.Green, FindingEvidenceArmDisposition.Green],
+            vacuous.Arms!.Select(arm => arm.Disposition));
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_RealCheckThatFailsOnBaselineIsValid()
+    {
+        var valid = await RunRealDualArmProbeAsync(
+            baselineFeature: "public static class Feature { public static bool Enabled => false; }",
+            candidateFeature: "public static class Feature { public static bool Enabled => true; }");
+        Assert.Equal(FindingEvidenceOutcomeReason.ValidEvidence, valid.OutcomeReason);
+        Assert.Equal(FindingEvidenceArmDisposition.Green, valid.Arms![0].Disposition);
+        Assert.Equal(FindingEvidenceArmDisposition.Red, valid.Arms[1].Disposition);
+        Assert.NotEmpty(valid.Arms[1].Checks.SelectMany(check => check.FailingTestIdentities ?? []));
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_RealBaselineBuildFailureIsInconclusive()
+    {
+        var inconclusive = await RunRealDualArmProbeAsync(
+            baselineFeature: "public static class Feature { public static bool Enabled => ; }",
+            candidateFeature: "public static class Feature { public static bool Enabled => true; }");
+        Assert.Equal(FindingEvidenceOutcomeReason.BaselineInconclusive, inconclusive.OutcomeReason);
+        Assert.Equal(FindingEvidenceArmDisposition.Green, inconclusive.Arms![0].Disposition);
+        Assert.Equal(FindingEvidenceArmDisposition.Inconclusive, inconclusive.Arms[1].Disposition);
+        Assert.Empty(inconclusive.Arms[1].Checks.SelectMany(check => check.FailingTestIdentities ?? []));
+    }
+
+    private static async Task<FocusedEvidenceRunResult> RunRealDualArmProbeAsync(
+        string baselineFeature,
+        string candidateFeature,
+        string? candidateMarker = null)
+    {
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "slotCount": 1,
+                "maxConcurrentShards": 1,
+                "enforceStructuralCoverage": false,
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.dll",
+                    "arguments": [
+                      "{executable}",
+                      "--results-directory",
+                      "{resultsDirectory}",
+                      "--report-trx",
+                      "--report-trx-filename",
+                      "{trxFileName}"
+                    ]
+                  }
+                ]
+              },
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        File.WriteAllText(
+            Path.Combine(root, "Directory.Build.props"),
+            """
+            <Project>
+              <PropertyGroup>
+                <UseSharedCompilation>false</UseSharedCompilation>
+                <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
+                <NuGetAudit>false</NuGetAudit>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(
+            Path.Combine(root, "NuGet.Config"),
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <configuration>
+              <packageSources>
+                <clear />
+              </packageSources>
+            </configuration>
+            """);
+        var projectDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Core.Tests");
+        Directory.CreateDirectory(projectDirectory);
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "Mcg.AgentOrchestrator.Core.Tests.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <ImplicitUsings>enable</ImplicitUsings>
+                <Nullable>enable</Nullable>
+                <IsPackable>false</IsPackable>
+                <IsTestProject>true</IsTestProject>
+                <OutputType>Exe</OutputType>
+                <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+              </PropertyGroup>
+              <ItemGroup>
+                <PackageReference Include="Microsoft.Testing.Extensions.TrxReport" Version="2.3.2" />
+                <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "DualArmProbeTests.cs"),
+            """
+            public sealed class DualArmProbeTests
+            {
+                [Xunit.Fact]
+                public void CandidateBehaviorIsPresent() => Xunit.Assert.True(Feature.Enabled);
+            }
+            """);
+        var featurePath = Path.Combine(projectDirectory, "Feature.cs");
+        File.WriteAllText(featurePath, baselineFeature);
+        AssertGitSucceeded(root, "init", "-b", "main");
+        AssertGitSucceeded(root, "config", "user.email", "dual-arm@example.invalid");
+        AssertGitSucceeded(root, "config", "user.name", "Dual Arm Fixture");
+        AssertGitSucceeded(root, "add", ".");
+        AssertGitSucceeded(root, "commit", "-m", "baseline");
+        AssertGitSucceeded(root, "checkout", "-b", "goal/dual-arm");
+        File.WriteAllText(featurePath, candidateFeature);
+        if (candidateMarker is not null)
+        {
+            File.WriteAllText(Path.Combine(root, "candidate-marker.txt"), candidateMarker);
+        }
+        AssertGitSucceeded(root, "add", ".");
+        AssertGitSucceeded(root, "commit", "-m", "candidate");
+
+        var goalId = GoalId.New();
+        FocusedEvidenceRunResult? result = null;
+        try
+        {
+            result = await new GoalAcceptanceVerifier().RunFocusedEvidenceAsync(
+                root,
+                goalId,
+                "Core.Tests: DualArmProbeTests",
+                runBaselineArm: true);
+            var baseline = Assert.Single(result.Arms!, arm => arm.Arm == FindingEvidenceArm.Baseline);
+            Assert.All(
+                baseline.Checks.Where(check => !string.IsNullOrWhiteSpace(check.ArtifactsPath)),
+                check => Assert.False(
+                    Directory.Exists(check.ArtifactsPath!),
+                    $"Baseline artifacts were retained at {check.ArtifactsPath}."));
+            return result;
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            foreach (var artifactPath in result?.Arms?
+                         .SelectMany(arm => arm.Checks)
+                         .Select(check => check.ArtifactsPath)
+                         .Where(path => !string.IsNullOrWhiteSpace(path))
+                         .Distinct(StringComparer.OrdinalIgnoreCase) ?? [])
+            {
+                if (Directory.Exists(artifactPath))
+                {
+                    TryDeleteDirectoryWithRetry(artifactPath!);
+                }
+            }
+            TryDeleteDirectoryWithRetry(root);
+        }
+    }
+
+    private static void TryDeleteDirectoryWithRetry(string path)
+    {
+        try
+        {
+            DeleteDirectoryWithRetry(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Probe teardown must never replace the assertion or execution failure being diagnosed.
+        }
+    }
+
+    private static void AssertGitSucceeded(string workingDirectory, params string[] arguments)
+    {
+        var result = GitCli.Run(workingDirectory, arguments);
+        Assert.True(result.Succeeded, $"git {string.Join(' ', arguments)} failed: {result.Error}");
     }
 
     private static async Task<(FocusedEvidenceRunResult Result, List<string[]> Calls)> RunMappedEvidenceAsync(
@@ -5156,6 +5435,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("cycle=2", output, StringComparison.Ordinal);
             Assert.Contains("LOCK_TRANSIENT_RETRY ", output, StringComparison.Ordinal);
             Assert.Contains("verdict=blocked", output, StringComparison.Ordinal);
+            Assert.Contains("holder-pid=none", output, StringComparison.Ordinal);
+            Assert.Contains("attribution-source=", output, StringComparison.Ordinal);
         }
         finally
         {

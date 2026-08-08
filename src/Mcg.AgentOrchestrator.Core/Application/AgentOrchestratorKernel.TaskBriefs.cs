@@ -911,6 +911,8 @@ public sealed partial class AgentOrchestratorKernel
                         : outcome.Honoured ? "honoured" : "not-honoured";
                     var reason = outcome?.Reason is { } reasonCode
                         ? $"; reason={FindingEvidenceNotHonouredReasonJsonConverter.ToWireValue(reasonCode)}"
+                        : outcome?.ResultReason is { } resultReason
+                            ? $"; reason={FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(resultReason)}"
                         : string.Empty;
                     lines.Add(
                         $"  evidence_index: selection={selection}; verdict={disposition}; " +
@@ -928,6 +930,17 @@ public sealed partial class AgentOrchestratorKernel
                             lines.Add(
                                 $"  evidence_receipt: id={receipt.ReceiptId}; candidate_sha={receipt.CandidateSha}; " +
                                 $"accepted={receipt.Accepted}; passed={receipt.Passed}; summary={PromptContextFormatter.TrimPromptBlock(receipt.Summary)}");
+                            foreach (var arm in receipt.Arms ?? [])
+                            {
+                                lines.Add(
+                                    $"    evidence_arm: arm={arm.Arm.ToString().ToLowerInvariant()}; sha={arm.Sha}; " +
+                                    $"disposition={arm.Disposition.ToString().ToLowerInvariant()}; accepted={arm.Accepted}; " +
+                                    $"passed={arm.Passed}; summary={PromptContextFormatter.TrimPromptBlock(arm.Summary)}");
+                                if (arm.FailingTestIdentities is { Count: > 0 })
+                                {
+                                    lines.Add($"      failing_tests: {string.Join(", ", arm.FailingTestIdentities)}");
+                                }
+                            }
                         }
                     }
                     else if (task.RequiredRole == item.RequiredRole && outcome is { Honoured: false })

@@ -53,7 +53,24 @@ public sealed record FocusedEvidenceRunResult(
     bool Passed,
     string Summary,
     IReadOnlyList<AcceptanceCheckResult> Checks,
-    FocusedEvidenceCoverage? Coverage = null);
+    FocusedEvidenceCoverage? Coverage = null,
+    IReadOnlyList<FocusedEvidenceArmRunResult>? Arms = null,
+    FindingEvidenceOutcomeReason? OutcomeReason = null)
+{
+    public bool IsValidEvidence =>
+        Accepted &&
+        Passed &&
+        OutcomeReason is null or FindingEvidenceOutcomeReason.ValidEvidence;
+}
+
+public sealed record FocusedEvidenceArmRunResult(
+    FindingEvidenceArm Arm,
+    string Sha,
+    FindingEvidenceArmDisposition Disposition,
+    bool Accepted,
+    bool Passed,
+    string Summary,
+    IReadOnlyList<AcceptanceCheckResult> Checks);
 
 public sealed record FocusedEvidenceTargetCoverage(
     string Target,
@@ -79,6 +96,7 @@ public interface IGoalAcceptanceVerifier
         string request,
         int? stableSlotIndex = null,
         DotnetBuildEnvironmentLease? stableSlotLease = null,
+        bool runBaselineArm = false,
         CancellationToken cancellationToken = default);
 }
 
@@ -562,6 +580,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string request,
         int? stableSlotIndex = null,
         DotnetBuildEnvironmentLease? stableSlotLease = null,
+        bool runBaselineArm = false,
         CancellationToken cancellationToken = default)
     {
         var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
@@ -584,15 +603,131 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 Checks: []);
         }
 
-        await _runner(
-            ["dotnet", "build-server", "shutdown"],
-            worktreePath,
-            engineSettings.ResolveBuildServerShutdownTimeout(),
-            cancellationToken).ConfigureAwait(false);
+        var candidateSha = ResolveGitScalar(worktreePath, "rev-parse", "HEAD") ?? "unavailable";
+        FocusedEvidenceArmRunResult candidate;
+        if (runBaselineArm)
+        {
+            EmitFocusedEvidenceArmStarted(FindingEvidenceArm.Candidate, candidateSha);
+        }
 
-        var dotnetTestBuildPhase = GateUsesStableSlot(stableSlotIndex, stableSlotLease)
-            ? CreateDotnetTestBuildPhase(worktreePath, focusedChecks, changedFiles: null, PolicyShardPlan.NotApplicable("focused evidence"))
-            : null;
+        try
+        {
+            candidate = await RunFocusedEvidenceArmAsync(
+                FindingEvidenceArm.Candidate,
+                candidateSha,
+                worktreePath,
+                goalId,
+                focusedChecks,
+                coverage,
+                stableSlotIndex,
+                stableSlotLease,
+                executionEnvironment: null,
+                shutdownBuildServers: true,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (runBaselineArm)
+        {
+            EmitFocusedEvidenceArmFailed(FindingEvidenceArm.Candidate, candidateSha, ex);
+            throw;
+        }
+
+        if (runBaselineArm)
+        {
+            EmitFocusedEvidenceArmResolved(candidate);
+        }
+
+        if (!runBaselineArm)
+        {
+            if (candidate.Disposition == FindingEvidenceArmDisposition.Green)
+            {
+                runEnvironmentScope.MarkSuccessful();
+            }
+
+            return new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: candidate.Disposition == FindingEvidenceArmDisposition.Green,
+                Summary: candidate.Summary,
+                Checks: candidate.Checks,
+                Coverage: coverage,
+                Arms: [candidate]);
+        }
+
+        var baselineSha = ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
+        EmitFocusedEvidenceArmStarted(FindingEvidenceArm.Baseline, baselineSha ?? "unavailable");
+        FocusedEvidenceArmRunResult baseline;
+        try
+        {
+            baseline = await RunBaselineFocusedEvidenceArmAsync(
+                worktreePath,
+                baselineSha,
+                goalId,
+                focusedChecks,
+                coverage,
+                stableSlotIndex,
+                stableSlotLease,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            EmitFocusedEvidenceArmFailed(FindingEvidenceArm.Baseline, baselineSha ?? "unavailable", ex);
+            throw;
+        }
+
+        EmitFocusedEvidenceArmResolved(baseline);
+        var outcomeReason = ClassifyFocusedEvidenceExperiment(candidate, baseline);
+        EmitFocusedEvidenceClassification(candidate, baseline, outcomeReason);
+        var summary =
+            $"focused evidence {FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(outcomeReason)}; " +
+            $"candidate={ArmDispositionWireValue(candidate.Disposition)} ({candidate.Summary}); " +
+            $"baseline={ArmDispositionWireValue(baseline.Disposition)} ({baseline.Summary})";
+        var evidence = new FocusedEvidenceRunResult(
+            request,
+            Accepted: true,
+            Passed: candidate.Disposition == FindingEvidenceArmDisposition.Green,
+            Summary: summary,
+            Checks: candidate.Checks,
+            Coverage: coverage,
+            Arms: [candidate, baseline],
+            OutcomeReason: outcomeReason);
+        if (candidate.Disposition == FindingEvidenceArmDisposition.Green)
+        {
+            runEnvironmentScope.MarkSuccessful();
+        }
+
+        return evidence;
+    }
+
+    private async Task<FocusedEvidenceArmRunResult> RunFocusedEvidenceArmAsync(
+        FindingEvidenceArm arm,
+        string sha,
+        string worktreePath,
+        GoalId? goalId,
+        IReadOnlyList<AcceptanceManifestCheck> focusedChecks,
+        FocusedEvidenceCoverage coverage,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        DotnetBuildEnvironment? executionEnvironment,
+        bool shutdownBuildServers,
+        CancellationToken cancellationToken)
+    {
+        using var armResultsScope = PushFocusedEvidenceArmResultsScope(arm);
+        var engineSettings = EngineSettings;
+        if (shutdownBuildServers)
+        {
+            await _runner(
+                ["dotnet", "build-server", "shutdown"],
+                worktreePath,
+                engineSettings.ResolveBuildServerShutdownTimeout(),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var dotnetTestBuildPhase = CreateDotnetTestBuildPhase(
+            worktreePath,
+            focusedChecks,
+            changedFiles: null,
+            PolicyShardPlan.NotApplicable("focused evidence"));
+        dotnetTestBuildPhase.BuildEnvironment = executionEnvironment;
         var shardCoreBudget =
             ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
         var shardConcurrencyBudget = Math.Min(engineSettings.MaxConcurrentShards, shardCoreBudget);
@@ -607,30 +742,225 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             shardConcurrencyBudget,
             cancellationToken).ConfigureAwait(false);
         var checks = batch.Results;
-
+        var disposition = ClassifyFocusedEvidenceArm(checks);
         var failed = checks.FirstOrDefault(check => !check.Passed);
         var receiptPaths = checks
-            .Select(check => check.ArtifactsPath)
+            .SelectMany(check => check.TestResultPaths ?? [])
+            .Concat(checks.Select(check => check.ArtifactsPath ?? string.Empty))
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var collapseSummary = FormatFocusedEvidenceCollapseSummary(focusedChecks, coverage.CollapseEngaged);
         var summary = failed is null
-            ? $"focused evidence passed: {checks.Count} check(s){collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
-            : $"focused evidence failed: {failed.Name} exit {failed.ExitCode}{collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
-        var evidence = new FocusedEvidenceRunResult(
-            request,
+            ? $"{checks.Count} check(s) passed{collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
+            : $"{failed.Name} exit {failed.ExitCode}{collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
+        return new FocusedEvidenceArmRunResult(
+            arm,
+            sha,
+            disposition,
             Accepted: true,
-            Passed: failed is null,
-            Summary: summary,
-            Checks: checks,
-            Coverage: coverage);
-        if (evidence.Passed)
+            Passed: disposition == FindingEvidenceArmDisposition.Green,
+            summary,
+            checks);
+    }
+
+    private async Task<FocusedEvidenceArmRunResult> RunBaselineFocusedEvidenceArmAsync(
+        string candidateWorktreePath,
+        string? baselineSha,
+        GoalId? goalId,
+        IReadOnlyList<AcceptanceManifestCheck> focusedChecks,
+        FocusedEvidenceCoverage coverage,
+        int? stableSlotIndex,
+        DotnetBuildEnvironmentLease? stableSlotLease,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(baselineSha))
         {
-            runEnvironmentScope.MarkSuccessful();
+            return InconclusiveBaseline("baseline merge-base could not be resolved");
         }
 
-        return evidence;
+        var baselineRoot = Path.Combine(Path.GetTempPath(), "mcg-focused-evidence-baselines");
+        Directory.CreateDirectory(baselineRoot);
+        var baselinePath = Path.Combine(
+            baselineRoot,
+            $"{(goalId?.Value ?? "operator")[..Math.Min(8, (goalId?.Value ?? "operator").Length)]}-{Guid.NewGuid():N}");
+        var add = GitCli.Run(
+            candidateWorktreePath,
+            "worktree", "add", "--detach", baselinePath, baselineSha);
+        if (!add.Succeeded)
+        {
+            TryDeleteFocusedEvidenceBaselineDirectory(baselineRoot, baselinePath);
+            return InconclusiveBaseline(
+                $"baseline worktree could not be created: {TrimForReceipt(add.Error)}",
+                baselineSha);
+        }
+
+        DotnetBuildEnvironment? baselineEnvironment = null;
+        GoalId? baselineEnvironmentId = null;
+        try
+        {
+            // The baseline owns a fresh artifact environment. Sharing candidate artifacts could make
+            // a structurally broken baseline look like a meaningful RED arm.
+            baselineEnvironmentId = GoalId.New();
+            baselineEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(
+                baselineEnvironmentId,
+                $"focused-evidence-baseline-{baselineSha[..Math.Min(8, baselineSha.Length)]}");
+            return await RunFocusedEvidenceArmAsync(
+                FindingEvidenceArm.Baseline,
+                baselineSha,
+                baselinePath,
+                // Ownerless execution gets an invocation-local build environment. Passing the goal
+                // id here would reuse candidate artifacts and invalidate the negative control.
+                null,
+                focusedChecks,
+                coverage,
+                stableSlotIndex,
+                stableSlotLease,
+                baselineEnvironment,
+                shutdownBuildServers: true,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _ = GitCli.Run(candidateWorktreePath, "worktree", "remove", "--force", baselinePath);
+            TryDeleteFocusedEvidenceBaselineDirectory(baselineRoot, baselinePath);
+            if (baselineEnvironment is not null)
+            {
+                DotnetBuildEnvironmentManager.TryCleanupSuccessfulRun(baselineEnvironment);
+            }
+
+            if (baselineEnvironmentId is not null)
+            {
+                DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(baselineEnvironmentId);
+            }
+        }
+    }
+
+    private static FindingEvidenceArmDisposition ClassifyFocusedEvidenceArm(
+        IReadOnlyList<AcceptanceCheckResult> checks)
+    {
+        if (checks.Count > 0 && checks.All(check => check.Passed))
+        {
+            return FindingEvidenceArmDisposition.Green;
+        }
+
+        return checks
+            .Where(check => !check.Passed)
+            .Any(check => check.FailingTestIdentities is { Count: > 0 })
+                ? FindingEvidenceArmDisposition.Red
+                : FindingEvidenceArmDisposition.Inconclusive;
+    }
+
+    private static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(
+        FocusedEvidenceArmRunResult candidate,
+        FocusedEvidenceArmRunResult baseline) =>
+        candidate.Disposition switch
+        {
+            FindingEvidenceArmDisposition.Red => FindingEvidenceOutcomeReason.CandidateRed,
+            FindingEvidenceArmDisposition.Inconclusive => FindingEvidenceOutcomeReason.CandidateInconclusive,
+            _ => baseline.Disposition switch
+            {
+                FindingEvidenceArmDisposition.Green => FindingEvidenceOutcomeReason.VacuousEvidence,
+                FindingEvidenceArmDisposition.Red => FindingEvidenceOutcomeReason.ValidEvidence,
+                _ => FindingEvidenceOutcomeReason.BaselineInconclusive
+            }
+        };
+
+    private static void EmitFocusedEvidenceArmStarted(FindingEvidenceArm arm, string sha) =>
+        EmitFocusedEvidenceDiagnostic(
+            $"FOCUSED_EVIDENCE_ARM arm={arm.ToString().ToLowerInvariant()} state=started sha={QuoteProgressToken(sha)}");
+
+    private static void EmitFocusedEvidenceArmResolved(FocusedEvidenceArmRunResult arm)
+    {
+        var failingTestCount = arm.Checks.Sum(check => check.FailingTestIdentities?.Count ?? 0);
+        var failed = arm.Checks.FirstOrDefault(check => !check.Passed);
+        var failureDetail = failed?.OutputTail is { Length: > 0 } outputTail
+            ? $" detail={QuoteProgressToken(TrimForReceipt(outputTail))}"
+            : string.Empty;
+        EmitFocusedEvidenceDiagnostic(
+            $"FOCUSED_EVIDENCE_ARM arm={arm.Arm.ToString().ToLowerInvariant()} state=resolved " +
+            $"sha={QuoteProgressToken(arm.Sha)} disposition={ArmDispositionWireValue(arm.Disposition)} " +
+            $"accepted={arm.Accepted.ToString().ToLowerInvariant()} passed={arm.Passed.ToString().ToLowerInvariant()} " +
+            $"checks={arm.Checks.Count} failing_tests={failingTestCount} summary={QuoteProgressToken(arm.Summary)}" +
+            failureDetail);
+    }
+
+    private static void EmitFocusedEvidenceArmFailed(
+        FindingEvidenceArm arm,
+        string sha,
+        Exception exception) =>
+        EmitFocusedEvidenceDiagnostic(
+            $"FOCUSED_EVIDENCE_ARM arm={arm.ToString().ToLowerInvariant()} state=failed " +
+            $"sha={QuoteProgressToken(sha)} exception={exception.GetType().Name} " +
+            $"detail={QuoteProgressToken(TrimForReceipt(exception.Message))}");
+
+    private static void EmitFocusedEvidenceClassification(
+        FocusedEvidenceArmRunResult candidate,
+        FocusedEvidenceArmRunResult baseline,
+        FindingEvidenceOutcomeReason outcomeReason) =>
+        EmitFocusedEvidenceDiagnostic(
+            $"FOCUSED_EVIDENCE_EXPERIMENT state=classified " +
+            $"outcome={FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(outcomeReason)} " +
+            $"candidate={ArmDispositionWireValue(candidate.Disposition)} " +
+            $"baseline={ArmDispositionWireValue(baseline.Disposition)}");
+
+    private static void EmitFocusedEvidenceDiagnostic(string line)
+    {
+        Console.WriteLine(line);
+        Console.Out.Flush();
+    }
+
+    private static FocusedEvidenceArmRunResult InconclusiveBaseline(string summary, string sha = "unavailable") =>
+        new(
+            FindingEvidenceArm.Baseline,
+            sha,
+            FindingEvidenceArmDisposition.Inconclusive,
+            Accepted: false,
+            Passed: false,
+            summary,
+            Checks: []);
+
+    private static IDisposable PushFocusedEvidenceArmResultsScope(FindingEvidenceArm arm)
+    {
+        var prefix = AcceptanceAttemptResultsPrefix;
+        return string.IsNullOrWhiteSpace(prefix)
+            ? new RestoreAction(static () => { })
+            : PushAcceptanceAttemptResultsPrefix($"{prefix}-{arm.ToString().ToLowerInvariant()}");
+    }
+
+    private static string ArmDispositionWireValue(FindingEvidenceArmDisposition disposition) =>
+        disposition switch
+        {
+            FindingEvidenceArmDisposition.Green => "green",
+            FindingEvidenceArmDisposition.Red => "red",
+            _ => "inconclusive"
+        };
+
+    private static string TrimForReceipt(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length <= 500 ? trimmed : trimmed[..500];
+    }
+
+    private static void TryDeleteFocusedEvidenceBaselineDirectory(string baselineRoot, string baselinePath)
+    {
+        try
+        {
+            var resolvedRoot = Path.GetFullPath(baselineRoot).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var resolvedPath = Path.GetFullPath(baselinePath);
+            if (resolvedPath.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase) && Directory.Exists(resolvedPath))
+            {
+                Directory.Delete(resolvedPath, recursive: true);
+            }
+        }
+        catch (IOException)
+        {
+            // The git worktree removal is authoritative; cleanup is best-effort for partial creation.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Preserve the evidence result when a stale handle delays temp-directory cleanup.
+        }
     }
 
     private static bool ShouldStopAfterFailedCheck(
@@ -2742,7 +3072,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? testResultsDirectoryOverride = null)
     {
         var elapsed = Stopwatch.StartNew();
-        var environment = ResolveExecutionEnvironment(
+        var environment = executableEnvironment ?? ResolveExecutionEnvironment(
             goalId,
             attemptName,
             stableSlotIndex,
@@ -2874,7 +3204,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return new DotnetTestBuildPhaseResult(completed, ContributesToCheck: false);
         }
 
-        phase.BuildEnvironment = ResolveExecutionEnvironment(
+        phase.BuildEnvironment ??= ResolveExecutionEnvironment(
             goalId,
             $"{attemptName}-build",
             stableSlotIndex,
@@ -3423,16 +3753,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             EmitTransientNoHolderBuildLockWaitReceipt(cycleAttribution, wait, cycle, maxRetryCycles);
             if (!wait.Released)
             {
+                var exhaustedAttribution = AttributeBuildLock(
+                    cycleAttribution.Path,
+                    worktreePath,
+                    "acceptance-transient-exhaustion",
+                    check.Name);
                 EmitTransientNoHolderBuildLockRetryReceipt(
                     check,
-                    cycleAttribution,
+                    exhaustedAttribution,
                     cycle,
                     maxRetryCycles,
                     "wait-exhausted",
                     exitCode: null,
                     timedOut: false,
                     buildLock: true);
-                throw new BuildLockBlockedException(cycleAttribution);
+                throw new BuildLockBlockedException(exhaustedAttribution);
             }
 
             reacquireLease(retryEnvironment);
@@ -3468,7 +3803,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     continue;
                 }
 
-                throw new BuildLockBlockedException(exceptionAttribution);
+                var exhaustedAttribution = AttributeBuildLock(
+                    exceptionAttribution.Path,
+                    worktreePath,
+                    "acceptance-transient-exhaustion",
+                    check.Name);
+                throw new BuildLockBlockedException(exhaustedAttribution);
             }
 
             if (!IsBuildLockFailure(retry, retryEnvironment, check, out var retryAttribution))
@@ -3485,9 +3825,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 return (retry, true);
             }
 
+            var finalAttribution = cycle == maxRetryCycles
+                ? AttributeBuildLock(
+                    retryAttribution.Path,
+                    worktreePath,
+                    "acceptance-transient-exhaustion",
+                    check.Name)
+                : retryAttribution;
             EmitTransientNoHolderBuildLockRetryReceipt(
                 check,
-                retryAttribution,
+                finalAttribution,
                 cycle,
                 maxRetryCycles,
                 "blocked",
@@ -3500,7 +3847,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 continue;
             }
 
-            throw new BuildLockBlockedException(retryAttribution);
+            throw new BuildLockBlockedException(finalAttribution);
         }
 
         throw new BuildLockBlockedException(cycleAttribution);
@@ -3605,6 +3952,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         bool timedOut,
         bool buildLock)
     {
+        var holder = attribution.Holders.FirstOrDefault();
         Console.WriteLine(
             $"LOCK_TRANSIENT_RETRY path={QuoteProgressToken(attribution.Path)} " +
             $"check={QuoteProgressToken(check.Name)} " +
@@ -3613,7 +3961,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             $"verdict={verdict} " +
             $"exit-code={(exitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none")} " +
             $"timed-out={timedOut.ToString().ToLowerInvariant()} " +
-            $"build-lock={buildLock.ToString().ToLowerInvariant()}");
+            $"build-lock={buildLock.ToString().ToLowerInvariant()} " +
+            $"holder-pid={holder?.ProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} " +
+            $"holder-name={QuoteProgressToken(holder?.ProcessName ?? "none")} " +
+            $"attribution-source={QuoteProgressToken(attribution.Source)}");
         Console.Out.Flush();
     }
 
@@ -3665,6 +4016,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
+        if (!OutputDescribesBuildLock(result.Output))
+        {
+            return false;
+        }
+
         var lockedPath = LockAttribution.TryExtractLockedPath(result.Output);
         if (lockedPath is null && !IsTransientCompilerLockFailure(result.Output))
         {
@@ -3680,6 +4036,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         EmitBuildLockClassificationContext(attribution, result, environment, check);
         return true;
     }
+
+    private static bool OutputDescribesBuildLock(string output) =>
+        output.Contains("being used by another process", StringComparison.OrdinalIgnoreCase) ||
+        output.Contains("file is locked", StringComparison.OrdinalIgnoreCase) ||
+        output.Contains("locked by another process", StringComparison.OrdinalIgnoreCase);
 
     private static BuildLockAttribution EnrichBuildLockAttributionWithGateContext(
         BuildLockAttribution attribution,
@@ -4459,7 +4820,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             // Discovery must mirror the execution-side unattended exclusion: lanes filter out
             // Category=HostIntegration tests, so listing them here would make the structural
             // coverage invariant report by-design-excluded tests as missing on every attempt.
-            return
+            return UseDotnetHostForManagedExecutable(
             [
                 invocation.ResolveExecutablePath(environment),
                 "--no-ansi",
@@ -4468,7 +4829,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 "--list-tests",
                 "--filter-not-trait",
                 "Category=HostIntegration"
-            ];
+            ]);
         }
 
         var arguments = new List<string>
@@ -5184,8 +5545,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             args.AddRange(TranslateMtpFilter(filter));
         }
 
-        return [.. args];
+        return UseDotnetHostForManagedExecutable(args);
     }
+
+    private static string[] UseDotnetHostForManagedExecutable(IReadOnlyList<string> arguments) =>
+        arguments.Count > 0 && arguments[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+            ? ["dotnet", .. arguments]
+            : [.. arguments];
 
     internal static string? ResolveGitText(string worktreePath, params string[] arguments)
     {
@@ -5852,7 +6218,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             stableSlotIndex,
             heartbeatPath,
             ResolveStableSlotHeartbeatMirrorPath(environment, heartbeatPath),
-            string.Join(' ', arguments.Select(QuoteForDisplay)));
+            string.Join(' ', arguments.Select(QuoteForDisplay)),
+            environment?.RootPath);
     }
 
     // An attempt can run several checks after releasing its build permit, and unrelated goals can hash to
@@ -5972,7 +6339,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal static void ConfigureHermeticVerificationEnvironment(
         IDictionary<string, string?> environment,
-        string repositoryRoot)
+        string repositoryRoot,
+        string? buildEnvironmentRoot = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         environment.TryGetValue("NUGET_PACKAGES", out var nugetPackages);
@@ -6029,6 +6397,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         environment["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";
         environment["DOTNET_NOLOGO"] = "1";
         environment["NUGET_PACKAGES"] = nugetPackages;
+        if (!string.IsNullOrWhiteSpace(buildEnvironmentRoot))
+        {
+            // NUGET_PACKAGES isolates restored packages, but NuGet's HTTP cache is derived from
+            // LOCALAPPDATA on Windows. Verification deliberately preserves the real LOCALAPPDATA, so
+            // concurrent arms otherwise race on %LOCALAPPDATA%\NuGet\v3-cache (notably vuln_index.dat-new).
+            // Keep the cache inside the build lease so candidate and baseline restores cannot share locks,
+            // and so invocation-local baseline cleanup removes it with the rest of the build environment.
+            var nugetHttpCachePath = Path.Combine(buildEnvironmentRoot, "nuget-http-cache");
+            Directory.CreateDirectory(nugetHttpCachePath);
+            environment["NUGET_HTTP_CACHE_PATH"] = nugetHttpCachePath;
+        }
         if (OperatingSystem.IsWindows())
         {
             var profileRootPath = Path.GetPathRoot(profileRoot) ?? string.Empty;
@@ -6160,7 +6539,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Task<CaptureLimitResult>[]? captureDrains = null;
         Stream[]? captureSources = null;
 
-        ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
+        ConfigureHermeticVerificationEnvironment(
+            startInfo.Environment,
+            workingDirectory,
+            heartbeatContext?.BuildEnvironmentRoot);
 
         int? startedProcessId = null;
         try
@@ -7199,7 +7581,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? SlotIndex,
         string HeartbeatPath,
         string? StableSlotHeartbeatPath,
-        string CommandLine);
+        string CommandLine,
+        string? BuildEnvironmentRoot);
 
     private sealed class GateHeartbeatRuntime
     {

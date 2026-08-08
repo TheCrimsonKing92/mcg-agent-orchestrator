@@ -350,6 +350,74 @@ public sealed class TaskVerificationTests
                 .FindingEvidenceReceipts!.Single());
     }
 
+    [Xunit.Fact(DisplayName = "FindingEvidenceReceipt_dual_arms_round_trip_through_snapshot")]
+    public void FindingEvidenceReceiptDualArmsRoundTripThroughSnapshot()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review dual-arm evidence.", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist dual-arm evidence", [reviewer]);
+        var request = new FindingEvidenceRequest(
+            [new FindingEvidenceSelection("Core.Tests", "TaskVerificationTests")]);
+        reviewer.RecordVerification(new TaskVerificationRecord(
+            "focused evidence",
+            "C:\\repo",
+            0,
+            "valid dual-arm evidence",
+            "",
+            DateTimeOffset.UtcNow,
+            FindingEvidenceReceipts:
+            [
+                new FindingEvidenceReceipt(
+                    "receipt-dual-arm",
+                    "candidate-sha",
+                    request,
+                    Accepted: true,
+                    Passed: true,
+                    "valid evidence",
+                    Arms:
+                    [
+                        new FindingEvidenceArmReceipt(
+                            FindingEvidenceArm.Candidate,
+                            "candidate-sha",
+                            FindingEvidenceArmDisposition.Green,
+                            true,
+                            true,
+                            "candidate passed",
+                            ["candidate.trx"],
+                            []),
+                        new FindingEvidenceArmReceipt(
+                            FindingEvidenceArm.Baseline,
+                            "baseline-sha",
+                            FindingEvidenceArmDisposition.Red,
+                            true,
+                            false,
+                            "baseline failed",
+                            ["baseline.trx"],
+                            ["TaskVerificationTests.NegativeControl"])
+                    ])
+            ]));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var receipt = Assert.Single(restored.GetGoal(goal.Id).FindTask(reviewer.Id)
+            .LastVerification!.FindingEvidenceReceipts!);
+
+        Assert.Equal("receipt-dual-arm", receipt.ReceiptId);
+        Assert.Collection(
+            receipt.Arms!,
+            arm =>
+            {
+                Assert.Equal(FindingEvidenceArm.Candidate, arm.Arm);
+                Assert.Equal(FindingEvidenceArmDisposition.Green, arm.Disposition);
+                Assert.Equal(["candidate.trx"], arm.ReceiptPaths);
+            },
+            arm =>
+            {
+                Assert.Equal(FindingEvidenceArm.Baseline, arm.Arm);
+                Assert.Equal(FindingEvidenceArmDisposition.Red, arm.Disposition);
+                Assert.Equal(["TaskVerificationTests.NegativeControl"], arm.FailingTestIdentities);
+            });
+    }
+
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]
     public void RecordTaskVerificationCompletesGoalOnlyWhenAllGatesPass()
 {

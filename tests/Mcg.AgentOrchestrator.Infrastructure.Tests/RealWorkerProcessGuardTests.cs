@@ -222,6 +222,7 @@ public sealed class RealWorkerProcessGuardTests
             string request,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
+            bool runBaselineArm = false,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new FocusedEvidenceRunResult(
                 request,

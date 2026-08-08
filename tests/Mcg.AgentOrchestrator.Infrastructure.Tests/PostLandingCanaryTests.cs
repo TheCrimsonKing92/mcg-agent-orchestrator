@@ -1373,6 +1373,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             string request,
             int? stableSlotIndex = null,
             DotnetBuildEnvironmentLease? stableSlotLease = null,
+            bool runBaselineArm = false,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
     }

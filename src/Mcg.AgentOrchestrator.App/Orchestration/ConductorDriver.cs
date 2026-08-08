@@ -52,6 +52,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, int?, DotnetBuildEnvironmentLease?, CancellationToken, AcceptanceVerificationSummary> _runAcceptanceVerification;
     private readonly Action<Goal, AcceptanceVerificationSummary> _runAdvisorySemanticAcceptance;
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runFocusedEvidence;
+    private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runDualArmFocusedEvidence;
     private readonly bool _focusedEvidenceRunnerConfigured;
     private readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
@@ -470,7 +471,12 @@ internal sealed class ConductorDriver
                 verification.Passed ? null : CleanTestBaseline.FormatFailureAttestation(baselineReceipt));
         };
 
-        _runFocusedEvidence = (goal, request, stableSlotLease, cancellationToken) =>
+        FocusedEvidenceRunResult RunFocusedEvidence(
+            Goal goal,
+            string request,
+            DotnetBuildEnvironmentLease? stableSlotLease,
+            bool runBaselineArm,
+            CancellationToken cancellationToken)
         {
             var worktreePath = GoalWorktrees.TryResolve(dir, goal.Id);
             if (worktreePath is null)
@@ -489,10 +495,11 @@ internal sealed class ConductorDriver
                     goal.Id,
                     request,
                     stableSlotLease: stableSlotLease,
+                    runBaselineArm: runBaselineArm,
                     cancellationToken: cancellationToken)
                 .GetAwaiter()
                 .GetResult();
-            if (result.Accepted && result.Passed)
+            if (result.Passed)
             {
                 GoalOperationJournal.Completed(dir, goal, "conductor:finding-evidence", result.Summary);
             }
@@ -502,7 +509,12 @@ internal sealed class ConductorDriver
             }
 
             return result;
-        };
+        }
+
+        _runFocusedEvidence = (goal, request, stableSlotLease, cancellationToken) =>
+            RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: false, cancellationToken);
+        _runDualArmFocusedEvidence = (goal, request, stableSlotLease, cancellationToken) =>
+            RunFocusedEvidence(goal, request, stableSlotLease, runBaselineArm: true, cancellationToken);
         _focusedEvidenceRunnerConfigured = true;
 
         _retryTask = (goalId, taskId, message, retryRoundKind) =>
@@ -822,6 +834,7 @@ internal sealed class ConductorDriver
                 Summary: "focused evidence runner was not configured",
                 Checks: []))
             : ((goal, request, _, _) => runFocusedEvidence(goal, request));
+        _runDualArmFocusedEvidence = _runFocusedEvidence;
         _focusedEvidenceRunnerConfigured = runFocusedEvidence is not null;
         _getPreReviewEvidenceContext = getPreReviewEvidenceContext ??
             (_ => new PreReviewEvidenceContext(
@@ -1599,21 +1612,52 @@ internal sealed class ConductorDriver
         }
 
         var receiptId = CreateFindingEvidenceReceiptId(candidateSha!, runnable.Identity);
+        var armReceipts = (evidence.Arms ?? [])
+            .Select(arm => new FindingEvidenceArmReceipt(
+                arm.Arm,
+                arm.Sha,
+                arm.Disposition,
+                arm.Accepted,
+                arm.Passed,
+                arm.Summary,
+                arm.Checks
+                    .SelectMany(check => check.TestResultPaths ?? [])
+                    .Concat(arm.Checks.Select(check => check.ArtifactsPath ?? string.Empty))
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                arm.Checks
+                    .SelectMany(check => check.FailingTestIdentities ?? [])
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()))
+            .ToArray();
         var receipt = new FindingEvidenceReceipt(
-            receiptId, candidateSha!, runnable.TypedRequest, evidence.Accepted, evidence.Passed, evidence.Summary);
+            receiptId,
+            candidateSha!,
+            runnable.TypedRequest,
+            evidence.Accepted,
+            evidence.IsValidEvidence,
+            evidence.Summary,
+            armReceipts);
         foreach (var finding in runnable.Findings)
         {
             _recordFindingEvidenceOutcome(
                 goal.Id, requestingTask.Id, finding.StableId,
-                new FindingEvidenceOutcome(Honoured: true, ReceiptId: receiptId), receipt);
+                new FindingEvidenceOutcome(
+                    Honoured: true,
+                    ReceiptId: receiptId,
+                    ResultReason: evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown),
+                receipt);
+            var resultReason = FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(
+                evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown);
             _recordFindingEvidenceRequest(
                 goal.Id, requestingTask.Id,
                 $"finding-evidence disposition=honoured; role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
-                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason=honoured");
+                $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; reason={resultReason}");
             _recordFindingEvidenceRun(
                 goal.Id, requestingTask.Id,
                 $"finding-evidence role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; finding_id={finding.StableId}; " +
-                $"candidate_sha={candidateSha}; receipt_id={receiptId}; reason=honoured; {FormatFocusedEvidenceResult(evidence)}");
+                $"candidate_sha={candidateSha}; receipt_id={receiptId}; reason={resultReason}; {FormatFocusedEvidenceResult(evidence)}");
         }
         decision = groups.Take(policy.MaxFocusedEvidenceRunsPerRound).Skip(1).Any()
             ? VerifyingFindingAutoRetryDecision.Hold(
@@ -1741,7 +1785,7 @@ internal sealed class ConductorDriver
             candidate,
             policy,
             request,
-            _runFocusedEvidence);
+            _runDualArmFocusedEvidence);
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
             ConductorParallelAcceptanceAttemptDecisionKind.Running)
@@ -1816,7 +1860,9 @@ internal sealed class ConductorDriver
         var checks = evidence.Checks.Count == 0
             ? "checks: none"
             : "checks: " + string.Join("; ", evidence.Checks.Select(FormatFocusedEvidenceCheck));
-        return $"request='{TrimForConductorMessage(evidence.Request)}'; accepted={evidence.Accepted}; passed={evidence.Passed}; " +
+        var outcome = FindingEvidenceOutcomeReasonJsonConverter.ToWireValue(
+            evidence.OutcomeReason ?? FindingEvidenceOutcomeReason.Unknown);
+        return $"request='{TrimForConductorMessage(evidence.Request)}'; accepted={evidence.Accepted}; passed={evidence.Passed}; outcome={outcome}; " +
             $"summary={TrimForConductorMessage(evidence.Summary)}; {checks}";
     }
 
