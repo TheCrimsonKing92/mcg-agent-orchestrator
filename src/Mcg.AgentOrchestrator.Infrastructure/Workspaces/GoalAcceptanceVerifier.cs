@@ -4876,6 +4876,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         Func<string, string?> resolveOwningProject) =>
         ParseDeletedTestFiles(output, project, resolveOwningProject);
 
+    internal static string? ResolveOwningProjectForTests(string worktreePath, string path) =>
+        ResolveOwningProject(worktreePath, path);
+
     private static string[] ParseDeletedTestFiles(
         string output,
         string project,
@@ -4912,10 +4915,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static string? ResolveOwningProject(string worktreePath, string path)
     {
-        var root = Path.GetFullPath(worktreePath);
+        var normalizedPath = NormalizePath(path);
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+        {
+            return null;
+        }
+
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(worktreePath));
         var fullPath = Path.GetFullPath(Path.Combine(
             root,
-            NormalizePath(path)!.Replace('/', Path.DirectorySeparatorChar)));
+            normalizedPath.Replace('/', Path.DirectorySeparatorChar)));
         var relativePath = Path.GetRelativePath(root, fullPath);
         if (Path.IsPathRooted(relativePath) ||
             relativePath.Equals("..", StringComparison.Ordinal) ||

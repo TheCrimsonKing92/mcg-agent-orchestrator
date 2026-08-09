@@ -358,6 +358,50 @@ public sealed class TestCoverageInvariantTests
         Xunit.Assert.Empty(deleted);
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_resolves_nearest_owning_project_within_worktree")]
+    public void GoalAcceptanceVerifierResolvesNearestOwningProjectWithinWorktree()
+    {
+        var outer = Path.Combine(Path.GetTempPath(), $"owning-project-{Guid.NewGuid():N}");
+        var worktree = Path.Combine(outer, "worktree");
+        var parentDirectory = Path.Combine(worktree, "tests", "Parent.Tests");
+        var nestedDirectory = Path.Combine(parentDirectory, "Nested");
+        var sameDirectory = Path.Combine(worktree, "tests", "Same.Tests");
+        var unownedDirectory = Path.Combine(worktree, "tests", "Unowned");
+        try
+        {
+            Directory.CreateDirectory(nestedDirectory);
+            Directory.CreateDirectory(sameDirectory);
+            Directory.CreateDirectory(unownedDirectory);
+            File.WriteAllText(Path.Combine(outer, "Ancestor.Tests.csproj"), "");
+            File.WriteAllText(Path.Combine(parentDirectory, "Parent.Tests.csproj"), "");
+            File.WriteAllText(Path.Combine(nestedDirectory, "Nested.Tests.csproj"), "");
+            File.WriteAllText(Path.Combine(sameDirectory, "Same.Tests.csproj"), "");
+
+            var rootWithTrailingSeparator = worktree + Path.DirectorySeparatorChar;
+            var nestedOwner = GoalAcceptanceVerifier.ResolveOwningProjectForTests(
+                rootWithTrailingSeparator,
+                "tests/Parent.Tests/Nested/CaseTests.cs");
+            var sameDirectoryOwner = GoalAcceptanceVerifier.ResolveOwningProjectForTests(
+                rootWithTrailingSeparator,
+                "tests/Same.Tests/CaseTests.cs");
+            var noOwner = GoalAcceptanceVerifier.ResolveOwningProjectForTests(
+                rootWithTrailingSeparator,
+                "tests/Unowned/CaseTests.cs");
+
+            Xunit.Assert.Equal("tests/Parent.Tests/Nested/Nested.Tests.csproj", nestedOwner);
+            Xunit.Assert.Equal("tests/Same.Tests/Same.Tests.csproj", sameDirectoryOwner);
+            Xunit.Assert.Null(noOwner);
+            Xunit.Assert.Null(GoalAcceptanceVerifier.ResolveOwningProjectForTests(worktree, " "));
+        }
+        finally
+        {
+            if (Directory.Exists(outer))
+            {
+                Directory.Delete(outer, recursive: true);
+            }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_classifies_empty_partition_as_environmental_only_with_positive_evidence")]
     public void TestCoverageInvariantClassifiesEmptyPartitionAsEnvironmentalOnlyWithPositiveEvidence()
     {
