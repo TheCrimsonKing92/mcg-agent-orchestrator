@@ -76,6 +76,7 @@ public static class DispatchFailureDiagnosticMarker
     public const string PlannerOutputContractRejected = "planner-output-contract-rejected";
     public const string PlannerPlanPersistenceFailed = "planner-plan-persistence-failed";
     public const string WorkerBuildCheckFailed = "worker-build-check-failed";
+    public const string WrapperProcessExitFailure = "wrapper-process-exit-failure";
     public const string RequiredFileChangeEvidenceMissing = "required-file-change-evidence-missing";
     public const string WorktreeInspectionFailed = "worktree-inspection-failed";
 
@@ -104,6 +105,9 @@ public static class DispatchFailureClassifier
             [DispatchFailureDiagnosticMarker.WorkerBuildCheckFailed] = new(
                 TaskOutcomeRules.WorkerBuildCheckFailed,
                 "Deterministic worker build check failed."),
+            [DispatchFailureDiagnosticMarker.WrapperProcessExitFailure] = new(
+                TaskOutcomeRules.WrapperProcessExitFailure,
+                "Wrapper process exited nonzero after the selected child succeeded, without usable completion evidence."),
             [DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing] = new(
                 TaskOutcomeRules.RequiredFileChangeEvidenceMissing,
                 "Developer/Tester dispatch did not produce required relevant file-change evidence."),
