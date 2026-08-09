@@ -3294,6 +3294,7 @@ public sealed class BackgroundDispatchRunner
     private static bool IsDecisionSignificantLine(string line, bool containsCodexFinalOutput)
     {
         return DispatchFailureClassifier.HasVerificationEvidenceInOutput(line, string.Empty) ||
+            line.Contains("PLANNER_EVIDENCE_REQUEST:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("HUMAN_INPUT:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("HUMAN INPUT:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains("NO_CHANGE:", StringComparison.OrdinalIgnoreCase) ||
