@@ -1449,6 +1449,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // earlier hard rejection of mappings over four targets; no filter-length or runner failure
         // was recorded. Keep every validated filter, while retaining the old path's manifest-default
         // timeout for wide mappings so serial focused execution does not lose its completion budget.
+        // Performance prediction pending the operator-owned like-for-like run: one build phase is
+        // created per arm, but each request item starts a serial MTP process with fixed cost F~=9-11s.
+        // Thus the six-target Infrastructure shape is B+R6+kF: 9-11s of process cost when packed into
+        // one item, or 54-66s when split across k=6 items, versus the 1775.9s/3367-test collapsed
+        // baseline. Fixed process cost alone crosses 1775.9s at k=162 (F=11), 178 (F=10), or 198
+        // (F=9); build plus filtered runtime B+R6 moves that crossing earlier. The two-target,
+        // cross-project shape remains B+R2+2F (18-22s of process cost), so predict its existing
+        // 231.6s/220-test focused result within ordinary run variance. RunCheckBatchAsync only shards
+        // named Infrastructure acceptance lanes, so mapped focused items do not recover the former
+        // four-lane concurrency. The operator receipt must replace these predictions with measured
+        // wall-clock and tests_executed for both exact target sets.
         var built = new List<AcceptanceManifestCheck>();
         var targetToChecks = new List<FocusedEvidenceTargetCoverage>();
         foreach (var item in validated)
