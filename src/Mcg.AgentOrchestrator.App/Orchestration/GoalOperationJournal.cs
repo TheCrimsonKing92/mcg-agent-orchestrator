@@ -13,7 +13,8 @@ internal enum GoalOperationStatus
     Begin,
     Completed,
     Failed,
-    Skipped
+    Skipped,
+    Aborted
 }
 
 internal sealed record GoalOperationJournalEntry(
@@ -330,6 +331,17 @@ internal static class GoalOperationJournal
         GoalAcceptanceAttemptReceipt? attemptReceipt = null,
         IReadOnlyList<string>? failedCheckNames = null) =>
         AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Failed, "failed", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames);
+
+    public static void AcceptanceAborted(
+        string executionDirectory,
+        Goal goal,
+        string operation,
+        string? branchHeadSha,
+        string? mainHeadSha,
+        string? detail = null,
+        DateTimeOffset? attemptStartedAt = null,
+        GoalAcceptanceAttemptReceipt? attemptReceipt = null) =>
+        AppendAcceptanceOutcome(executionDirectory, goal, operation, GoalOperationStatus.Aborted, "aborted:state-guard", branchHeadSha, mainHeadSha, detail, attemptStartedAt, attemptReceipt, failedCheckNames: null);
 
     public static void AcceptanceRetried(
         string executionDirectory,

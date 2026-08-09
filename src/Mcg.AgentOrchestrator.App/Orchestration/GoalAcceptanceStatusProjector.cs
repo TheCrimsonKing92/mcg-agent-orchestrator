@@ -35,6 +35,8 @@ internal static class GoalAcceptanceStatusProjector
         var outcomes = currentOutcomes
             .Select(entry => ToOutcome(entry, isCurrentCandidate: true))
             .ToList();
+        var hasPassingGateReceipt = currentOutcomes.Any(entry =>
+            entry.AcceptanceOutcome?.Equals("gate-passed", StringComparison.OrdinalIgnoreCase) == true);
         var hasCurrentPassedOutcome = false;
         if (outcomes.Count > 0)
         {
@@ -44,12 +46,17 @@ internal static class GoalAcceptanceStatusProjector
                 currentOutcome.Outcome.Equals("gate-passed", StringComparison.OrdinalIgnoreCase);
             if (!hasCurrentPassedOutcome)
             {
+                var aborted = currentOutcome.Outcome.StartsWith("aborted:", StringComparison.OrdinalIgnoreCase);
                 blockers.Add(new GoalAcceptanceBlocker(
-                    GoalAcceptanceBlockerKind.AcceptanceFailed,
+                    aborted ? GoalAcceptanceBlockerKind.AcceptanceAborted : GoalAcceptanceBlockerKind.AcceptanceFailed,
                     null,
                     null,
                     currentOutcome.Message,
-                    $"Rerun acceptance for goal {goal.Id.Value[..8]} after resolving the current candidate outcome."));
+                    aborted
+                        ? hasPassingGateReceipt
+                            ? $"Quiesce conductor mutations for goal {goal.Id.Value[..8]} before another landing attempt; the passing gate receipt remains recorded."
+                            : $"Quiesce conductor mutations for goal {goal.Id.Value[..8]} before another landing attempt; no passing gate receipt was recorded for this candidate."
+                        : $"Rerun acceptance for goal {goal.Id.Value[..8]} after resolving the current candidate outcome."));
             }
         }
         else

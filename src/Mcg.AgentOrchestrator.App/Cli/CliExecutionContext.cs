@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -26,7 +27,9 @@ internal sealed class CliExecutionContext(
     Func<IReadOnlyCollection<string>, AgentOrchestratorKernel>? reloadKernelForGoals = null,
     Action<string>? registerPostCommitFailure = null,
     TextReader? standardInput = null,
-    bool? isStandardInputRedirected = null)
+    bool? isStandardInputRedirected = null,
+    Action? registerAcceptanceGuardAbort = null,
+    Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -126,6 +129,21 @@ public Action ReacquireConductLoopLease { get; } = reacquireConductLoopLease ?? 
 public AcceptanceMergeCommitResult FinalizeAcceptanceMerge(AcceptanceMergeCommitRequest request) =>
     finalizeAcceptanceMerge?.Invoke(request) ?? request.Merge();
 
+public AcceptanceMergeGuardPreflightResult PrepareAcceptanceMergeGuard(AcceptanceMergeGuardPreflightRequest request)
+{
+    if (prepareAcceptanceMergeGuard is not null)
+    {
+        return prepareAcceptanceMergeGuard(request);
+    }
+
+    var currentGuard = AcceptanceMergeGuard.Capture(ReloadKernel([request.GoalId.Value]), request.GoalId);
+    return new AcceptanceMergeGuardPreflightResult(
+        currentGuard,
+        AcceptanceMergeGuard.Compare(request.ProposedGuard, currentGuard));
+}
+
+public void RegisterAcceptanceGuardAbort() => registerAcceptanceGuardAbort?.Invoke();
+
 public AcceptanceHostStopResult StopAcceptanceHosts(AcceptanceHostStopRequest request) =>
     stopAcceptanceHosts?.Invoke(request) ?? AcceptanceHostStopper.Stop(request);
 
@@ -168,15 +186,27 @@ internal sealed class CliPhaseTimingRecorder(string commandName, bool enabled = 
 
 internal sealed record AcceptanceMergeCommitRequest(
     GoalId GoalId,
-    string ExpectedGoalFingerprint,
+    AcceptanceMergeGuardSnapshot ExpectedGuard,
     string? TestedWorktreeHead,
+    bool PassingGateReceiptRecorded,
     Func<AcceptanceMergeCommitResult> Merge,
     string CompletionReason);
+
+internal sealed record AcceptanceMergeGuardPreflightRequest(
+    GoalId GoalId,
+    AcceptanceMergeGuardSnapshot ProposedGuard);
+
+internal sealed record AcceptanceMergeGuardPreflightResult(
+    AcceptanceMergeGuardSnapshot CurrentGuard,
+    AcceptanceMergeGuardMismatch? GuardAbort);
 
 internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
     string? Message,
-    bool GuardFailure = false);
+    AcceptanceMergeGuardMismatch? GuardAbort = null)
+{
+    public bool GuardAborted => GuardAbort is not null;
+}
 
 internal interface ICliGoalWorktreeService
 {
