@@ -846,11 +846,32 @@ public sealed partial class AgentOrchestratorKernel
                         }
                     }
 
-                    state = ReviewFindingConvergence.ApplyCanonicalizedIdentityTransitionRound(
-                        priorState,
-                        round,
-                        ex.Violation,
-                        out var identityCanonicalizations);
+                    IReadOnlyList<ReviewFindingIdentityCanonicalization> identityCanonicalizations;
+                    try
+                    {
+                        state = ReviewFindingConvergence.ApplyCanonicalizedIdentityTransitionRound(
+                            priorState,
+                            round,
+                            ex.Violation,
+                            out identityCanonicalizations);
+                    }
+                    catch (ReviewFindingConvergenceException canonicalizedRoundException)
+                    {
+                        // Canonicalizing the identity can expose a different invalid transition that the
+                        // initial identity check intentionally evaluated first (for example, an untouched
+                        // resolved-to-open transition). Retain the pre-round ledger and record that typed
+                        // violation instead of letting the second exception discard the verification.
+                        state = priorState;
+                        if (isCurrentRound)
+                        {
+                            diagnostic = $"{canonicalizedRoundException.Code}: {canonicalizedRoundException.Message}";
+                            violation = canonicalizedRoundException.Violation;
+                            identityTransitionSalvaged = true;
+                            return false;
+                        }
+
+                        continue;
+                    }
                     var canonicalizedOutcomes = (verification.MergedReviewFindings ?? [])
                         .Where(finding => finding.EvidenceOutcome is not null)
                         .ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
@@ -889,7 +910,26 @@ public sealed partial class AgentOrchestratorKernel
                         !string.IsNullOrWhiteSpace(lastAcceptedReviewedCommit) &&
                         !string.IsNullOrWhiteSpace(verification.ReviewedCommit))
                     {
-                        state = ReviewFindingConvergence.ApplyRejectedIdentityTransitionRound(state, round, ex.Violation);
+                        var priorState = state;
+                        try
+                        {
+                            state = ReviewFindingConvergence.ApplyRejectedIdentityTransitionRound(
+                                priorState,
+                                round,
+                                ex.Violation);
+                        }
+                        catch (ReviewFindingConvergenceException salvagedRoundException)
+                        {
+                            // Applying the non-identity portion of the round can expose another invalid
+                            // transition. Preserve the accepted ledger while still recording the more
+                            // specific typed violation on this verification.
+                            state = priorState;
+                            diagnostic = $"{salvagedRoundException.Code}: {salvagedRoundException.Message}";
+                            violation = salvagedRoundException.Violation;
+                            identityTransitionSalvaged = true;
+                            return false;
+                        }
+
                         identityTransitionSalvaged = true;
                     }
 
