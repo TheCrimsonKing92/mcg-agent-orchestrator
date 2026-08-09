@@ -1143,9 +1143,14 @@ internal sealed class ConductorDriver
                 var attemptInCycle = ((flakedTask.EmptyOutputRetryCount - 1) % policy.MaxEmptyOutputDispatchRetries) + 1;
                 var cycle = ((flakedTask.EmptyOutputRetryCount - 1) / policy.MaxEmptyOutputDispatchRetries) + 1;
                 var launchFailure = DispatchFailureClassifier.Classify(flakedTask, flakedTask.LastVerification!).Kind == DispatchOutcomeKind.LaunchFailure;
-                var failureLabel = launchFailure ? "silent launch failure" : "empty-output dispatch flake";
-                var failureEvidence = launchFailure
-                    ? $"task produced zero bytes on both streams with root exit {flakedTask.LastVerification!.ExitCode}"
+                var sandboxLaunchFailure = flakedTask.LastVerification!.ProviderFailureKind == ProviderFailureKind.Sandbox1312;
+                var failureLabel = sandboxLaunchFailure
+                    ? "sandbox command-launch failure"
+                    : launchFailure ? "silent launch failure" : "empty-output dispatch flake";
+                var failureEvidence = sandboxLaunchFailure
+                    ? $"sandbox logon session failed with root exit {flakedTask.LastVerification.ExitCode}"
+                    : launchFailure
+                    ? $"task produced zero bytes on both streams with root exit {flakedTask.LastVerification.ExitCode}"
                     : $"task produced zero-byte stdout with exit {flakedTask.LastVerification!.ExitCode}";
                 var note = attemptInCycle == policy.MaxEmptyOutputDispatchRetries
                     ? $"Auto-recover+re-admit {failureLabel} cycle {cycle}/{policy.MaxEmptyOutputAutoRecoverCycles}; {failureEvidence}"

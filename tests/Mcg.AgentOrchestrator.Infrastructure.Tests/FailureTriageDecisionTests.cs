@@ -38,6 +38,41 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
         }
     }
 
+    [Xunit.Fact(DisplayName = "FailureTriagePlanner_treats_sandbox_1312_as_launch_failure_not_commit_permissions")]
+    public void FailureTriagePlannerTreatsSandbox1312AsLaunchFailureNotCommitPermissions()
+    {
+        var repo = CreateSeededDispatchRepository();
+        try
+        {
+            var (kernel, goal, task, agents) = CreateActiveGoal("Sandbox launch triage", AgentRole.Planner);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "codex exec",
+                repo,
+                1,
+                "Planner output",
+                "CreateProcessAsUserW 1312: A specified logon session does not exist.",
+                DateTimeOffset.UtcNow,
+                ProviderFailureKind: ProviderFailureKind.Sandbox1312));
+
+            var item = FailureTriagePlanner.Build(
+                    kernel,
+                    goal,
+                    agents,
+                    repo,
+                    AutonomyPolicy.Observe)
+                .Items
+                .Single(candidate => candidate.TaskId == task.Id);
+
+            Assert.Equal(FailureTriageCause.FailedVerification, item.Cause);
+            Assert.NotEqual(FailureTriageCause.MissingWorkerPermissions, item.Cause);
+            Assert.DoesNotContain("worker-profile-check", item.SuggestedCommand, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try { Directory.Delete(repo, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "FailureTriagePlanner_does_not_treat_quoted_permission_test_text_as_apparatus_failure")]
     public void FailureTriagePlannerDoesNotTreatQuotedPermissionTestTextAsApparatusFailure()
     {

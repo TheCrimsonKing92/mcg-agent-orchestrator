@@ -60,7 +60,7 @@ public sealed class StaticWorkerProvider : IWorkerProvider
             return ProviderFailureKind.RateLimit;
         }
 
-        if (text.Contains("1312", StringComparison.OrdinalIgnoreCase))
+        if (ContainsSandboxLogonSessionFailure(text))
         {
             return ProviderFailureKind.Sandbox1312;
         }
@@ -86,6 +86,14 @@ public sealed class StaticWorkerProvider : IWorkerProvider
         text.Contains("Unable to connect", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("could not resolve host", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("temporary failure in name resolution", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsSandboxLogonSessionFailure(string text) =>
+        (text.Contains("CreateProcessAsUserW", StringComparison.OrdinalIgnoreCase) &&
+         text.Contains("1312", StringComparison.OrdinalIgnoreCase)) ||
+        text.Contains("ERROR_NO_SUCH_LOGON_SESSION", StringComparison.OrdinalIgnoreCase) ||
+        (text.Contains("logon session", StringComparison.OrdinalIgnoreCase) &&
+         (text.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
+          text.Contains("terminated", StringComparison.OrdinalIgnoreCase)));
 
     private static string StripWorkerResultBlocks(string text)
     {

@@ -161,6 +161,9 @@ public sealed class ModelOutcomeScorecardTests
 
     [Xunit.Theory(DisplayName = "TaskOutcomeClassifier_non_merit_failures_never_become_real_failures")]
     [Xunit.InlineData("silent-launch-failure", TaskOutcomeClass.Environmental)]
+    [Xunit.InlineData("provider-sandbox-launch-1312", TaskOutcomeClass.Environmental)]
+    [Xunit.InlineData("provider-sandbox-1312", TaskOutcomeClass.ManufacturedFixed)]
+    [Xunit.InlineData("provider-sandbox1312", TaskOutcomeClass.ManufacturedFixed)]
     [Xunit.InlineData("provider-unknown", TaskOutcomeClass.UnknownEra)]
     [Xunit.InlineData("unknown-failure", TaskOutcomeClass.UnknownEra)]
     [Xunit.InlineData("tester-verification-inconclusive", TaskOutcomeClass.UnknownEra)]

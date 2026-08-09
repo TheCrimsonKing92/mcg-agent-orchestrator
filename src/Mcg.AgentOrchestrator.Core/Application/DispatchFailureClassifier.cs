@@ -152,14 +152,14 @@ public static class DispatchFailureClassifier
                 evidenceSummary),
                 exitCode),
             ProviderFailureKind.Sandbox1312 => WithClassifierReceipt(
-                TaskOutcomeRules.ProviderSandbox1312,
+                TaskOutcomeRules.ProviderSandboxLaunch1312,
                 new DispatchOutcome(
-                DispatchOutcomeKind.SandboxCommitBlocked,
+                DispatchOutcomeKind.LaunchFailure,
                 exitCode,
                 hasZeroByteOutput,
                 null,
                 null,
-                RecoveryRecommendation.CommitAndVerify,
+                RecoveryRecommendation.AutoRetry,
                 evidenceSummary),
                 exitCode),
             _ => WithClassifierReceipt(
@@ -599,7 +599,7 @@ public static class DispatchFailureClassifier
                 hasZeroByteOutput,
                 BuildEvidenceSummary(verification));
             return BuildOutcome(
-                TaskOutcomeRules.ProviderSandbox1312,
+                TaskOutcomeRules.ProviderSandboxLaunch1312,
                 task,
                 verification,
                 workerResultPresent,
@@ -723,7 +723,7 @@ public static class DispatchFailureClassifier
                 string.Empty));
         }
 
-        if (IsSandboxCommitBlockedFailure(verification))
+        if (IsSandboxCommitBlockedFailure(task, verification))
         {
             return BuildOutcome(
                 TaskOutcomeRules.SandboxCommitBlocked,
@@ -1550,9 +1550,9 @@ public static class DispatchFailureClassifier
     // blocked by OS confinement. We recognise it (git permission/index.lock signature + the worker
     // having produced useful work) so the orchestrator can commit the edits at Medium and let the
     // acceptance suite — which always runs before any merge to main — be the authoritative gate.
-    public static bool IsSandboxCommitBlockedFailure(TaskVerificationRecord verification)
+    public static bool IsSandboxCommitBlockedFailure(TaskSpec task, TaskVerificationRecord verification)
     {
-        if (verification.Succeeded)
+        if (verification.Succeeded || !CanReceiveSandboxCommitBlockedOutcome(task.RequiredRole))
         {
             return false;
         }
@@ -1567,8 +1567,18 @@ public static class DispatchFailureClassifier
             includeRetainedText: false);
     }
 
-    public static bool IsSandboxCommitBlockedFailure(int exitCode, string standardOutput, string standardError) =>
-        exitCode != 0 && HasSandboxCommitBlockedEvidence(standardOutput, standardError);
+    public static bool IsSandboxCommitBlockedFailure(
+        AgentRole role,
+        int exitCode,
+        string standardOutput,
+        string standardError) =>
+        exitCode != 0 &&
+        CanReceiveSandboxCommitBlockedOutcome(role) &&
+        HasSandboxCommitBlockedEvidence(standardOutput, standardError);
+
+    private static bool CanReceiveSandboxCommitBlockedOutcome(AgentRole role) =>
+        DispatchRoleOutputCapabilities.TryGet(role, out var capability) &&
+        capability != DispatchRoleOutputCapability.ReadOnly;
 
     private static bool HasSandboxCommitBlockedEvidence(string standardOutput, string standardError)
     {
@@ -1576,9 +1586,6 @@ public static class DispatchFailureClassifier
         var commitBlocked =
             output.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
-            (output.Contains("CreateProcessAsUserW", StringComparison.OrdinalIgnoreCase) &&
-             output.Contains("1312", StringComparison.OrdinalIgnoreCase)) ||
-            output.Contains("specified logon session does not exist", StringComparison.OrdinalIgnoreCase) ||
             (output.Contains(".git", StringComparison.OrdinalIgnoreCase) &&
              output.Contains("Permission denied", StringComparison.OrdinalIgnoreCase));
 
@@ -1606,9 +1613,6 @@ public static class DispatchFailureClassifier
             commitBlocked |=
                 line.Contains("index.lock", StringComparison.OrdinalIgnoreCase) ||
                 line.Contains("blocked on committing", StringComparison.OrdinalIgnoreCase) ||
-                (line.Contains("CreateProcessAsUserW", StringComparison.OrdinalIgnoreCase) &&
-                 line.Contains("1312", StringComparison.OrdinalIgnoreCase)) ||
-                line.Contains("specified logon session does not exist", StringComparison.OrdinalIgnoreCase) ||
                 (line.Contains(".git", StringComparison.OrdinalIgnoreCase) &&
                  line.Contains("Permission denied", StringComparison.OrdinalIgnoreCase));
 

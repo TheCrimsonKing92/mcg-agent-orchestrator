@@ -30,11 +30,12 @@ internal static class TaskOutcomeRules
     public static readonly TaskOutcomeRule ProviderNeutralProgressStall = new("provider-neutral-progress-stall", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderModelRejection = new("provider-model-rejection", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule ProviderRateLimit = new("provider-rate-limit", TaskOutcomeClass.Environmental);
+    public static readonly TaskOutcomeRule ProviderSandboxLaunch1312 = new("provider-sandbox-launch-1312", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule SubscriptionLimit = new("subscription-limit", TaskOutcomeClass.Environmental);
     public static readonly TaskOutcomeRule SilentLaunchFailure = new("silent-launch-failure", TaskOutcomeClass.Environmental);
 
     public static readonly TaskOutcomeRule EmptyOutputFlake = new("empty-output-flake", TaskOutcomeClass.ManufacturedFixed);
-    public static readonly TaskOutcomeRule ProviderSandbox1312 = new("provider-sandbox-1312", TaskOutcomeClass.ManufacturedFixed);
+    private static readonly TaskOutcomeRule ProviderSandbox1312 = new("provider-sandbox-1312", TaskOutcomeClass.ManufacturedFixed);
     public static readonly TaskOutcomeRule RetryRoundProducedNoCommitAndNoDeferral = new("retry-round-produced-no-commit-and-no-deferral", TaskOutcomeClass.ManufacturedFixed);
     public static readonly TaskOutcomeRule SandboxCommitBlocked = new("sandbox-commit-blocked", TaskOutcomeClass.ManufacturedFixed);
 
@@ -69,10 +70,10 @@ internal static class TaskOutcomeRules
         ProviderNeutralProgressStall,
         ProviderModelRejection,
         ProviderRateLimit,
+        ProviderSandboxLaunch1312,
         SubscriptionLimit,
         SilentLaunchFailure,
         EmptyOutputFlake,
-        ProviderSandbox1312,
         RetryRoundProducedNoCommitAndNoDeferral,
         SandboxCommitBlocked,
         SucceededWorkerResultFailingTests,
@@ -93,6 +94,7 @@ internal static class TaskOutcomeRules
 
     public static IReadOnlyDictionary<string, TaskOutcomeRule> Known { get; } = Produced
         .Append(RecoverableSubscriptionLimitLegacy)
+        .Append(ProviderSandbox1312)
         .Append(ProviderSandbox1312Legacy)
         .ToDictionary(rule => rule.Token, StringComparer.OrdinalIgnoreCase);
 }

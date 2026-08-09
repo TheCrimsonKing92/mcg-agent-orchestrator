@@ -5938,6 +5938,42 @@ public sealed class ConductorDriverTests
         Assert.Equal(0, task.CriterionRetryCount);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_sandbox_1312_launch_failure_uses_bounded_retry_without_commit_language")]
+    public void ConductorDriverSandbox1312LaunchFailureUsesBoundedRetryWithoutCommitLanguage()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        DispatchTask(kernel, goal, task);
+        kernel.RecordDispatchExecutionResult(goal.Id, task.Id,
+            new TaskVerificationRecord(
+                "test.exe",
+                "C:\\tmp",
+                1,
+                "worker output before sandbox command launch failed",
+                "CreateProcessAsUserW 1312: A specified logon session does not exist.",
+                DateTimeOffset.UtcNow,
+                ProviderFailureKind: ProviderFailureKind.Sandbox1312));
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.EmptyOutputRetryCount);
+
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTask: (gid, tid, msg) =>
+            {
+                retryMessage = msg;
+                return kernel.RetryTask(gid, tid, msg);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+        Assert.Contains("sandbox command-launch failure", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("sandbox logon session failed", retryMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain("commit", retryMessage!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_sandbox_preflight_failure_auto_retries_on_shared_dispatch_flake_budget")]
     public void ConductorDriverSandboxPreflightFailureAutoRetriesOnSharedDispatchFlakeBudget()
     {

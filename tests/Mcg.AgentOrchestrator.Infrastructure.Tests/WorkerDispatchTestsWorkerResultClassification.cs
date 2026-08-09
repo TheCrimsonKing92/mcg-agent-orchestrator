@@ -74,6 +74,22 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(ProviderFailureKind.Unknown, failureKind);
 }
 
+    [Xunit.Theory(DisplayName = "WorkerProvider_parse_outcome_requires_launch_or_logon_context_for_sandbox_1312")]
+    [Xunit.InlineData("git.exe: CreateProcessAsUserW failed 1312", ProviderFailureKind.Sandbox1312)]
+    [Xunit.InlineData("ERROR_NO_SUCH_LOGON_SESSION", ProviderFailureKind.Sandbox1312)]
+    [Xunit.InlineData("A specified logon session does not exist. It may already have been terminated.", ProviderFailureKind.Sandbox1312)]
+    [Xunit.InlineData("provider returned diagnostic 1312", ProviderFailureKind.Unknown)]
+    public void WorkerProviderParseOutcomeRequiresLaunchOrLogonContextForSandbox1312(
+        string standardError,
+        ProviderFailureKind expected)
+    {
+        var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.OpenAICodexCli);
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, string.Empty, standardError));
+
+        Assert.Equal(expected, failureKind);
+    }
+
     [Xunit.Fact(DisplayName = "DispatchFailureClassifier_identifies_subscription_dispatch_from_typed_provider_identity")]
     public void DispatchFailureClassifierIdentifiesSubscriptionDispatchFromTypedProviderIdentity()
 {
@@ -2577,6 +2593,44 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, classified.Kind);
     Assert.Contains("rule=succeeded-dispatch-completion-evidence", classified.ClassifierReceipt, StringComparison.Ordinal);
 }
+
+    [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_read_only_receipt_reconciles_wrapper_failure_before_failure_classification")]
+    [Xunit.InlineData("fatal: Unable to create '.git/index.lock': Permission denied")]
+    [Xunit.InlineData("dotnet.cmd: CreateProcessAsUserW 1312: A specified logon session does not exist. It may already have been terminated.")]
+    public void BackgroundDispatchRunnerReadOnlyReceiptReconcilesWrapperFailureBeforeFailureClassification(
+        string standardError)
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Planner,
+            WorkerResultBlock(
+                "none",
+                "source inspection",
+                "not-run - Planner performed read-only planning only",
+                commit: "none",
+                blockers: "none"),
+            standardError,
+            clock,
+            childExitCode: 0);
+        File.WriteAllText(process.ExitCodePath, "1");
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.Equal(0, task.LastVerification.ChildExitCode);
+        AssertExitCode(process.ExitCodePath, 1);
+        Assert.Contains(
+            "observed_wrapper_exit_code=1; child_exit_code=0; logical_exit_code=0",
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Assert.False(GitCli.IsWorktreeDirty(GoalWorktrees.Ensure(root, goal.Id)));
+        var classified = DispatchFailureClassifier.Classify(task, task.LastVerification);
+        Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, classified.Kind);
+        Assert.Contains("rule=succeeded-dispatch-completion-evidence", classified.ClassifierReceipt, StringComparison.Ordinal);
+    }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_child_nonzero_keeps_usable_worker_result_failed")]
     public void BackgroundDispatchRunnerChildNonzeroKeepsUsableWorkerResultFailed()
