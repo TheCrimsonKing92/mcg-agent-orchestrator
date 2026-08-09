@@ -39,7 +39,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             {
                 var linkedGoal = FindLinkedGoal(goalsByBacklogItem, item.Id);
                 var goalId = linkedGoal?.Id.Value ?? "-";
-                Console.WriteLine($"{RenderBacklogListTag(item)}{RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | title={item.Title}");
+                Console.WriteLine($"{RenderBacklogListTag(item)}{RenderBacklogTimestampSuffix(item)}{RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | title={item.Title}");
             }
             Console.WriteLine($"Backlog list: {items.Count} item(s) from backlog store");
             return false;
@@ -435,6 +435,9 @@ internal static string RenderBacklogListTag(BacklogItem item)
 
     return $"[{item.Status}]";
 }
+
+internal static string RenderBacklogTimestampSuffix(BacklogItem item) =>
+    FormattableString.Invariant($" [created={item.CreatedAt.UtcDateTime:yyyy-MM-dd}] [updated={item.UpdatedAt.UtcDateTime:yyyy-MM-dd}]");
 
 internal static string RenderBacklogListSuffix(BacklogItem item)
 {
