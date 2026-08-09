@@ -15,7 +15,8 @@ public static class AgentOutputDirectives
         if (role == AgentRole.Planner)
         {
             lines.Add(
-                "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; a summary or private model-home file path alone is invalid. " +
+                "Planner: print the complete decision-changing plan in stdout before WORKER_RESULT; stdout is authoritative, and a summary or private model-home file path alone is invalid. " +
+                "A referenced plan artifact is only a fallback when stdout parsing fails; writing a separate artifact is not required. " +
                 "Use these exact substantive headings: ## Premise validity; ## Acceptance criteria mapping; ## Target seams and symbols; " +
                 "## Ownership and lifecycle; ## External and edge contracts; ## Integration seams; ## Verification commands and classes; ## Risks and stop conditions. " +
                 "Map every numbered acceptance criterion, and state valid/invalid premise evidence, backticked file/symbol citations, the owner/lifecycle decision, external and unhappy-path contracts, integration sequence, " +
