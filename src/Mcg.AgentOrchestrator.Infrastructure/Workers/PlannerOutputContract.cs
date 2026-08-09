@@ -17,6 +17,7 @@ internal static partial class PlannerOutputContract
     internal const string DurablePlanEndMarker = "<!-- MCG_DURABLE_PLANNER_PLAN:END -->";
     private const int CapturedOutputTailBytes = (MaxPlanChars * 4) + 32_000;
     private const int AppendAttempts = 4;
+    private static readonly string[] CandidatePathSuffixes = [".cs"];
 
     private static readonly (string Label, Regex Heading)[] RequiredSections =
     [
@@ -83,13 +84,13 @@ internal static partial class PlannerOutputContract
         }
 
         var pathDetail = pathFailures.Count == 0
-            ? "no readable orchestrator-workspace or model-home plan artifact was referenced"
-            : string.Join("; ", pathFailures);
+            ? string.Empty
+            : $" Referenced plan artifact failures: {string.Join("; ", pathFailures)}.";
         return new PlannerOutputContractResult(
             false,
             null,
             null,
-            $"Planner output contract failed: {diagnostic}; {pathDetail}. Retry Planner for contract repair.");
+            $"Planner output contract failed.{pathDetail} Stdout plan reason: {diagnostic}. Retry Planner for contract repair.");
     }
 
     internal static string ReadCapturedOutputTail(string path)
@@ -182,6 +183,35 @@ internal static partial class PlannerOutputContract
 
         diagnostic = "could not append durable Planner plan to captured stdout";
         return false;
+    }
+
+    internal static bool TryPersistRejectionDiagnostic(
+        string standardErrorPath,
+        string rejectionDiagnostic,
+        out string diagnostic)
+    {
+        try
+        {
+            var payload = Environment.NewLine +
+                "[orchestrator Planner output contract rejection]" + Environment.NewLine +
+                rejectionDiagnostic + Environment.NewLine;
+            var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(payload);
+            using var stream = new FileStream(
+                standardErrorPath,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            stream.Write(bytes);
+            stream.Flush(flushToDisk: true);
+            diagnostic = string.Empty;
+            return true;
+        }
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            diagnostic = error.Message;
+            return false;
+        }
     }
 
     internal static bool TryExtractDurablePlan(string text, out string plan, out string diagnostic)
@@ -318,9 +348,21 @@ internal static partial class PlannerOutputContract
         string workingDirectory,
         out string plan,
         out string diagnostic,
-        IReadOnlyList<string>? acceptanceCriteria = null) =>
-        TryValidate(text, out plan, out diagnostic, acceptanceCriteria) &&
-        ValidateCitedPaths(plan, workingDirectory, out diagnostic);
+        IReadOnlyList<string>? acceptanceCriteria = null)
+    {
+        if (!TryValidate(text, out plan, out diagnostic, acceptanceCriteria))
+        {
+            return false;
+        }
+
+        if (!TryResolveCitedPaths(plan, workingDirectory, out var resolvedPlan, out diagnostic))
+        {
+            return false;
+        }
+
+        plan = resolvedPlan;
+        return true;
+    }
 
     private static bool TryValidateCriterionMappings(
         string normalized,
@@ -349,9 +391,15 @@ internal static partial class PlannerOutputContract
         return true;
     }
 
-    private static bool ValidateCitedPaths(string plan, string workingDirectory, out string diagnostic)
+    private static bool TryResolveCitedPaths(
+        string plan,
+        string workingDirectory,
+        out string resolvedPlan,
+        out string diagnostic)
     {
+        resolvedPlan = plan;
         diagnostic = string.Empty;
+        var substitutions = new List<CitationSubstitution>();
         string? contextualDirectory = null;
         var contextualLineStart = -2;
         var targetHeading = TargetSeamsHeading().Match(plan);
@@ -427,15 +475,167 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
-            if (!File.Exists(candidate) && !Directory.Exists(candidate))
+            if (PathExistsWithExactCasing(candidate))
             {
-                diagnostic = $"target citation '{citation}' does not exist and is not marked as a new file";
+                continue;
+            }
+
+            string? resolvedCandidate = null;
+            string? resolvedCitation = null;
+            foreach (var suffix in CandidatePathSuffixes)
+            {
+                var suffixedCandidate = candidate + suffix;
+                if (!PathExistsWithExactCasing(suffixedCandidate))
+                {
+                    continue;
+                }
+
+                resolvedCandidate = suffixedCandidate;
+                resolvedCitation = citation + suffix;
+                break;
+            }
+
+            if (resolvedCandidate is not null && resolvedCitation is not null)
+            {
+                substitutions.Add(new CitationSubstitution(
+                    targetHeading.Index + match.Groups["citation"].Index,
+                    match.Groups["citation"].Length,
+                    citation,
+                    resolvedCitation));
+                continue;
+            }
+
+            var citationStart = targetHeading.Index + match.Groups["citation"].Index;
+            var suggestion = FindSingleCaseInsensitiveSuggestion(
+                candidate,
+                citation,
+                hasExplicitDirectory,
+                workingDirectory);
+            var suggestionText = suggestion is null
+                ? string.Empty
+                : $" Did you mean `{suggestion}`?";
+            diagnostic =
+                $"target citation '{citation}' does not exist and is not marked as a new file; source span [{citationStart}..{citationStart + citation.Length})." +
+                $"{suggestionText}{Environment.NewLine}Offending citation: '{citation}'";
+            return false;
+        }
+
+        foreach (var substitution in substitutions.OrderByDescending(item => item.Start))
+        {
+            resolvedPlan = resolvedPlan[..substitution.Start] +
+                substitution.ResolvedCitation +
+                resolvedPlan[(substitution.Start + substitution.Length)..];
+        }
+
+        if (substitutions.Count > 0)
+        {
+            var notes = substitutions.Select(substitution =>
+                $"Planner contract note: raw citation `{substitution.RawCitation}` resolved to `{substitution.ResolvedCitation}`.");
+            resolvedPlan = resolvedPlan.TrimEnd() + Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, notes);
+            if (resolvedPlan.Length > MaxPlanChars)
+            {
+                diagnostic = $"resolved plan is {resolvedPlan.Length} characters after citation audit notes; maximum durable size is {MaxPlanChars}";
+                resolvedPlan = string.Empty;
                 return false;
             }
         }
 
         return true;
     }
+
+    private static bool PathExistsWithExactCasing(string path)
+    {
+        try
+        {
+            if (!File.Exists(path) && !Directory.Exists(path))
+            {
+                return false;
+            }
+
+            var fullPath = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var root = Path.GetPathRoot(fullPath);
+            if (string.IsNullOrEmpty(root))
+            {
+                return false;
+            }
+
+            var current = root;
+            var relative = fullPath[root.Length..];
+            foreach (var segment in relative.Split(
+                         [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                         StringSplitOptions.RemoveEmptyEntries))
+            {
+                var exactEntry = Directory
+                    .EnumerateFileSystemEntries(current)
+                    .FirstOrDefault(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.Ordinal));
+                if (exactEntry is null)
+                {
+                    return false;
+                }
+
+                current = exactEntry;
+            }
+
+            return true;
+        }
+        catch (Exception error) when (
+            error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static string? FindSingleCaseInsensitiveSuggestion(
+        string candidate,
+        string citation,
+        bool hasExplicitDirectory,
+        string workingDirectory)
+    {
+        var matches = new List<string>();
+        foreach (var probe in new[] { candidate }.Concat(CandidatePathSuffixes.Select(suffix => candidate + suffix)))
+        {
+            var parent = Path.GetDirectoryName(probe);
+            var name = Path.GetFileName(probe);
+            if (string.IsNullOrWhiteSpace(parent) || string.IsNullOrWhiteSpace(name) || !Directory.Exists(parent))
+            {
+                continue;
+            }
+
+            try
+            {
+                matches.AddRange(Directory
+                    .EnumerateFileSystemEntries(parent)
+                    .Where(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.OrdinalIgnoreCase)));
+            }
+            catch (Exception error) when (
+                error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+            {
+                // Suggestions are advisory and must never change the validation verdict.
+            }
+        }
+
+        var distinctMatches = matches.Distinct(StringComparer.Ordinal).ToArray();
+        if (distinctMatches.Length != 1)
+        {
+            return null;
+        }
+
+        if (Path.IsPathFullyQualified(citation))
+        {
+            return distinctMatches[0];
+        }
+
+        return hasExplicitDirectory
+            ? Path.GetRelativePath(workingDirectory, distinctMatches[0]).Replace(Path.DirectorySeparatorChar, '/')
+            : Path.GetFileName(distinctMatches[0]);
+    }
+
+    private sealed record CitationSubstitution(
+        int Start,
+        int Length,
+        string RawCitation,
+        string ResolvedCitation);
 
     private static string? NormalizeCitedPath(string citation)
     {

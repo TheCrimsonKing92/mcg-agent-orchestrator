@@ -28,22 +28,42 @@ internal sealed record OutputTextPreview(string Text, bool IsTruncated, int Orig
 
     public static OutputTextPreview CreateVerificationLog(string text, string? logPath = null)
     {
-        return Create(text, VerificationLogMaxChars, VerificationLogTailChars, logPath);
+        const string offendingCitationLabel = "Offending citation: '";
+        var offendingCitationStart = text.LastIndexOf(offendingCitationLabel, StringComparison.Ordinal);
+        return Create(
+            text,
+            VerificationLogMaxChars,
+            VerificationLogTailChars,
+            logPath,
+            offendingCitationStart >= 0 ? offendingCitationStart : null);
     }
 
-    private static OutputTextPreview Create(string text, int maxChars, int tailChars, string? logPath)
+    private static OutputTextPreview Create(
+        string text,
+        int maxChars,
+        int tailChars,
+        string? logPath,
+        int? nonElidableTailStart = null)
     {
         if (text.Length <= maxChars)
         {
             return new OutputTextPreview(text, false, text.Length);
         }
 
-        var headChars = maxChars - tailChars;
-        var omittedChars = text.Length - headChars - tailChars;
+        var retainedTailChars = nonElidableTailStart is { } protectedStart
+            ? Math.Max(tailChars, text.Length - protectedStart)
+            : tailChars;
+        var headChars = Math.Max(0, maxChars - retainedTailChars);
+        var omittedChars = text.Length - headChars - retainedTailChars;
+        if (omittedChars <= 0)
+        {
+            return new OutputTextPreview(text, false, text.Length);
+        }
+
         var pathSuffix = logPath is null ? string.Empty : $" — full log: {logPath}";
         var marker = $"{Environment.NewLine}{Environment.NewLine}[truncated {omittedChars} chars{pathSuffix}]{Environment.NewLine}{Environment.NewLine}";
         return new OutputTextPreview(
-            text[..headChars] + marker + text[^tailChars..],
+            text[..headChars] + marker + text[^retainedTailChars..],
             true,
             text.Length);
     }

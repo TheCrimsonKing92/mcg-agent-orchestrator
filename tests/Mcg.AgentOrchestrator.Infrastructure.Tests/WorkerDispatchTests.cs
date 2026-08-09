@@ -745,10 +745,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             modelHome);
 
         Assert.False(result.Succeeded);
-        Assert.Contains(
-            "no readable orchestrator-workspace or model-home plan artifact was referenced",
-            result.Diagnostic,
-            StringComparison.Ordinal);
+        Assert.Contains("Stdout plan reason:", result.Diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("plan artifact was referenced", result.Diagnostic, StringComparison.Ordinal);
 
         if (OperatingSystem.IsWindows())
         {
@@ -765,10 +763,8 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
                     string.Empty,
                     workingDirectory,
                     modelHome);
-                Assert.Contains(
-                    "no readable orchestrator-workspace or model-home plan artifact was referenced",
-                    crossVolumeResult.Diagnostic,
-                    StringComparison.Ordinal);
+                Assert.Contains("Stdout plan reason:", crossVolumeResult.Diagnostic, StringComparison.Ordinal);
+                Assert.DoesNotContain("plan artifact was referenced", crossVolumeResult.Diagnostic, StringComparison.Ordinal);
             }
         }
     }

@@ -1167,6 +1167,7 @@ public sealed class BackgroundDispatchRunner
         var errorSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
         var decisionStandardOutput = outputSnapshot.DecisionText;
         var decisionStandardError = errorSnapshot.DecisionText;
+        string? finalPlannerRejectionDiagnostic = null;
         var hasChildExitRecord = TryReadChildExitRecord(processRecord.ChildExitRecordPath, out var childExitRecord);
         var wrapperExitReconciled = false;
         var resourceAccounting = capturedResourceAccounting ?? ReleaseTrackedProcessJobs(processRecord);
@@ -1255,10 +1256,20 @@ public sealed class BackgroundDispatchRunner
             if (!plannerContract.Succeeded || plannerContract.Plan is null)
             {
                 exitCode = 1;
+                var rejectionDiagnostic = plannerContract.Diagnostic;
+                if (!PlannerOutputContract.TryPersistRejectionDiagnostic(
+                        processRecord.StandardErrorPath,
+                        rejectionDiagnostic,
+                        out var persistenceDiagnostic))
+                {
+                    rejectionDiagnostic = AppendDiagnostic(
+                        rejectionDiagnostic,
+                        $"Full Planner rejection could not be persisted to '{processRecord.StandardErrorPath}': {persistenceDiagnostic}");
+                }
+
+                finalPlannerRejectionDiagnostic = rejectionDiagnostic;
                 standardErrorDiagnostic = AppendDiagnostic(
-                    AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
-                        plannerContract.Diagnostic),
+                    standardErrorDiagnostic ?? string.Empty,
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerOutputContractRejected));
             }
             else
@@ -1487,8 +1498,8 @@ public sealed class BackgroundDispatchRunner
         // snapshot. Kernel classification reparses the snapshot for directives and blockers.
         var standardOutput = outputSnapshot.BoundedText;
         var standardError = AppendDiagnostic(
-            errorSnapshot.BoundedText,
-            standardErrorDiagnostic);
+            AppendDiagnostic(errorSnapshot.BoundedText, standardErrorDiagnostic),
+            finalPlannerRejectionDiagnostic);
         if (!exitArtifactAlreadyExisted)
         {
             TryWriteExitCode(

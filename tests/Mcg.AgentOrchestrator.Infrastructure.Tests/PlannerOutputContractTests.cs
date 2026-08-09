@@ -272,6 +272,137 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void PlannerContract_ExtensionlessCsCitationResolvesAndRetainsAuditNote()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var sourceDirectory = Path.Combine(workingDirectory, "src");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "ExistingTarget.cs"), "// fixture");
+        var rawCitation = "src/ExistingTarget";
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Extend `{rawCitation}` with focused resolver coverage and preserve its downstream file contract.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains("`src/ExistingTarget.cs`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            "raw citation `src/ExistingTarget` resolved to `src/ExistingTarget.cs`",
+            result.Plan,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_LiveRoundFiveExtensionlessCitationResolves()
+    {
+        const string receiptCitation = "tests/Mcg.AgentOrchestrator.Core.Tests/DispatchOutcomeClassifyTests";
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        Xunit.Assert.True(
+            File.Exists(Path.Combine(repositoryRoot, receiptCitation.Replace('/', Path.DirectorySeparatorChar) + ".cs")),
+            "The live receipt file moved; update this receipt-pinned test independently of the resolver rule.");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Extend `{receiptCitation}` with focused classification coverage for the verified Planner rejection receipt.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, repositoryRoot);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains($"`{receiptCitation}.cs`", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_ExtensionlessMissingCitationStillFails()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var citation = "src/GenuinelyMissingTarget";
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Extend `{citation}` with focused negative-control coverage for nonexistent targets.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains($"target citation '{citation}' does not exist", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Offending citation: '{citation}'", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_CaseMismatchedCsCandidateSuggestsButDoesNotResolve()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var sourceDirectory = Path.Combine(workingDirectory, "src");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "ExactCase.cs"), "// fixture");
+        var citation = "src/exactcase";
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Extend `{citation}` with focused case-sensitive resolution coverage for cross-platform consistency.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("Did you mean `src/ExactCase.cs`?", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Offending citation: '{citation}'", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_LiteralPathWinsWhenCsCandidateAlsoExists()
+    {
+        var workingDirectory = CreateTempDirectory();
+        var sourceDirectory = Path.Combine(workingDirectory, "src");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "LiteralTarget"), "literal fixture");
+        File.WriteAllText(Path.Combine(sourceDirectory, "LiteralTarget.cs"), "suffixed fixture");
+        const string citation = "src/LiteralTarget";
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Extend `{citation}` with focused literal-first resolution coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains($"`{citation}`", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Planner contract note", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_RejectionIsCompleteInRoundAndRecordedLog()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-09T03:07:55Z"));
+        var citation = "tests/Mcg.AgentOrchestrator.Core.Tests/" + new string('Q', 600);
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            $"- Extend `{citation}` with focused rejection-recovery coverage for the stored Planner round.");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            Mcg.AgentOrchestrator.Core.AgentRole.Planner,
+            plan,
+            new string('x', Mcg.AgentOrchestrator.Core.VerificationTextBounds.BoundThreshold * 2),
+            clock);
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        var expected = $"Offending citation: '{citation}'";
+        Xunit.Assert.Contains(expected, task.LastVerification!.StandardError, StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            expected,
+            Mcg.AgentOrchestrator.App.Rendering.OutputTextPreview
+                .CreateVerificationLog(task.LastVerification.StandardError, task.LastVerification.StandardErrorPath)
+                .Text,
+            StringComparison.Ordinal);
+        Xunit.Assert.Contains(expected, File.ReadAllText(process.StandardErrorPath), StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_PublishedDirectiveStatesDescriptiveArtifactKindForm()
     {
         var directive = string.Join(
@@ -282,6 +413,8 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.Contains("up to three descriptive words", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("artifact-kind noun", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("period, semicolon, or the end of the line", directive, StringComparison.Ordinal);
+        Xunit.Assert.Contains("stdout is authoritative", directive, StringComparison.Ordinal);
+        Xunit.Assert.Contains("writing a separate artifact is not required", directive, StringComparison.Ordinal);
     }
 
     private static string ReplaceSectionBody(string plan, string heading, string replacement)
