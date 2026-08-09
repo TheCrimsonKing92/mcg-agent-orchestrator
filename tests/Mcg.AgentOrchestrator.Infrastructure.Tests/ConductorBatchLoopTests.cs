@@ -238,20 +238,24 @@ public sealed class ConductorBatchLoopTests
         var policy = ConductorAutonomyPolicy.Conservative with
         {
             Name = "OperatorTuned",
-            MaxConcurrentPaidWorkers = 8
+            MaxConcurrentPaidWorkers = ConductorBatchLoop.WorkerAdmissionCapacity + 2
         };
+        var driver = MakeDriver(hasGateReadyGoal: () => true);
+        var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
         var output = CaptureConsole(() =>
             new ConductorBatchLoop().Run(
                 kernel,
-                MakeDriver(hasGateReadyGoal: () => true),
+                driver,
                 policy,
                 NoStopPath(),
                 maxIterations: 0,
                 journalMode: "wal"));
 
+        Assert.True(workerAdmission.EffectiveWorkerCap < workerAdmission.ConfiguredWorkerCap);
+        Assert.Equal(ConductorBatchLoop.WorkerAdmissionCapacity - 1, workerAdmission.EffectiveWorkerCap);
         Assert.Contains("LOOP_START policy=OperatorTuned", output, StringComparison.Ordinal);
         Assert.Contains("policySource=preset", output, StringComparison.Ordinal);
-        Assert.Contains("configuredWorkerCap=8", output, StringComparison.Ordinal);
+        Assert.Contains("configuredWorkerCap=11", output, StringComparison.Ordinal);
         Assert.Contains("workerAdmissionCapacity=9", output, StringComparison.Ordinal);
         Assert.Contains("reservedGateSlots=1", output, StringComparison.Ordinal);
         Assert.Contains("effectiveWorkerCap=8", output, StringComparison.Ordinal);

@@ -2354,10 +2354,13 @@ internal sealed class ConductorDriver
         {
             var reservedGateSlot = workerAdmission.ReservedGateSlots > 0 &&
                                    workerCap < policy.MaxConcurrentPaidWorkers;
-            if (reservedGateSlot)
+            var admissionClamped = workerCap < workerAdmission.ConfiguredWorkerCap;
+            if (admissionClamped)
             {
+                var reason = reservedGateSlot ? "reserved-gate-slot" : "worker-admission-capacity";
                 Console.WriteLine(
-                    $"ADMISSION goal={goalPrefix} result=deferred reason=reserved-gate-slot cap={workerCap} running={running}");
+                    $"ADMISSION goal={goalPrefix} result=deferred reason={reason} cap={workerCap} running={running} " +
+                    $"configuredCap={workerAdmission.ConfiguredWorkerCap} admissionCapacity={workerAdmission.AdmissionCapacity}");
             }
 
             EmitPhaseTiming("dispatch-prep", goal, TimeSpan.Zero, $"tasks={CountAssignedTasks(goal)} result=held-cap running={running}");
@@ -2365,7 +2368,9 @@ internal sealed class ConductorDriver
                 new ConductorAdvanceOutcome.Held(fromState,
                     reservedGateSlot
                         ? $"At worker cap ({running}/{workerCap}) with a gate-ready goal reserving a stable slot; will advance when a slot opens"
-                        : $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
+                        : admissionClamped
+                            ? $"At worker admission capacity ({running}/{workerCap}); configured cap {workerAdmission.ConfiguredWorkerCap} is clamped; will advance when a slot opens"
+                            : $"At worker cap ({running}/{workerCap}); will advance when a slot opens"));
         }
 
         if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))

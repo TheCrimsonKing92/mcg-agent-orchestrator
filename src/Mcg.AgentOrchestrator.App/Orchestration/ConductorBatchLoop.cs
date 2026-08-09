@@ -31,9 +31,11 @@ internal sealed class ConductorBatchLoop
         DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
     // Paid-worker ADMISSION pool that the gate-slot reservation (ConductorDriver worker-cap)
     // draws from. Deliberately INDEPENDENT of build concurrency / acceptance width: coding
-    // workers do not hold build slots. The pool supports the current operator-configured target
-    // of eight paid workers plus one stable gate slot (observed board demand, 2026-08-08).
-    // Provider cooldowns are handled separately; memory-aware scaling is not yet implemented.
+    // workers do not hold build slots. On the 47.9-GiB operator host, a reviewed paid-worker
+    // dispatch peaked at 1,750,343,680 bytes. Limiting workers to one third of physical memory
+    // yields floor(51,385,864,192 / 3 / 1,750,343,680) = 9, leaving two thirds for the OS,
+    // dashboard, builds, and acceptance gates (observed 2026-08-08). Provider cooldowns are
+    // handled separately; revisit this fixed limit when memory-aware admission is implemented.
     // Do NOT tie this to BuildConcurrencySlotCount or DefaultParallelAcceptanceCapacity.
     internal const int WorkerAdmissionCapacity = 9;
     internal const int DefaultUnscopedStallTickThreshold = 3;

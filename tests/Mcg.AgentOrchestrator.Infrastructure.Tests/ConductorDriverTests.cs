@@ -1144,6 +1144,54 @@ public sealed class ConductorDriverTests
         Assert.Equal(GoalLifecycleState.WorkspaceReady, ((ConductorAdvanceOutcome.Executed)result.Outcome).FromState);
     }
 
+    [Xunit.Theory(DisplayName = "ConductorDriver_worker_admission_snapshot_clamps_above_capacity")]
+    [Xunit.InlineData(false, 0)]
+    [Xunit.InlineData(true, 1)]
+    public void ConductorDriverWorkerAdmissionSnapshotClampsAboveCapacity(bool gateReady, int expectedReservedSlots)
+    {
+        var policy = ConductorAutonomyPolicy.Conservative with
+        {
+            MaxConcurrentPaidWorkers = ConductorBatchLoop.WorkerAdmissionCapacity + 3
+        };
+        var driver = MakeDriver(hasGateReadyGoal: () => gateReady);
+
+        var snapshot = driver.GetWorkerAdmissionSnapshot(policy);
+
+        Assert.Equal(policy.MaxConcurrentPaidWorkers, snapshot.ConfiguredWorkerCap);
+        Assert.Equal(ConductorBatchLoop.WorkerAdmissionCapacity, snapshot.AdmissionCapacity);
+        Assert.Equal(expectedReservedSlots, snapshot.ReservedGateSlots);
+        Assert.Equal(ConductorBatchLoop.WorkerAdmissionCapacity - expectedReservedSlots, snapshot.EffectiveWorkerCap);
+        Assert.True(snapshot.EffectiveWorkerCap < snapshot.ConfiguredWorkerCap);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_capacity_clamp_reports_effective_cap_and_deferral")]
+    public void ConductorDriverWorkspaceReadyCapacityClampReportsEffectiveCapAndDeferral()
+    {
+        var (_, goal) = SimpleGoal();
+        var policy = ConductorAutonomyPolicy.Conservative with
+        {
+            MaxConcurrentPaidWorkers = ConductorBatchLoop.WorkerAdmissionCapacity + 3
+        };
+        var dispatchCalled = false;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorBatchLoop.WorkerAdmissionCapacity,
+            dispatchAndStart: _ => { dispatchCalled = true; return DispatchStartOutcome.Started(); },
+            hasGateReadyGoal: () => false);
+
+        ConductorAdvanceResult? result = null;
+        var output = AsyncLocalConsoleRouter.Capture(() => result = driver.AdvanceOnce(goal, policy));
+
+        Assert.False(dispatchCalled);
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result!.Outcome);
+        Assert.Contains("worker admission capacity (9/9)", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("configured cap 12 is clamped", held.Reason, StringComparison.Ordinal);
+        Assert.Contains("ADMISSION", output, StringComparison.Ordinal);
+        Assert.Contains("reason=worker-admission-capacity", output, StringComparison.Ordinal);
+        Assert.Contains("cap=9", output, StringComparison.Ordinal);
+        Assert.Contains("configuredCap=12", output, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_WorkspaceReady_reserves_acceptance_capacity_not_build_permit_count")]
     public void ConductorDriverWorkspaceReadyReservesAcceptanceCapacityNotBuildPermitCount()
     {
