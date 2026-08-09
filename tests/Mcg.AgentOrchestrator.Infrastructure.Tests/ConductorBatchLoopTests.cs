@@ -8760,6 +8760,9 @@ public sealed class ConductorBatchLoopTests
         var plannerPlan = WorkerDispatchTestSupport.PlannerContractPlanFixture().Replace(
             "`seed.txt`, ",
             string.Empty,
+            StringComparison.Ordinal).Replace(
+            WorkerDispatchTestSupport.PlannerContractAcceptanceMappingBody,
+            "1. disposition=undecidable; would-settle=an historical diagnostic; required-source=the original process; unavailable-because=the process never recorded it",
             StringComparison.Ordinal);
         File.WriteAllText(stdout, string.Join(Environment.NewLine,
             plannerPlan,
@@ -8797,6 +8800,7 @@ public sealed class ConductorBatchLoopTests
 
         Assert.Equal(WorkTaskStatus.Completed, planner.Status);
         Assert.Equal(WorkTaskStatus.Running, researcher.Status);
+        Assert.Empty(kernel.GetPendingHumanInput(goal.Id));
         Assert.Equal([researcher.Id], dispatchCalls);
         Assert.Equal(1, summary.Advanced);
     }

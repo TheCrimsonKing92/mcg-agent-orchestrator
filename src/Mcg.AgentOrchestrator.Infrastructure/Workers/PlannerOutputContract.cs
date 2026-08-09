@@ -383,19 +383,89 @@ internal static partial class PlannerOutputContract
             ? sections[mappingIndex + 1].Start
             : FindPlanEnd(normalized, mapping.BodyStart);
         var body = normalized[mapping.BodyStart..end];
+        var mappingLines = new Dictionary<int, string>();
+        foreach (var line in body.Split('\n'))
+        {
+            var match = CriterionMappingLine().Match(line);
+            if (match.Success && int.TryParse(match.Groups["criterion"].Value, out var criterion))
+            {
+                mappingLines.TryAdd(criterion, match.Groups["mapping"].Value.Trim());
+            }
+        }
+
         for (var criterion = 1; criterion <= criterionCount; criterion++)
         {
-            if (!Regex.IsMatch(
-                    body,
-                    $@"(?im)^[ \t]*(?:[-*][ \t]+)?(?:criterion[ \t]+)?{criterion}(?:[.)\]:-]|[ \t]+(?:maps?|→|=>))"))
+            if (!mappingLines.ContainsKey(criterion))
             {
                 diagnostic = $"acceptance criterion mapping is incomplete: criterion {criterion} is unmapped";
                 return false;
             }
         }
 
+        // Historical durable receipts predate dispositions and remain readable. Once a plan uses the
+        // new grammar, every criterion must use it so one undecidable item cannot hide an unmapped peer.
+        var usesDispositionGrammar = mappingLines.Values.Any(mapping =>
+            Regex.IsMatch(mapping, @"(?i)\bdisposition\s*="));
+        if (!usesDispositionGrammar)
+        {
+            return true;
+        }
+
+        for (var criterion = 1; criterion <= criterionCount; criterion++)
+        {
+            var fields = ParseCriterionMappingFields(mappingLines[criterion]);
+            if (!fields.TryGetValue("disposition", out var disposition))
+            {
+                diagnostic = $"acceptance criterion {criterion} must declare disposition=planned or disposition=undecidable";
+                return false;
+            }
+
+            if (disposition.Equals("planned", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!fields.TryGetValue("plan", out var plannedMapping) || string.IsNullOrWhiteSpace(plannedMapping))
+                {
+                    diagnostic = $"acceptance criterion {criterion} with disposition=planned must include a non-empty plan";
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (!disposition.Equals("undecidable", StringComparison.OrdinalIgnoreCase))
+            {
+                diagnostic = $"acceptance criterion {criterion} has unknown disposition '{disposition}'";
+                return false;
+            }
+
+            foreach (var requiredField in new[] { "would-settle", "required-source", "unavailable-because" })
+            {
+                if (!fields.TryGetValue(requiredField, out var value) || string.IsNullOrWhiteSpace(value))
+                {
+                    diagnostic = $"acceptance criterion {criterion} with disposition=undecidable must include a non-empty {requiredField}";
+                    return false;
+                }
+            }
+        }
+
         return true;
     }
+
+    private static Dictionary<string, string> ParseCriterionMappingFields(string mapping)
+    {
+        var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in CriterionMappingField().Matches(mapping))
+        {
+            fields[match.Groups["name"].Value] = match.Groups["value"].Value.Trim();
+        }
+
+        return fields;
+    }
+
+    [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?:criterion[ \t]+)?(?<criterion>\d+)(?:[.)\]:-]|[ \t]+(?:maps?|→|=>))[ \t]*(?<mapping>.*)$", RegexOptions.IgnoreCase)]
+    private static partial Regex CriterionMappingLine();
+
+    [GeneratedRegex(@"(?i)(?<name>disposition|plan|would-settle|required-source|unavailable-because)\s*=\s*(?<value>[^;]+)")]
+    private static partial Regex CriterionMappingField();
 
     private static bool TryResolveCitedPaths(
         string plan,

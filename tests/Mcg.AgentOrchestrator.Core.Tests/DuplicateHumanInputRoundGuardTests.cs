@@ -3,6 +3,28 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class DuplicateHumanInputRoundGuardTests
 {
     [Xunit.Fact]
+    public void StablePlannerEvidenceFingerprintSurfacesRepeatedOccurrences()
+    {
+        var (_, kernel, goal, task) = CreateScenario();
+        var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(2, "third-round-receipt");
+
+        kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "First wording.",
+            questionFingerprint: fingerprint);
+        kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Different wording.",
+            questionFingerprint: fingerprint);
+
+        var item = Assert.Single(kernel.BuildHumanInputWorklist(goal.Id).Items);
+        Assert.Equal(2, item.OccurrenceCount);
+        Assert.Contains("Occurrences: 2", item.SuggestedAction, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void Clean_rounds_after_one_answered_raise_never_suppress_or_fail()
     {
         var (clock, kernel, goal, task) = CreateScenario();

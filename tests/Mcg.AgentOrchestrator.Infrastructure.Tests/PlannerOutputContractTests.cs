@@ -450,6 +450,52 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         Xunit.Assert.Contains("period, semicolon, or the end of the line", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("stdout is authoritative", directive, StringComparison.Ordinal);
         Xunit.Assert.Contains("writing a separate artifact is not required", directive, StringComparison.Ordinal);
+        Xunit.Assert.Contains("disposition=undecidable", directive, StringComparison.Ordinal);
+        Xunit.Assert.Contains("PLANNER_EVIDENCE_REQUEST:", directive, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_AcceptsMixedPlannedAndUndecidableCriterionMappings()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping",
+            """
+            1. disposition=undecidable; would-settle=the original wrapper diagnostic; required-source=the historical wrapper process; unavailable-because=the process exited without recording it
+            2. disposition=planned; plan=Implement the remaining behavior through the existing durable receipt and verify its downstream projection.
+            """);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Recover the historical cause.", "Implement the remaining behavior."]);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.Contains("disposition=undecidable", result.Plan, StringComparison.Ordinal);
+        Xunit.Assert.Contains("2. disposition=planned", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("1. disposition=undecidable; required-source=wrapper; unavailable-because=never recorded", "would-settle")]
+    [Xunit.InlineData("1. disposition=undecidable; would-settle=diagnostic; unavailable-because=never recorded", "required-source")]
+    [Xunit.InlineData("1. disposition=planned", "plan")]
+    public void PlannerContract_RejectsIncompleteDispositionMappings(string mapping, string missingField)
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Acceptance criteria mapping", mapping);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Map the criterion."]);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains(missingField, result.Diagnostic, StringComparison.Ordinal);
     }
 
     private static string ReplaceSectionBody(string plan, string heading, string replacement)

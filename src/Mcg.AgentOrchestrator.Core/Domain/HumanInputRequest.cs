@@ -359,6 +359,21 @@ public sealed class HumanInputRequest
 
     public static string BuildQuestionFingerprint(string question) => BuildFingerprint(Normalize(question));
 
+    public static string BuildPlannerEvidenceFingerprint(int criterionIndex, string evidenceKey)
+    {
+        if (criterionIndex <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(criterionIndex));
+        }
+
+        if (string.IsNullOrWhiteSpace(evidenceKey))
+        {
+            throw new ArgumentException("Value cannot be empty.", nameof(evidenceKey));
+        }
+
+        return BuildFingerprint($"planner-evidence\ncriterion:{criterionIndex}\nevidence:{Normalize(evidenceKey)}");
+    }
+
     public static string BuildWorkerResultBlockerFingerprint(
         TaskId taskId,
         AgentRole role,

@@ -1,4 +1,16 @@
+using System.Text.Json;
+
 namespace Mcg.AgentOrchestrator.Core;
+
+public sealed record HumanInputDirective(
+    string Question,
+    string QuestionFingerprint,
+    string? BlockerFingerprint = null);
+
+public sealed record HumanInputDirectiveParseResult(HumanInputDirective? Directive, string? Diagnostic)
+{
+    public bool IsMalformed => !string.IsNullOrWhiteSpace(Diagnostic);
+}
 
 public static class AgentOutputDirectives
 {
@@ -20,6 +32,10 @@ public static class AgentOutputDirectives
                 "Use these exact substantive headings: ## Premise validity; ## Acceptance criteria mapping; ## Target seams and symbols; " +
                 "## Ownership and lifecycle; ## External and edge contracts; ## Integration seams; ## Verification commands and classes; ## Risks and stop conditions. " +
                 "Map every numbered acceptance criterion, and state valid/invalid premise evidence, backticked file/symbol citations, the owner/lifecycle decision, external and unhappy-path contracts, integration sequence, " +
+                "For every criterion mapping use `disposition=planned; plan=<mapping>` or `disposition=undecidable; would-settle=<evidence>; required-source=<producer/store>; unavailable-because=<reason>`. " +
+                "An undecidable criterion does not block other criteria and requires `blockers: none` when no operator action is needed. " +
+                "For evidence that exists only in an unreadable store, emit exactly one `PLANNER_EVIDENCE_REQUEST:` JSON directive with criterion_index, evidence_key, availability=retrievable, store, needed, and reason. " +
+                "For evidence that was never recorded, prefer an undecidable mapping; if operator action is still required, use availability=never-recorded and omit store. " +
                 "backticked verification commands with TEST-VERIFIABLE or REAL-WORLD-DEPENDENT, and explicit stop conditions. " +
                 "Cited repository paths must exist unless explicitly marked as a new file to create. " +
                 "Mark a new file with the exact token `(new file)` or `— new file` immediately after its backticked path, " +
@@ -92,19 +108,131 @@ public static class AgentOutputDirectives
     }
 
     public static string? TryParseHumanInputRequest(string output)
+        => ParseHumanInputRequest(output).Directive?.Question;
+
+    public static HumanInputDirectiveParseResult ParseHumanInputRequest(string output, AgentRole? role = null)
     {
-        foreach (var line in output.Split(["\r\n", "\n"], StringSplitOptions.None))
+        var lines = output.Split(["\r\n", "\n"], StringSplitOptions.None);
+        var evidenceRequests = lines
+            .Select(line => line.Trim())
+            .Where(line => line.StartsWith("PLANNER_EVIDENCE_REQUEST:", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (evidenceRequests.Length > 1)
+        {
+            return MalformedEvidenceRequest("exactly one evidence request may be emitted per round");
+        }
+
+        if (evidenceRequests.Length == 1)
+        {
+            if (role is not null && role != AgentRole.Planner)
+            {
+                return new HumanInputDirectiveParseResult(
+                    null,
+                    "PLANNER_EVIDENCE_REQUEST is valid only for the Planner role");
+            }
+
+            var evidenceRequest = evidenceRequests[0];
+            return ParsePlannerEvidenceRequest(evidenceRequest["PLANNER_EVIDENCE_REQUEST:".Length..].Trim());
+        }
+
+        foreach (var line in lines)
         {
             var trimmed = line.Trim();
             var question = TryReadDirective(trimmed, "HUMAN_INPUT:")
                 ?? TryReadDirective(trimmed, "HUMAN INPUT:");
             if (!string.IsNullOrWhiteSpace(question))
             {
-                return question;
+                return new HumanInputDirectiveParseResult(
+                    new HumanInputDirective(question, HumanInputRequest.BuildQuestionFingerprint(question)),
+                    null);
             }
         }
 
-        return null;
+        return new HumanInputDirectiveParseResult(null, null);
+    }
+
+    private static HumanInputDirectiveParseResult ParsePlannerEvidenceRequest(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return MalformedEvidenceRequest("payload must be a JSON object");
+            }
+
+            var root = document.RootElement;
+            if (!TryGetPositiveInt(root, "criterion_index", out var criterionIndex) ||
+                !TryGetRequiredString(root, "evidence_key", out var evidenceKey) ||
+                !TryGetRequiredString(root, "availability", out var availability) ||
+                !TryGetRequiredString(root, "needed", out var needed) ||
+                !TryGetRequiredString(root, "reason", out var reason))
+            {
+                return MalformedEvidenceRequest(
+                    "criterion_index must be positive and evidence_key, availability, needed, and reason must be non-empty");
+            }
+
+            var hasStore = TryGetRequiredString(root, "store", out var store);
+            string availabilityText;
+            if (availability.Equals("retrievable", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!hasStore)
+                {
+                    return MalformedEvidenceRequest("retrievable evidence must name a non-empty store");
+                }
+
+                availabilityText = $"retrievable from store '{store}', which the worker cannot reach";
+            }
+            else if (availability.Equals("never-recorded", StringComparison.OrdinalIgnoreCase))
+            {
+                if (hasStore)
+                {
+                    return MalformedEvidenceRequest("never-recorded evidence must not name a store");
+                }
+
+                availabilityText = "never-recorded; the evidence does not exist in an available record";
+            }
+            else
+            {
+                return MalformedEvidenceRequest("availability must be retrievable or never-recorded");
+            }
+
+            var question =
+                $"Planner evidence request for criterion {criterionIndex}: {needed}. " +
+                $"Availability: {availabilityText}. Reason: {reason}";
+            var fingerprint = HumanInputRequest.BuildPlannerEvidenceFingerprint(criterionIndex, evidenceKey);
+            return new HumanInputDirectiveParseResult(
+                new HumanInputDirective(question, fingerprint, fingerprint),
+                null);
+        }
+        catch (JsonException error)
+        {
+            return MalformedEvidenceRequest($"payload is not valid JSON: {error.Message}");
+        }
+    }
+
+    private static HumanInputDirectiveParseResult MalformedEvidenceRequest(string diagnostic) =>
+        new(null, $"Malformed PLANNER_EVIDENCE_REQUEST: {diagnostic}.");
+
+    private static bool TryGetPositiveInt(JsonElement root, string name, out int value)
+    {
+        value = 0;
+        return root.TryGetProperty(name, out var property) &&
+               property.ValueKind == JsonValueKind.Number &&
+               property.TryGetInt32(out value) &&
+               value > 0;
+    }
+
+    private static bool TryGetRequiredString(JsonElement root, string name, out string value)
+    {
+        value = string.Empty;
+        if (!root.TryGetProperty(name, out var property) || property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = property.GetString()?.Trim() ?? string.Empty;
+        return value.Length > 0;
     }
 
     private static string? TryReadDirective(string value, string prefix)

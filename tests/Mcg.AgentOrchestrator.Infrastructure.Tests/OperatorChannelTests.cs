@@ -899,6 +899,30 @@ public sealed class OperatorChannelTests : CliCommandTestBase
         Assert.Equal($"acceptance {goal.Id.Value[..8]} --autonomy supervised-auto", item.SuggestedCommand);
     }
 
+    [Xunit.Fact]
+    public void HumanInputInboxSurfacesRepeatedOccurrenceCount()
+    {
+        var workspace = BuildTestWorkspace();
+        var (kernel, goal, task) = BuildKernelWithSingleTaskGoal();
+        const string fingerprint = "stable-evidence-fingerprint";
+        kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Retrieve the missing receipt.",
+            questionFingerprint: fingerprint);
+        kernel.RequestHumanInputDeduplicated(
+            goal.Id,
+            task.Id,
+            "Retrieve that receipt from the store.",
+            questionFingerprint: fingerprint);
+
+        var item = OperatorInbox.Build(kernel, [], WorkerProfileCatalog.Default(), workspace, goal.Id.Value[..8])
+            .Items
+            .Single(candidate => candidate.Kind == OperatorInboxKind.HumanInput);
+
+        Assert.Contains("Occurrences: 2", item.Message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "RecordLandingEscalation_inbox_still_recorded_when_channel_throws")]
     public void RecordLandingEscalationInboxStillRecordedWhenChannelThrows()
     {
