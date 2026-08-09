@@ -492,11 +492,14 @@ public sealed class AcceptanceGateEngineSettingsTests
             }
             """);
         const string displayName = "structural coverage discovers Core through direct MTP";
+        const string relocatedSource =
+            "tests/Mcg.AgentOrchestrator.Core.Tests/RelocatedCoverageTests.cs";
         var calls = new List<string[]>();
         var buildPermitChecks = 0;
+        var discoveryInvocationCount = 0;
         DotnetBuildEnvironmentLease? buildLease = null;
         GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
-        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [relocatedSource];
         try
         {
             buildLease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
@@ -525,7 +528,18 @@ public sealed class AcceptanceGateEngineSettingsTests
 
                 if (arguments.Contains("--list-tests"))
                 {
-                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, displayName));
+                    var listTestsIndex = Array.IndexOf(arguments, "--list-tests");
+                    Xunit.Assert.Equal("json", arguments[listTestsIndex + 1]);
+                    var discovery = discoveryInvocationCount++ == 0
+                        ? CreateMtpDiscoveryJson(
+                            root,
+                            (displayName, "tests/Mcg.AgentOrchestrator.Core.Tests/CoreCoverageTests.cs"))
+                        : CreateMtpDiscoveryJson(
+                            root,
+                            (displayName, "tests/Mcg.AgentOrchestrator.Core.Tests/CoreCoverageTests.cs"),
+                            ("relocated coverage case one", relocatedSource),
+                            ("relocated coverage case two", relocatedSource));
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, discovery));
                 }
 
                 if (arguments.Contains("--report-trx-filename"))
@@ -550,7 +564,11 @@ public sealed class AcceptanceGateEngineSettingsTests
             var discoveryCalls = calls.Where(call => call.Contains("--list-tests")).ToArray();
             Xunit.Assert.Equal(2, discoveryCalls.Length);
             Xunit.Assert.All(discoveryCalls, call =>
-                Xunit.Assert.NotEqual("dotnet", call[0], StringComparer.OrdinalIgnoreCase));
+            {
+                Xunit.Assert.NotEqual("dotnet", call[0], StringComparer.OrdinalIgnoreCase);
+                var listTestsIndex = Array.IndexOf(call, "--list-tests");
+                Xunit.Assert.Equal("json", call[listTestsIndex + 1]);
+            });
         }
         finally
         {
@@ -865,6 +883,27 @@ public sealed class AcceptanceGateEngineSettingsTests
             Path.Combine(resultsDirectory, arguments[trxFileIndex + 1]),
             $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{displayName}\"><TestMethod className=\"{testClass}\" name=\"{method}\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{displayName}\" outcome=\"Passed\" /></Results></TestRun>");
     }
+
+    private static string CreateMtpDiscoveryJson(
+        string repositoryRoot,
+        params (string DisplayName, string SourceFile)[] tests) =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            tests = tests.Select((test, index) => new
+            {
+                uid = $"test-{index:D4}",
+                displayName = test.DisplayName,
+                location = new
+                {
+                    file = Path.Combine(
+                        repositoryRoot,
+                        test.SourceFile.Replace('/', Path.DirectorySeparatorChar)),
+                    lineStart = index + 1,
+                    lineEnd = index + 1
+                }
+            })
+        });
 
     private static void AssertLanePairPreservesCoverage(
         AcceptanceGateEngineSettings settings,

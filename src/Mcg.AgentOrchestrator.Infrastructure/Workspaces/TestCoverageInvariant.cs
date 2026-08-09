@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -18,6 +20,10 @@ internal sealed record TestCoverageInvariantResult(
     IReadOnlyList<string> EmptyPartitions,
     string? FailureClassification,
     IReadOnlyList<string> ExecutedTests);
+
+internal sealed record TestDiscoverySnapshot(
+    IReadOnlySet<string> Tests,
+    IReadOnlyDictionary<string, string>? SourceFilesByTest);
 
 internal static class TestCoverageInvariant
 {
@@ -51,7 +57,24 @@ internal static class TestCoverageInvariant
         "Error"
     ];
 
-    public static IReadOnlySet<string> ParseDiscoveredTests(string output, bool bareTestList = false)
+    public static IReadOnlySet<string> ParseDiscoveredTests(string output, bool bareTestList = false) =>
+        ParseDiscovery(output, bareTestList).Tests;
+
+    public static TestDiscoverySnapshot ParseDiscovery(
+        string output,
+        bool bareTestList = false,
+        string? repositoryRoot = null)
+    {
+        var structured = TryParseStructuredDiscovery(output, repositoryRoot);
+        if (structured is not null)
+        {
+            return structured;
+        }
+
+        return new TestDiscoverySnapshot(ParseTextDiscovery(output, bareTestList), null);
+    }
+
+    private static IReadOnlySet<string> ParseTextDiscovery(string output, bool bareTestList)
     {
         var tests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var inTestList = false;
@@ -96,6 +119,79 @@ internal static class TestCoverageInvariant
         }
 
         return tests;
+    }
+
+    private static TestDiscoverySnapshot? TryParseStructuredDiscovery(
+        string output,
+        string? repositoryRoot)
+    {
+        var schemaVersion = output.IndexOf("\"schemaVersion\"", StringComparison.Ordinal);
+        var jsonStart = schemaVersion < 0 ? -1 : output.LastIndexOf('{', schemaVersion);
+        if (jsonStart < 0 ||
+            !output.AsSpan(schemaVersion).Contains("\"tests\"", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        try
+        {
+            var utf8 = Encoding.UTF8.GetBytes(output[jsonStart..]);
+            var reader = new Utf8JsonReader(utf8);
+            using var document = JsonDocument.ParseValue(ref reader);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("tests", out var discoveredTests) ||
+                discoveredTests.ValueKind != JsonValueKind.Array)
+            {
+                throw new InvalidDataException("Structured test discovery did not contain a tests array.");
+            }
+
+            var tests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var sourceFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var ambiguousSourceFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var discoveredTest in discoveredTests.EnumerateArray())
+            {
+                if (!discoveredTest.TryGetProperty("displayName", out var displayNameElement))
+                {
+                    continue;
+                }
+
+                var identity = NormalizeIdentity(displayNameElement.GetString());
+                if (string.IsNullOrWhiteSpace(identity))
+                {
+                    continue;
+                }
+
+                tests.Add(identity);
+                if (ambiguousSourceFiles.Contains(identity) ||
+                    !discoveredTest.TryGetProperty("location", out var location) ||
+                    !location.TryGetProperty("file", out var fileElement))
+                {
+                    continue;
+                }
+
+                var sourceFile = NormalizeSourcePath(fileElement.GetString(), repositoryRoot);
+                if (string.IsNullOrWhiteSpace(sourceFile))
+                {
+                    continue;
+                }
+
+                if (sourceFiles.TryGetValue(identity, out var existingSourceFile) &&
+                    !existingSourceFile.Equals(sourceFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    sourceFiles.Remove(identity);
+                    ambiguousSourceFiles.Add(identity);
+                    continue;
+                }
+
+                sourceFiles[identity] = sourceFile;
+            }
+
+            return new TestDiscoverySnapshot(tests, sourceFiles);
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException("Structured test discovery JSON could not be parsed.", exception);
+        }
     }
 
     public static IReadOnlySet<string> ReadCompletedTests(IEnumerable<string> trxPaths) =>
@@ -161,7 +257,8 @@ internal static class TestCoverageInvariant
         IReadOnlyList<TestPartitionCoverage> partitions,
         IReadOnlySet<string>? mainDiscoveredTests = null,
         IReadOnlyList<string>? deletedTestFiles = null,
-        string? currentAttemptId = null)
+        string? currentAttemptId = null,
+        IReadOnlyDictionary<string, string>? mainDiscoveredTestSourceFiles = null)
     {
         if (candidateDiscoveredTests.Count == 0)
         {
@@ -212,24 +309,71 @@ internal static class TestCoverageInvariant
             .Where(discovered => !accountedTests.Any(accounted => IdentitiesMatch(discovered, accounted)))
             .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var attributionReceipts = new List<string>();
 
         if (mainDiscoveredTests is not null)
         {
-            var deletedClassNames = (deletedTestFiles ?? [])
+            var normalizedDeletedTestFiles = (deletedTestFiles ?? [])
+                .Select(path => NormalizeSourcePath(path, repositoryRoot: null))
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var deletedClassNames = normalizedDeletedTestFiles
                 .Select(Path.GetFileNameWithoutExtension)
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .ToArray();
-            var deletedMainTestCount = mainDiscoveredTests.Count(mainTest =>
-                deletedClassNames.Any(className =>
-                    IdentityBelongsToDeletedTestFile(mainTest, className!)));
-            var unmatchedDeletedFileCount = Math.Min(
-                deletedClassNames.Count(className =>
-                    !mainDiscoveredTests.Any(mainTest =>
-                        IdentityBelongsToDeletedTestFile(mainTest, className!))),
-                mainDiscoveredTests.Count(mainTest =>
-                    !HasClassQualifiedIdentity(mainTest) &&
-                    !deletedClassNames.Any(className =>
-                        IdentityBelongsToDeletedTestFile(mainTest, className!))));
+            // Structured MTP discovery identifies the source file directly. Prefer that exact
+            // attribution over the legacy filename/class-name heuristic. Location metadata is
+            // optional, however, so an unattributed deleted file retains at most the legacy
+            // one-test credit and emits a named receipt instead of silently tightening the gate.
+            int deletedMainTestCount;
+            var unmatchedDeletedFileCount = 0;
+            if (mainDiscoveredTestSourceFiles is not null)
+            {
+                deletedMainTestCount = 0;
+                var unattributedDeletedFiles = new List<string>();
+                foreach (var deletedTestFile in normalizedDeletedTestFiles)
+                {
+                    var attributedTestCount = mainDiscoveredTests.Count(mainTest =>
+                        mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) &&
+                        IsUsableRepositoryRelativeSourcePath(sourceFile) &&
+                        sourceFile.Equals(deletedTestFile, StringComparison.OrdinalIgnoreCase));
+                    if (attributedTestCount > 0)
+                    {
+                        deletedMainTestCount += attributedTestCount;
+                    }
+                    else
+                    {
+                        unattributedDeletedFiles.Add(deletedTestFile);
+                    }
+                }
+
+                var testsWithoutUsableAttribution = mainDiscoveredTests.Count(mainTest =>
+                    !mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) ||
+                    !IsUsableRepositoryRelativeSourcePath(sourceFile));
+                unmatchedDeletedFileCount = Math.Min(
+                    unattributedDeletedFiles.Count,
+                    testsWithoutUsableAttribution);
+                for (var index = 0; index < unattributedDeletedFiles.Count; index++)
+                {
+                    attributionReceipts.Add(
+                        $"cross-generation-attribution:source=mtp-json-location,file={unattributedDeletedFiles[index]},status=unattributed,fallback=legacy-one-per-file,credit={(index < unmatchedDeletedFileCount ? 1 : 0)}");
+                }
+            }
+            else
+            {
+                deletedMainTestCount = mainDiscoveredTests.Count(mainTest =>
+                    deletedClassNames.Any(className =>
+                        IdentityBelongsToDeletedTestFile(mainTest, className!)));
+                unmatchedDeletedFileCount = Math.Min(
+                    deletedClassNames.Count(className =>
+                        !mainDiscoveredTests.Any(mainTest =>
+                            IdentityBelongsToDeletedTestFile(mainTest, className!))),
+                    mainDiscoveredTests.Count(mainTest =>
+                        !HasClassQualifiedIdentity(mainTest) &&
+                        !deletedClassNames.Any(className =>
+                            IdentityBelongsToDeletedTestFile(mainTest, className!))));
+            }
             var minimumCandidateCount = Math.Max(
                 0,
                 mainDiscoveredTests.Count - deletedMainTestCount - unmatchedDeletedFileCount);
@@ -244,6 +388,10 @@ internal static class TestCoverageInvariant
         var summary = passed
             ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, partitions={partitions.Count}"
             : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
+        if (attributionReceipts.Count > 0)
+        {
+            summary += $"; {string.Join("; ", attributionReceipts)}";
+        }
         var failureClassification = passed
             ? null
             : partitions.Any(partition =>
@@ -281,6 +429,37 @@ internal static class TestCoverageInvariant
         var normalized = NormalizeIdentity(identity);
         var separator = normalized.LastIndexOf('.');
         return separator > 0 && separator < normalized.Length - 1;
+    }
+
+    private static bool IsUsableRepositoryRelativeSourcePath(string path) =>
+        !string.IsNullOrWhiteSpace(path) &&
+        !Path.IsPathRooted(path) &&
+        !path.Equals("..", StringComparison.Ordinal) &&
+        !path.StartsWith("../", StringComparison.Ordinal);
+
+    private static string NormalizeSourcePath(string? path, string? repositoryRoot)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return string.Empty;
+        }
+
+        var normalized = path.Trim();
+        if (!string.IsNullOrWhiteSpace(repositoryRoot) && Path.IsPathRooted(normalized))
+        {
+            var relative = Path.GetRelativePath(repositoryRoot, normalized);
+            if (relative.Equals("..", StringComparison.Ordinal) ||
+                relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+            else
+            {
+                normalized = relative;
+            }
+        }
+
+        return normalized.Replace('\\', '/').TrimStart('/');
     }
 
     private static bool IsBareTestListDiagnostic(string line) =>
