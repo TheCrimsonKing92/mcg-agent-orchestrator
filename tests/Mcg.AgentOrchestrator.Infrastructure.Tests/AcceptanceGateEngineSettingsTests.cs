@@ -13,6 +13,33 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
         Xunit.Assert.Equal(18, settings.InfrastructureTestLanes.Count);
+        var expectedEstimates = new Dictionary<string, double>(StringComparer.Ordinal)
+        {
+            ["Cli"] = 11.4,
+            ["Worker shell"] = 9.1,
+            ["Worker sandbox planner"] = 9.3,
+            ["Dashboard validation"] = 9.2,
+            ["Conduct watch sweep scoping"] = 10.0,
+            ["Goal lifecycle commands"] = 248.4,
+            ["Goal worktree cleanup"] = 327.3,
+            ["Worker profiles"] = 45.8,
+            ["Worker dispatch fixtures"] = 354.0,
+            ["Process spawning"] = 230.2,
+            ["Chaos gate"] = 75.1,
+            ["Dotnet build slots"] = 201.2,
+            ["Goal acceptance verifier"] = 30.5,
+            ["Goal acceptance build slots"] = 326.0,
+            ["Provider environment"] = 11.3,
+            ["Remainder balance A"] = 136.6,
+            ["Remainder balance B"] = 33.1,
+            ["Remainder"] = 176.6
+        };
+        Xunit.Assert.Equal(
+            expectedEstimates,
+            settings.InfrastructureTestLanes.ToDictionary(
+                lane => lane.Name,
+                lane => lane.EstimatedSerialSeconds,
+                StringComparer.Ordinal));
         Xunit.Assert.All(
             settings.InfrastructureTestLanes,
             lane => Xunit.Assert.True(

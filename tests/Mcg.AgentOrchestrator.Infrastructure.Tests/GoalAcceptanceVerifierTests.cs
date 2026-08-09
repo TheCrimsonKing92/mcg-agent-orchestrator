@@ -3431,10 +3431,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     "exclusiveResourceKeys": [ "shared-a", "beta-only" ]
                   },
                   {
-                    "name": "Disjoint",
-                    "filter": "FullyQualifiedName~DisjointTests",
+                    "name": "Beta-only follower",
+                    "filter": "FullyQualifiedName~BetaOnlyFollowerTests",
                     "estimatedSerialSeconds": 80,
-                    "exclusiveResourceKeys": [ "disjoint" ]
+                    "exclusiveResourceKeys": [ "beta-only" ]
                   }
                 ],
                 "mtpInvocations": [
@@ -3464,14 +3464,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             }
             """);
         var firstConflictStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var disjointStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var betaOnlyFollowerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var firstConflictFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var activeExecutions = 0;
         var peakExecutions = 0;
         var activeConflicts = 0;
         var peakConflicts = 0;
         var conflictEntries = 0;
-        var disjointOverlappedConflict = 0;
+        var betaOnlyFollowerOverlappedConflict = 0;
         try
         {
             static void RecordPeak(ref int peak, int active)
@@ -3527,7 +3527,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     if (conflictOrdinal == 1)
                     {
                         firstConflictStarted.TrySetResult();
-                        await disjointStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                        await betaOnlyFollowerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     }
                     else if (conflictOrdinal == 2)
                     {
@@ -3540,10 +3540,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                         await firstConflictStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                         if (!firstConflictFinished.Task.IsCompleted)
                         {
-                            Interlocked.Exchange(ref disjointOverlappedConflict, 1);
+                            Interlocked.Exchange(ref betaOnlyFollowerOverlappedConflict, 1);
                         }
 
-                        disjointStarted.TrySetResult();
+                        betaOnlyFollowerStarted.TrySetResult();
                         await firstConflictFinished.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     }
 
@@ -3577,7 +3577,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Equal(2, conflictEntries);
             Assert.Equal(1, peakConflicts);
             Assert.Equal(2, peakExecutions);
-            Assert.Equal(1, disjointOverlappedConflict);
+            Assert.Equal(1, betaOnlyFollowerOverlappedConflict);
         }
         finally
         {
@@ -3588,8 +3588,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_cancellation_while_waiting_for_execution_slot_does_not_over_release")]
-    public async Task GoalAcceptanceVerifierCancellationWhileWaitingForExecutionSlotDoesNotOverRelease()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_cancellation_leaves_pending_resource_keys_unreserved")]
+    public async Task GoalAcceptanceVerifierCancellationLeavesPendingResourceKeysUnreserved()
     {
         GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
         GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
@@ -3604,19 +3604,26 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 "maxConcurrentShards": 2,
                 "infrastructureTestLanes": [
                   {
-                    "name": "Holder alpha",
-                    "filter": "FullyQualifiedName~HolderAlphaTests",
-                    "estimatedSerialSeconds": 100
+                    "name": "Resource holder",
+                    "filter": "FullyQualifiedName~ResourceHolderTests",
+                    "estimatedSerialSeconds": 100,
+                    "exclusiveResourceKeys": [ "z-holder" ]
                   },
                   {
-                    "name": "Holder beta",
-                    "filter": "FullyQualifiedName~HolderBetaTests",
+                    "name": "Slot holder",
+                    "filter": "FullyQualifiedName~SlotHolderTests",
                     "estimatedSerialSeconds": 90
                   },
                   {
                     "name": "Resource waiter",
                     "filter": "FullyQualifiedName~ResourceWaiterTests",
                     "estimatedSerialSeconds": 80,
+                    "exclusiveResourceKeys": [ "shared", "z-holder" ]
+                  },
+                  {
+                    "name": "Shared-key probe",
+                    "filter": "FullyQualifiedName~SharedKeyProbeTests",
+                    "estimatedSerialSeconds": 70,
                     "exclusiveResourceKeys": [ "shared" ]
                   }
                 ],
@@ -3646,19 +3653,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "forbiddenChangedPathGlobs": []
             }
             """);
-        var bothHoldersStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var waiterParked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseHolders = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var holderCount = 0;
+        var resourceHolderStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slotHolderStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sharedKeyProbeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseResourceHolder = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSlotHolder = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSharedKeyProbe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var waiterRan = 0;
         using var cancellation = new CancellationTokenSource();
-        GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = checkName =>
-        {
-            if (checkName.EndsWith(": Resource waiter", StringComparison.Ordinal))
-            {
-                waiterParked.TrySetResult();
-            }
-        };
+        Task? verification = null;
         try
         {
             async Task<GoalAcceptanceVerifier.CommandResult> RunShardAsync(
@@ -3685,37 +3688,51 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
                 var filterIndex = Array.IndexOf(args, "--filter-class");
                 Assert.True(filterIndex >= 0 && filterIndex + 1 < args.Length);
-                if (args[filterIndex + 1].Contains("Holder", StringComparison.Ordinal))
+                var filter = args[filterIndex + 1];
+                WriteMtpTrx(args);
+                if (filter.Contains("ResourceHolder", StringComparison.Ordinal))
                 {
-                    if (Interlocked.Increment(ref holderCount) == 2)
-                    {
-                        bothHoldersStarted.TrySetResult();
-                    }
+                    resourceHolderStarted.TrySetResult();
+                    await releaseResourceHolder.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+                }
 
-                    WriteMtpTrx(args);
-                    await releaseHolders.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (filter.Contains("SlotHolder", StringComparison.Ordinal))
+                {
+                    slotHolderStarted.TrySetResult();
+                    await releaseSlotHolder.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
+                }
+
+                if (filter.Contains("SharedKeyProbe", StringComparison.Ordinal))
+                {
+                    sharedKeyProbeStarted.TrySetResult();
+                    await releaseSharedKeyProbe.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
                 }
 
                 Interlocked.Exchange(ref waiterRan, 1);
-                WriteMtpTrx(args);
                 return new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1");
             }
 
             var verifier = new GoalAcceptanceVerifier(RunShardAsync);
             using var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
                 TimeSpan.FromSeconds(2));
-            var verification = verifier.RunAsync(
+            verification = verifier.RunAsync(
                 root,
                 new GoalId("77777777777777777777777777777777"),
                 stableSlotIndex: StableSlotIndex(lease.Environment.ArtifactsPath),
                 stableSlotLease: lease,
                 cancellationToken: cancellation.Token);
 
-            await bothHoldersStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await waiterParked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.WhenAll(
+                resourceHolderStarted.Task,
+                slotHolderStarted.Task).WaitAsync(TimeSpan.FromSeconds(5));
+            releaseSlotHolder.TrySetResult();
+            await sharedKeyProbeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             cancellation.Cancel();
-            releaseHolders.TrySetResult();
+            releaseResourceHolder.TrySetResult();
+            releaseSharedKeyProbe.TrySetResult();
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => verification.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -3727,8 +3744,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
         finally
         {
-            releaseHolders.TrySetResult();
-            GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = null;
+            cancellation.Cancel();
+            releaseResourceHolder.TrySetResult();
+            releaseSlotHolder.TrySetResult();
+            releaseSharedKeyProbe.TrySetResult();
+            if (verification is not null && !verification.IsCompleted)
+            {
+                _ = await Record.ExceptionAsync(
+                    () => verification.WaitAsync(TimeSpan.FromSeconds(5)));
+            }
+
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
