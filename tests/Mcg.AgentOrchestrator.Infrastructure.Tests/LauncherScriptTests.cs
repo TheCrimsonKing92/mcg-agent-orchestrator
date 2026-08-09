@@ -63,10 +63,36 @@ public sealed class LauncherScriptTests
         var repoRoot = FindLauncherSourceRoot();
         var runbook = File.ReadAllText(Path.Combine(repoRoot, "docs", "operator-runbook.md"));
 
-        Assert.Contains(
-            "If a gate defect blocks an otherwise green goal, file and fix the gate bug, then re-run acceptance; do not bypass the gate.",
-            runbook);
+        Assert.True(
+            RunbookStatesNoGateBypassNorm(runbook),
+            "docs/operator-runbook.md must retain the phrase 'do not bypass the gate'.");
         Assert.DoesNotContain(RetiredManualLandingScriptName(), runbook, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Runbook_no_gate_bypass_norm_removed_warning_returns_false")]
+    public void RunbookNoGateBypassNorm_RemovedWarning_ReturnsFalse()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var runbook = File.ReadAllText(Path.Combine(repoRoot, "docs", "operator-runbook.md"));
+        var withoutWarning = CollapseWhitespace(runbook).Replace(
+            "do not bypass the gate",
+            string.Empty,
+            StringComparison.OrdinalIgnoreCase);
+
+        Assert.False(RunbookStatesNoGateBypassNorm(withoutWarning));
+    }
+
+    [Xunit.Fact(DisplayName = "Runbook_no_gate_bypass_norm_reworded_and_reflowed_returns_true")]
+    public void RunbookNoGateBypassNorm_RewordedAndReflowed_ReturnsTrue()
+    {
+        const string reworded = "Resolve the defect first; do not bypass the gate while recovery proceeds.";
+        const string recasedAndReflowed = """
+            Do not bypass
+            the gate while recovery proceeds.
+            """;
+
+        Assert.True(RunbookStatesNoGateBypassNorm(reworded));
+        Assert.True(RunbookStatesNoGateBypassNorm(recasedAndReflowed));
     }
 
     [Xunit.Fact(DisplayName = "Permission_allowlist_keeps_acceptance_and_excludes_retired_manual_landing_script")]
@@ -1160,6 +1186,17 @@ public sealed class LauncherScriptTests
 
     private static string EscapePowerShellSingleQuoted(string value) =>
         value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static bool RunbookStatesNoGateBypassNorm(string runbook)
+    {
+        const string noGateBypassNorm = "do not bypass the gate";
+        return CollapseWhitespace(runbook).Contains(
+            CollapseWhitespace(noGateBypassNorm),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string CollapseWhitespace(string value) =>
+        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private static string RetiredManualLandingScriptName() =>
         string.Concat("Land-", "Verified", "Goal.ps1");
