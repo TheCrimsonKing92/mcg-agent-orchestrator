@@ -173,4 +173,41 @@ public sealed class SandboxCommitBlockedFailureTests
 
         Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(role), verification));
     }
+
+    [Xunit.Theory(DisplayName = "IsSandboxCommitBlockedFailure_excludes_read_only_roles_under_a_recorded_dispatch")]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void ExcludesReadOnlyRolesUnderRecordedDispatch(AgentRole role)
+    {
+        var verification = Verification(
+            1,
+            WorkerResultStdout,
+            "fatal: Unable to create '.../.git/worktrees/abc/index.lock': Permission denied");
+
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-sandbox-role-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var clock = new FakeClock();
+            var kernel = new AgentOrchestratorKernel(clock);
+            var goal = kernel.CreateGoal("Classify sandbox evidence");
+            kernel.ActivateGoal(goal.Id, DefaultAgents());
+            var task = goal.Tasks.First(candidate => candidate.RequiredRole == role);
+            kernel.RecordTaskDispatch(
+                goal.Id,
+                task.Id,
+                new TaskDispatchRecord("codex-cli", "opaque command", root, clock.UtcNow));
+
+            Assert.NotNull(task.LastDispatch);
+            Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(task, verification));
+            Assert.NotEqual(
+                DispatchOutcomeKind.SandboxCommitBlocked,
+                DispatchFailureClassifier.Classify(task, verification).Kind);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }
