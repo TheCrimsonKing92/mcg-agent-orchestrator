@@ -13,6 +13,15 @@ public sealed record GoalLifecycleFacts(
 
 public static class GoalLifecycle
 {
+    public const string ActiveWithFailedTaskCondition = "active-with-failed-task";
+
+    public static bool HasActiveFailedTask(Goal goal)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        return goal.Status == GoalStatus.Active &&
+            goal.Tasks.Any(task => task.Status == WorkTaskStatus.Failed);
+    }
+
     /// <summary>
     /// Maps a goal to its current canonical lifecycle state using only goal domain state
     /// and externally-supplied workspace/dispatch facts. Pure — no side effects, no I/O.

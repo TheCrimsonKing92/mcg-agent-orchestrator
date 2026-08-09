@@ -16,7 +16,10 @@ public static GoalSummaryDto ToGoalSummary(Goal goal, string? executionDirectory
         goal.Tasks.Count,
         goal.Timeline.LastOrDefault()?.OccurredAt)
     {
-        StatusText = GoalStatusText(goal.Status, lifecycle)
+        StatusText = GoalStatusText(goal.Status, lifecycle),
+        Condition = GoalLifecycle.HasActiveFailedTask(goal)
+            ? GoalLifecycle.ActiveWithFailedTaskCondition
+            : null
     };
 }
 

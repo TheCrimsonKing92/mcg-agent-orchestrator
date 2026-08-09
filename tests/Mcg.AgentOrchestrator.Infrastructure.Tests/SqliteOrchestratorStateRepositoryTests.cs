@@ -553,6 +553,26 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.True(listing.All(m => !string.IsNullOrEmpty(m.UpdatedAt)));
     }
 
+    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_list_metadata_surfaces_active_failed_condition")]
+    public async Task ListMetadataSurfacesActiveFailedCondition()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Find failed work from the aggregate view",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, goal.Tasks.Single().Id, WorkTaskStatus.Failed, "failed");
+        await repo.SaveAsync(kernel);
+
+        var summary = Assert.Single(await repo.ListGoalMetadataAsync());
+        var conductSummary = Assert.Single(await repo.ListConductLoopGoalMetadataAsync());
+
+        Assert.Equal(GoalStatus.Active.ToString(), summary.Status);
+        Assert.Equal(GoalLifecycle.ActiveWithFailedTaskCondition, summary.Condition);
+        Assert.Equal(GoalLifecycle.ActiveWithFailedTaskCondition, conductSummary.Condition);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_load_goals_filters_before_snapshot_deserialization")]
     public async Task LoadGoalsFiltersBeforeSnapshotDeserialization()
     {

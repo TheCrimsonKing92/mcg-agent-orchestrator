@@ -342,6 +342,7 @@ internal sealed record DistributedArchitectureDto(
 internal sealed record GoalSummaryDto(string Id, string Objective, GoalStatus Status, int TotalTasks, DateTimeOffset? LastEventAt)
 {
     public string StatusText { get; init; } = DashboardDisplayNames.Display(Status);
+    public string? Condition { get; init; }
 }
 
 internal sealed record GoalDetailDto(

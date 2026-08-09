@@ -59,6 +59,71 @@ public sealed class ConductorBatchLoopTests
         kernel.RecordTaskVerification(goal.Id, task.Id, verification);
     }
 
+    private static (AgentOrchestratorKernel Kernel, Goal Goal, TaskSpec Reviewer) ReviewerIdentityMovedWithoutTouchProof()
+    {
+        const string workingDirectory = "C:\\tmp";
+        const string diagnostic =
+            "Round-diff touch proof unavailable because the carried finding round has no reviewed-commit baseline.";
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review implementation", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Escalate an unclassifiable review finding", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        var prior = new ReviewFinding(
+            "F-IDENTITY",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/A.cs", "A.Run", "guard"),
+            "Blocking guard is missing.",
+            FindingSeverity.Blocking);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            reviewer.Id,
+            new TaskDispatchRecord("reviewer", "review-seed", workingDirectory, DateTimeOffset.UtcNow));
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-seed",
+            workingDirectory,
+            0,
+            StructuredReviewerResult(prior, "needs-work"),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "fresh review");
+        var moved = prior with { Location = new ReviewFindingLocation("src/B.cs", "B.Run", "guard") };
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            reviewer.Id,
+            new TaskDispatchRecord(
+                "reviewer",
+                "review-moved",
+                workingDirectory,
+                DateTimeOffset.UtcNow,
+                ReviewFindingTouchedAnchors: [],
+                ReviewFindingTouchProofDiagnostic: diagnostic));
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-moved",
+            workingDirectory,
+            0,
+            StructuredReviewerResult(moved, "needs-work"),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+
+        return (kernel, goal, reviewer);
+
+        static string StructuredReviewerResult(ReviewFinding finding, string verdict) => string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected evidence",
+            "blockers: exact-blocker - blocking guard remains open",
+            $"findings: {JsonSerializer.Serialize(new[] { finding })}",
+            "touched_anchors: []",
+            $"verdict: {verdict}",
+            "END_WORKER_RESULT");
+    }
+
     private static Exception SqliteBusy() =>
         new InvalidOperationException("SQLite Error 5: 'database is locked'.");
 
@@ -11149,6 +11214,36 @@ public sealed class ConductorBatchLoopTests
                 .Select(goal => goal.Id == goalId.Value ? goal with { Status = status } : goal)
                 .ToArray()
         });
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorBatchLoop_identity_moved_without_touch_proof_emits_immediate_goal_escalation")]
+    public void IdentityMovedWithoutTouchProofEmitsImmediateGoalEscalation()
+    {
+        var root = CreateTempDirectory("mcg-review-identity-escalation");
+        var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+        var (kernel, goal, reviewer) = ReviewerIdentityMovedWithoutTouchProof();
+        Assert.Equal(GoalStatus.Active, goal.Status);
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+
+        new ConductorBatchLoop(
+            conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
+                kernel,
+                MakeDriver(getFacts: _ => GoalLifecycleFacts.None),
+                ConductorAutonomyPolicy.Permissive,
+                NoStopPath(),
+                maxIterations: 1);
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+        var escalation = Assert.Single(records.Where(record => record.EventKind == "goal-escalation"));
+        Assert.Equal(goal.Id.Value[..8], escalation.GoalId);
+        Assert.Contains(reviewer.Id.Value[..8], escalation.Detail, StringComparison.Ordinal);
+        Assert.Contains("ERR_REVIEW_FINDING_IDENTITY_MOVED", escalation.Detail, StringComparison.Ordinal);
+        Assert.Contains("suppression=missing-system-derived-round-diff-proof", escalation.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(records, record => record.EventKind == "goal-stalled");
     }
 
     [Xunit.Fact(Timeout = 30_000)]

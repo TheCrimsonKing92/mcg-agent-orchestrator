@@ -751,16 +751,22 @@ public static partial class DashboardRenderer
     {
         html.AppendLine("<section>");
         html.AppendLine("<h2>Goals</h2>");
-        html.AppendLine("<table><thead><tr><th>Goal</th><th>Status</th><th>Tasks</th><th>Attention</th><th>Pending Input</th></tr></thead><tbody>");
+        html.AppendLine("<table><thead><tr><th>Goal</th><th>Status</th><th>Condition</th><th>Tasks</th><th>Attention</th><th>Pending Input</th></tr></thead><tbody>");
         foreach (var goal in displayedGoals)
         {
             var monitor = kernel.BuildMonitor(goal.Id);
             var prefix = goal.Id.Value[..8];
             var attentionClass = monitor.AttentionItems.Count > 0 ? " class=\"bad\"" : "";
             var inputClass = monitor.PendingHumanInputCount > 0 ? " class=\"bad\"" : "";
-            html.AppendLine("<tr>");
+            var condition = GoalLifecycle.HasActiveFailedTask(goal)
+                ? GoalLifecycle.ActiveWithFailedTaskCondition
+                : string.Empty;
+            var conditionText = condition.Length > 0 ? condition : "&mdash;";
+            var conditionClass = condition.Length > 0 ? " class=\"bad\"" : string.Empty;
+            html.AppendLine($"<tr data-condition=\"{Encode(condition)}\">");
             html.AppendLine($"<td><a href=\"/goal/{Encode(prefix)}\">{Encode(TruncateObjective(goal.Objective))}</a></td>");
             html.AppendLine($"<td><span class=\"pill\">{Encode(DisplayGoalStatus(goal, options))}</span></td>");
+            html.AppendLine($"<td{conditionClass}>{conditionText}</td>");
             html.AppendLine($"<td>{monitor.TotalTasks}</td>");
             html.AppendLine($"<td{attentionClass}>{monitor.AttentionItems.Count}</td>");
             html.AppendLine($"<td{inputClass}>{monitor.PendingHumanInputCount}</td>");
