@@ -71,7 +71,8 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
             ? ReviewRetryCapReceipt.Create(
                 goal,
                 ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound))
-            : null);
+            : null,
+        citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace));
 }
 
 public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -252,7 +253,8 @@ public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
         safeBatch.TaskIds,
-        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound));
+        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound),
+        citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace));
 }
 
 public static WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -284,7 +286,8 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
         DateTimeOffset.UtcNow,
         modelOverride,
         allowGitReference,
-        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound));
+        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound),
+        citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace));
 }
 
 public static SubscriptionStartResult StartSubscriptionReadyTasks(
@@ -317,7 +320,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
         safeBatch.TaskIds,
-        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound));
+        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound),
+        citedPriorEvidenceResolver: CreateCitedPriorEvidenceResolver(workspace));
     var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
         dispatch.Task.InterruptedDispatchRecoveryId is not null);
     if (!containsInterruptedDispatchRecovery &&
@@ -348,6 +352,9 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         safeBatch.Plan,
         safeBatch.Blocked.Concat(batch.Blocked).ToList());
 }
+
+private static CitedPriorEvidenceResolver CreateCitedPriorEvidenceResolver(OrchestratorWorkspace workspace) =>
+    CitedPriorEvidenceResolver.ForStateDatabase(workspace.SqliteStatePath);
 
 private static int ResolveReviewAutoRetryStopRound(
     OrchestratorWorkspace workspace,

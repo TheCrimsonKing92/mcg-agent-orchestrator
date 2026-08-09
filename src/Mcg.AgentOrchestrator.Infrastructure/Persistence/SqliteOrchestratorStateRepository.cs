@@ -1680,6 +1680,88 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         }, cancellationToken);
     }
 
+    internal async Task<IReadOnlyList<GoalSnapshot>> FindGoalSnapshotsByIdPrefixAsync(
+        string idPrefix,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateHistoricalIdPrefixLookup(idPrefix, limit);
+        return await WithBusyRetryAsync(async () =>
+        {
+            var matches = new List<GoalSnapshot>();
+            await using var conn = OpenConnection();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT snapshot_json FROM goals WHERE id LIKE $prefix COLLATE NOCASE ORDER BY id LIMIT $limit";
+            cmd.Parameters.AddWithValue("$prefix", idPrefix + "%");
+            cmd.Parameters.AddWithValue("$limit", limit);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var snapshot = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions)
+                    ?? throw new InvalidOperationException("Stored goal snapshot could not be deserialized.");
+                matches.Add(snapshot);
+            }
+
+            return (IReadOnlyList<GoalSnapshot>)matches;
+        }, cancellationToken);
+    }
+
+    internal async Task<IReadOnlyList<CitedPriorTaskMatch>> FindTaskSnapshotsByIdPrefixAsync(
+        string idPrefix,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateHistoricalIdPrefixLookup(idPrefix, limit);
+        return await WithBusyRetryAsync(async () =>
+        {
+            var matches = new List<CitedPriorTaskMatch>();
+            await using var conn = OpenConnection();
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT goals.snapshot_json
+                FROM goals
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM json_each(goals.snapshot_json, '$.Tasks') AS task
+                    WHERE json_extract(task.value, '$.Id') LIKE $prefix COLLATE NOCASE
+                )
+                ORDER BY goals.id
+                LIMIT $limit
+                """;
+            cmd.Parameters.AddWithValue("$prefix", idPrefix + "%");
+            cmd.Parameters.AddWithValue("$limit", limit);
+            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var goal = JsonSerializer.Deserialize<GoalSnapshot>(reader.GetString(0), SerializerOptions)
+                    ?? throw new InvalidOperationException("Stored goal snapshot could not be deserialized.");
+                foreach (var task in goal.Tasks.Where(task => task.Id.StartsWith(idPrefix, StringComparison.OrdinalIgnoreCase)))
+                {
+                    matches.Add(new CitedPriorTaskMatch(goal, task));
+                    if (matches.Count == limit)
+                    {
+                        return (IReadOnlyList<CitedPriorTaskMatch>)matches;
+                    }
+                }
+            }
+
+            return (IReadOnlyList<CitedPriorTaskMatch>)matches;
+        }, cancellationToken);
+    }
+
+    private static void ValidateHistoricalIdPrefixLookup(string idPrefix, int limit)
+    {
+        if (idPrefix.Length is < 8 or > 32 || idPrefix.Any(character => !Uri.IsHexDigit(character)))
+        {
+            throw new ArgumentException("Historical id prefixes must contain 8 to 32 hexadecimal characters.", nameof(idPrefix));
+        }
+
+        if (limit is < 1 or > 2)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), "Historical id prefix lookups are capped at two matches.");
+        }
+    }
+
     public static async Task<long?> TryLoadGoalStateVersionAsync(
         string dbPath,
         string goalId,
