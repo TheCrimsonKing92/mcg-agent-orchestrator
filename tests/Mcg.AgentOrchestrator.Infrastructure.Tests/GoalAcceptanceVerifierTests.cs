@@ -7971,12 +7971,17 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_treats_rename_sources_as_deleted_from_their_former_project")]
     public void GoalAcceptanceVerifierTreatsRenameSourcesAsDeletedFromTheirFormerProject()
     {
-        var deleted = GoalAcceptanceVerifier.ParseDeletedTestFiles("""
+        var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
+            """
             M	tests/Infrastructure.Tests/UnchangedTests.cs
             D	tests/Infrastructure.Tests/DeletedTests.cs
             R100	tests/Infrastructure.Tests/MovedTests.cs	tests/Infrastructure.Tests/Extracted/MovedTests.cs
             A	tests/Infrastructure.Tests/AddedTests.cs
-            """);
+            """,
+            "tests/Infrastructure.Tests/Infrastructure.Tests.csproj",
+            destination => destination.Contains("/Extracted/")
+                ? "tests/Infrastructure.Tests/Extracted/Extracted.Tests.csproj"
+                : "tests/Infrastructure.Tests/Infrastructure.Tests.csproj");
 
         Assert.Equal(
             [
