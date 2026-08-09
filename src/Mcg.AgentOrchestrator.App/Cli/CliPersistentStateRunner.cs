@@ -1748,6 +1748,7 @@ internal static class CliPersistentStateRunner
         currentGoal = ResolveCurrentGoal(kernel, goalId.Value);
         var updatedCurrentGoal = currentGoal;
         var acceptanceFinalStatePersisted = false;
+        var acceptanceGuardAborted = false;
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
             PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
@@ -1769,41 +1770,20 @@ internal static class CliPersistentStateRunner
                         }
 
                         var transactionKernel = KernelFromGoalSnapshot(snapshot);
-                        var transactionGoal = transactionKernel.Goals.FirstOrDefault(goal => goal.Id == request.GoalId)
-                            ?? throw new InvalidOperationException($"Goal '{request.GoalId.Value}' no longer exists; retry acceptance.");
-                        if (transactionGoal.Status != GoalStatus.Verified)
+                        var currentGuard = AcceptanceMergeGuard.Capture(transactionKernel, request.GoalId);
+                        if (AcceptanceMergeGuard.Compare(request.ExpectedGuard, currentGuard) is { } stateMismatch)
                         {
-                            var guardedResult = GuardedAcceptanceFailure(
-                                transactionKernel,
-                                request.GoalId,
-                                $"Goal '{request.GoalId.Value[..8]}' state changed during acceptance verification; retry acceptance.");
-                            var guardedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
+                            var guardedResult = GuardedAcceptanceAbort(request.GoalId, stateMismatch);
                             return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
-                                (true, guardedSnapshot, (guardedResult, guardedSnapshot)));
-                        }
-
-                        var currentFingerprint = BuildGoalFingerprint(transactionKernel, request.GoalId);
-                        if (!string.Equals(currentFingerprint, request.ExpectedGoalFingerprint, StringComparison.Ordinal))
-                        {
-                            var guardedResult = GuardedAcceptanceFailure(
-                                transactionKernel,
-                                request.GoalId,
-                                $"Goal '{request.GoalId.Value[..8]}' state changed during acceptance verification; retry acceptance.");
-                            var guardedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
-                            return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
-                                (true, guardedSnapshot, (guardedResult, guardedSnapshot)));
+                                (false, snapshot, (guardedResult, snapshot)));
                         }
 
                         var currentHead = ResolveWorktreeHead(workspace.ExecutionDirectory, request.GoalId);
-                        if (!string.Equals(currentHead, request.TestedWorktreeHead, StringComparison.Ordinal))
+                        if (AcceptanceMergeGuard.CompareWorktreeHead(request.TestedWorktreeHead, currentHead) is { } headMismatch)
                         {
-                            var guardedResult = GuardedAcceptanceFailure(
-                                transactionKernel,
-                                request.GoalId,
-                                $"Goal '{request.GoalId.Value[..8]}' worktree changed during acceptance verification; retry acceptance.");
-                            var guardedSnapshot = ExportGoalSnapshot(transactionKernel, request.GoalId);
+                            var guardedResult = GuardedAcceptanceAbort(request.GoalId, headMismatch);
                             return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
-                                (true, guardedSnapshot, (guardedResult, guardedSnapshot)));
+                                (false, snapshot, (guardedResult, snapshot)));
                         }
 
                         var result = request.Merge();
@@ -1824,6 +1804,7 @@ internal static class CliPersistentStateRunner
                 .GetAwaiter()
                 .GetResult();
             acceptanceFinalStatePersisted = true;
+            acceptanceGuardAborted = transactionResult.Result.GuardAborted;
             updatedCurrentGoal = KernelFromGoalSnapshot(transactionResult.Snapshot).GetGoal(request.GoalId);
             return transactionResult.Result;
         }
@@ -1847,7 +1828,10 @@ internal static class CliPersistentStateRunner
 
         if (acceptanceFinalStatePersisted)
         {
-            PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
+            if (!acceptanceGuardAborted)
+            {
+                PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
+            }
             return shouldSave;
         }
 
@@ -1934,13 +1918,12 @@ internal static class CliPersistentStateRunner
         return head.Output.Trim();
     }
 
-    private static AcceptanceMergeCommitResult GuardedAcceptanceFailure(
-        AgentOrchestratorKernel kernel,
+    private static AcceptanceMergeCommitResult GuardedAcceptanceAbort(
         GoalId goalId,
-        string reason)
+        AcceptanceMergeGuardMismatch mismatch)
     {
-        kernel.RecordAcceptanceFailure(goalId, [reason]);
-        return new AcceptanceMergeCommitResult(false, reason, GuardFailure: true);
+        var reason = AcceptanceMergeGuard.BuildAbortMessage(goalId, mismatch, verificationPassed: true);
+        return new AcceptanceMergeCommitResult(false, reason, mismatch);
     }
 
     private static IReadOnlyDictionary<(GoalId GoalId, TaskId TaskId), ProcessRefreshIdentity> CaptureRunningProcessIdentities(
@@ -2497,25 +2480,6 @@ internal static class CliPersistentStateRunner
         ProcessRefreshIdentity ExpectedIdentity,
         TaskProcessRecord Process,
         TaskVerificationRecord? Verification);
-
-    private static string BuildGoalFingerprint(AgentOrchestratorKernel kernel, GoalId goalId)
-    {
-        var snapshot = kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
-            ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists; retry acceptance.");
-        var landingRelevantState = new
-        {
-            Tasks = snapshot.Tasks
-                .OrderBy(task => task.Id, StringComparer.Ordinal)
-                .Select(task => new
-                {
-                    task.Id,
-                    Role = task.RequiredRole,
-                    task.Status
-                })
-        };
-
-        return JsonSerializer.Serialize(landingRelevantState);
-    }
 
     private static Goal? ResolveCurrentGoal(AgentOrchestratorKernel kernel, string? currentGoalId)
     {

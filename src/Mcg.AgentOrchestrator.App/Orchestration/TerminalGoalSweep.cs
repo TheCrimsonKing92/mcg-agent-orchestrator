@@ -1102,9 +1102,25 @@ internal static class TerminalGoalSweep
         GoalGitFactIndex branchFactIndex)
     {
         var branchHeadSha = branchFactIndex.TryGetGoalBranchTip(goal.Id);
+        var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
         var passedGate = GoalOperationJournal.NewestPassedGateForBranch(
-            GoalOperationJournal.Read(executionDirectory, goal.Id),
+            journal,
             branchHeadSha);
+        var newerGuardAbort = journal.Entries
+            .Where(entry =>
+                string.Equals(entry.BranchHeadSha?.Trim(), branchHeadSha?.Trim(), StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(entry.AcceptanceOutcome, "aborted:state-guard", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(entry => entry.At)
+            .FirstOrDefault(entry => passedGate is null || entry.At >= passedGate.At);
+        if (newerGuardAbort is not null)
+        {
+            var receipt = passedGate?.IdempotencyKey ?? "none";
+            return TerminalGoalRemedy.OperatorOnly(
+                goal.Id,
+                prefix,
+                $"Quiesce conductor mutations for goal {prefix}, then run acceptance {prefix}; prior passing gate receipt {receipt} remains recorded.");
+        }
+
         var artifact = passedGate is null || string.IsNullOrWhiteSpace(branchHeadSha)
             ? null
             : new TerminalGoalGateArtifact(

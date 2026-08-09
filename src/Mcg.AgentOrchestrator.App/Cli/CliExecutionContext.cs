@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -168,7 +169,7 @@ internal sealed class CliPhaseTimingRecorder(string commandName, bool enabled = 
 
 internal sealed record AcceptanceMergeCommitRequest(
     GoalId GoalId,
-    string ExpectedGoalFingerprint,
+    AcceptanceMergeGuardSnapshot ExpectedGuard,
     string? TestedWorktreeHead,
     Func<AcceptanceMergeCommitResult> Merge,
     string CompletionReason);
@@ -176,7 +177,10 @@ internal sealed record AcceptanceMergeCommitRequest(
 internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
     string? Message,
-    bool GuardFailure = false);
+    AcceptanceMergeGuardMismatch? GuardAbort = null)
+{
+    public bool GuardAborted => GuardAbort is not null;
+}
 
 internal interface ICliGoalWorktreeService
 {

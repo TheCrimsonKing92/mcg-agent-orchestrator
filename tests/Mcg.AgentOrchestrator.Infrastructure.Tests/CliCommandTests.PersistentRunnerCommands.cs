@@ -1257,7 +1257,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.True(verifierObservedUnlockedState);
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Equal(2, repository.TransactionCount);
-        Xunit.Assert.Equal(0, repository.LoadCount);
+        Xunit.Assert.Equal(1, repository.LoadCount);
         Xunit.Assert.Equal(1, repository.LoadGoalsCount);
         Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
         Xunit.Assert.False(repository.IsInTransaction);
@@ -1466,8 +1466,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_blocks_task_status_change")]
-    public void PersistentRunnerAcceptanceBlocksTaskStatusChange()
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_guard_status_demotion_aborts_without_failure_history")]
+    public void PersistentRunnerAcceptanceGuardStatusDemotionAbortsWithoutFailureHistory()
     {
         var root = CreateShortAcceptanceRepository();
         var kernel = new AgentOrchestratorKernel();
@@ -1487,41 +1487,186 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         repository.BeforeNextTransaction = stored =>
             stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Task moved during acceptance.");
 
-        InvalidOperationException? caught = null;
-        var output = CaptureConsole(() =>
-        {
-            try
-            {
-                CliPersistentStateRunner.ExecuteCommand(
-                    ["acceptance", "--skip-verify", "--keep-workspace"],
-                    repository,
-                    CreateRefinedWorkspace(root),
-                    ref agents,
-                    providers,
-                    ref profiles,
-                    ref currentGoal);
-            }
-            catch (InvalidOperationException ex)
-            {
-                caught = ex;
-            }
-        });
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["acceptance", "--skip-verify", "--keep-workspace"],
+            repository,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
 
-        Xunit.Assert.NotNull(caught);
-        Xunit.Assert.Contains("changed during acceptance verification", caught!.Message);
         Xunit.Assert.Contains("BLOCKER step=acceptance-state-guard", output);
-        Xunit.Assert.Contains("state changed during acceptance verification", output);
-        Xunit.Assert.Contains($"Goal {goal.Id.Value[..8]} acceptance: not accepted", output);
+        Xunit.Assert.Contains("Goal.Status", output);
+        Xunit.Assert.Contains("expected Verified, actual Active", output);
+        Xunit.Assert.Contains("result=aborted", output);
+        Xunit.Assert.DoesNotContain("retry acceptance", output, StringComparison.OrdinalIgnoreCase);
         var storedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
-        Xunit.Assert.NotNull(storedGoal.LatestAcceptanceFailure);
-        Xunit.Assert.Contains(storedGoal.LatestAcceptanceFailure.FailedChecks, check =>
-            check.Contains("state changed during acceptance verification", StringComparison.Ordinal));
-        var acceptance = repository.LoadAsync().GetAwaiter().GetResult().BuildGoalAcceptanceSummary(goal.Id);
-        Xunit.Assert.Contains(acceptance.Blockers, blocker =>
-            blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed &&
-            blocker.Message.Contains("state changed during acceptance verification", StringComparison.Ordinal));
+        Xunit.Assert.Null(storedGoal.LatestAcceptanceFailure);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var abort = Xunit.Assert.Single(journal.Entries.Where(entry => entry.AcceptanceOutcome == "aborted:state-guard"));
+        Xunit.Assert.Equal(GoalOperationStatus.Aborted, abort.Status);
+        Xunit.Assert.DoesNotContain(journal.Entries, entry => entry.AcceptanceOutcome == "failed");
         Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
         Xunit.Assert.False(File.Exists(Path.Combine(root, "feature.txt")));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_guard_task_projection_aborts_without_failure_history")]
+    public void PersistentRunnerAcceptanceGuardTaskProjectionAbortsWithoutFailureHistory()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Block stale task projection", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var verifier = new ProbeAcceptanceVerifier(() => { });
+        repository.BeforeNextTransaction = stored =>
+        {
+            stored.BeginGoalAcceptanceVerification(goal.Id, "Arrange a task-set-only mismatch.");
+            stored.AddTask(goal.Id, AgentRole.Tester, "Concurrent task");
+            stored.ReconcileGoalAcceptanceVerified(goal.Id, "Keep the goal status Verified so the task field is reported.");
+        };
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            repository,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier));
+
+        Xunit.Assert.Equal(1, verifier.RunCount);
+        Xunit.Assert.Contains("Tasks added/removed", output);
+        Xunit.Assert.Contains("result=aborted", output);
+        var restored = repository.LoadAsync().GetAwaiter().GetResult();
+        Xunit.Assert.Equal(GoalStatus.Verified, restored.GetGoal(goal.Id).Status);
+        Xunit.Assert.Null(restored.GetGoal(goal.Id).LatestAcceptanceFailure);
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        Xunit.Assert.Contains(journal.Entries, entry => entry.AcceptanceOutcome == "gate-passed");
+        Xunit.Assert.Contains(journal.Entries, entry =>
+            entry.AcceptanceOutcome == "aborted:state-guard" && entry.Status == GoalOperationStatus.Aborted);
+        Xunit.Assert.DoesNotContain(journal.Entries, entry => entry.AcceptanceOutcome == "failed");
+        var acceptance = GoalAcceptanceStatusProjector.Build(restored, restored.GetGoal(goal.Id), root);
+        Xunit.Assert.Contains(acceptance.Blockers, blocker => blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceAborted);
+        Xunit.Assert.DoesNotContain(acceptance.Blockers, blocker => blocker.Kind == GoalAcceptanceBlockerKind.AcceptanceFailed);
+        Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
+        Xunit.Assert.False(File.Exists(Path.Combine(root, "feature.txt")));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_guard_preflight_skips_slot_and_verifier")]
+    public void PersistentRunnerAcceptanceGuardPreflightSkipsSlotAndVerifier()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Abort before an expensive gate", [task]);
+        var agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var concurrent = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        concurrent.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Concurrent conductor mutation.");
+        var verifier = new ProbeAcceptanceVerifier(() => throw new InvalidOperationException("Verifier must not run after a preflight mismatch."));
+        var context = new CliExecutionContext(
+            kernel,
+            CreateRefinedWorkspace(root),
+            new InMemoryModelProviderRegistry([]),
+            agents,
+            WorkerProfileCatalog.Default(),
+            goal,
+            reloadKernel: () => concurrent)
+        {
+            AcceptanceVerifier = verifier,
+            StableSlotSelector = (_, _) => throw new InvalidOperationException("Build slot must not be acquired after a preflight mismatch.")
+        };
+
+        var output = CaptureConsole(() =>
+            Xunit.Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context)));
+
+        Xunit.Assert.Equal(0, verifier.RunCount);
+        Xunit.Assert.Contains("stage=preflight-state-guard", output);
+        Xunit.Assert.Contains("Goal.Status expected Verified, actual Active", output);
+        Xunit.Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_guard_worktree_head_change_remains_blocked")]
+    public void PersistentRunnerAcceptanceGuardWorktreeHeadChangeRemainsBlocked()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Block a changed tested worktree", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+        var worktree = CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        repository.BeforeNextTransaction = _ =>
+        {
+            File.WriteAllText(Path.Combine(worktree, "concurrent.txt"), "concurrent change");
+            RunGit(worktree, "add", "concurrent.txt");
+            RunGit(worktree, "commit", "-m", "Concurrent acceptance change");
+        };
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["acceptance", "--skip-verify", "--keep-workspace"],
+            repository,
+            CreateRefinedWorkspace(root),
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("WorktreeHead expected", output);
+        Xunit.Assert.Contains("result=aborted", output);
+        Xunit.Assert.Null(repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id).LatestAcceptanceFailure);
+        Xunit.Assert.Equal("main", RunGitOutput(root, "branch", "--show-current").Trim());
+        Xunit.Assert.False(File.Exists(Path.Combine(root, "feature.txt")));
+    }
+
+    [Xunit.Fact(DisplayName = "Acceptance_merge_guard_names_every_invalidating_task_projection_field")]
+    public void AcceptanceMergeGuardNamesEveryInvalidatingTaskProjectionField()
+    {
+        var baseline = new AcceptanceMergeGuardSnapshot(
+            GoalStatus.Verified,
+            [new AcceptanceMergeGuardTask("task-one", AgentRole.Developer, WorkTaskStatus.Completed)]);
+
+        Xunit.Assert.Equal("Goal.Status", AcceptanceMergeGuard.Compare(
+            baseline,
+            baseline with { GoalStatus = GoalStatus.Active })!.Field);
+        Xunit.Assert.Equal("Tasks added/removed", AcceptanceMergeGuard.Compare(
+            baseline,
+            baseline with { Tasks = [] })!.Field);
+        Xunit.Assert.Equal("Tasks added/removed", AcceptanceMergeGuard.Compare(
+            baseline,
+            baseline with { Tasks = [.. baseline.Tasks, new("task-two", AgentRole.Tester, WorkTaskStatus.Pending)] })!.Field);
+        Xunit.Assert.Equal("Task task-one.RequiredRole", AcceptanceMergeGuard.Compare(
+            baseline,
+            baseline with { Tasks = [new("task-one", AgentRole.Tester, WorkTaskStatus.Completed)] })!.Field);
+        Xunit.Assert.Equal("Task task-one.Status", AcceptanceMergeGuard.Compare(
+            baseline,
+            baseline with { Tasks = [new("task-one", AgentRole.Developer, WorkTaskStatus.Running)] })!.Field);
     }
 
 

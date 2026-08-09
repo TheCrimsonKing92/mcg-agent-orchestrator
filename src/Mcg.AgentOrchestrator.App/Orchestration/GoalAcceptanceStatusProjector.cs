@@ -44,12 +44,15 @@ internal static class GoalAcceptanceStatusProjector
                 currentOutcome.Outcome.Equals("gate-passed", StringComparison.OrdinalIgnoreCase);
             if (!hasCurrentPassedOutcome)
             {
+                var aborted = currentOutcome.Outcome.StartsWith("aborted:", StringComparison.OrdinalIgnoreCase);
                 blockers.Add(new GoalAcceptanceBlocker(
-                    GoalAcceptanceBlockerKind.AcceptanceFailed,
+                    aborted ? GoalAcceptanceBlockerKind.AcceptanceAborted : GoalAcceptanceBlockerKind.AcceptanceFailed,
                     null,
                     null,
                     currentOutcome.Message,
-                    $"Rerun acceptance for goal {goal.Id.Value[..8]} after resolving the current candidate outcome."));
+                    aborted
+                        ? $"Quiesce conductor mutations for goal {goal.Id.Value[..8]} before another landing attempt; the passing gate receipt remains recorded."
+                        : $"Rerun acceptance for goal {goal.Id.Value[..8]} after resolving the current candidate outcome."));
             }
         }
         else

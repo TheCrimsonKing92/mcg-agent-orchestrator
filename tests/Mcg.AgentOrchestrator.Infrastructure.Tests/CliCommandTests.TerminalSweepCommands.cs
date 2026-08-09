@@ -1058,6 +1058,58 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_acceptance_guard_abort_is_operator_only_and_not_a_bare_retry")]
+    public void TerminalGoalSweepAcceptanceGuardAbortIsOperatorOnlyAndNotABareRetry()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Do not repeat an aborted acceptance gate", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/aborted-remedy.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Verified);
+            var branchHead = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
+            var mainHead = RunGitOutput(root, "rev-parse", "main").Trim();
+            var gateAt = DateTimeOffset.Parse("2026-08-09T03:30:00Z");
+            GoalOperationJournal.AcceptanceGatePassed(
+                root,
+                goal,
+                "acceptance",
+                branchHead,
+                mainHead,
+                "terminal gate passed",
+                gateAt);
+            GoalOperationJournal.AcceptanceAborted(
+                root,
+                goal,
+                "acceptance",
+                branchHead,
+                mainHead,
+                "Acceptance aborted:state-guard: Task task-one.Status expected Completed, actual Running.",
+                gateAt.AddMinutes(1));
+
+            var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, root, goal.Id).Blockers);
+
+            Assert.Equal(TerminalGoalRemedyVerb.OperatorCommand, blocker.Remedy.Verb);
+            Assert.Equal(TerminalGoalRemedySafetyClass.OperatorOnly, blocker.Remedy.SafetyClass);
+            Assert.Null(blocker.Remedy.GateArtifact);
+            Assert.Contains("Quiesce conductor mutations", blocker.Command);
+            Assert.Contains($"acceptance {goal.Id.Value[..8]}", blocker.Command);
+            Assert.NotEqual($"acceptance {goal.Id.Value[..8]}", blocker.Command);
+            Assert.Empty(blocker.Remedy.BuildInvocationArguments());
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_conduct_loop_early_exits_print_blocker")]
     public void TerminalGoalSweepConductLoopEarlyExitsPrintBlocker()

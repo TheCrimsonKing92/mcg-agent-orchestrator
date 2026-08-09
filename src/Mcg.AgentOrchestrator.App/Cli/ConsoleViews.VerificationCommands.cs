@@ -102,6 +102,8 @@ public static string BuildAcceptanceSuggestedCommand(GoalAcceptanceBlocker block
             $"verifications {taskNumber} | retry {taskNumber} <note>",
         GoalAcceptanceBlockerKind.AcceptanceFailed =>
             blocker.SuggestedAction,
+        GoalAcceptanceBlockerKind.AcceptanceAborted =>
+            blocker.SuggestedAction,
         _ => "monitor"
     };
 }

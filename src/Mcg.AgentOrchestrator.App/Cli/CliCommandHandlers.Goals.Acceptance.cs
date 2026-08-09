@@ -71,6 +71,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     IReadOnlyList<string> landingChangedFiles = [];
     string? testedWorktreeHead = null;
     DateTimeOffset? acceptanceAttemptStartedAt = null;
+    AcceptanceMergeGuardSnapshot? expectedMergeGuard = null;
     var testedMainHead = TryResolveGitHead(context, context.Workspace.ExecutionDirectory);
     if (worktreePath is not null)
     {
@@ -132,6 +133,26 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             goal = context.Kernel.GetGoal(goal.Id);
             context.CurrentGoal = goal;
             Console.WriteLine($"Acceptance history: superseded failure is historical for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}.");
+        }
+
+        expectedMergeGuard = AcceptanceMergeGuard.Capture(context.Kernel, goal.Id);
+        var freshPreflightGuard = AcceptanceMergeGuard.Capture(context.ReloadKernel(), goal.Id);
+        if (AcceptanceMergeGuard.Compare(expectedMergeGuard, freshPreflightGuard) is { } preflightMismatch)
+        {
+            var preflightAbort = new AcceptanceMergeCommitResult(
+                false,
+                AcceptanceMergeGuard.BuildAbortMessage(goal.Id, preflightMismatch, verificationPassed: false),
+                preflightMismatch);
+            RecordAcceptanceGuardAbort(
+                context,
+                goal,
+                preflightAbort,
+                testedWorktreeHead,
+                testedMainHead,
+                acceptanceAttemptStartedAt,
+                verification: null,
+                stage: "preflight-state-guard");
+            return false;
         }
 
         var changedFiles = context.Worktrees.GetChangedFiles(worktreePath);
@@ -275,6 +296,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             ("goal", goal.Id.Value[..8]),
             ("status", "skipped"),
             ("reason", "no-worktree"));
+        expectedMergeGuard = AcceptanceMergeGuard.Capture(context.Kernel, goal.Id);
     }
 
     if (verification is { Passed: true })
@@ -295,7 +317,6 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         context.Kernel.ClearAcceptanceFailure(goal.Id);
     }
 
-    var expectedGoalFingerprint = BuildGoalFingerprint(context.Kernel, goal.Id);
     var evidence = context.Worktrees.BuildAcceptanceEvidence(
         context.Kernel,
         goal,
@@ -414,7 +435,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
     var mergeStarted = System.Diagnostics.Stopwatch.StartNew();
     var mergeCommit = context.FinalizeAcceptanceMerge(new AcceptanceMergeCommitRequest(
             goal.Id,
-            expectedGoalFingerprint,
+            expectedMergeGuard ?? AcceptanceMergeGuard.Capture(context.Kernel, goal.Id),
             testedWorktreeHead,
             Merge: () =>
             {
@@ -448,29 +469,21 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         mergeStarted.Elapsed,
         ("goal", goal.Id.Value[..8]),
         ("fastForwarded", mergeCommit.FastForwarded),
-        ("guardFailure", mergeCommit.GuardFailure),
+        ("guardAborted", mergeCommit.GuardAborted),
         ("message", mergeCommit.Message));
 
-    if (mergeCommit.GuardFailure)
+    if (mergeCommit.GuardAborted)
     {
-        var failedChecks = new[] { mergeCommit.Message ?? "acceptance state changed during acceptance verification" };
-        context.Kernel.RecordAcceptanceFailure(goal.Id, failedChecks, testedWorktreeHead, testedMainHead);
-        GoalOperationJournal.AcceptanceFailed(
-            context.Workspace.ExecutionDirectory,
+        RecordAcceptanceGuardAbort(
+            context,
             goal,
-            "acceptance",
+            mergeCommit,
             testedWorktreeHead,
             testedMainHead,
-            $"Acceptance failed for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {failedChecks[0]}.",
             acceptanceAttemptStartedAt,
-            GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
-        context.EventWriter.AppendAcceptanceResult(goal.Id, false, failedChecks);
-        AppendConductEvent(context, "acceptance", goal.Id, $"ACCEPTANCE goal={goal.Id.Value[..8]} result=failed stage=state-guard checks={FormatConductEventChecks(failedChecks)}");
-        Console.WriteLine($"BLOCKER step=acceptance-state-guard reason=state-changed detail=\"{EscapeBlockerDetail(failedChecks[0])}\" action=\"Resolve concurrent goal or worktree changes, then rerun acceptance.\"");
-        ConsoleViews.PrintAcceptanceSummary(
-            goal,
-            GoalAcceptanceStatusProjector.Build(context.Kernel, goal, context.Workspace.ExecutionDirectory));
-        throw new InvalidOperationException(failedChecks[0]);
+            verification,
+            stage: "state-guard");
+        return false;
     }
 
     if (mergeCommit.Message is not null)
@@ -810,23 +823,40 @@ private static bool HasLandedCleanedTerminalEvidence(
     return true;
 }
 
-private static string BuildGoalFingerprint(AgentOrchestratorKernel kernel, GoalId goalId)
+private static void RecordAcceptanceGuardAbort(
+    CliExecutionContext context,
+    Goal goal,
+    AcceptanceMergeCommitResult abort,
+    string? testedWorktreeHead,
+    string? testedMainHead,
+    DateTimeOffset? acceptanceAttemptStartedAt,
+    AcceptanceVerificationResult? verification,
+    string stage)
 {
-    var snapshot = kernel.ExportSnapshot().Goals.FirstOrDefault(goal => goal.Id == goalId.Value)
-        ?? throw new InvalidOperationException($"Goal '{goalId.Value}' no longer exists.");
-    var landingRelevantState = new
-    {
-        Tasks = snapshot.Tasks
-            .OrderBy(task => task.Id, StringComparer.Ordinal)
-            .Select(task => new
-            {
-                task.Id,
-                Role = task.RequiredRole,
-                task.Status
-            })
-    };
-
-    return JsonSerializer.Serialize(landingRelevantState);
+    var detail = abort.Message ?? "Acceptance merge aborted because a landing guard changed.";
+    var field = abort.GuardAbort?.Field ?? "unknown";
+    GoalOperationJournal.AcceptanceAborted(
+        context.Workspace.ExecutionDirectory,
+        goal,
+        "acceptance",
+        testedWorktreeHead,
+        testedMainHead,
+        $"Acceptance aborted:state-guard for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {detail}",
+        acceptanceAttemptStartedAt,
+        GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
+    AppendConductEvent(
+        context,
+        "acceptance",
+        goal.Id,
+        $"ACCEPTANCE goal={goal.Id.Value[..8]} result=aborted stage={stage} field={FormatConductEventChecks([field])} checks={FormatConductEventChecks([detail])}");
+    Console.WriteLine(
+        $"BLOCKER step=acceptance-state-guard reason=aborted field=\"{EscapeBlockerDetail(field)}\" " +
+        $"detail=\"{EscapeBlockerDetail(detail)}\" action=\"Quiesce conductor mutations for this goal before another landing attempt; do not use a bare retry while the goal is changing.\"");
+    var projectionKernel = context.ReloadKernel();
+    var projectionGoal = projectionKernel.Goals.FirstOrDefault(candidate => candidate.Id == goal.Id) ?? goal;
+    ConsoleViews.PrintAcceptanceSummary(
+        projectionGoal,
+        GoalAcceptanceStatusProjector.Build(projectionKernel, projectionGoal, context.Workspace.ExecutionDirectory));
 }
 
 private static T RunGoalMarkLandedStep<T>(string stepName, Func<T> step)
