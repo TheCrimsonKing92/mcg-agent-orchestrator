@@ -63,19 +63,26 @@ public sealed class LauncherScriptTests
         var repoRoot = FindLauncherSourceRoot();
         var runbook = File.ReadAllText(Path.Combine(repoRoot, "docs", "operator-runbook.md"));
 
-        Assert.True(RunbookStatesNoGateBypassNorm(runbook));
+        Assert.True(
+            RunbookStatesNoGateBypassNorm(runbook),
+            "docs/operator-runbook.md must retain the phrase 'do not bypass the gate'.");
         Assert.DoesNotContain(RetiredManualLandingScriptName(), runbook, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Xunit.Fact]
+    [Xunit.Fact(DisplayName = "Runbook_no_gate_bypass_norm_removed_warning_returns_false")]
     public void RunbookNoGateBypassNorm_RemovedWarning_ReturnsFalse()
     {
-        const string runbook = "Fix the gate defect before continuing through normal recovery.";
+        var repoRoot = FindLauncherSourceRoot();
+        var runbook = File.ReadAllText(Path.Combine(repoRoot, "docs", "operator-runbook.md"));
+        var withoutWarning = runbook.Replace(
+            "do not bypass the gate",
+            string.Empty,
+            StringComparison.OrdinalIgnoreCase);
 
-        Assert.False(RunbookStatesNoGateBypassNorm(runbook));
+        Assert.False(RunbookStatesNoGateBypassNorm(withoutWarning));
     }
 
-    [Xunit.Fact]
+    [Xunit.Fact(DisplayName = "Runbook_no_gate_bypass_norm_reworded_and_reflowed_returns_true")]
     public void RunbookNoGateBypassNorm_RewordedAndReflowed_ReturnsTrue()
     {
         const string reworded = "Resolve the defect first; do not bypass the gate while recovery proceeds.";
