@@ -448,7 +448,10 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             WorkerProviderKind: originalDispatch.WorkerProviderKind,
             ReasoningEffortReason: originalDispatch.ReasoningEffortReason,
             DispatchLane: originalDispatch.DispatchLane,
-            ModelSelectionReason: "progressive-review-steer:warm-resume"));
+            ModelSelectionReason: "progressive-review-steer:warm-resume",
+            ReviewFindingTouchedAnchors: originalDispatch.ReviewFindingTouchedAnchors,
+            ReviewFindingTouchProofDiagnostic: originalDispatch.ReviewFindingTouchProofDiagnostic,
+            ReviewRetryCap: originalDispatch.ReviewRetryCap));
     }
 
     private void PrepareRawFreshSubscriptionDispatch(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string guidanceText)

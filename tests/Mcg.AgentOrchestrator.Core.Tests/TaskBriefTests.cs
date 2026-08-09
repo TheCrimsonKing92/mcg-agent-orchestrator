@@ -111,6 +111,12 @@ public sealed class TaskBriefTests
     var reviewer = new TaskSpec(TaskId.New(), "Review severity-aware convergence.", AgentRole.Reviewer);
     var goal = kernel.CreateGoal("Preserve advisory severity across review rounds", [reviewer]);
     kernel.ActivateGoal(goal.Id, DefaultAgents());
+    kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+        "reviewer",
+        "review-1",
+        "C:\\repo",
+        clock.UtcNow,
+        ReviewRetryCap: new ReviewRetryCapReceipt(1, 7)));
     kernel.RecordTaskVerification(
         goal.Id,
         reviewer.Id,
@@ -138,6 +144,12 @@ public sealed class TaskBriefTests
             WorkerResultPresent: true));
     kernel.RetryTask(goal.Id, reviewer.Id, "Address B-1 before the next review.");
     clock.Advance();
+    kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+        "reviewer",
+        "review-2",
+        "C:\\repo",
+        clock.UtcNow,
+        ReviewRetryCap: new ReviewRetryCapReceipt(2, 7)));
     kernel.RecordTaskVerification(
         goal.Id,
         reviewer.Id,

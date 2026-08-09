@@ -184,7 +184,8 @@ public sealed record TaskDispatchSnapshot(
     IReadOnlyList<ReviewFindingLocation>? ReviewFindingTouchedAnchors = null,
     int BriefVersion = 1,
     string? BriefSnapshot = null,
-    string? ReviewFindingTouchProofDiagnostic = null);
+    string? ReviewFindingTouchProofDiagnostic = null,
+    ReviewRetryCapReceipt? ReviewRetryCap = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

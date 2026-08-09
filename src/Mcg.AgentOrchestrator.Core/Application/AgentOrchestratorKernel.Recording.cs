@@ -342,6 +342,20 @@ public sealed partial class AgentOrchestratorKernel
         bool enforceFailureEvidenceRule)
     {
         var goal = GetGoal(goalId);
+        string? nonPassingCriteriaDiagnostic = null;
+        if (verification.WorkerResultPresent &&
+            task.RequiredRole == AgentRole.Reviewer &&
+            WorkerResultBlockers.TryFindBlockedAtCapVerdict(verification, out _) &&
+            task.LastDispatch?.ReviewRetryCap is not { IsAtCap: true })
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                "Reviewer WORKER_RESULT verdict rejected: blocked-at-cap is only valid when the system-owned dispatch receipt is at the configured review-retry cap.");
+            return true;
+        }
+
         if (verification.ReviewFindingContractViolation is { } violation)
         {
             var startedAt = task.LastProcess?.StartedAt ??
@@ -409,6 +423,27 @@ public sealed partial class AgentOrchestratorKernel
                 return true;
             }
 
+            var nonPassingVerdicts = registeredVerdicts
+                .Where(item =>
+                    !item.Verdict.Equals("met", StringComparison.Ordinal) &&
+                    !goal.EffectiveAcceptanceCriteriaCorrections.Any(correction =>
+                        correction.IsWaiver &&
+                        string.Equals(
+                            correction.SupersededCriterion,
+                            refinedSpec.AcceptanceCriteria[item.CriterionIndex].Trim(),
+                            StringComparison.OrdinalIgnoreCase)))
+                .ToArray();
+            if (nonPassingVerdicts.Length > 0 &&
+                WorkerResultBlockers.TryFindPassVerdict(verification))
+            {
+                var details = string.Join(
+                    "; ",
+                    nonPassingVerdicts.Select(item =>
+                        $"criterion_index={item.CriterionIndex} verdict={item.Verdict} evidence={item.Evidence}"));
+                nonPassingCriteriaDiagnostic =
+                    $"Reviewer WORKER_RESULT criteria attestation rejected: non-waived criteria are not passing: {details}.";
+            }
+
             foreach (var extra in criterionVerdicts.Where(item =>
                          item.CriterionIndex >= refinedSpec.AcceptanceCriteria.Count))
             {
@@ -429,6 +464,7 @@ public sealed partial class AgentOrchestratorKernel
                 goal,
                 AgentRole.Reviewer,
                 verification,
+                task.LastDispatch?.ReviewRetryCap,
                 out mergedFindings,
                 out var findingDiagnostic,
                 out _,
@@ -452,11 +488,14 @@ public sealed partial class AgentOrchestratorKernel
         {
             foreach (var item in suppressedFindings)
             {
+                var capAudit = task.LastDispatch?.ReviewRetryCap is { IsAtCap: true } cap
+                    ? $" review_cap={cap.Round}/{cap.StopRound}; candidate_sha={verification.ReviewedCommit ?? "missing"}; override=operator-waiver."
+                    : string.Empty;
                 Append(
                     goal,
                     task.Id,
                     ProgressKind.TaskNote,
-                    $"Suppressed Reviewer structured finding matching operator criteria correction: stable_id={item.Finding.StableId}; finding: {item.Finding.Description}; superseded criterion: {item.Correction.SupersededCriterion}; correction recorded {item.Correction.RecordedAt:u} by {item.Correction.Actor}.");
+                    $"Suppressed Reviewer structured finding matching operator criteria correction: stable_id={item.Finding.StableId}; finding: {item.Finding.Description}; superseded criterion: {item.Correction.SupersededCriterion}; correction recorded {item.Correction.RecordedAt:u} by {item.Correction.Actor}.{capAudit}");
             }
         }
 
@@ -475,6 +514,16 @@ public sealed partial class AgentOrchestratorKernel
                 task.Id,
                 WorkTaskStatus.Failed,
                 $"Reviewer WORKER_RESULT verdict rejected: merged structured finding state still has open blocking stable_id(s): {openIds}.");
+            return true;
+        }
+
+        if (nonPassingCriteriaDiagnostic is not null)
+        {
+            ReportTaskProgress(
+                goalId,
+                task.Id,
+                WorkTaskStatus.Failed,
+                nonPassingCriteriaDiagnostic);
             return true;
         }
 
@@ -595,12 +644,21 @@ public sealed partial class AgentOrchestratorKernel
                 goal,
                 task.RequiredRole,
                 verification,
+                task.LastDispatch?.ReviewRetryCap,
                 out var mergedFindings,
                 out _,
                 out var violation,
                 out var canonicalizations))
         {
-            return verification with { ReviewFindingContractViolation = violation };
+            return verification with
+            {
+                ReviewFindingContractViolation = violation,
+                MergedReviewFindings = violation?.Code is
+                        ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode or
+                        ReviewFindingConvergence.MissingReviewRetryCapReceiptViolationCode
+                    ? mergedFindings
+                    : null
+            };
         }
 
         foreach (var canonicalization in canonicalizations)
@@ -621,6 +679,7 @@ public sealed partial class AgentOrchestratorKernel
         Goal goal,
         AgentRole role,
         TaskVerificationRecord currentVerification,
+        ReviewRetryCapReceipt? reviewRetryCap,
         out IReadOnlyList<ReviewFinding> state,
         out string diagnostic,
         out ReviewFindingContractViolation? violation,
@@ -635,11 +694,24 @@ public sealed partial class AgentOrchestratorKernel
             .Where(candidate => candidate.RequiredRole == role)
             .SelectMany(candidate => candidate.VerificationHistory)
             .Where(candidate => !ReferenceEquals(candidate, currentVerification));
+        var evidenceReceipts = historicalVerifications
+            .Append(currentVerification)
+            .SelectMany(candidate => candidate.FindingEvidenceReceipts ?? [])
+            .ToArray();
         foreach (var verification in historicalVerifications
             .Append(currentVerification)
             .OrderBy(candidate => candidate.CompletedAt))
         {
             var isCurrentRound = ReferenceEquals(verification, currentVerification);
+            if (!isCurrentRound &&
+                verification.ReviewFindingContractViolation is { } historicalViolation &&
+                !ReviewFindingConvergence.IsRejectedCapResolutionRound(historicalViolation))
+            {
+                // The durable violation marks this worker-authored round as rejected. Replaying it would
+                // let an invalid structural transition mutate the accepted ledger.
+                continue;
+            }
+
             if (!WorkerResultBlockers.TryFindReviewFindingRound(verification, out var round, out var parseDiagnostic))
             {
                 if (isCurrentRound)
@@ -653,9 +725,36 @@ public sealed partial class AgentOrchestratorKernel
 
             try
             {
-                state = isCurrentRound
-                    ? ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations)
-                    : ReviewFindingConvergence.ApplyRound(state, round);
+                if (isCurrentRound)
+                {
+                    var nextState = ReviewFindingConvergence.ApplyRound(state, round, out canonicalizations);
+                    if (role == AgentRole.Reviewer && reviewRetryCap is { IsAtCap: true })
+                    {
+                        ReviewFindingConvergence.ValidateResolutionAtCap(
+                            state,
+                            round,
+                            goal.EffectiveAcceptanceCriteriaCorrections,
+                            currentVerification.ReviewedCommit,
+                            evidenceReceipts);
+                    }
+                    else if (role == AgentRole.Reviewer && reviewRetryCap is null)
+                    {
+                        ReviewFindingConvergence.ValidateResolutionWithoutCapReceipt(
+                            state,
+                            round,
+                            goal.EffectiveAcceptanceCriteriaCorrections,
+                            currentVerification.ReviewedCommit,
+                            evidenceReceipts);
+                    }
+
+                    state = nextState;
+                }
+                else
+                {
+                    state = verification.ReviewFindingContractViolation is { } rejectedCapResolution
+                        ? ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, rejectedCapResolution)
+                        : ReviewFindingConvergence.ApplyRound(state, round);
+                }
                 var conductorOutcomes = (verification.MergedReviewFindings ?? [])
                     .Where(finding => finding.EvidenceOutcome is not null)
                     .ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
@@ -668,7 +767,9 @@ public sealed partial class AgentOrchestratorKernel
                         }
                         : finding)
                     .ToArray();
-                foreach (var finding in round.Findings)
+                foreach (var finding in round.Findings.Where(finding =>
+                             verification.ReviewFindingContractViolation is not { } rejectedCapResolution ||
+                             !ReviewFindingConvergence.IsRejectedCapResolutionTransition(rejectedCapResolution, finding.StableId)))
                 {
                     latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
                 }
@@ -681,6 +782,11 @@ public sealed partial class AgentOrchestratorKernel
                 // evaluated, and must not report a stale violation as though it described the new submission.
                 if (isCurrentRound)
                 {
+                    if (ReviewFindingConvergence.IsRejectedCapResolutionRound(ex.Violation))
+                    {
+                        state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, ex.Violation);
+                    }
+
                     diagnostic = $"{ex.Code}: {ex.Message}";
                     violation = ex.Violation;
                     return false;

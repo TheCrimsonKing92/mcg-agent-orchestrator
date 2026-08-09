@@ -92,6 +92,58 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
     }
 
+    [Fact(DisplayName = "ProgressiveReviewSteering_warm_resume_preserves_reviewer_cap_and_touch_receipts")]
+    public void WarmResumePreservesReviewerCapAndTouchReceipts()
+    {
+        var now = new DateTimeOffset(2026, 8, 8, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-review-cap");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var anchor = new ReviewFindingLocation("src/Guard.cs", "Guard.Run", "guard");
+        var cap = new ReviewRetryCapReceipt(7, 7);
+        var (kernel, goal, task) = RunningDeveloper(
+            root,
+            now,
+            head,
+            sessionId: "review-session-12345678",
+            role: AgentRole.Reviewer,
+            reviewFindingTouchedAnchors: [anchor],
+            reviewFindingTouchProofDiagnostic: "System-derived diff touched the guard anchor.",
+            reviewRetryCap: cap);
+        Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
+        File.WriteAllText(task.LastDispatch.PromptPath!, kernel.BuildTaskBrief(goal.Id, task.Id).Content);
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "finish the cap review")).GetAwaiter().GetResult();
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                Assert.Equal(cap, dispatch.ReviewRetryCap);
+                Assert.Equal([anchor], dispatch.ReviewFindingTouchedAnchors);
+                Assert.Equal("System-derived diff touched the guard anchor.", dispatch.ReviewFindingTouchProofDiagnostic);
+                var started = new TaskProcessRecord(
+                    7002,
+                    dispatch.Command,
+                    dispatch.WorkingDirectory,
+                    "out-review.log",
+                    "err-review.log",
+                    "exit-review.txt",
+                    now.AddSeconds(2),
+                    null,
+                    null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            },
+            currentHead: head);
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState, string.Join(Environment.NewLine, result.ProgressLines));
+        Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_rebuilds_freshness_envelope_at_steer_time")]
     public void RebuildsFreshnessEnvelopeAtSteerTime()
     {
@@ -992,12 +1044,16 @@ public sealed class ProgressiveReviewSteeringTests
         DateTimeOffset dispatchedAt,
         string? worktreeHead,
         string? sessionId,
-        TimeSpan? clockOffsetAfterDispatch = null)
+        TimeSpan? clockOffsetAfterDispatch = null,
+        AgentRole role = AgentRole.Developer,
+        IReadOnlyList<ReviewFindingLocation>? reviewFindingTouchedAnchors = null,
+        string? reviewFindingTouchProofDiagnostic = null,
+        ReviewRetryCapReceipt? reviewRetryCap = null)
     {
         Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "logs"));
         var clock = new TestClock(dispatchedAt);
         var kernel = new AgentOrchestratorKernel(clock);
-        var task = new TaskSpec(new TaskId("developer-task-0001"), "Implement feature.\n\nACCEPTANCE\n- Stay scoped", AgentRole.Developer);
+        var task = new TaskSpec(new TaskId("developer-task-0001"), "Implement feature.\n\nACCEPTANCE\n- Stay scoped", role);
         var goal = kernel.CreateGoal(new GoalId("goal-progressive-review-0001"), "Progressive review steering goal", [task]);
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
@@ -1013,7 +1069,10 @@ public sealed class ProgressiveReviewSteeringTests
             WorkerProviderKind: ProviderKind.OpenAICodexCli,
             ProviderSessionId: sessionId,
             WorktreeHeadSha: worktreeHead,
-            DirtyStateHash: "clean"));
+            DirtyStateHash: "clean",
+            ReviewFindingTouchedAnchors: reviewFindingTouchedAnchors,
+            ReviewFindingTouchProofDiagnostic: reviewFindingTouchProofDiagnostic,
+            ReviewRetryCap: reviewRetryCap));
         var process = new TaskProcessRecord(
             6001,
             task.LastDispatch!.Command,
@@ -1038,7 +1097,7 @@ public sealed class ProgressiveReviewSteeringTests
             Guid.NewGuid().ToString("n"),
             goal.Id.Value,
             task.Id.Value,
-            AgentRole.Developer.ToString(),
+            task.RequiredRole.ToString(),
             $"{goal.Id.Value}|{task.Id.Value}|{now.UtcTicks}",
             "glance-abc",
             "inputs-hash",

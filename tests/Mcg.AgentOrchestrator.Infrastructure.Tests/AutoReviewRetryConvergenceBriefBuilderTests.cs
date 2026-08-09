@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Text.Json;
 
@@ -422,6 +423,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
 
         // Round 3 resolves the finding at its ORIGINAL anchor. Replaying the rejected round 2 must not
         // block it, nor report round 2's stale violation as though it described this submission.
+        // The hand-built dispatch still needs the system-owned cap receipt; missing policy context fails
+        // closed by design and would make this a receipt-contract test instead of a history-replay test.
         kernel.RetryTask(goal.Id, reviewer.Id, "round 3");
         RecordReviewerRound(
             kernel,
@@ -429,11 +432,80 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             reviewer,
             "pass",
             [new ReviewFinding("F-1", ReviewFindingState.Resolved, openedAt, "Guard added.")],
-            [openedAt]);
+            [openedAt],
+            new ReviewRetryCapReceipt(
+                3,
+                ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound));
 
         var recorded = kernel.GetGoal(goal.Id).Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         Assert.Equal(WorkTaskStatus.Completed, recorded.Status);
         Assert.Equal(0, ReviewFindingConvergence.CountOpen(kernel.GetReviewFindingState(goal.Id)));
+    }
+
+    [Xunit.Fact(DisplayName = "Review_convergence_brief_retains_cap_rejected_resolution_and_new_blocker")]
+    public void ReviewConvergenceBriefRetainsCapRejectedResolutionAndNewBlocker()
+    {
+        var carriedAnchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var newAnchor = new ReviewFindingLocation("src/B.cs", "B.Run", "validation");
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "Rejected cap round stays authoritative in later briefs");
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "needs-work",
+            [new ReviewFinding("F-CARRIED", ReviewFindingState.Open, carriedAnchor, "Guard is missing.")],
+            []);
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "cap round");
+        RecordReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "pass",
+            [
+                new ReviewFinding("F-CARRIED", ReviewFindingState.Resolved, carriedAnchor, "Guard is missing."),
+                new ReviewFinding("F-NEW", ReviewFindingState.Open, newAnchor, "Validation is missing.")
+            ],
+            [],
+            new ReviewRetryCapReceipt(7, 7));
+
+        var rejectedVerification = reviewer.LastVerification!;
+        Assert.Equal(ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode, rejectedVerification.ReviewFindingContractViolation?.Code);
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Collection(
+            rejectedVerification.MergedReviewFindings!.OrderBy(finding => finding.StableId),
+            finding =>
+            {
+                Assert.Equal("F-CARRIED", finding.StableId);
+                Assert.Equal(ReviewFindingState.Open, finding.State);
+            },
+            finding =>
+            {
+                Assert.Equal("F-NEW", finding.StableId);
+                Assert.Equal(ReviewFindingState.Open, finding.State);
+            });
+
+        var replayed = kernel.GetReviewFindingState(goal.Id, out var inconsistencies);
+        Assert.Equal(2, ReviewFindingConvergence.CountOpen(replayed));
+        Assert.Contains(
+            inconsistencies,
+            message => message.Contains(ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode, StringComparison.Ordinal));
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "operator-directed follow-up");
+        var brief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
+        Assert.Contains("OPEN_ACTIVE_RECHECK count=2", brief, StringComparison.Ordinal);
+        Assert.Contains($"- F-CARRIED | severity=blocking | {carriedAnchor}", brief, StringComparison.Ordinal);
+        Assert.Contains($"- F-NEW | severity=blocking | {newAnchor}", brief, StringComparison.Ordinal);
+        var resolvedScope = brief[
+            brief.IndexOf("RESOLVED_CARRIED", StringComparison.Ordinal)..
+            brief.IndexOf("ROUND_DIFF_TOUCHED_ANCHORS", StringComparison.Ordinal)];
+        Assert.DoesNotContain("F-CARRIED", resolvedScope, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GetReviewFindingState_skips_an_unfoldable_stored_round_instead_of_throwing")]
@@ -907,7 +979,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         string command = "test.exe",
         string? reviewedCommit = null,
         IReadOnlyList<ReviewFindingLocation>? touchedAnchors = null,
-        string? touchProofDiagnostic = null)
+        string? touchProofDiagnostic = null,
+        ReviewRetryCapReceipt? reviewRetryCap = null)
     {
         var dispatch = new TaskDispatchRecord(
             "test-worker",
@@ -916,7 +989,8 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
             DateTimeOffset.UtcNow,
             BaseCommit: reviewedCommit,
             ReviewFindingTouchedAnchors: touchedAnchors,
-            ReviewFindingTouchProofDiagnostic: touchProofDiagnostic);
+            ReviewFindingTouchProofDiagnostic: touchProofDiagnostic,
+            ReviewRetryCap: reviewRetryCap);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
 
@@ -1007,9 +1081,16 @@ public sealed class AutoReviewRetryConvergenceBriefBuilderTests : WorkerDispatch
         TaskSpec reviewer,
         string verdict,
         IReadOnlyList<ReviewFinding> findings,
-        IReadOnlyList<ReviewFindingLocation> touchedAnchors)
+        IReadOnlyList<ReviewFindingLocation> touchedAnchors,
+        ReviewRetryCapReceipt? reviewRetryCap = null)
     {
-        DispatchTask(kernel, goal, reviewer, "review", touchedAnchors: touchedAnchors);
+        DispatchTask(
+            kernel,
+            goal,
+            reviewer,
+            "review",
+            touchedAnchors: touchedAnchors,
+            reviewRetryCap: reviewRetryCap);
         RecordPreparedReviewerRound(kernel, goal, reviewer, verdict, findings);
     }
 

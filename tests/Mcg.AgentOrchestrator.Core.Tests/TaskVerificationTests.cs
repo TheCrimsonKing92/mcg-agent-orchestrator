@@ -2,6 +2,29 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class TaskVerificationTests
 {
+    [Xunit.Fact(DisplayName = "Task_dispatch_snapshot_round_trips_review_retry_cap_receipt")]
+    public void TaskDispatchSnapshotRoundTripsReviewRetryCapReceipt()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var reviewer = new TaskSpec(TaskId.New(), "Review", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Persist review cap context", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "reviewer",
+            "review",
+            "C:\\repo",
+            DateTimeOffset.UtcNow,
+            ReviewRetryCap: new ReviewRetryCapReceipt(5, 9)));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var receipt = Assert.IsType<ReviewRetryCapReceipt>(
+            restored.GetGoal(goal.Id).FindTask(reviewer.Id).LastDispatch!.ReviewRetryCap);
+
+        Assert.Equal(5, receipt.Round);
+        Assert.Equal(9, receipt.StopRound);
+        Assert.False(receipt.IsAtCap);
+    }
+
     [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_round_trips_through_snapshot")]
     public void PreReviewEvidenceReceiptRoundTripsThroughSnapshot()
     {

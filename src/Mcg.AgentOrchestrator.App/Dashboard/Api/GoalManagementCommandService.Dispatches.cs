@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Infrastructure;
 
@@ -39,7 +40,8 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
     WorkerProfile profile,
     IReadOnlyList<AgentDefinition>? agents = null,
     IModelProviderRegistry? providers = null,
-    bool allowPendingRecordedDispatchRefresh = false)
+    bool allowPendingRecordedDispatchRefresh = false,
+    int? reviewAutoRetryStopRound = null)
 {
     GoalRefinementGate.EnsureRefined(
         kernel,
@@ -64,7 +66,12 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
         usesComplexModel: false,
         reasoningEffortReason: subscriptionMetadata?.ReasoningEffortReason,
         preflightFindings: null,
-        allowPendingRecordedDispatchRefresh: allowPendingRecordedDispatchRefresh);
+        allowPendingRecordedDispatchRefresh: allowPendingRecordedDispatchRefresh,
+        reviewRetryCap: task.RequiredRole == AgentRole.Reviewer
+            ? ReviewRetryCapReceipt.Create(
+                goal,
+                ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound))
+            : null);
 }
 
 public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
@@ -74,7 +81,8 @@ public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
     TaskSpec task,
     IReadOnlyList<AgentDefinition>? agents = null,
     WorkerProfileCatalog? profiles = null,
-    IModelProviderRegistry? providers = null)
+    IModelProviderRegistry? providers = null,
+    int? reviewAutoRetryStopRound = null)
 {
     var lastDispatch = task.LastDispatch
         ?? throw new InvalidOperationException($"Task '{task.Id}' has no dispatch to refresh before start.");
@@ -101,7 +109,8 @@ public static WorkerProfileDispatchResult RefreshPreparedDispatchBeforeStart(
         profile,
         resolvedAgents,
         providers,
-        allowPendingRecordedDispatchRefresh: true);
+        allowPendingRecordedDispatchRefresh: true,
+        reviewAutoRetryStopRound: reviewAutoRetryStopRound);
 }
 
 public static IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatchesBeforeStart(
@@ -110,7 +119,8 @@ public static IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatch
     Goal goal,
     IReadOnlyList<AgentDefinition>? agents = null,
     WorkerProfileCatalog? profiles = null,
-    IModelProviderRegistry? providers = null)
+    IModelProviderRegistry? providers = null,
+    int? reviewAutoRetryStopRound = null)
 {
     var plan = kernel.BuildProcessBatchPlan(goal.Id, ProcessBatchActionKind.StartDispatches);
     var resolvedAgents = agents ?? AgentCatalogStore.Load(workspace.AgentCatalogPath).Agents;
@@ -127,7 +137,8 @@ public static IReadOnlyList<WorkerProfileDispatchResult> RefreshPreparedDispatch
             task,
             resolvedAgents,
             resolvedProfiles,
-            providers);
+            providers,
+            reviewAutoRetryStopRound);
         refreshed.Add(dispatch);
     }
 
@@ -201,9 +212,17 @@ public static IReadOnlyList<WorkerProfileDispatchResult> SubscriptionDispatchRea
     Goal goal,
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
-    IModelProviderRegistry? providers = null)
+    IModelProviderRegistry? providers = null,
+    int? reviewAutoRetryStopRound = null)
 {
-    return SubscriptionDispatchReadyBatch(kernel, workspace, goal, agents, profiles, providers).Dispatches;
+    return SubscriptionDispatchReadyBatch(
+        kernel,
+        workspace,
+        goal,
+        agents,
+        profiles,
+        providers,
+        reviewAutoRetryStopRound).Dispatches;
 }
 
 public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
@@ -212,7 +231,8 @@ public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
     Goal goal,
     IReadOnlyList<AgentDefinition> agents,
     WorkerProfileCatalog profiles,
-    IModelProviderRegistry? providers = null)
+    IModelProviderRegistry? providers = null,
+    int? reviewAutoRetryStopRound = null)
 {
     GoalRefinementGate.EnsureRefined(
         kernel,
@@ -231,7 +251,8 @@ public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
         workspace.PromptDirectory,
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
-        safeBatch.TaskIds);
+        safeBatch.TaskIds,
+        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound));
 }
 
 public static WorkerProfileDispatchResult SubscriptionDispatchTask(
@@ -243,7 +264,8 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
     WorkerProfileCatalog profiles,
     DispatchModelOverride? modelOverride = null,
     bool allowGitReference = false,
-    IModelProviderRegistry? providers = null)
+    IModelProviderRegistry? providers = null,
+    int? reviewAutoRetryStopRound = null)
 {
     GoalRefinementGate.EnsureRefined(
         kernel,
@@ -261,7 +283,8 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
         modelOverride,
-        allowGitReference);
+        allowGitReference,
+        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound));
 }
 
 public static SubscriptionStartResult StartSubscriptionReadyTasks(
@@ -273,7 +296,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     IModelProviderRegistry? providers = null,
     bool approveHighRiskOwnership = false,
     Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
-    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
+    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
+    int? reviewAutoRetryStopRound = null)
 {
     GoalRefinementGate.EnsureRefined(
         kernel,
@@ -292,7 +316,8 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         workspace.PromptDirectory,
         workspace.ResolveExecutionDirectory(goal.Id),
         DateTimeOffset.UtcNow,
-        safeBatch.TaskIds);
+        safeBatch.TaskIds,
+        reviewAutoRetryStopRound: ResolveReviewAutoRetryStopRound(workspace, reviewAutoRetryStopRound));
     var containsInterruptedDispatchRecovery = batch.Dispatches.Any(dispatch =>
         dispatch.Task.InterruptedDispatchRecoveryId is not null);
     if (!containsInterruptedDispatchRecovery &&
@@ -323,6 +348,13 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
         safeBatch.Plan,
         safeBatch.Blocked.Concat(batch.Blocked).ToList());
 }
+
+private static int ResolveReviewAutoRetryStopRound(
+    OrchestratorWorkspace workspace,
+    int? reviewAutoRetryStopRound) =>
+    reviewAutoRetryStopRound ??
+    ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(
+        new DirectoryInfo(workspace.OrchestratorDirectory)).ReviewAutoRetryStopRound;
 
 private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(
     Goal goal,
@@ -608,7 +640,8 @@ public static ProcessBatchExecutionResult StartDispatches(
     IModelProviderRegistry? providers = null,
     bool refreshBeforeStart = true,
     Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
-    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
+    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
+    int? reviewAutoRetryStopRound = null)
 {
     return StartDispatches(
         kernel,
@@ -620,7 +653,8 @@ public static ProcessBatchExecutionResult StartDispatches(
         profiles,
         providers,
         checkpointBeforeWorkerStart,
-        readCurrentInterruptedDispatchState);
+        readCurrentInterruptedDispatchState,
+        reviewAutoRetryStopRound);
 }
 
 private static ProcessBatchExecutionResult StartDispatches(
@@ -633,7 +667,8 @@ private static ProcessBatchExecutionResult StartDispatches(
     WorkerProfileCatalog? profiles = null,
     IModelProviderRegistry? providers = null,
     Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
-    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null)
+    Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentInterruptedDispatchState = null,
+    int? reviewAutoRetryStopRound = null)
 {
     var runner = new BackgroundDispatchRunner();
     var logRoot = workspace.LogDirectory;
@@ -664,7 +699,8 @@ private static ProcessBatchExecutionResult StartDispatches(
                 task,
                 resolvedAgents,
                 resolvedProfiles,
-                providers);
+                providers,
+                reviewAutoRetryStopRound);
         }
 
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? batchCheckpoint =
