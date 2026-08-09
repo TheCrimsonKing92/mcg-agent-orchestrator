@@ -31,10 +31,13 @@ internal sealed class ConductorBatchLoop
         DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
     // Paid-worker ADMISSION pool that the gate-slot reservation (ConductorDriver worker-cap)
     // draws from. Deliberately INDEPENDENT of build concurrency / acceptance width: coding
-    // workers do not hold build slots, so reserving one of these for a ready gate still
-    // admits ~3 paid workers (WorkerAdmissionCapacity - 1), preserving pre-de-slotting
-    // throughput. Do NOT tie this to BuildConcurrencySlotCount or DefaultParallelAcceptanceCapacity.
-    internal const int WorkerAdmissionCapacity = 4;
+    // workers do not hold build slots. On the 47.9-GiB operator host, a reviewed paid-worker
+    // dispatch peaked at 1,750,343,680 bytes. Limiting workers to one third of physical memory
+    // yields floor(51,385,864,192 / 3 / 1,750,343,680) = 9, leaving two thirds for the OS,
+    // dashboard, builds, and acceptance gates (observed 2026-08-08). Provider cooldowns are
+    // handled separately; revisit this fixed limit when memory-aware admission is implemented.
+    // Do NOT tie this to BuildConcurrencySlotCount or DefaultParallelAcceptanceCapacity.
+    internal const int WorkerAdmissionCapacity = 9;
     internal const int DefaultUnscopedStallTickThreshold = 3;
     internal static readonly TimeSpan DefaultGoalStallThreshold = TimeSpan.FromMinutes(10);
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
@@ -303,9 +306,12 @@ internal sealed class ConductorBatchLoop
                 previousSuccessfulLandingSink?.Invoke(receipt);
             };
         }
+        var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
         EmitProgress(
             $"LOOP_START policy={Sanitize(policy.Name)} policySource={SanitizeReason(policySource)} maxIterations={maxIterations?.ToString() ?? "none"} " +
-            $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")}" +
+            $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")} " +
+            $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
+            $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap}" +
             (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
 
         while (true)

@@ -87,7 +87,9 @@ public sealed class ConductorBatchLoopTests
         Action<Goal, string>? recordMissingBranchRetirement = null,
         Func<Goal, IReadOnlyList<string>>? getLandingFileScopes = null,
         ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
-        Func<Goal, int>? getAcceptanceSlotCount = null) =>
+        Func<Goal, int>? getAcceptanceSlotCount = null,
+        Func<bool>? hasGateReadyGoal = null,
+        Func<int>? getWorkerAdmissionCapacity = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -117,6 +119,8 @@ public sealed class ConductorBatchLoopTests
             runAcceptanceVerificationWithSlot: runAcceptanceWithSlot,
             parallelAcceptanceAttemptCoordinator: parallelAcceptanceAttemptCoordinator,
             getAcceptanceSlotCount: getAcceptanceSlotCount,
+            hasGateReadyGoal: hasGateReadyGoal,
+            getWorkerAdmissionCapacity: getWorkerAdmissionCapacity,
             recheckPreLandingRebaseConflict: recheckPreLandingRebaseConflict);
 
     // Returns a path to a stop file that does NOT exist yet.
@@ -227,21 +231,34 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(expected, CliPersistentStateRunner.HasStateDbMigrationAuthority(args));
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_loop_start_reports_verified_journal_mode")]
-    public void BatchLoopLoopStartReportsVerifiedJournalMode()
+    [Xunit.Fact(DisplayName = "BatchLoop_loop_start_reports_policy_worker_caps_and_verified_journal_mode")]
+    public void BatchLoopLoopStartReportsPolicyWorkerCapsAndVerifiedJournalMode()
     {
         var (kernel, _) = SimpleGoal();
+        var policy = ConductorAutonomyPolicy.Conservative with
+        {
+            Name = "OperatorTuned",
+            MaxConcurrentPaidWorkers = ConductorBatchLoop.WorkerAdmissionCapacity + 2
+        };
+        var driver = MakeDriver(hasGateReadyGoal: () => true);
+        var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
         var output = CaptureConsole(() =>
             new ConductorBatchLoop().Run(
                 kernel,
-                MakeDriver(),
-                ConductorAutonomyPolicy.Conservative,
+                driver,
+                policy,
                 NoStopPath(),
                 maxIterations: 0,
                 journalMode: "wal"));
 
-        Assert.Contains("LOOP_START policy=Conservative", output, StringComparison.Ordinal);
+        Assert.True(workerAdmission.EffectiveWorkerCap < workerAdmission.ConfiguredWorkerCap);
+        Assert.Equal(ConductorBatchLoop.WorkerAdmissionCapacity - 1, workerAdmission.EffectiveWorkerCap);
+        Assert.Contains("LOOP_START policy=OperatorTuned", output, StringComparison.Ordinal);
         Assert.Contains("policySource=preset", output, StringComparison.Ordinal);
+        Assert.Contains("configuredWorkerCap=11", output, StringComparison.Ordinal);
+        Assert.Contains("workerAdmissionCapacity=9", output, StringComparison.Ordinal);
+        Assert.Contains("reservedGateSlots=1", output, StringComparison.Ordinal);
+        Assert.Contains("effectiveWorkerCap=8", output, StringComparison.Ordinal);
         Assert.Contains("journalMode=wal", output, StringComparison.Ordinal);
     }
 
@@ -280,6 +297,40 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(
                 "Unknown conductor policy 'UnknownName'. Valid: Conservative, Permissive, Manual",
                 unknown.Message);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Conductor_policy_resolution_prints_worker_admission_clamp_warning")]
+    public void ConductorPolicyResolutionPrintsWorkerAdmissionClampWarning()
+    {
+        var root = CreateTempDirectory("mcg-conductor-policy-cap-warning");
+        try
+        {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            var policyPath = Path.Combine(orchestratorDirectory, "conductor-policy.json");
+            var configured = ConductorAutonomyPolicy.Conservative with
+            {
+                Name = "AboveAdmissionCapacity",
+                MaxConcurrentPaidWorkers = ConductorBatchLoop.WorkerAdmissionCapacity + 1
+            };
+            File.WriteAllText(policyPath, configured.ToJson());
+
+            var resolution = CliCommandHandlers.ResolveConductorPolicy(null, orchestratorDirectory);
+            var output = CaptureConsole(() => CliCommandHandlers.PrintConductorPolicyWarnings(resolution));
+
+            Assert.Contains(resolution.Warnings, warning =>
+                warning.Contains("above worker admission capacity 9", StringComparison.Ordinal) &&
+                warning.Contains("clamped to 9 normally and 8 while a gate-ready goal", StringComparison.Ordinal));
+            Assert.Contains("[conduct] WARNING:", output, StringComparison.Ordinal);
+            Assert.Contains(
+                "clamped_to_9_normally_and_8_while_a_gate-ready_goal",
+                output.Replace(' ', '_'),
+                StringComparison.Ordinal);
         }
         finally
         {

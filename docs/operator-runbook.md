@@ -347,7 +347,9 @@ After a durable landing, the conductor enqueues mirror debt and starts a trusted
 
 ### 6.3 Concurrency caps
 
-Two independent constraints bound useful parallelism:
+Three independent constraints bound useful parallelism:
+
+**Paid-worker admission capacity.** `maxConcurrentPaidWorkers` is bounded by the paid-worker admission pool, currently 9. This is a memory-headroom limit, independent of build capacity: the 47.9-GiB operator host recorded a paid-worker peak of 1,750,343,680 bytes on 2026-08-08, and allocating no more than one third of physical memory to paid workers gives `floor(51,385,864,192 / 3 / 1,750,343,680) = 9`. The remaining two thirds cover the OS, dashboard, builds, and acceptance gates. A gate-ready goal reserves one admission slot, so the effective cap is at most 8 while that reservation is active. `LOOP_START` reports the configured cap, admission capacity, reserved slots, and effective cap; policy-file values above the capacity produce a load warning. This fixed host-derived limit should be revisited when memory-aware admission is implemented.
 
 **Build capacity and test artifacts.** Builds share two machine-wide file locks under the isolated dotnet root. Test execution is not slot-confined: acceptance receipts live beneath `.orchestrator/acceptance-gate-attempts/<goal-id>/`, pre-review focused receipts beneath `.orchestrator/pre-review-evidence-attempts/<goal-id>/`, and operator test commands use invocation-owned directories. Both receipt roots follow the goal artifact retention plan and `Show-TestDurations.ps1` reads both by default. Per-goal build artifacts remain reusable under the isolated dotnet goal root.
 

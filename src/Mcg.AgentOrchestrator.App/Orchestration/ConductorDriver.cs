@@ -18,6 +18,12 @@ internal sealed record PreReviewEvidenceContext(
     bool NoApplicableTests,
     bool MappingNeedsInput);
 
+internal sealed record WorkerAdmissionSnapshot(
+    int ConfiguredWorkerCap,
+    int AdmissionCapacity,
+    int ReservedGateSlots,
+    int EffectiveWorkerCap);
+
 internal sealed class ConductorDriver
 {
     private const int MaxCriterionRetryEvidenceLines = 30;
@@ -101,6 +107,20 @@ internal sealed class ConductorDriver
     internal Action<ConductorLandingReceipt>? SuccessfulLandingSink { get; set; }
     internal Action<GoalId>? DispatchRecordWriteSucceededSink { get; set; }
     internal Func<string?>? LandingMutationBlocker { get; set; }
+
+    internal WorkerAdmissionSnapshot GetWorkerAdmissionSnapshot(ConductorAutonomyPolicy policy)
+    {
+        var admissionCapacity = Math.Max(0, _getWorkerAdmissionCapacity());
+        var reservedGateSlots = _hasGateReadyGoal() ? 1 : 0;
+        var effectiveWorkerCap = Math.Min(
+            policy.MaxConcurrentPaidWorkers,
+            Math.Max(0, admissionCapacity - reservedGateSlots));
+        return new WorkerAdmissionSnapshot(
+            policy.MaxConcurrentPaidWorkers,
+            admissionCapacity,
+            reservedGateSlots,
+            effectiveWorkerCap);
+    }
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -2327,23 +2347,20 @@ internal sealed class ConductorDriver
         GoalLifecycleState fromState)
     {
         var running = _getRunningPaidWorkerCount();
-        var workerCap = policy.MaxConcurrentPaidWorkers;
-        if (_hasGateReadyGoal())
-        {
-            // Reserve one paid-worker admission slot for the ready gate. The pool this draws
-            // from is the worker-admission capacity, deliberately decoupled from the
-            // parallel-acceptance width / build-concurrency slot count so a running gate does
-            // not starve paid-worker admission down to 1.
-            workerCap = Math.Min(workerCap, Math.Max(0, _getWorkerAdmissionCapacity() - 1));
-        }
+        var workerAdmission = GetWorkerAdmissionSnapshot(policy);
+        var workerCap = workerAdmission.EffectiveWorkerCap;
 
         if (running >= workerCap)
         {
-            var reservedGateSlot = workerCap < policy.MaxConcurrentPaidWorkers;
-            if (reservedGateSlot)
+            var reservedGateSlot = workerAdmission.ReservedGateSlots > 0 &&
+                                   workerCap < policy.MaxConcurrentPaidWorkers;
+            var admissionClamped = workerCap < workerAdmission.ConfiguredWorkerCap;
+            if (admissionClamped)
             {
+                var reason = reservedGateSlot ? "reserved-gate-slot" : "worker-admission-capacity";
                 Console.WriteLine(
-                    $"ADMISSION goal={goalPrefix} result=deferred reason=reserved-gate-slot cap={workerCap} running={running}");
+                    $"ADMISSION goal={goalPrefix} result=deferred reason={reason} cap={workerCap} running={running} " +
+                    $"configuredCap={workerAdmission.ConfiguredWorkerCap} admissionCapacity={workerAdmission.AdmissionCapacity}");
             }
 
             EmitPhaseTiming("dispatch-prep", goal, TimeSpan.Zero, $"tasks={CountAssignedTasks(goal)} result=held-cap running={running}");
@@ -2351,7 +2368,9 @@ internal sealed class ConductorDriver
                 new ConductorAdvanceOutcome.Held(fromState,
                     reservedGateSlot
                         ? $"At worker cap ({running}/{workerCap}) with a gate-ready goal reserving a stable slot; will advance when a slot opens"
-                        : $"At worker cap ({running}/{policy.MaxConcurrentPaidWorkers}); will advance when a slot opens"));
+                        : admissionClamped
+                            ? $"At worker admission capacity ({running}/{workerCap}); configured cap {workerAdmission.ConfiguredWorkerCap} is clamped; will advance when a slot opens"
+                            : $"At worker cap ({running}/{workerCap}); will advance when a slot opens"));
         }
 
         if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
