@@ -161,6 +161,7 @@ internal sealed class ConductorBatchLoop
         var blockedRecheckCycles = 0;
         var totalBlockedRechecks = 0;
         var dispatchRecordWriteSkips = new Dictionary<string, int>(StringComparer.Ordinal);
+        var blockedRecheckRecurrences = new Dictionary<string, BlockedRecheckRecurrence>(StringComparer.Ordinal);
         DateTimeOffset? lastBlockedRecheckHeartbeatAt = null;
         string? stopReason = null;
         ConductorLifecycleSession? lifecycleSession = null;
@@ -739,11 +740,12 @@ internal sealed class ConductorBatchLoop
                     {
                         blockedRecheckCycles++;
                         totalBlockedRechecks++;
+                        UpdateBlockedRecheckRecurrences(sweepResult, blockedRecheckRecurrences);
                         var now = _utcNow();
                         if (lastBlockedRecheckHeartbeatAt is null ||
                             now - lastBlockedRecheckHeartbeatAt.Value >= _blockedRecheckHeartbeatInterval)
                         {
-                            EmitProgress(FormatBlockedRecheckHeartbeat(sweepResult, totalBlockedRechecks));
+                            EmitProgress(FormatBlockedRecheckHeartbeat(blockedRecheckRecurrences, totalBlockedRechecks));
                             lastBlockedRecheckHeartbeatAt = now;
                         }
                         var blockedRecheckBudget = maxIterations ??
@@ -1340,11 +1342,12 @@ internal sealed class ConductorBatchLoop
                         transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals) > 0)
                 {
                     totalBlockedRechecks++;
+                    UpdateBlockedRecheckRecurrences(sweepResult, blockedRecheckRecurrences);
                     var now = _utcNow();
                     if (lastBlockedRecheckHeartbeatAt is null ||
                         now - lastBlockedRecheckHeartbeatAt.Value >= _blockedRecheckHeartbeatInterval)
                     {
-                        EmitProgress(FormatBlockedRecheckHeartbeat(sweepResult, totalBlockedRechecks));
+                        EmitProgress(FormatBlockedRecheckHeartbeat(blockedRecheckRecurrences, totalBlockedRechecks));
                         lastBlockedRecheckHeartbeatAt = now;
                     }
                 }
@@ -1720,15 +1723,46 @@ internal sealed class ConductorBatchLoop
         return kind.Length > 0;
     }
 
-    private static string FormatBlockedRecheckHeartbeat(
+    private sealed record BlockedRecheckRecurrence(string Fingerprint, int Count);
+
+    private static void UpdateBlockedRecheckRecurrences(
         TerminalGoalSweepResult? sweepResult,
+        Dictionary<string, BlockedRecheckRecurrence> recurrences)
+    {
+        var current = sweepResult?.Goals
+            .SelectMany(goal => goal.Blockers.Select(blocker => new
+            {
+                Key = $"{goal.GoalPrefix}:{blocker.Kind}",
+                Fingerprint = $"{blocker.Evidence}\n{blocker.Command}"
+            }))
+            .GroupBy(item => item.Key, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => string.Join("\n", group.Select(item => item.Fingerprint).OrderBy(value => value, StringComparer.Ordinal)),
+                StringComparer.Ordinal) ?? new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var staleKey in recurrences.Keys.Except(current.Keys, StringComparer.Ordinal).ToArray())
+        {
+            recurrences.Remove(staleKey);
+        }
+
+        foreach (var (key, fingerprint) in current)
+        {
+            recurrences[key] = recurrences.TryGetValue(key, out var previous) &&
+                string.Equals(previous.Fingerprint, fingerprint, StringComparison.Ordinal)
+                    ? previous with { Count = previous.Count + 1 }
+                    : new BlockedRecheckRecurrence(fingerprint, 1);
+        }
+    }
+
+    private static string FormatBlockedRecheckHeartbeat(
+        IReadOnlyDictionary<string, BlockedRecheckRecurrence> recurrences,
         int totalBlockedRechecks)
     {
-        var blocked = sweepResult?.Goals
-            .SelectMany(goal => goal.Blockers.Select(blocker => $"{goal.GoalPrefix}:{blocker.Kind}"))
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(value => value, StringComparer.Ordinal)
-            .ToArray() ?? [];
+        var blocked = recurrences
+            .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry => $"{entry.Key}(recurrences={entry.Value.Count})")
+            .ToArray();
         return $"BLOCKED_RECHECK_HEARTBEAT rechecks={totalBlockedRechecks} blocked={string.Join(',', blocked)}";
     }
 

@@ -22,6 +22,67 @@ public sealed class GoalGitFactIndexTests
         Assert.Equal(expected, result.ToString());
     }
 
+    [Xunit.Fact]
+    public void BuildGoalBranchFacts_WithoutMainSha_IsInconclusiveWithoutRunningCherry()
+    {
+        var originalRunner = GoalGitFactIndex.GitRunner;
+        var goal = CreateGoalWithStatus("Main ref is unavailable", GoalStatus.Verified);
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var index = new GoalGitFactIndex(
+            Environment.CurrentDirectory,
+            isGitWorkTree: true,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [branch] = "1111111111111111111111111111111111111111"
+            },
+            new HashSet<string>(StringComparer.Ordinal),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            mainSha: null);
+        try
+        {
+            GoalGitFactIndex.GitRunner = (_, _) => throw new Xunit.Sdk.XunitException("git cherry must not run without a main SHA");
+
+            var facts = index.BuildGoalBranchFacts(goal);
+
+            Assert.Equal(GoalBranchContentState.Inconclusive, facts.ContentState);
+        }
+        finally
+        {
+            GoalGitFactIndex.GitRunner = originalRunner;
+        }
+    }
+
+    [Xunit.Fact]
+    public void BuildGoalEvidenceKey_DoesNotProbeBranchContentThatCannotBeCached()
+    {
+        var originalRunner = GoalGitFactIndex.GitRunner;
+        var goal = CreateGoalWithStatus("Evidence key stays cheap", GoalStatus.Completed);
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var index = new GoalGitFactIndex(
+            Environment.CurrentDirectory,
+            isGitWorkTree: true,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [branch] = "2222222222222222222222222222222222222222"
+            },
+            new HashSet<string>(StringComparer.Ordinal),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            mainSha: "3333333333333333333333333333333333333333");
+        try
+        {
+            GoalGitFactIndex.GitRunner = (_, _) => throw new Xunit.Sdk.XunitException("evidence-key construction must not run git cherry");
+
+            var key = index.BuildGoalEvidenceKey(goal);
+
+            Assert.DoesNotContain("main=", key, StringComparison.Ordinal);
+            Assert.DoesNotContain("content=", key, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GoalGitFactIndex.GitRunner = originalRunner;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalGitFactIndex_parse_branch_tips_keeps_present_and_ignores_malformed_lines")]
     public void GoalGitFactIndexParseBranchTipsKeepsPresentAndIgnoresMalformedLines()
     {
@@ -106,5 +167,21 @@ public sealed class GoalGitFactIndexTests
         {
             GoalGitFactIndex.GitRunner = originalRunner;
         }
+    }
+
+    private static Goal CreateGoalWithStatus(string objective, GoalStatus status)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            objective,
+            [new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer)]);
+        var snapshot = kernel.ExportSnapshot();
+        kernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Select(item => item.Id == goal.Id.Value ? item with { Status = status } : item)
+                .ToArray()
+        });
+        return kernel.GetGoal(goal.Id);
     }
 }

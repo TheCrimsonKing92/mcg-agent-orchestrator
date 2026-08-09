@@ -452,7 +452,51 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
-    public void CompletedSquashedBranch_RemainsLandingBlocker()
+    public void VerifiedEquivalentBranch_IsNamedSupersededWithoutAutoRetirement()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Verified equivalent branch already upstream", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/verified-equivalent.txt", "already upstream");
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            var mainPath = Path.Combine(root, "src", "verified-equivalent.txt");
+            Directory.CreateDirectory(Path.GetDirectoryName(mainPath)!);
+            File.WriteAllText(mainPath, "already upstream");
+            RunGit(root, "add", "-A");
+            RunGit(root, "commit", "-m", "Equivalent verified work landed by another goal");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Verified);
+
+            Assert.False(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
+            Assert.StartsWith("- ", RunGitOutput(root, "cherry", "main", branch).Trim(), StringComparison.Ordinal);
+
+            var diagnosis = TerminalGoalSweep.Diagnose(kernel, root, goal.Id);
+            var run = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+            Assert.Equal("completed-branch-superseded", Assert.Single(diagnosis.Blockers).Kind);
+            var blocker = Assert.Single(Assert.Single(run.Goals).Blockers);
+            Assert.Equal("completed-branch-superseded", blocker.Kind);
+            Assert.Equal($"conduct {goal.Id.Value[..8]} --loop", blocker.Command);
+            Assert.NotEqual(string.Empty, RunGitOutput(root, "branch", "--list", branch).Trim());
+            Assert.False(GoalOperationJournal.HasRetiredTerminalDisposition(
+                GoalOperationJournal.Read(root, goal.Id)));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact]
+    public void CompletedSquashedBranchWithAbsentPatchIds_RemainsLandingBlocker()
     {
         var root = CreateAcceptanceRepository();
         GoalId? cleanupGoalId = null;
@@ -496,6 +540,51 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
         finally
         {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact]
+    public void CompletedBranchWithInconclusiveCherry_RemainsLandingBlocker()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        var originalRunner = TerminalGoalSweep.GitRunner;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Inconclusive patch equivalence", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/inconclusive.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+            TerminalGoalSweep.GitRunner = (workingDirectory, args) =>
+                args.Count > 0 && args[0] == "cherry"
+                    ? new GitCli.GitResult(0, "ambiguous output", string.Empty)
+                    : originalRunner(workingDirectory, args);
+
+            var diagnosis = TerminalGoalSweep.Diagnose(kernel, root, goal.Id);
+            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+
+            var diagnosed = Assert.Single(diagnosis.Blockers);
+            Assert.Equal("completed-branch-unmerged", diagnosed.Kind);
+            Assert.Contains("contentCheck=inconclusive", diagnosed.Evidence, StringComparison.Ordinal);
+            var blocker = Assert.Single(Assert.Single(result.Goals).Blockers);
+            Assert.Equal("completed-branch-unmerged", blocker.Kind);
+            Assert.Contains("contentCheck=inconclusive", blocker.Evidence, StringComparison.Ordinal);
+            Assert.Equal($"acceptance {goal.Id.Value[..8]}", blocker.Command);
+            Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
+            Assert.NotEqual(
+                string.Empty,
+                RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
+        }
+        finally
+        {
+            TerminalGoalSweep.GitRunner = originalRunner;
             CleanupAcceptanceRepository(root, cleanupGoalId);
         }
     }

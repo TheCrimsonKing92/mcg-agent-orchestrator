@@ -650,10 +650,18 @@ internal static class TerminalGoalSweep
                     branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
                 }
 
+                var contentEquivalent = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain;
                 blockers.Add(new TerminalGoalSweepBlocker(
-                    "completed-branch-unmerged",
-                    $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
-                    BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
+                    contentEquivalent ? "completed-branch-superseded" : "completed-branch-unmerged",
+                    contentEquivalent
+                        ? BuildSupersededBranchEvidence(goal, "retirement required")
+                        : $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}; contentCheck={branchFacts.ContentState.ToString().ToLowerInvariant()}",
+                    contentEquivalent
+                        ? TerminalGoalRemedy.OperatorOnly(
+                            goal.Id,
+                            prefix,
+                            $"conduct {prefix} --loop")
+                        : BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
                 results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
                 continue;
             }
@@ -1061,8 +1069,7 @@ internal static class TerminalGoalSweep
                 branchFacts.HasGoalBranchArtifact &&
                 !branchFacts.BranchAlreadyLanded)
             {
-                var contentEquivalent = goal.Status == GoalStatus.Completed &&
-                    branchFacts.ContentState == GoalBranchContentState.EquivalentToMain;
+                var contentEquivalent = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain;
                 blockers.Add(new TerminalGoalSweepBlocker(
                     contentEquivalent ? "completed-branch-superseded" : "completed-branch-unmerged",
                     contentEquivalent

@@ -98,18 +98,13 @@ internal sealed class GoalGitFactIndex(
         var hasTip = goalBranchTips.TryGetValue(branch, out var tip);
         var registeredWorktree = registeredWorktreePaths.Contains(NormalizePath(GoalWorktrees.WorktreePath(executionDirectory, goal.Id)));
         var merged = mergedGoalBranches.Contains(branch);
-        var contentState = hasTip && !merged && goal.Status is GoalStatus.Verified or GoalStatus.Completed
-            ? GetBranchContentState(branch)
-            : GoalBranchContentState.NotChecked;
         return string.Join(
             "|",
             $"git={(isGitWorkTree ? "available" : "unavailable")}",
             $"branch={branch}",
             $"tip={(hasTip ? tip : "absent")}",
             $"worktree={(registeredWorktree ? "present" : "absent")}",
-            $"merged={(merged ? "true" : "false")}",
-            $"main={(mainSha ?? "unavailable")}",
-            $"content={contentState.ToString().ToLowerInvariant()}");
+            $"merged={(merged ? "true" : "false")}");
     }
 
     private GoalBranchContentState GetBranchContentState(string branch)
