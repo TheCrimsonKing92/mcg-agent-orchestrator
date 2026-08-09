@@ -163,6 +163,50 @@ public sealed partial class CollaborationItemStore
         }, cancellationToken);
     }
 
+    public async Task<bool> TryResolveByIdAsync(
+        string itemId,
+        string resolution,
+        CancellationToken cancellationToken = default)
+    {
+        return await WithBusyRetryAsync(async () =>
+        {
+            await using var conn = OpenConnection();
+            await RunNonQueryAsync(conn, "PRAGMA busy_timeout=30000", cancellationToken);
+            await RunNonQueryAsync(conn, "BEGIN IMMEDIATE", cancellationToken);
+            try
+            {
+                var resolvedAt = DateTimeOffset.UtcNow;
+                var answerHistory = new[]
+                {
+                    new HumanInputAnswerRecord(
+                        Guid.NewGuid().ToString("n"),
+                        resolution,
+                        resolvedAt)
+                };
+                await using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE collaboration_items
+                    SET status = 'Resolved', resolved_at = $resolved_at, resolution = $resolution,
+                        answer_history_json = $answer_history_json
+                    WHERE id = $id
+                      AND status NOT IN ('Resolved', 'Closed')
+                    """;
+                cmd.Parameters.AddWithValue("$resolved_at", resolvedAt.ToString("O"));
+                cmd.Parameters.AddWithValue("$resolution", resolution);
+                cmd.Parameters.AddWithValue("$answer_history_json", Serialize(answerHistory));
+                cmd.Parameters.AddWithValue("$id", itemId);
+                var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+                await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+                return rows > 0;
+            }
+            catch
+            {
+                try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+                throw;
+            }
+        }, cancellationToken);
+    }
+
     public async Task<CollaborationItem> SupersedeClarificationAsync(
         string goalId,
         string itemId,

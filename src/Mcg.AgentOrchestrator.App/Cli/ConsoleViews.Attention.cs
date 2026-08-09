@@ -69,6 +69,9 @@ internal static partial class ConsoleViews
             if (string.IsNullOrWhiteSpace(renderedId))
                 renderedId = item.Id[..8];
             Console.WriteLine($"  [{item.Type}] {renderedId} status={item.Status} goal={goal}");
+            Console.WriteLine(CollaborationItemLifecycle.IsTerminal(item.Status)
+                ? $"    dismiss: unavailable (status={item.Status}; item-id={item.Id})"
+                : $"    dismiss: attention dismiss --item {item.Id}");
             Console.WriteLine($"    subject: {item.Subject}");
             if (!string.IsNullOrWhiteSpace(item.Body))
                 Console.WriteLine($"    body: {item.Body}");

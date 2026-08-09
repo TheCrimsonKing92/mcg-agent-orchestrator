@@ -69,6 +69,84 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
     }
 
 
+    [Xunit.Fact(DisplayName = "Cli_attention_item_dismissal_handles_cross_goal_and_owned_items_selectively")]
+    public async Task CliAttentionItemDismissalHandlesCrossGoalAndOwnedItemsSelectively()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(new GoalId("aaaaaaaa111111111111111111111111"), "Owned attention");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var crossGoal = await store.RaiseAsync(
+            CollaborationItemType.Verify,
+            null,
+            "Historical canary",
+            "Already handled");
+        var ownedStale = await store.RaiseAsync(
+            CollaborationItemType.Verify,
+            goal.Id.Value,
+            "Owned stale item",
+            "Clear only this item");
+        var ownedLive = await store.RaiseAsync(
+            CollaborationItemType.Decision,
+            goal.Id.Value,
+            "Owned live item",
+            "Keep this item");
+
+        var listing = ExecuteCliAndCapture(["attention", "show"], kernel, workspace);
+        Xunit.Assert.Contains("goal=cross-goal", listing, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"dismiss: attention dismiss --item {crossGoal.Id}", listing, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"dismiss: attention dismiss --item {ownedStale.Id}", listing, StringComparison.Ordinal);
+
+        var crossGoalResult = ExecuteCliAndCapture(
+            ["attention", "dismiss", "--item", crossGoal.Id[..8]],
+            kernel,
+            workspace);
+        var ownedResult = ExecuteCliAndCapture(
+            ["attention", "dismiss", "--item", ownedStale.Id],
+            kernel,
+            workspace);
+
+        Xunit.Assert.Contains($"Dismissed attention item '{crossGoal.Id}'.", crossGoalResult, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Dismissed attention item '{ownedStale.Id}'.", ownedResult, StringComparison.Ordinal);
+        var remaining = await store.GetAttentionQueueAsync();
+        Xunit.Assert.Equal(ownedLive.Id, Xunit.Assert.Single(remaining).Id);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_attention_item_dismissal_distinguishes_unknown_from_ineligible")]
+    public async Task CliAttentionItemDismissalDistinguishesUnknownFromIneligible()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var resolved = await store.RaiseAsync(
+            CollaborationItemType.Verify,
+            null,
+            "Resolved item",
+            "Historical",
+            "resolved-attention-item");
+        Xunit.Assert.True(await store.TryResolveAsync(resolved.CorrelationKey!, "already handled"));
+
+        var unknown = Xunit.Assert.Throws<ArgumentException>(() => ExecuteCliAndCapture(
+            ["attention", "dismiss", "--item", "ffffffff"],
+            kernel,
+            workspace));
+        var ineligible = Xunit.Assert.Throws<InvalidOperationException>(() => ExecuteCliAndCapture(
+            ["attention", "dismiss", "--item", resolved.Id],
+            kernel,
+            workspace));
+        var displayArtifact = Xunit.Assert.Throws<KeyNotFoundException>(() => ExecuteCliAndCapture(
+            ["attention", "dismiss", "cross-goal"],
+            kernel,
+            workspace));
+
+        Xunit.Assert.Equal("No attention item matches id 'ffffffff'.", unknown.Message);
+        Xunit.Assert.Contains("matched, but status is 'Resolved'; nothing was dismissed", ineligible.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("No goal found matching prefix 'cross-goal'", displayArtifact.Message, StringComparison.Ordinal);
+    }
+
+
     [Xunit.Fact(DisplayName = "Cli_attention_show_goal_prefix_filters_unrelated_items")]
     public async Task CliAttentionShowGoalPrefixFiltersUnrelatedItems()
     {
