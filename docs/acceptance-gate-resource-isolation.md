@@ -31,3 +31,57 @@ key. Unit-test timing and stub runners do not satisfy this gate.
 The baseline for comparison is goal `a9920536`: 18 shard verdicts, 2,244,894 ms total shard work, and
 595,660 ms wall clock. Post-change performance remains unclaimed until the real acceptance workflow records
 the corresponding receipt.
+
+### Baseline receipt
+
+The clean `a9920536` acceptance run on 2026-08-09 produced these shard durations:
+
+| Lane | Duration (s) | Lane | Duration (s) |
+| --- | ---: | --- | ---: |
+| Worker dispatch fixtures | 354.0 | Goal worktree cleanup | 327.3 |
+| Goal acceptance build slots | 326.0 | Goal lifecycle commands | 248.4 |
+| Process spawning | 230.2 | Dotnet build slots | 201.2 |
+| Remainder | 176.6 | Remainder balance A | 136.6 |
+| Chaos gate | 75.1 | Worker profiles | 45.8 |
+| Remainder balance B | 33.1 | Goal acceptance verifier | 30.5 |
+| Cli | 11.4 | Provider environment | 11.3 |
+| Conduct watch sweep scoping | 10.0 | Worker sandbox planner | 9.3 |
+| Dashboard validation | 9.2 | Worker shell | 9.1 |
+
+The four longest measured exclusive-resource chains were:
+
+```text
+xunit:GoalWorktreeCleanupHooks  Goal worktree cleanup 327.3s + Goal lifecycle commands 248.4s     = 575.7s
+xunit:EnvMutation               Worker dispatch fixtures 354.0s + Worker profiles 45.8s          = 399.8s
+xunit:DotnetBuildSlots          Dotnet build slots 201.2s + Remainder 176.6s                     = 377.8s
+xunit:JobAccounting             Goal acceptance build slots 326.0s + Goal acceptance verifier 30.5s = 356.5s
+```
+
+### Post-change comparison method
+
+The operator-owned acceptance run must record the exact commit and retain all 18 `shard-complete` lines,
+the `phase=shards-complete elapsed_ms` line, and the terminal `EVIDENCE_END duration_s` line. First verify
+that the same 18 named lanes emitted successful gating verdicts. Sum the 18 shard elapsed values for total
+work and reconstruct every exclusive-key chain from the manifest and those same values. The shard-phase
+wall clock is `shards-complete elapsed_ms`; `EVIDENCE_END duration_s` is the end-to-end cross-check and must
+not be substituted for the shard-phase number.
+
+For a direct like-for-like comparison, subtract the baseline wall clock: `postWallMs - 595,660`. Because
+test durations can move between runs, also compare normalized scheduler overhead:
+
+```text
+baselineCriticalChain = 327,300 + 248,400 = 575,700 ms
+baselineSchedulerOverhead = 595,660 - 575,700 = 19,960 ms
+postSchedulerOverhead = postWallMs - postLongestExclusiveChainMs
+```
+
+A post-run overhead below 19,960 ms is an improvement; above 19,960 ms is a regression. A lower direct wall
+clock with materially less than 2,244,894 ms of shard work is workload drift, not sufficient performance
+evidence. Any missing/failed lane, incomplete receipt, or cleanup failure is a correctness regression
+regardless of timing.
+
+No exclusive key or shard-cap setting changed in this goal. Key-aware admission can remove only avoidable
+idle time above the retained critical chain. With baseline durations, its predicted effect is therefore
+between 0 and `595,660 - 575,700 = 19,960 ms` saved (at most 3.35%), for a shard-phase wall clock between
+575,700 and 595,660 ms. A materially larger saving would require changed lane durations or a broken chain
+and must be reconciled from the per-shard receipt rather than attributed to this scheduler change.
