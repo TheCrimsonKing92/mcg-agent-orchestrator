@@ -147,29 +147,7 @@ public static class RepositoryChangeClassifier
         using var trusted = JsonDocument.Parse(trustedManifestJson);
         using var candidate = JsonDocument.Parse(candidateManifestJson);
         var changed = new List<string>();
-        CompareSecurityCriticalField(
-            trusted.RootElement,
-            candidate.RootElement,
-            "engine.mtpInvocations[].executablePathTemplate",
-            invocation => invocation.TryGetProperty("executablePathTemplate", out var value) ? value.GetString() : null,
-            changed);
-        CompareSecurityCriticalField(
-            trusted.RootElement,
-            candidate.RootElement,
-            "engine.mtpInvocations[].firewallExecutablePathTemplate",
-            invocation => invocation.TryGetProperty("firewallExecutablePathTemplate", out var value) ? value.GetString() : null,
-            changed);
-        CompareSecurityCriticalField(
-            trusted.RootElement,
-            candidate.RootElement,
-            "engine.mtpInvocations[].arguments[0]",
-            invocation =>
-                invocation.TryGetProperty("arguments", out var arguments) &&
-                arguments.ValueKind == JsonValueKind.Array &&
-                arguments.GetArrayLength() > 0
-                    ? arguments[0].GetString()
-                    : null,
-            changed);
+        CompareSecurityCriticalMtpInvocations(trusted.RootElement, candidate.RootElement, changed);
         if (HasUnsafeMtpInvocationArguments(candidate.RootElement))
         {
             changed.Add("engine.mtpInvocations[].arguments");
@@ -262,16 +240,110 @@ public static class RepositoryChangeClassifier
             broad);
     }
 
-    private static void CompareSecurityCriticalField(
+    private static void CompareSecurityCriticalMtpInvocations(
         JsonElement trustedRoot,
         JsonElement candidateRoot,
-        string fieldName,
-        Func<JsonElement, string?> selector,
         ICollection<string> changed)
     {
-        var trustedValues = ReadMtpInvocationValues(trustedRoot, selector);
-        var candidateValues = ReadMtpInvocationValues(candidateRoot, selector);
-        if (!trustedValues.SequenceEqual(candidateValues, StringComparer.Ordinal))
+        var trustedInvocations = ReadMtpInvocations(trustedRoot);
+        var candidateInvocations = ReadMtpInvocations(candidateRoot);
+        if (trustedInvocations is null || candidateInvocations is null)
+        {
+            AddMtpInvocationSecurityFields(changed);
+            return;
+        }
+
+        foreach (var trustedInvocation in trustedInvocations)
+        {
+            if (!candidateInvocations.TryGetValue(trustedInvocation.Key, out var candidateInvocation))
+            {
+                AddMtpInvocationSecurityFields(changed);
+                continue;
+            }
+
+            CompareMtpInvocationField(
+                trustedInvocation.Value,
+                candidateInvocation,
+                "executablePathTemplate",
+                "engine.mtpInvocations[].executablePathTemplate",
+                changed);
+            CompareMtpInvocationField(
+                trustedInvocation.Value,
+                candidateInvocation,
+                "firewallExecutablePathTemplate",
+                "engine.mtpInvocations[].firewallExecutablePathTemplate",
+                changed);
+            if (!string.Equals(
+                    ReadMtpArgumentZero(trustedInvocation.Value),
+                    ReadMtpArgumentZero(candidateInvocation),
+                    StringComparison.Ordinal))
+            {
+                AddChangedField(changed, "engine.mtpInvocations[].arguments[0]");
+            }
+        }
+
+        foreach (var candidateInvocation in candidateInvocations
+                     .Where(invocation => !trustedInvocations.ContainsKey(invocation.Key)))
+        {
+            RequireTrustedTemplateForAddedInvocation(
+                trustedInvocations.Values,
+                candidateInvocation.Value,
+                "executablePathTemplate",
+                "engine.mtpInvocations[].executablePathTemplate",
+                changed);
+            RequireTrustedTemplateForAddedInvocation(
+                trustedInvocations.Values,
+                candidateInvocation.Value,
+                "firewallExecutablePathTemplate",
+                "engine.mtpInvocations[].firewallExecutablePathTemplate",
+                changed);
+        }
+    }
+
+    private static void CompareMtpInvocationField(
+        JsonElement trustedInvocation,
+        JsonElement candidateInvocation,
+        string propertyName,
+        string fieldName,
+        ICollection<string> changed)
+    {
+        if (!string.Equals(
+                ReadMtpInvocationString(trustedInvocation, propertyName),
+                ReadMtpInvocationString(candidateInvocation, propertyName),
+                StringComparison.Ordinal))
+        {
+            AddChangedField(changed, fieldName);
+        }
+    }
+
+    private static void RequireTrustedTemplateForAddedInvocation(
+        IEnumerable<JsonElement> trustedInvocations,
+        JsonElement candidateInvocation,
+        string propertyName,
+        string fieldName,
+        ICollection<string> changed)
+    {
+        var candidateTemplate = ReadMtpInvocationString(candidateInvocation, propertyName);
+        if (candidateTemplate is null ||
+            !trustedInvocations.Any(trustedInvocation => string.Equals(
+                ReadMtpInvocationString(trustedInvocation, propertyName),
+                candidateTemplate,
+                StringComparison.Ordinal)))
+        {
+            AddChangedField(changed, fieldName);
+        }
+    }
+
+    private static void AddMtpInvocationSecurityFields(ICollection<string> changed)
+    {
+        AddChangedField(changed, "engine.mtpInvocations[].executablePathTemplate");
+        AddChangedField(changed, "engine.mtpInvocations[].firewallExecutablePathTemplate");
+        AddChangedField(changed, "engine.mtpInvocations[].arguments[0]");
+    }
+
+    private static void AddChangedField(ICollection<string> changed, string fieldName)
+    {
+        if (!changed.Contains(fieldName))
         {
             changed.Add(fieldName);
         }
@@ -303,28 +375,52 @@ public static class RepositoryChangeClassifier
         return value.GetRawText();
     }
 
-    private static string[] ReadMtpInvocationValues(
-        JsonElement root,
-        Func<JsonElement, string?> selector)
+    private static Dictionary<string, JsonElement>? ReadMtpInvocations(JsonElement root)
     {
         if (!root.TryGetProperty("engine", out var engine) ||
-            !engine.TryGetProperty("mtpInvocations", out var invocations) ||
-            invocations.ValueKind != JsonValueKind.Array)
+            !engine.TryGetProperty("mtpInvocations", out var invocations))
         {
-            return [];
+            return new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
         }
 
-        return invocations.EnumerateArray()
-            .Select(invocation =>
+        if (invocations.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var byProject = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+        foreach (var invocation in invocations.EnumerateArray())
+        {
+            if (invocation.ValueKind != JsonValueKind.Object ||
+                !invocation.TryGetProperty("project", out var projectValue) ||
+                projectValue.ValueKind != JsonValueKind.String ||
+                string.IsNullOrWhiteSpace(projectValue.GetString()))
             {
-                var project = invocation.TryGetProperty("project", out var projectValue)
-                    ? projectValue.GetString()
-                    : null;
-                return $"{project}\u001f{selector(invocation)}";
-            })
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+                return null;
+            }
+
+            var project = projectValue.GetString()!.Replace('\\', '/').TrimStart('/');
+            if (!byProject.TryAdd(project, invocation))
+            {
+                return null;
+            }
+        }
+
+        return byProject;
     }
+
+    private static string? ReadMtpInvocationString(JsonElement invocation, string propertyName) =>
+        invocation.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static string? ReadMtpArgumentZero(JsonElement invocation) =>
+        invocation.TryGetProperty("arguments", out var arguments) &&
+        arguments.ValueKind == JsonValueKind.Array &&
+        arguments.GetArrayLength() > 0 &&
+        arguments[0].ValueKind == JsonValueKind.String
+            ? arguments[0].GetString()
+            : null;
 
     private static bool HasUnsafeMtpInvocationArguments(JsonElement root)
     {

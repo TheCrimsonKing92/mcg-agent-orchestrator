@@ -127,6 +127,91 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains("trusted review required", decision.Evidence, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_allows_safe_MTP_project_addition_using_trusted_templates")]
+    public void RepositoryChangeClassifierAllowsSafeMtpProjectAdditionUsingTrustedTemplates()
+    {
+        const string trusted = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "executablePathTemplate": "bin/{projectName}.exe",
+              "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+              "arguments": ["{executable}", "--report-trx"]
+            }] } }
+            """;
+        const string candidate = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "executablePathTemplate": "bin/{projectName}.exe",
+              "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+              "arguments": ["{executable}", "--report-trx"]
+            }, {
+              "project": "tests/B.csproj",
+              "executablePathTemplate": "bin/{projectName}.exe",
+              "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+              "arguments": ["{executable}", "--report-trx", "--minimum-expected-tests", "1"]
+            }] } }
+            """;
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.False(decision.RequiresTrustedReview);
+        Assert.Empty(decision.SecurityCriticalChanges);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_MTP_project_removal_to_trusted_review")]
+    public void RepositoryChangeClassifierRoutesMtpProjectRemovalToTrustedReview()
+    {
+        const string invocation = """
+            {
+              "project": "tests/A.csproj",
+              "executablePathTemplate": "bin/{projectName}.exe",
+              "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+              "arguments": ["{executable}", "--report-trx"]
+            }
+            """;
+        var trusted = $$"""{ "engine": { "mtpInvocations": [{{invocation}}] } }""";
+        const string candidate = """{ "engine": { "mtpInvocations": [] } }""";
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.True(decision.RequiresTrustedReview);
+        Assert.Contains("engine.mtpInvocations[].executablePathTemplate", decision.SecurityCriticalChanges);
+        Assert.Contains("engine.mtpInvocations[].firewallExecutablePathTemplate", decision.SecurityCriticalChanges);
+        Assert.Contains("engine.mtpInvocations[].arguments[0]", decision.SecurityCriticalChanges);
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_MTP_project_addition_with_novel_template_to_trusted_review")]
+    public void RepositoryChangeClassifierRoutesMtpProjectAdditionWithNovelTemplateToTrustedReview()
+    {
+        const string trusted = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "executablePathTemplate": "bin/{projectName}.exe",
+              "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+              "arguments": ["{executable}", "--report-trx"]
+            }] } }
+            """;
+        const string candidate = """
+            { "engine": { "mtpInvocations": [{
+              "project": "tests/A.csproj",
+              "executablePathTemplate": "bin/{projectName}.exe",
+              "firewallExecutablePathTemplate": "bin/{projectName}.exe",
+              "arguments": ["{executable}", "--report-trx"]
+            }, {
+              "project": "tests/B.csproj",
+              "executablePathTemplate": "../candidate.exe",
+              "firewallExecutablePathTemplate": "../candidate.exe",
+              "arguments": ["{executable}", "--report-trx"]
+            }] } }
+            """;
+
+        var decision = RepositoryChangeClassifier.ClassifyAcceptanceManifestChange(trusted, candidate);
+
+        Assert.True(decision.RequiresTrustedReview);
+        Assert.Contains("engine.mtpInvocations[].executablePathTemplate", decision.SecurityCriticalChanges);
+        Assert.Contains("engine.mtpInvocations[].firewallExecutablePathTemplate", decision.SecurityCriticalChanges);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryChangeClassifier_routes_structural_coverage_disable_to_trusted_review")]
     public void RepositoryChangeClassifierRoutesStructuralCoverageDisableToTrustedReview()
     {
