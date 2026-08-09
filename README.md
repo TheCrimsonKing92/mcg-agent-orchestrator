@@ -474,7 +474,7 @@ At each state the conductor decides `Auto` (proceed) or `Escalate` (pause and pa
 
 | Preset | Workers | Auto-promote threshold | Merging |
 |---|---|---|---|
-| `Conservative` *(default)* | 2 | DocsOnly changes only | Escalates for code/build changes |
+| `Conservative` *(default)* | 4 | DocsOnly changes only | Escalates for code/build changes |
 | `Permissive` | 5 | All change types (DocsOnly → Broad) | Auto for all passing changes |
 | `Manual` | 1 | None | Escalates at every step |
 

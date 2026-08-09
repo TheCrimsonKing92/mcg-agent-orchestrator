@@ -256,6 +256,24 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_ignores_malformed_retired_budget_values")]
+    public void ConductorAutonomyPolicyParseJsonIgnoresMalformedRetiredBudgetValues()
+    {
+        var currentJson = ConductorAutonomyPolicy.Conservative.ToJson();
+        var legacyJson = """
+            {
+              "maxTotalBudget": "not-a-budget",
+              "perProviderBudgetCaps": ["not-a-provider-map"],
+            """ + currentJson[1..];
+
+        var restored = ConductorAutonomyPolicy.ParseJson(legacyJson);
+        var reserialized = restored.ToJson();
+
+        Assert.Equal(ConductorAutonomyPolicy.Conservative, restored);
+        Assert.DoesNotContain("maxTotalBudget", reserialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_rejects_invalid_JSON")]
     public void ConductorAutonomyPolicyParseJsonRejectsInvalidJson()
     {
