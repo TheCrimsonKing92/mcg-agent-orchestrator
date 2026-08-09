@@ -256,13 +256,29 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_ignores_malformed_retired_budget_values")]
-    public void ConductorAutonomyPolicyParseJsonIgnoresMalformedRetiredBudgetValues()
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_ignores_malformed_retired_total_budget")]
+    public void ConductorAutonomyPolicyParseJsonIgnoresMalformedRetiredTotalBudget()
     {
         var currentJson = ConductorAutonomyPolicy.Conservative.ToJson();
         var legacyJson = """
             {
               "maxTotalBudget": "not-a-budget",
+            """ + currentJson[1..];
+
+        var restored = ConductorAutonomyPolicy.ParseJson(legacyJson);
+        var reserialized = restored.ToJson();
+
+        Assert.Equal(ConductorAutonomyPolicy.Conservative, restored);
+        Assert.DoesNotContain("maxTotalBudget", reserialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_ignores_malformed_retired_provider_budget_caps")]
+    public void ConductorAutonomyPolicyParseJsonIgnoresMalformedRetiredProviderBudgetCaps()
+    {
+        var currentJson = ConductorAutonomyPolicy.Conservative.ToJson();
+        var legacyJson = """
+            {
               "perProviderBudgetCaps": ["not-a-provider-map"],
             """ + currentJson[1..];
 
