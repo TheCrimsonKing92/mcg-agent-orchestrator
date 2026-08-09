@@ -4460,10 +4460,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "acceptance-coverage-discovery",
             stableSlotIndex,
             stableSlotLease);
-        var deletedTestFiles = ResolveDeletedTestFiles(worktreePath);
         var allSummaries = new List<string>();
         foreach (var broadCheck in broadChecks)
         {
+            var deletedTestFiles = ResolveDeletedTestFiles(worktreePath, broadCheck.Project!);
             var candidateDiscoveryArguments = BuildUnattendedDiscoveryArguments(
                 broadCheck,
                 EngineSettings,
@@ -4851,7 +4851,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return null;
     }
 
-    private static string[] ResolveDeletedTestFiles(string worktreePath)
+    private static string[] ResolveDeletedTestFiles(string worktreePath, string project)
     {
         if (ResolveDeletedTestFilesForTests is not null)
         {
@@ -4864,13 +4864,98 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return [];
         }
 
+        return ParseDeletedTestFiles(
+            output,
+            project,
+            destination => ResolveOwningProject(worktreePath, destination));
+    }
+
+    internal static string[] ParseDeletedTestFilesForTests(
+        string output,
+        string project,
+        Func<string, string?> resolveOwningProject) =>
+        ParseDeletedTestFiles(output, project, resolveOwningProject);
+
+    internal static string? ResolveOwningProjectForTests(string worktreePath, string path) =>
+        ResolveOwningProject(worktreePath, path);
+
+    private static string[] ParseDeletedTestFiles(
+        string output,
+        string project,
+        Func<string, string?> resolveOwningProject)
+    {
+        var normalizedProject = NormalizePath(project);
         return output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Select(line => line.Split('\t', StringSplitOptions.RemoveEmptyEntries))
-            .Where(parts => parts.Length >= 2 &&
-                parts[0].Equals("D", StringComparison.OrdinalIgnoreCase) &&
-                IsTestFile(parts[1]))
-            .Select(parts => NormalizePath(parts[1]))
+            .Select(line => line.Split('\t'))
+            .Where(parts =>
+            {
+                if (parts.Length < 2 || !IsTestFile(parts[1]))
+                {
+                    return false;
+                }
+
+                if (parts[0].Equals("D", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (parts.Length < 3 ||
+                    !parts[0].StartsWith("R", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                var destinationProject = NormalizePath(resolveOwningProject(parts[2]));
+                return !string.IsNullOrWhiteSpace(destinationProject) &&
+                    !string.Equals(destinationProject, normalizedProject, StringComparison.OrdinalIgnoreCase);
+            })
+            .Select(parts => NormalizePath(parts[1])!)
             .ToArray();
+    }
+
+    private static string? ResolveOwningProject(string worktreePath, string path)
+    {
+        var normalizedPath = NormalizePath(path);
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+        {
+            return null;
+        }
+
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(worktreePath));
+        var fullPath = Path.GetFullPath(Path.Combine(
+            root,
+            normalizedPath.Replace('/', Path.DirectorySeparatorChar)));
+        var relativePath = Path.GetRelativePath(root, fullPath);
+        if (Path.IsPathRooted(relativePath) ||
+            relativePath.Equals("..", StringComparison.Ordinal) ||
+            relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var directory = Path.GetDirectoryName(fullPath);
+        while (!string.IsNullOrWhiteSpace(directory))
+        {
+            if (Directory.Exists(directory))
+            {
+                var project = Directory.EnumerateFiles(directory, "*.csproj", SearchOption.TopDirectoryOnly)
+                    .OrderBy(candidate => candidate, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+                if (project is not null)
+                {
+                    return NormalizePath(Path.GetRelativePath(root, project));
+                }
+            }
+
+            if (directory.Equals(root, StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+
+            directory = Path.GetDirectoryName(directory);
+        }
+
+        return null;
     }
 
     private async Task<AcceptanceCheckResult> RunTestTamperCheckAsync(

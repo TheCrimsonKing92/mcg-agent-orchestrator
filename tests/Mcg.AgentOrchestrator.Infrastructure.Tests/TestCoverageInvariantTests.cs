@@ -204,8 +204,61 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "TestCoverageInvariant_rejects_cross_generation_drop_unless_test_file_was_deleted")]
-    public void TestCoverageInvariantRejectsCrossGenerationDropUnlessTestFileWasDeleted()
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_allows_cross_generation_count_when_test_files_move_to_another_project")]
+    public void TestCoverageInvariantAllowsCrossGenerationCountWhenTestFilesMoveToAnotherProject()
+    {
+        const string gatedProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+        const string extractedProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
+        var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
+            "R100\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentTests.cs" +
+                "\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/ProviderEnvironmentTests.cs\n" +
+            "R097\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentIsolationTests.cs" +
+                "\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/ProviderEnvironmentIsolationTests.cs",
+            gatedProject,
+            _ => extractedProject);
+        var candidate = Enumerable.Range(0, 3439)
+            .Select(index => $"CurrentCoverageTests.Case{index:D4}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var moved = Enumerable.Range(0, 6)
+            .Select(index => $"ProviderEnvironmentTests.Case{index:D2}")
+            .Concat(Enumerable.Range(0, 7)
+                .Select(index => $"ProviderEnvironmentIsolationTests.Case{index:D2}"));
+        var main = candidate.Concat(moved).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var trx = WriteTrx(candidate
+            .Select((name, index) => (index.ToString(), name, "Passed"))
+            .ToArray());
+        try
+        {
+            var partitions = new[] { new TestPartitionCoverage("lane", true, [trx]) };
+
+            var receipt = TestCoverageInvariant.Evaluate(candidate, partitions, main, deleted);
+            var oneShort = TestCoverageInvariant.Evaluate(
+                candidate.Take(3438).ToHashSet(StringComparer.OrdinalIgnoreCase),
+                partitions,
+                main,
+                deleted);
+
+            Xunit.Assert.Equal(
+                [
+                    "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentTests.cs",
+                    "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentIsolationTests.cs"
+                ],
+                deleted);
+            Xunit.Assert.True(receipt.Passed);
+            Xunit.Assert.Contains(
+                "cross-generation-count:candidate=3438,minimum=3439,main=3452,deleted=13",
+                oneShort.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_counts_deleted_test_file")]
+    public void TestCoverageInvariantCountsDeletedTestFile()
     {
         var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
         try
@@ -215,19 +268,137 @@ public sealed class TestCoverageInvariantTests
                 ["CurrentTests.Runs", "RemovedTests.WasPresentOnMain"],
                 StringComparer.OrdinalIgnoreCase);
             var partitions = new[] { new TestPartitionCoverage("lane", true, [trx]) };
+            var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
+                "D\ttests/Example.Tests/RemovedTests.cs",
+                "tests/Example.Tests/Example.Tests.csproj",
+                _ => throw new InvalidOperationException("Deletion rows do not resolve a destination project."));
 
-            var rejected = TestCoverageInvariant.Evaluate(candidate, partitions, main, []);
-            var allowed = TestCoverageInvariant.Evaluate(candidate, partitions, main, ["tests/RemovedTests.cs"]);
+            var allowed = TestCoverageInvariant.Evaluate(candidate, partitions, main, deleted);
 
-            Xunit.Assert.False(rejected.Passed);
-            Xunit.Assert.Contains(
-                rejected.MissingTests,
-                missing => missing.StartsWith("cross-generation-count:", StringComparison.Ordinal));
+            Xunit.Assert.Equal(["tests/Example.Tests/RemovedTests.cs"], deleted);
             Xunit.Assert.True(allowed.Passed);
         }
         finally
         {
             File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_rejects_tests_dropped_from_a_retained_file")]
+    public void TestCoverageInvariantRejectsTestsDroppedFromRetainedFile()
+    {
+        var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
+        try
+        {
+            var candidate = new HashSet<string>(["CurrentTests.Runs"], StringComparer.OrdinalIgnoreCase);
+            var main = new HashSet<string>(
+                ["CurrentTests.Runs", "RetainedTests.WasDropped"],
+                StringComparer.OrdinalIgnoreCase);
+            var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
+                "M\ttests/RetainedTests.cs",
+                "tests/Example.Tests/Example.Tests.csproj",
+                _ => throw new InvalidOperationException("Modified rows do not resolve a destination project."));
+
+            var rejected = TestCoverageInvariant.Evaluate(
+                candidate,
+                [new TestPartitionCoverage("lane", true, [trx])],
+                main,
+                deleted);
+
+            Xunit.Assert.Empty(deleted);
+            Xunit.Assert.Contains(
+                "cross-generation-count:candidate=1,minimum=2,main=2,deleted=0",
+                rejected.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_does_not_reduce_minimum_for_intra_project_rename")]
+    public void TestCoverageInvariantDoesNotReduceMinimumForIntraProjectRename()
+    {
+        const string project = "tests/Example.Tests/Example.Tests.csproj";
+        var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
+            "R100\ttests/Example.Tests/OldTests.cs\ttests/Example.Tests/RenamedTests.cs",
+            project,
+            _ => project);
+        var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(["CurrentTests.Runs"], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("lane", true, [trx])],
+                new HashSet<string>(
+                    ["CurrentTests.Runs", "OldTests.WasPresentOnMain"],
+                    StringComparer.OrdinalIgnoreCase),
+                deleted);
+
+            Xunit.Assert.Empty(deleted);
+            Xunit.Assert.Contains(
+                "cross-generation-count:candidate=1,minimum=2,main=2,deleted=0",
+                result.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_ignores_non_test_renames_and_test_copies")]
+    public void GoalAcceptanceVerifierIgnoresNonTestRenamesAndTestCopies()
+    {
+        var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
+            "R100\tdocs/old.md\tdocs/new.md\n" +
+            "C100\ttests/Example.Tests/SourceTests.cs\ttests/Example.Tests/CopiedTests.cs",
+            "tests/Example.Tests/Example.Tests.csproj",
+            _ => "tests/Other.Tests/Other.Tests.csproj");
+
+        Xunit.Assert.Empty(deleted);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_resolves_nearest_owning_project_within_worktree")]
+    public void GoalAcceptanceVerifierResolvesNearestOwningProjectWithinWorktree()
+    {
+        var outer = Path.Combine(Path.GetTempPath(), $"owning-project-{Guid.NewGuid():N}");
+        var worktree = Path.Combine(outer, "worktree");
+        var parentDirectory = Path.Combine(worktree, "tests", "Parent.Tests");
+        var nestedDirectory = Path.Combine(parentDirectory, "Nested");
+        var sameDirectory = Path.Combine(worktree, "tests", "Same.Tests");
+        var unownedDirectory = Path.Combine(worktree, "tests", "Unowned");
+        try
+        {
+            Directory.CreateDirectory(nestedDirectory);
+            Directory.CreateDirectory(sameDirectory);
+            Directory.CreateDirectory(unownedDirectory);
+            File.WriteAllText(Path.Combine(outer, "Ancestor.Tests.csproj"), "");
+            File.WriteAllText(Path.Combine(parentDirectory, "Parent.Tests.csproj"), "");
+            File.WriteAllText(Path.Combine(nestedDirectory, "Nested.Tests.csproj"), "");
+            File.WriteAllText(Path.Combine(sameDirectory, "Same.Tests.csproj"), "");
+
+            var rootWithTrailingSeparator = worktree + Path.DirectorySeparatorChar;
+            var nestedOwner = GoalAcceptanceVerifier.ResolveOwningProjectForTests(
+                rootWithTrailingSeparator,
+                "tests/Parent.Tests/Nested/CaseTests.cs");
+            var sameDirectoryOwner = GoalAcceptanceVerifier.ResolveOwningProjectForTests(
+                rootWithTrailingSeparator,
+                "tests/Same.Tests/CaseTests.cs");
+            var noOwner = GoalAcceptanceVerifier.ResolveOwningProjectForTests(
+                rootWithTrailingSeparator,
+                "tests/Unowned/CaseTests.cs");
+
+            Xunit.Assert.Equal("tests/Parent.Tests/Nested/Nested.Tests.csproj", nestedOwner);
+            Xunit.Assert.Equal("tests/Same.Tests/Same.Tests.csproj", sameDirectoryOwner);
+            Xunit.Assert.Null(noOwner);
+            Xunit.Assert.Null(GoalAcceptanceVerifier.ResolveOwningProjectForTests(worktree, " "));
+        }
+        finally
+        {
+            if (Directory.Exists(outer))
+            {
+                Directory.Delete(outer, recursive: true);
+            }
         }
     }
 
