@@ -1167,6 +1167,8 @@ public sealed class BackgroundDispatchRunner
         var errorSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
         var decisionStandardOutput = outputSnapshot.DecisionText;
         var decisionStandardError = errorSnapshot.DecisionText;
+        var hasChildExitRecord = TryReadChildExitRecord(processRecord.ChildExitRecordPath, out var childExitRecord);
+        var wrapperExitReconciled = false;
         var resourceAccounting = capturedResourceAccounting ?? ReleaseTrackedProcessJobs(processRecord);
         if (resourceAccounting is not null &&
             !resourceAccounting.Reaped &&
@@ -1176,6 +1178,40 @@ public sealed class BackgroundDispatchRunner
         }
         var task = kernel.GetTask(goalId, taskId);
         var goal = kernel.GetGoal(goalId);
+        if (CanReconcileWrapperExit(recoveryDecision) &&
+            exitCode != 0 &&
+            hasChildExitRecord &&
+            childExitRecord.ExitCode == 0)
+        {
+            var exitCodeEvidenceName = exitArtifactAlreadyExisted
+                ? "observed_wrapper_exit_code"
+                : "synthesized_wrapper_exit_code";
+            if (HasSuccessfulWorkerResult(
+                    processRecord.WorkingDirectory,
+                    decisionStandardOutput,
+                    decisionStandardError,
+                    allowNoChangedFiles: true,
+                    requireNoBlockers: true))
+            {
+                exitCode = 0;
+                wrapperExitReconciled = true;
+                orchestratorFailureReason = null;
+                standardErrorDiagnostic = AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    "Reconciled non-zero wrapper completion because the selected child and its complete, non-blocked WORKER_RESULT succeeded; " +
+                    $"{exitCodeEvidenceName}={observedExitCode}; child_exit_code=0; logical_exit_code=0.");
+            }
+            else
+            {
+                standardErrorDiagnostic = AppendDiagnostic(
+                    AppendDiagnostic(
+                        standardErrorDiagnostic ?? string.Empty,
+                        "Wrapper process exited nonzero after the selected child succeeded, but no complete, usable, non-blocked WORKER_RESULT was available; " +
+                        $"{exitCodeEvidenceName}={observedExitCode}; child_exit_code=0."),
+                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WrapperProcessExitFailure));
+            }
+        }
+
         if (task.RequiredRole == AgentRole.Researcher &&
             RequiresDurableResearchArtifact(goal, task) &&
             exitCode == 0)
@@ -1373,10 +1409,15 @@ public sealed class BackgroundDispatchRunner
             }
             else if (!orchestratorCommitted && worktreeEvidence.IsClean)
             {
+                var reconciledRoleStillRequiresChangeEvidence =
+                    wrapperExitReconciled &&
+                    DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var roleCapability) &&
+                    roleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
                 var requiresCommitEvidence =
                     RequiresPostDispatchCommitEvidence(task, decisionStandardOutput, decisionStandardError, workerResultPresent) &&
-                    !HasCompletedVerification(decisionStandardOutput, decisionStandardError) &&
-                    !AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError) &&
+                    (reconciledRoleStillRequiresChangeEvidence ||
+                     (!HasCompletedVerification(decisionStandardOutput, decisionStandardError) &&
+                      !AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError))) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
 
                 if (requiresCommitEvidence)
@@ -1458,7 +1499,6 @@ public sealed class BackgroundDispatchRunner
                     : $"orchestrator recovery action={recoveryDecision.ActionName}");
         }
         _ = DispatchExitArtifacts.TryRead(processRecord.ExitCodePath, out var exitArtifact);
-        var hasChildExitRecord = TryReadChildExitRecord(processRecord.ChildExitRecordPath, out var childExitRecord);
         var completed = processRecord with
         {
             CompletedAt = _clock.UtcNow,
@@ -1511,6 +1551,11 @@ public sealed class BackgroundDispatchRunner
         EvictProcessLogCache(processRecord);
         return outcome;
     }
+
+    private static bool CanReconcileWrapperExit(DispatchRecoveryDecision? recoveryDecision) =>
+        recoveryDecision?.Action is DispatchRecoveryAction.ReconcileFromExit or
+            DispatchRecoveryAction.Reap or
+            DispatchRecoveryAction.ClassifyBlocker;
 
     private static bool RequiresDurableResearchArtifact(Goal goal, TaskSpec researcher)
     {
