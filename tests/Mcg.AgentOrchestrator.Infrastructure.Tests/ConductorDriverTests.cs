@@ -3383,6 +3383,7 @@ public sealed class ConductorDriverTests
             "Conductor routing needs an executed receipt.",
             id: "tester-evidence",
             category: FindingCategory.Correctness,
+            project: "Mcg.AgentOrchestrator.Infrastructure.Tests",
             classes: ["ConductorDriverTests"]);
         var output = string.Join(
             Environment.NewLine,
@@ -3443,6 +3444,55 @@ public sealed class ConductorDriverTests
             evt.Message.Contains("finding_id=tester-evidence", StringComparison.Ordinal));
         var recorded = tester.VerificationHistory.Last().MergedReviewFindings!.Single(item => item.StableId == "tester-evidence");
         Assert.True(recorded.EvidenceOutcome?.Honoured);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("Mcg.AgentOrchestrator.Infrastructure.Tests", "Infrastructure.Tests")]
+    [Xunit.InlineData("Mcg.AgentOrchestrator.Core.Tests", "Core.Tests")]
+    [Xunit.InlineData("Infrastructure.Tests", "Infrastructure.Tests")]
+    [Xunit.InlineData("Core.Tests", "Core.Tests")]
+    [Xunit.InlineData("Infrastructure", "Infrastructure.Tests")]
+    [Xunit.InlineData("Core", "Core.Tests")]
+    [Xunit.InlineData("C:\\repo\\tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "Infrastructure.Tests")]
+    public void ReviewerStructuredRequestAcceptsEveryFocusedEvidenceProjectForm(
+        string project,
+        string canonicalProject)
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "The project form must reach focused evidence execution.",
+            id: "project-form",
+            project: project,
+            classes: ["ConductorDriverTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                Assert.Equal($"{canonicalProject}: ConductorDriverTests", request);
+                return new FocusedEvidenceRunResult(request, true, true, "project form accepted", []);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, focusedRuns);
+        var outcome = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == "project-form")
+            .EvidenceOutcome;
+        Assert.True(outcome?.Honoured);
+        Assert.Null(outcome?.Reason);
     }
 
     [Xunit.Fact]
@@ -3647,8 +3697,10 @@ public sealed class ConductorDriverTests
         }
     }
 
-    [Xunit.Fact]
-    public void InvalidAndValidRequestsAreProcessedIndependently()
+    [Xunit.Theory]
+    [Xunit.InlineData("Unsupported.Tests")]
+    [Xunit.InlineData("Mcg.AgentOrchestrator.App")]
+    public void InvalidAndValidRequestsAreProcessedIndependently(string unsupportedProject)
     {
         var (kernel, goal) = SoftwareGoal();
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
@@ -3660,7 +3712,7 @@ public sealed class ConductorDriverTests
         var invalid = EvidenceFindingWithRequest(
             "Unsupported project should be refused.",
             id: "invalid-request",
-            project: "Unsupported.Tests",
+            project: unsupportedProject,
             classes: ["UnknownTests"]);
         var valid = EvidenceFindingWithRequest(
             "Valid request should still run.",
@@ -3690,6 +3742,10 @@ public sealed class ConductorDriverTests
         var validOutcome = recorded.Single(finding => finding.StableId == "valid-request").EvidenceOutcome;
         Assert.False(invalidOutcome?.Honoured);
         Assert.Equal(FindingEvidenceNotHonouredReason.UnsupportedProject, invalidOutcome?.Reason);
+        Assert.Contains(unsupportedProject, invalidOutcome?.Detail, StringComparison.Ordinal);
+        Assert.Contains("Accepted forms: Core, Core.Tests", invalidOutcome?.Detail, StringComparison.Ordinal);
+        Assert.Contains("Mcg.AgentOrchestrator.Infrastructure.Tests", invalidOutcome?.Detail, StringComparison.Ordinal);
+        Assert.Contains("full .csproj path", invalidOutcome?.Detail, StringComparison.Ordinal);
         Assert.Null(invalidOutcome?.ReceiptId);
         Assert.Contains(goal.Timeline, evt =>
             evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&

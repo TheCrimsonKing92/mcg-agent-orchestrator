@@ -1840,18 +1840,16 @@ internal sealed class ConductorDriver
                 return false;
             }
 
-            var canonicalProject = project.Equals("Core.Tests", StringComparison.OrdinalIgnoreCase)
-                ? "Core.Tests"
-                : project.Equals("Infrastructure.Tests", StringComparison.OrdinalIgnoreCase)
-                    ? "Infrastructure.Tests"
-                    : null;
-            if (canonicalProject is null)
+            if (!GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(project, out var resolvedProject))
             {
                 refusalReason = FindingEvidenceNotHonouredReason.UnsupportedProject;
-                refusalDetail = $"Focused evidence does not support test project '{project}'.";
+                refusalDetail =
+                    $"Focused evidence does not support test project '{project}'. Accepted forms: " +
+                    $"{GoalAcceptanceVerifier.FocusedEvidenceSupportedProjectForms}.";
                 return false;
             }
 
+            var canonicalProject = GoalAcceptanceVerifier.ProjectLabel(resolvedProject);
             selections.Add(new FindingEvidenceSelection(canonicalProject, testClass));
         }
 

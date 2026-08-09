@@ -141,6 +141,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+    internal const string FocusedEvidenceSupportedProjectForms =
+        "Core, Core.Tests, Mcg.AgentOrchestrator.Core.Tests, Infrastructure, Infrastructure.Tests, " +
+        "Mcg.AgentOrchestrator.Infrastructure.Tests, or a full .csproj path ending in " +
+        "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj or " +
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
     private const string PartitionVerdictJournalOperation = "acceptance:partition-verdict";
     private const string PartitionVerdictCacheJournalOperation = "acceptance:partition-verdict-cache";
     private const int FocusedEvidenceShortTimeoutTargetLimit = 4;
@@ -1498,7 +1503,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return true;
     }
 
-    private static bool TryResolveFocusedEvidenceProject(string alias, out string project)
+    internal static bool TryResolveFocusedEvidenceProject(string alias, out string project)
     {
         var normalized = alias.Replace('\\', '/').Trim();
         project = normalized switch
@@ -1900,7 +1905,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return null;
     }
 
-    private static string ProjectLabel(string project) =>
+    internal static string ProjectLabel(string project) =>
         project.Equals(CoreProject, StringComparison.OrdinalIgnoreCase) ? "Core" :
         project.Equals(InfrastructureProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure" :
         project.Equals(AppProject, StringComparison.OrdinalIgnoreCase) ? "App" :
