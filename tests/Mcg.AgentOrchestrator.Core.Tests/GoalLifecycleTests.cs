@@ -2,6 +2,23 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class GoalLifecycleTests
 {
+    [Xunit.Fact(DisplayName = "GoalLifecycle_identifies_active_goal_with_failed_task")]
+    public void GoalLifecycleIdentifiesActiveGoalWithFailedTask()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var goal = kernel.CreateGoal(
+            "Expose failed work",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+
+        Assert.False(GoalLifecycle.HasActiveFailedTask(goal));
+
+        kernel.ReportTaskProgress(goal.Id, goal.Tasks.Single().Id, WorkTaskStatus.Failed, "failed");
+
+        Assert.True(GoalLifecycle.HasActiveFailedTask(goal));
+        Assert.Equal(GoalStatus.Active, goal.Status);
+    }
+
     [Xunit.Fact(DisplayName = "CreateGoal_records_goal_and_initial_progress_event")]
     public void CreateGoalRecordsGoalAndInitialProgressEvent()
 {

@@ -996,13 +996,20 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         IReadOnlyList<GoalSummary> summaries =
         [
             new GoalSummary("0123456789abcdef0123456789abcdef", "Active", "Build the widget", "2026-06-15T00:00:00.0000000+00:00"),
-            new GoalSummary("fedcba98", "Completed", "Ship the gadget", "2026-06-14T00:00:00.0000000+00:00")
+            new GoalSummary("fedcba98", "Completed", "Ship the gadget", "2026-06-14T00:00:00.0000000+00:00"),
+            new GoalSummary(
+                "badc0ffe",
+                "Active",
+                "Recover failed work",
+                "2026-06-13T00:00:00.0000000+00:00",
+                Condition: GoalLifecycle.ActiveWithFailedTaskCondition)
         ];
 
         var output = CaptureConsole(() => ConsoleViews.PrintGoals(summaries));
 
         Xunit.Assert.Contains("01234567 Active: Build the widget", output);
         Xunit.Assert.Contains("fedcba98 Completed: Ship the gadget", output);
+        Xunit.Assert.Contains("badc0ffe Active [active-with-failed-task]: Recover failed work", output);
     }
 
     [Xunit.Fact(DisplayName = "ConsoleViews_PrintGoal_renders_effective_acceptance_criteria_corrections")]

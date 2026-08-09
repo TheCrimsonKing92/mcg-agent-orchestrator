@@ -5219,8 +5219,8 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_unavailable_touch_proof_holds_without_consuming_exhausted_repair_budget")]
-    public void ConductorDriverUnavailableTouchProofHoldsWithoutConsumingExhaustedRepairBudget()
+    [Xunit.Fact(DisplayName = "ConductorDriver_unavailable_touch_proof_escalates_without_consuming_exhausted_repair_budget")]
+    public void ConductorDriverUnavailableTouchProofEscalatesWithoutConsumingExhaustedRepairBudget()
     {
         const string diagnostic =
             "Round-diff touch proof unavailable because the carried finding round has no reviewed-commit baseline.";
@@ -5243,7 +5243,7 @@ public sealed class ConductorDriverTests
         }
 
         var retried = false;
-        var escalated = false;
+        string? escalation = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             retryTaskWithRoundKind: (_, _, _, _) =>
@@ -5251,15 +5251,16 @@ public sealed class ConductorDriverTests
                 retried = true;
                 return reviewer;
             },
-            writeEscalation: (_, _, _) => escalated = true);
+            writeEscalation: (_, _, message) => escalation = message);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.False(retried);
-        Assert.False(escalated);
-        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
-        Assert.Contains("mechanical repair budget was not consumed", held.Reason, StringComparison.Ordinal);
-        Assert.Contains(diagnostic, held.Reason, StringComparison.Ordinal);
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Contains("ERR_REVIEW_FINDING_IDENTITY_MOVED", escalation, StringComparison.Ordinal);
+        Assert.Contains("suppression=missing-system-derived-round-diff-proof", escalation, StringComparison.Ordinal);
+        Assert.Contains("mechanical repair budget was not consumed", escalation, StringComparison.Ordinal);
+        Assert.Contains(diagnostic, escalation, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_legacy_reviewer_evidence_counters_do_not_cap_structured_requests")]

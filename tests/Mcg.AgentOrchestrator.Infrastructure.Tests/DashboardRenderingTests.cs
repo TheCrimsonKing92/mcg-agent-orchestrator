@@ -14,6 +14,25 @@ using System.Text.Json;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class DashboardRenderingTests
 {
+    [Xunit.Fact(DisplayName = "DashboardRenderer_surfaces_active_goal_with_failed_task_condition")]
+    public void DashboardRendererSurfacesActiveGoalWithFailedTaskCondition()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Reconcile failed work",
+            [new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, goal.Tasks.Single().Id, WorkTaskStatus.Failed, "failed");
+
+        var summary = DashboardResponseMapper.ToGoalSummary(goal);
+        var html = DashboardRenderer.Render(kernel);
+
+        Assert.Equal(GoalLifecycle.ActiveWithFailedTaskCondition, summary.Condition);
+        Assert.Contains("<th>Condition</th>", html, StringComparison.Ordinal);
+        Assert.Contains("data-condition=\"active-with-failed-task\"", html, StringComparison.Ordinal);
+        Assert.Contains(">active-with-failed-task</td>", html, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "DashboardRenderer_emits_mobile_responsive_shell")]
     public void DashboardRendererEmitsMobileResponsiveShell()
     {

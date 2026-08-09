@@ -1285,10 +1285,11 @@ internal sealed class ConductorDriver
                 ReviewFindingConvergence.UntouchedReopenViolationCode &&
             reviewerTask.LastVerification?.ReviewFindingTouchProofDiagnostic is { Length: > 0 } touchProofDiagnostic)
         {
-            decision = VerifyingFindingAutoRetryDecision.Hold(
+            decision = VerifyingFindingAutoRetryDecision.Escalate(
                 $"{reviewerTask.RequiredRole} review-finding contract cannot classify touch-dependent violation {violation.Code} " +
                 $"for task {reviewerTask.Id.Value[..8]} because system-derived round-diff proof is unavailable; " +
-                $"the mechanical repair budget was not consumed. Diagnostic: {TrimForConductorMessage(touchProofDiagnostic)}");
+                $"suppression=missing-system-derived-round-diff-proof; operator adjudication is required and the mechanical repair budget was not consumed. " +
+                $"Diagnostic: {TrimForConductorMessage(touchProofDiagnostic)}");
             return true;
         }
 

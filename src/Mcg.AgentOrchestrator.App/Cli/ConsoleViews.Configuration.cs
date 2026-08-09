@@ -11,7 +11,10 @@ internal static partial class ConsoleViews
     {
         foreach (var goal in kernel.Goals.OrderByDescending(goal => goal.Timeline.FirstOrDefault()?.OccurredAt ?? DateTimeOffset.MinValue))
         {
-            Console.WriteLine($"{goal.Id.Value[..8]} {goal.Status}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
+            var condition = GoalLifecycle.HasActiveFailedTask(goal)
+                ? $" [{GoalLifecycle.ActiveWithFailedTaskCondition}]"
+                : string.Empty;
+            Console.WriteLine($"{goal.Id.Value[..8]} {goal.Status}{condition}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
         }
     }
 
@@ -22,7 +25,8 @@ internal static partial class ConsoleViews
         foreach (var goal in goals)
         {
             var prefix = goal.Id.Length >= 8 ? goal.Id[..8] : goal.Id;
-            Console.WriteLine($"{prefix} {goal.Status}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
+            var condition = string.IsNullOrWhiteSpace(goal.Condition) ? string.Empty : $" [{goal.Condition}]";
+            Console.WriteLine($"{prefix} {goal.Status}{condition}: {OutputTextPreview.CreateSummary(goal.Objective).Text}");
         }
     }
 

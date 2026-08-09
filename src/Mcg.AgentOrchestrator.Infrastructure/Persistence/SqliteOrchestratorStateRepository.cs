@@ -1002,7 +1002,16 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         var results = new List<GoalSummary>();
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT id, status, objective, updated_at FROM goals ORDER BY updated_at DESC";
+        cmd.CommandText = $"""
+            SELECT
+                id,
+                status,
+                objective,
+                updated_at,
+                {ActiveWithFailedTaskConditionSql()}
+            FROM goals
+            ORDER BY updated_at DESC
+            """;
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
         while (await reader.ReadAsync(cancellationToken))
@@ -1011,7 +1020,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.GetString(2),
-                reader.GetString(3)));
+                reader.GetString(3),
+                Condition: reader.IsDBNull(4) ? null : reader.GetString(4)));
         }
 
         return results;
@@ -1047,7 +1057,8 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                     FROM json_each(goals.snapshot_json, '$.Timeline') AS evt
                     ORDER BY CAST(evt.key AS INTEGER) DESC
                     LIMIT 1
-                ) AS terminated_at
+                ) AS terminated_at,
+                {ActiveWithFailedTaskConditionSql()}
             FROM goals
             ORDER BY updated_at DESC
             """;
@@ -1062,11 +1073,23 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 reader.GetString(3),
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
-                reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture)));
+                reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
+                Condition: reader.IsDBNull(7) ? null : reader.GetString(7)));
         }
 
         return results;
     }
+
+    private static string ActiveWithFailedTaskConditionSql() => $"""
+        CASE
+            WHEN status = '{GoalStatus.Active}' AND EXISTS (
+                SELECT 1
+                FROM json_each(goals.snapshot_json, '$.Tasks') AS failed_task
+                WHERE json_extract(failed_task.value, '$.Status') = '{WorkTaskStatus.Failed}'
+            ) THEN '{GoalLifecycle.ActiveWithFailedTaskCondition}'
+            ELSE NULL
+        END AS condition
+        """;
 
     public async Task<IReadOnlyList<GoalId>> ListGoalIdsWithCompletedHumanInputAsync(
         IReadOnlyCollection<GoalId> goalIds,
@@ -2188,6 +2211,7 @@ public sealed record GoalSummary(
     string UpdatedAt,
     string? ResultCommit = null,
     DateTimeOffset? CreatedAt = null,
-    DateTimeOffset? TerminatedAt = null);
+    DateTimeOffset? TerminatedAt = null,
+    string? Condition = null);
 
 public sealed record QuarantinedGoalSummary(string Id, string Error);
