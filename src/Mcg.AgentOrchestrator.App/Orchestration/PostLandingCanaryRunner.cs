@@ -147,7 +147,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 canaryRepositoryRoot,
                 logs,
                 "run-canary-probe",
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                logs.ReceiptPrefix).ConfigureAwait(false);
 
             var current = await ReadRepositoryStateAsync(canaryRepositoryRoot, logs, cancellationToken)
                 .ConfigureAwait(false);
@@ -435,7 +436,8 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         string workingDirectory,
         PostLandingCanaryLogSession logs,
         string operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? acceptanceAttemptResultsPrefix = null)
     {
         var nativeFileCapture = OperatingSystem.IsWindows();
         var (stdoutPath, stderrPath) = logs.CreateCaptureFiles(operation);
@@ -446,6 +448,12 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
             redirectStandardStreams: !nativeFileCapture);
 
         GoalAcceptanceVerifier.ConfigureHermeticVerificationEnvironment(startInfo.Environment, workingDirectory);
+        if (!string.IsNullOrWhiteSpace(acceptanceAttemptResultsPrefix))
+        {
+            // Set this after hermetic cleanup: it is a run-scoped output contract, not ambient operator state.
+            startInfo.Environment[GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable] =
+                Path.GetFullPath(acceptanceAttemptResultsPrefix);
+        }
         using var process = nativeFileCapture
             ? WorkerProcessJobs.StartRegisteredWithFileCaptureOrThrow(
                 startInfo,
@@ -584,6 +592,11 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
                 $"post-landing-canary-{SanitizeSegment(landingSha)}-" +
                 Guid.NewGuid().ToString("N")[..12]);
         }
+
+        // The verifier's generic owner-root discovery cannot identify this temporary Git worktree
+        // (its .git marker is a file), so pin TRX output beside the durable canary process logs.
+        // The run-unique capture prefix prevents cross-run custody and integrity-level collisions.
+        internal string ReceiptPrefix => _capturePrefix;
 
         internal (string StdoutPath, string StderrPath) CreateCaptureFiles(string operation)
         {

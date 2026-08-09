@@ -119,13 +119,16 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
         Assert.Equal(
             PostLandingCanaryFailureReason.InfrastructureError,
-            PostLandingCanaryCommand.ClassifyFailure(noChecks));
+            PostLandingCanaryCommand.ClassifyFailure(noChecks, executedTestCount: 0));
         Assert.Equal(
             PostLandingCanaryFailureReason.InfrastructureError,
-            PostLandingCanaryCommand.ClassifyFailure(interference));
+            PostLandingCanaryCommand.ClassifyFailure(interference, executedTestCount: 0));
         Assert.Equal(
             PostLandingCanaryFailureReason.Reject,
-            PostLandingCanaryCommand.ClassifyFailure(productReject));
+            PostLandingCanaryCommand.ClassifyFailure(productReject, executedTestCount: 1));
+        Assert.Equal(
+            PostLandingCanaryFailureReason.InfrastructureError,
+            PostLandingCanaryCommand.ClassifyFailure(productReject, executedTestCount: 0));
     }
 
     [Xunit.Fact(DisplayName = "Canary fault classifier uses positive evidence for known and unexpected dispositions")]
@@ -158,7 +161,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 PostLandingCanaryFailureReason.EvaluatedArtifactFailure,
                 "landed artifact failed to build")));
         Assert.Equal(
-            PostLandingCanaryFaultDisposition.VerdictFailure,
+            PostLandingCanaryFaultDisposition.EnvironmentFault,
             PostLandingCanaryFailureClassifier.Classify(PostLandingCanaryOutcome.Failed(
                 PostLandingCanaryFailureReason.EmptyReceipt,
                 "evaluation reported green without executing tests")));
@@ -485,6 +488,28 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var cleared = circuit.Clear("engine repaired and independently verified");
         Assert.Equal(AcceptanceEngineHealth.Healthy, cleared.Health);
         Assert.False(ConductorBatchLoop.IsAcceptanceEngineCircuitHoldRequired(GoalStatus.Verified, cleared));
+    }
+
+    [Xunit.Fact(DisplayName = "A canary with no executed-test receipt remains unverified without tripping the circuit")]
+    public async Task EmptyReceiptRemainsUnverifiedWithoutCircuitFailure()
+    {
+        using var fixture = new CanaryTestFixture();
+        var (coordinator, circuit) = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => Task.FromResult(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.EmptyReceipt,
+                "fixture started but produced no completed-test receipt"))),
+            maxAttempts: 1);
+
+        var disposition = await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-empty-receipt", ["engine/empty-receipt"]),
+            CancellationToken.None);
+
+        Assert.Equal(PostLandingCanaryDisposition.Abandoned, disposition);
+        Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+        var abandoned = Assert.Single((await fixture.RawStore.ReadByTypeSinceAsync(RunEventTypes.PostLandingCanary))
+            .Where(item => item.Operation == "abandoned"));
+        Assert.Equal("Unverified", abandoned.Status);
+        Assert.Contains("no completed-test receipt", abandoned.Detail, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Hard timeout cancels the runner, abandons unverified at the retry cap, and keeps process-tree kill path")]
@@ -1243,6 +1268,9 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             Assert.NotEmpty(Directory.GetFiles(
                 logDirectory,
                 $"post-landing-canary-{landingSha}-*.err.log"));
+            Assert.NotEmpty(Directory.GetFiles(
+                logDirectory,
+                $"post-landing-canary-{landingSha}-*.trx"));
             Assert.Equal(
                 statusBefore,
                 GoalAcceptanceVerifier.ResolveGitText(

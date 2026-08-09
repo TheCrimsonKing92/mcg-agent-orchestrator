@@ -53,7 +53,7 @@ internal static class PostLandingCanaryCommand
                         "accept verdict had an empty or missing core-tests receipt")
                     : new PostLandingCanaryProbeResult(
                         false,
-                        ClassifyFailure(verification),
+                        ClassifyFailure(verification, executedTestCount),
                         executedTestCount,
                         verification.OutputTail ?? "gate returned a reject verdict");
         }
@@ -73,9 +73,14 @@ internal static class PostLandingCanaryCommand
         return probe.Green ? 0 : 1;
     }
 
-    internal static PostLandingCanaryFailureReason ClassifyFailure(AcceptanceVerificationResult verification)
+    internal static PostLandingCanaryFailureReason ClassifyFailure(
+        AcceptanceVerificationResult verification,
+        int executedTestCount)
     {
-        if (verification.Checks is null or { Count: 0 } ||
+        // A rejection without an executed test receipt has no evidence about the landed artifact.
+        // Keep it on the retry/unverified path instead of tripping the acceptance-engine circuit.
+        if (executedTestCount <= 0 ||
+            verification.Checks is null or { Count: 0 } ||
             verification.Checks.Any(check =>
                 string.Equals(
                     check.FailureClassification,
