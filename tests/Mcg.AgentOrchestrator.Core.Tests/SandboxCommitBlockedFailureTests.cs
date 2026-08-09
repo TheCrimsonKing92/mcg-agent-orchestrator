@@ -16,6 +16,21 @@ public sealed class SandboxCommitBlockedFailureTests
     private static TaskSpec Task(AgentRole role = AgentRole.Developer) =>
         new(TaskId.New(), $"{role} task", role);
 
+    private static TaskSpec TaskWithRecordedDispatch(AgentRole role)
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Classify sandbox evidence");
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == role);
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("codex-cli", "opaque command", "C:\\repo", clock.UtcNow));
+
+        return task;
+    }
+
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_true_for_index_lock_with_worker_result")]
     public void TrueForIndexLockWithWorkerResult()
     {
@@ -170,7 +185,31 @@ public sealed class SandboxCommitBlockedFailureTests
             1,
             WorkerResultStdout,
             "fatal: Unable to create '.../.git/worktrees/abc/index.lock': Permission denied");
+        var task = TaskWithRecordedDispatch(role);
 
-        Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(role), verification));
+        Assert.NotNull(task.LastDispatch);
+        Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(task, verification));
+        Assert.Equal(
+            DispatchOutcomeKind.SandboxCommitBlocked,
+            DispatchFailureClassifier.Classify(task, verification).Kind);
+    }
+
+    [Xunit.Theory(DisplayName = "IsSandboxCommitBlockedFailure_excludes_read_only_roles_under_a_recorded_dispatch")]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void ExcludesReadOnlyRolesUnderRecordedDispatch(AgentRole role)
+    {
+        var verification = Verification(
+            1,
+            WorkerResultStdout,
+            "fatal: Unable to create '.../.git/worktrees/abc/index.lock': Permission denied");
+        var task = TaskWithRecordedDispatch(role);
+
+        Assert.NotNull(task.LastDispatch);
+        Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(task, verification));
+        Assert.NotEqual(
+            DispatchOutcomeKind.SandboxCommitBlocked,
+            DispatchFailureClassifier.Classify(task, verification).Kind);
     }
 }
