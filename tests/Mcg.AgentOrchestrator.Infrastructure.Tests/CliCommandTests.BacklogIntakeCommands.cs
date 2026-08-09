@@ -1286,14 +1286,23 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
 
 
     [Xunit.Fact]
-    public async Task BacklogList_AllItems_ShowsStatusGoalAndExactTitleReadOnly()
+    public async Task BacklogList_AllItems_ShowsTimestampsStatusGoalAndExactTitleReadOnly()
     {
         // Parallel-safe: the SQLite store and kernel are scoped to this test's unique temp root.
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
         var store = new BacklogStore(workspace.BacklogStorePath);
-        var items = new List<BacklogItem>();
-        for (var index = 0; index < 7; index++)
+        var historicalItem = new BacklogItem(
+            Guid.NewGuid().ToString("n"),
+            "Filed defect 0: exact title",
+            "Body 0",
+            BacklogItemStatus.Open,
+            new DateTimeOffset(2025, 1, 2, 3, 4, 5, TimeSpan.Zero),
+            new DateTimeOffset(2025, 6, 7, 8, 9, 10, TimeSpan.Zero),
+            SourceGoalId: null);
+        await store.UpsertAsync(historicalItem);
+        var items = new List<BacklogItem> { historicalItem };
+        for (var index = 1; index < 7; index++)
         {
             items.Add(await store.AddAsync($"Filed defect {index}: exact title", $"Body {index}"));
         }
@@ -1318,7 +1327,9 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains("Backlog list: 7 item(s) from backlog store", first);
         Xunit.Assert.Equal(first, second);
         Xunit.Assert.Equal(goalCountBeforeList, kernel.Goals.Count);
-        Xunit.Assert.Contains(rows, row => row.Contains($"{items[0].Id} | status=open | goal=- | title={items[0].Title}", StringComparison.Ordinal));
+        Xunit.Assert.Contains(rows, row =>
+            row.Contains("[created=2025-01-02] [updated=2025-06-07]", StringComparison.Ordinal) &&
+            row.Contains($"{items[0].Id} | status=open | goal=- | title={items[0].Title}", StringComparison.Ordinal));
         Xunit.Assert.Contains(rows, row => row.Contains($"{items[2].Id} | status=claimed | goal={linkedGoal.Id.Value} | title={items[2].Title}", StringComparison.Ordinal));
         Xunit.Assert.Contains(rows, row => row.Contains($"{items[6].Id} | status=closed | goal=- | title={items[6].Title}", StringComparison.Ordinal));
         Xunit.Assert.Contains($"{items[0].Id} | status=open | goal=- | title={items[0].Title}", open);
