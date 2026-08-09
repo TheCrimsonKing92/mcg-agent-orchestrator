@@ -3126,6 +3126,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             ref currentGoal));
 
         Xunit.Assert.Contains("human input worklist: 1 open", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("occurrences=1", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("premise-invalid", output, StringComparison.Ordinal);
         Xunit.Assert.Contains(request.Id.Value, output, StringComparison.Ordinal);
         Xunit.Assert.Contains($"answer {request.Id.Value} <answer>", output, StringComparison.Ordinal);

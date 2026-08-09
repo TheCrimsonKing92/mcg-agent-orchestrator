@@ -3,7 +3,7 @@ using Mcg.AgentOrchestrator.Core;
 public sealed class TaskBriefTests
 {
     [Xunit.Fact]
-    public void BuildTaskBrief_AlwaysPermitsBlockedCriterionReport()
+    public void BuildTaskBriefPreflight_DistinguishesUndecidableCriteriaWithoutStartingWorker()
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Implement a small change");
@@ -12,9 +12,12 @@ public sealed class TaskBriefTests
         var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
 
         Assert.Contains(
-            "Reporting an acceptance criterion as BLOCKED, while naming what is needed to satisfy it, is an acceptable and expected outcome.",
+            "disposition=undecidable",
             brief,
             StringComparison.Ordinal);
+        Assert.Contains("retrievable plus the inaccessible store, or never-recorded", brief, StringComparison.Ordinal);
+        Assert.Null(task.LastDispatch);
+        Assert.Null(task.LastProcess);
     }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_goal_task_role_and_timeline")]

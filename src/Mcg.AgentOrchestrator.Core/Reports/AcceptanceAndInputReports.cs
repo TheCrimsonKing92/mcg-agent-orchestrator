@@ -49,4 +49,5 @@ public sealed record HumanInputWorkItem(
     string ResumeCommand,
     string SuggestedAction,
     int TotalRequestCount = 0,
-    int OpenRequestCount = 0);
+    int OpenRequestCount = 0,
+    int OccurrenceCount = 1);

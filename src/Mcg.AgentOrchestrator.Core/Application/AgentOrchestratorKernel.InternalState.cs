@@ -215,14 +215,15 @@ public sealed partial class AgentOrchestratorKernel
             request.ResumeCommand,
             BuildHumanWaitSuggestedAction(request, counts),
             counts.Total,
-            counts.Open);
+            counts.Open,
+            1 + request.SuppressionCount);
     }
 
     private static string BuildHumanWaitSuggestedAction(
         HumanInputRequest request,
         HumanInputRequestCounts counts)
     {
-        var countText = $"Requests: {counts.Open} open / {counts.Total} total. ";
+        var countText = $"Requests: {counts.Open} open / {counts.Total} total. Occurrences: {1 + request.SuppressionCount}. ";
         if (request.IsExternallyBlocked)
         {
             return $"{countText}{request.Kind} is externally blocked; complete the external prerequisite, then resume with `{request.ResumeCommand}`.";

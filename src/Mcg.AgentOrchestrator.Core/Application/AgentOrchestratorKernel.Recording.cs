@@ -129,8 +129,8 @@ public sealed partial class AgentOrchestratorKernel
                 $"worker_result_log={verification.StandardOutputPath ?? "unavailable"} reason=missing-or-unparseable-worker-result");
         }
 
-        var humanInputQuestion = verification.HumanInputQuestion
-            ?? AgentOutputDirectives.TryParseHumanInputRequest(verification.StandardOutput);
+        var parsedHumanInput = AgentOutputDirectives.ParseHumanInputRequest(verification.StandardOutput, task.RequiredRole);
+        var humanInputQuestion = verification.HumanInputQuestion ?? parsedHumanInput.Directive?.Question;
         if (humanInputQuestion is not null)
         {
             var rawQuestion = humanInputQuestion;
@@ -144,12 +144,16 @@ public sealed partial class AgentOrchestratorKernel
                 goal.Id,
                 task.Id,
                 humanInputQuestion,
-                questionFingerprint: HumanInputRequest.BuildQuestionFingerprint(rawQuestion),
-                blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
-                    task.Id,
-                    task.RequiredRole,
-                    rawQuestion,
-                    accompanyingBlocker),
+                questionFingerprint: verification.HumanInputQuestionFingerprint
+                    ?? parsedHumanInput.Directive?.QuestionFingerprint
+                    ?? HumanInputRequest.BuildQuestionFingerprint(rawQuestion),
+                blockerFingerprint: verification.HumanInputBlockerFingerprint
+                    ?? parsedHumanInput.Directive?.BlockerFingerprint
+                    ?? HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                        task.Id,
+                        task.RequiredRole,
+                        rawQuestion,
+                        accompanyingBlocker),
                 completedRound: verification.WorkerResultPresent ? completedRound : null,
                 workerResultLogReference: verification.StandardOutputPath,
                 recordDuplicateSuppression: verification.WorkerResultPresent);

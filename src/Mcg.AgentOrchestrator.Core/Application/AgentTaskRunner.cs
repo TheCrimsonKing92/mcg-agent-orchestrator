@@ -97,7 +97,8 @@ public sealed class AgentTaskRunner
         }
 
         var output = response.Text.Trim();
-        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(output);
+        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(output, task.RequiredRole);
+        var humanInputQuestion = humanInputDirective.Directive?.Question;
         var execution = new TaskExecutionRecord(
             agent.Id,
             agent.Name,
@@ -113,6 +114,16 @@ public sealed class AgentTaskRunner
 
         task.RecordExecution(execution);
         goal.Append(new ProgressEvent(goal.Id, task.Id, ProgressKind.TaskOutputRecorded, TrimForTimeline(execution.Output), execution.CompletedAt));
+
+        if (humanInputDirective.IsMalformed)
+        {
+            _kernel.ReportTaskProgress(
+                goal.Id,
+                task.Id,
+                WorkTaskStatus.Failed,
+                $"Planner output contract failed: {humanInputDirective.Diagnostic}");
+            return new AgentTaskRunResult(goal, task, execution);
+        }
 
         var hasCompleteWorkerResult = WorkerResultBlockers.HasCompleteWorkerResult(output);
         var completedRound = goal.Timeline.Count(evt =>
@@ -133,12 +144,13 @@ public sealed class AgentTaskRunner
                 goal.Id,
                 task.Id,
                 humanInputQuestion,
-                questionFingerprint: HumanInputRequest.BuildQuestionFingerprint(rawQuestion),
-                blockerFingerprint: HumanInputRequest.BuildWorkerResultBlockerFingerprint(
-                    task.Id,
-                    task.RequiredRole,
-                    rawQuestion,
-                    accompanyingBlocker),
+                questionFingerprint: humanInputDirective.Directive!.QuestionFingerprint,
+                blockerFingerprint: humanInputDirective.Directive.BlockerFingerprint ??
+                    HumanInputRequest.BuildWorkerResultBlockerFingerprint(
+                        task.Id,
+                        task.RequiredRole,
+                        rawQuestion,
+                        accompanyingBlocker),
                 completedRound: hasCompleteWorkerResult ? completedRound : null,
                 workerResultLogReference: workerResultReference,
                 recordDuplicateSuppression: hasCompleteWorkerResult);

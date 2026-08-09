@@ -133,4 +133,34 @@ public sealed class AgentOutputDirectivesTests
     {
         Assert.Equal(expected, AgentOutputDirectives.TryParseHumanInputRequest(output));
     }
+
+    [Xunit.Fact]
+    public void ParseHumanInputRequestClassifiesRetrievablePlannerEvidenceAndUsesStableFingerprint()
+    {
+        const string first =
+            "PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":2,\"evidence_key\":\"third-round-receipt\",\"availability\":\"retrievable\",\"store\":\".orchestrator/goal-events/<goal>.jsonl\",\"needed\":\"timestamp and classifier receipt\",\"reason\":\"worker cannot read orchestrator state\"}";
+        const string wordingVariant =
+            "PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":2,\"evidence_key\":\"third-round-receipt\",\"availability\":\"retrievable\",\"store\":\"event store\",\"needed\":\"the original stdout\",\"reason\":\"not packaged\"}";
+
+        var parsed = AgentOutputDirectives.ParseHumanInputRequest(first, AgentRole.Planner);
+        var variant = AgentOutputDirectives.ParseHumanInputRequest(wordingVariant, AgentRole.Planner);
+
+        Assert.False(parsed.IsMalformed);
+        Assert.Contains("Availability: retrievable", parsed.Directive!.Question, StringComparison.Ordinal);
+        Assert.Contains(".orchestrator/goal-events/<goal>.jsonl", parsed.Directive.Question, StringComparison.Ordinal);
+        Assert.Equal(parsed.Directive.QuestionFingerprint, variant.Directive!.QuestionFingerprint);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"retrievable\",\"needed\":\"stdout\",\"reason\":\"inaccessible\"}")]
+    [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: {\"criterion_index\":1,\"evidence_key\":\"receipt\",\"availability\":\"never-recorded\",\"store\":\"somewhere\",\"needed\":\"stdout\",\"reason\":\"absent\"}")]
+    [Xunit.InlineData("PLANNER_EVIDENCE_REQUEST: not-json")]
+    public void ParseHumanInputRequestRejectsMalformedPlannerEvidence(string output)
+    {
+        var parsed = AgentOutputDirectives.ParseHumanInputRequest(output, AgentRole.Planner);
+
+        Assert.True(parsed.IsMalformed);
+        Assert.Null(parsed.Directive);
+        Assert.StartsWith("Malformed PLANNER_EVIDENCE_REQUEST:", parsed.Diagnostic, StringComparison.Ordinal);
+    }
 }

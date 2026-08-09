@@ -66,7 +66,9 @@ public sealed record TaskVerificationRecord(
     int? ChildExitCode = null,
     IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts = null,
     string? OrchestratorFailureReason = null,
-    string? ReviewFindingTouchProofDiagnostic = null)
+    string? ReviewFindingTouchProofDiagnostic = null,
+    string? HumanInputQuestionFingerprint = null,
+    string? HumanInputBlockerFingerprint = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 

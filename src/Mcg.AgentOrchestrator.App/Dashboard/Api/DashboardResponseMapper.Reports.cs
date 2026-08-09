@@ -668,7 +668,8 @@ public static HumanInputWorkItemDto ToHumanInputWorkItemDto(Goal goal, HumanInpu
         TimelineText(item.SuggestedAction),
         item.ResumeCommand,
         item.TotalRequestCount,
-        item.OpenRequestCount);
+        item.OpenRequestCount,
+        item.OccurrenceCount);
 }
 
 public static NextActionsDto ToNextActionsDto(

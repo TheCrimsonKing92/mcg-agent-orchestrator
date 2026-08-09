@@ -182,7 +182,7 @@ public sealed partial class AgentOrchestratorKernel
             $"Goal id: {goal.Id.Value}",
             $"Goal status: {goal.Status}",
             "Decision context: embedded in this brief and .orchestrator-handoff.md in the working directory when present; do not attempt to reach dashboard APIs or orchestrator state.",
-            "Reporting an acceptance criterion as BLOCKED, while naming what is needed to satisfy it, is an acceptable and expected outcome.",
+            "A Planner must map evidence that was never recorded as disposition=undecidable, naming what would settle it, its required source, and why it is unavailable, while planning all remaining criteria in the same round. Escalate only when operator action is required; classified evidence escalations must state retrievable plus the inaccessible store, or never-recorded.",
             $"Task: {PromptContextFormatter.TrimPrimaryContextBlock(task.Description, complexity)}",
             $"Task role: {task.RequiredRole}",
             $"Task status: {task.Status}",

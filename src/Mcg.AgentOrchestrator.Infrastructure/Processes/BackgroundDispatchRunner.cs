@@ -1248,11 +1248,14 @@ public sealed class BackgroundDispatchRunner
                 ? goal.RefinedSpec?.AcceptanceCriteria ?? []
                 : null;
             var capturedPlannerOutput = PlannerOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
-            var plannerContract = PlannerOutputContract.Resolve(
-                capturedPlannerOutput,
-                decisionStandardError,
-                processRecord.WorkingDirectory,
-                acceptanceCriteria: acceptanceCriteria);
+            var evidenceRequest = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, AgentRole.Planner);
+            var plannerContract = evidenceRequest.IsMalformed
+                ? new PlannerOutputContractResult(false, null, null, evidenceRequest.Diagnostic!)
+                : PlannerOutputContract.Resolve(
+                    capturedPlannerOutput,
+                    decisionStandardError,
+                    processRecord.WorkingDirectory,
+                    acceptanceCriteria: acceptanceCriteria);
             if (!plannerContract.Succeeded || plannerContract.Plan is null)
             {
                 exitCode = 1;
@@ -1492,7 +1495,8 @@ public sealed class BackgroundDispatchRunner
             exitCode = observedExitCode;
         }
 
-        var humanInputQuestion = AgentOutputDirectives.TryParseHumanInputRequest(decisionStandardOutput);
+        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, task.RequiredRole);
+        var humanInputQuestion = humanInputDirective.Directive?.Question;
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
         // snapshot. Kernel classification reparses the snapshot for directives and blockers.
@@ -1549,7 +1553,9 @@ public sealed class BackgroundDispatchRunner
             DispatchStartedAt: processRecord.StartedAt,
             ChildProcessId: completed.ChildProcessId,
             ChildExitCode: completed.ChildExitCode,
-            OrchestratorFailureReason: orchestratorFailureReason);
+            OrchestratorFailureReason: orchestratorFailureReason,
+            HumanInputQuestionFingerprint: humanInputDirective.Directive?.QuestionFingerprint,
+            HumanInputBlockerFingerprint: humanInputDirective.Directive?.BlockerFingerprint);
 
         var outcome = new DispatchRefreshOutcome(
             completed,

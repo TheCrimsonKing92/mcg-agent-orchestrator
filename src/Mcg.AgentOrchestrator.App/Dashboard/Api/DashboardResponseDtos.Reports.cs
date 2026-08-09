@@ -68,7 +68,8 @@ internal sealed record HumanInputWorkItemDto(
     string SuggestedAction,
     string SuggestedCommand,
     int TotalRequestCount,
-    int OpenRequestCount);
+    int OpenRequestCount,
+    int OccurrenceCount);
 
 internal sealed record MonitorDto(
     string GoalId,

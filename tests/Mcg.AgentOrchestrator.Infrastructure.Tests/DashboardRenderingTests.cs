@@ -894,7 +894,9 @@ public sealed class DashboardRenderingTests
         Assert.Equal("provider auth resume", item.ResumeCommand);
         Assert.Equal(1, item.TotalRequestCount);
         Assert.Equal(1, item.OpenRequestCount);
+        Assert.Equal(1, item.OccurrenceCount);
         Assert.Contains("Requests: 1 open / 1 total", item.SuggestedAction, StringComparison.Ordinal);
+        Assert.Contains("Occurrences: 1", item.SuggestedAction, StringComparison.Ordinal);
         Assert.Contains("ProviderAuth", html, StringComparison.Ordinal);
         Assert.Contains("externally-blocked=True", html, StringComparison.Ordinal);
         Assert.Contains("provider auth resume", html, StringComparison.Ordinal);
