@@ -47,7 +47,7 @@ You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch
 | `--daemon` | persistent mode for controlled active-goal intake; stays alive on an empty backlog and picks up goals submitted after the loop starts |
 | `--dashboard-url <url>` | attach to a running dashboard |
 
-**Stop a loop** by creating a `.conduct-stop` file in the repo root or by using Ctrl-C. A `.conduct-stop` is a detach, not a drain: at the next stop check the loop starts no new dispatches, attempts to detach live workers, persists the detached state, and exits without waiting for those workers to finish. A successful detach leaves the task running for a successor to reconcile; if detachment fails, the fallback cancels the dispatch so it can be requeued. Prefer a quiet window with no live workers before a deliberate stop. Remove `.conduct-stop` before starting a new loop.
+**Stop a loop deliberately** by creating a `.conduct-stop` file in the repo root. A `.conduct-stop` is a detach, not a drain: at the next stop check the loop starts no new dispatches, attempts to detach live workers, persists the detached state, and exits without waiting for those workers to finish. A successful detach leaves the task running for a successor to reconcile; if detachment fails, the fallback cancels the dispatch so it can be requeued. Prefer a quiet window with no live workers before a deliberate stop. Ctrl-C is not equivalent: the conduct-loop path has no `Console.CancelKeyPress` handler, so Ctrl-C terminates without the detach/checkpoint path. Remove `.conduct-stop` before starting a new loop.
 
 ### Manual bounce after loop-affecting code lands
 
@@ -64,8 +64,10 @@ $conductorPid = Get-Content -LiteralPath .orchestrator\conduct-loop.lock -TotalC
 New-Item -ItemType File .conduct-stop
 # Wait for LOOP_STOP, then verify the recorded lock PID is dead:
 .\scripts\Invoke-RepoScript.ps1 scripts\Get-RepoProcessInfo.ps1 -Id $conductorPid -IncludeChildren
-# Only after the PID is confirmed dead:
-Remove-Item -LiteralPath .orchestrator\conduct-loop.lock -ErrorAction SilentlyContinue
+# Only after the PID is confirmed dead; a live-owner lock failure must remain visible:
+if (Test-Path -LiteralPath .orchestrator\conduct-loop.lock) {
+    Remove-Item -LiteralPath .orchestrator\conduct-loop.lock -ErrorAction Stop
+}
 Remove-Item -LiteralPath .conduct-stop
 .\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name <batch-name> conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 5400
 ```
@@ -205,7 +207,7 @@ Known direct-command limitation: `acceptance <goal>` can finish the full suite a
 | `escalated at AwaitingClarification` | The spec-refiner asked questions. | `attention dismiss <goal>` (proceed with the brief) or answer them, then re-run. |
 | Workers repeatedly invent evidence for an infeasible acceptance criterion | The authoritative refined brief still requires the criterion; retry notes cannot change it. | During a quiet window, run `goal-amend <goal> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]`. The durable waiver, reason, actor, and timestamp appear in subsequent briefs and goal events. |
 | A task shows `[Cancelled]` (e.g. a loop was stopped mid-dispatch on an older build) | Interrupted dispatch. | `recover <goal> --text-file <path>` — it now revives Cancelled tasks too. |
-| `escalated at Verified - Acceptance verification failed` | The acceptance build/test suite failed against the worktree (a real defect, a worker-written test bug, or a gate defect). | Inspect the worktree, run the focused failing check there, fix + commit in the worktree, then re-run the conductor and let its sweep retry acceptance. If a gate defect blocks an otherwise green goal, file and fix the gate bug; do not bypass the gate or repeatedly invoke direct `acceptance`. |
+| `escalated at Verified - Acceptance verification failed` | The acceptance build/test suite failed against the worktree (a real defect, a worker-written test bug, or a gate defect). | Inspect the worktree, run the focused failing check there, fix + commit in the worktree, then re-run the conductor and let its sweep retry acceptance. If a gate defect blocks an otherwise green goal, file and fix the gate bug, then re-run acceptance; do not bypass the gate. With the known direct-command limitation above, re-run it through the conductor sweep rather than repeatedly invoking direct `acceptance`. |
 | `acceptance <goal>` prints **"not accepted"** with `Tasks passed: N/5` | A task isn't verified yet (often a verification-role task). | `status <goal>` → if a Tester/Reviewer is `Failed`, `recover` it and re-run the conductor; the goal reconciles `Failed → Active`. |
 | `status <goal>` shows goal `Completed` while one or more tasks are still `[Assigned]` after a retry | Lifecycle/task desync from a retry or failed conductor pass. The conductor may refuse to start the assigned task because the persisted goal status is terminal. | First try `recover <goal> --text-file <path>`. If it remains `Completed`, use the repo-bounded repair helper: `.\scripts\Invoke-RepoScript.ps1 scripts\Set-OrchestratorGoalStatus.ps1 --status Active <goal>`; then re-run `conduct <goal> --policy Permissive`. |
 | Goal is intentionally `Parked` and needs to resume | Operator parked it to stop churn or wait for external context. | `unpark-goal <goal> --text-file <path> --confirm-goal-unpark`, then re-run the loop. Use `park-goal <goal> --text-file <path> --confirm-goal-park` to pause it again. |
