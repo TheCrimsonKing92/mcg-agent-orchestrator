@@ -860,7 +860,7 @@ private static void RecordAcceptanceGuardAbort(
     Console.WriteLine(
         $"BLOCKER step=acceptance-state-guard reason=aborted field=\"{EscapeBlockerDetail(field)}\" " +
         $"detail=\"{EscapeBlockerDetail(detail)}\" action=\"Quiesce conductor mutations for this goal before another landing attempt; do not use a bare retry while the goal is changing.\"");
-    var projectionKernel = context.ReloadKernel();
+    var projectionKernel = context.ReloadKernel([goal.Id.Value]);
     var projectionGoal = projectionKernel.Goals.FirstOrDefault(candidate => candidate.Id == goal.Id) ?? goal;
     ConsoleViews.PrintAcceptanceSummary(
         projectionGoal,

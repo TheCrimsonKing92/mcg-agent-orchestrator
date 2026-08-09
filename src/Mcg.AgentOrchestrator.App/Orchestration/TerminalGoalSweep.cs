@@ -1108,6 +1108,7 @@ internal static class TerminalGoalSweep
             branchHeadSha);
         var newerGuardAbort = journal.Entries
             .Where(entry =>
+                !string.IsNullOrWhiteSpace(branchHeadSha) &&
                 string.Equals(entry.BranchHeadSha?.Trim(), branchHeadSha?.Trim(), StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(entry.AcceptanceOutcome, "aborted:state-guard", StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(entry => entry.At)
