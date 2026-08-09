@@ -4,6 +4,7 @@
 Owns: Claude Code harness operating guidance.
 Counterpart: AGENTS.md owns shared repository discipline plus Codex harness operating guidance.
 Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CLAUDE.md counterpart-contract blocks and shared-anchor lists, or move the content to docs/operator-runbook.md or another shared home.
+Operator procedure home: docs/operator-runbook.md owns harness-neutral operate/observe/recover procedures, including conductor stop and relaunch semantics; counterpart files point there instead of duplicating them.
 Shared anchors:
 - output-discipline
 - retry-and-loop-control
@@ -35,9 +36,7 @@ Issue single bare shell commands so Claude permission allowlist prefixes match p
 
 For conductor loop monitoring, prefer a persistent Monitor on the stable structured stream, starting at the current end: `tail -n 0 -F .orchestrator/logs/conduct-events.log | grep --line-buffered -E "<event patterns>"`. It is JSON lines with `eventKind`, goal ids, phase changes, and long-gate heartbeats, and it survives rotation. Do not poll goal state or process lists while relevant heartbeats continue; per-batch loop output is fallback evidence only. Use a higher-level subscriber only after confirming that it honors the current cursor plus goal/event filters.
 
-For graceful conductor stops, create `.conduct-stop`, wait for `LOOP_STOP` in `conduct-events.log`, then remove `.conduct-stop` before any new loop. Bounded loops self-renew on `--max-duration`; relaunch manually only after `LOOP_HANDOFF_FAILED`, deliberate stop/Ctrl-C, code/config changes, or an all-done stop followed by new goals. The max-duration handoff spawns the PREBUILT executable without rebuilding - code landed on main mid-generation does NOT arm at the next handoff; after landing loop-affecting code, bounce deliberately (graceful stop, relaunch via the launcher, which rebuilds).
-
-Until the lock-lifecycle fix lands, every relaunch after a self-stop first verifies `.orchestrator/conduct-loop.lock`'s recorded pid is dead (`Get-Process -Id <pid>` failing = dead) and deletes the stale lock; an all-done self-stop always leaves one behind. After ANY manual worktree-state repair (stash pop, privileged rebase finish), the repair is complete only when the next tick's dispatch actually forms — a dirty goal worktree blocks all dispatch with only a generic "no ready batch" hold, so commit restored work on the goal branch rather than leaving it unstaged.
+Use the runbook's manual-bounce procedure after loop-affecting landings and its `.conduct-stop` section for detach semantics, PID/lock validation, and relaunch. After ANY manual worktree-state repair (stash pop, privileged rebase finish), the repair is complete only when the next tick's dispatch actually forms — a dirty goal worktree blocks all dispatch with only a generic "no ready batch" hold, so commit restored work on the goal branch rather than leaving it unstaged.
 
 To reopen an AcceptanceFailed goal whose verdict genuinely stands (flake or environment-caused gate failure) without a paid worker round, leave the loop running and submit `retry <goal> <last-task#> "<reason>" --mechanical`, then `progress <goal> <task#> completed "<justification>"`, then `verify-manual <goal> <task#> passed "<evidence>"`. These verbs always append typed records to `operator-intents.db`; the tick is the sole `state.db` writer and each submitting surface can poll the recorded outcome. If the loop is down, the intents remain pending until a conductor starts; the CLI never applies them directly.
 
