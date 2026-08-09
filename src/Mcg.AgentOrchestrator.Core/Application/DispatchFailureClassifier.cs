@@ -85,6 +85,8 @@ public static class DispatchFailureDiagnosticMarker
 
 public static class DispatchFailureClassifier
 {
+    private static readonly TimeSpan BareClockRetryStalenessTolerance = TimeSpan.FromHours(1);
+
     private sealed record OrchestratorAuthoredFailure(TaskOutcomeRule Rule, string Description);
 
     private static readonly IReadOnlyDictionary<string, OrchestratorAuthoredFailure> OrchestratorAuthoredFailures =
@@ -1810,7 +1812,30 @@ public static class DispatchFailureClassifier
             return true;
         }
 
+        // RetryTask is the operator's explicit reset boundary. Keep the historical receipt, but do not
+        // let a verification from before that boundary regenerate a deferral after the stored value was cleared.
+        if (task.LatestRetryAt is { } latestRetryAt && latest.CompletedAt <= latestRetryAt)
+        {
+            return false;
+        }
+
         return TryGetSubscriptionLimitRetryAfter(latest, out retryAfter);
+    }
+
+    public static string DescribeSubscriptionRetrySource(TaskSpec task)
+    {
+        if (task.SubscriptionRetryAfter is not null)
+        {
+            return "stored task field SubscriptionRetryAfter";
+        }
+
+        if (task.VerificationHistory.LastOrDefault() is { } latest)
+        {
+            var recordNumber = task.VerificationHistory.Count;
+            return $"verification history record {recordNumber} of {recordNumber}, completed {latest.CompletedAt:u}";
+        }
+
+        return "retry source unavailable";
     }
 
     public static bool TryGetSubscriptionLimitRetryAfter(TaskVerificationRecord verification, out DateTimeOffset retryAfter)
@@ -1858,7 +1883,10 @@ public static class DispatchFailureClassifier
             0,
             basis.Offset);
 
-        if (retryAfter <= basis)
+        // Provider notices are emitted before the worker exits. A clock time shortly before completion
+        // therefore names an already-expired same-day window, while a substantially earlier time still
+        // denotes the next occurrence of that clock time.
+        if (retryAfter <= basis && basis - retryAfter > BareClockRetryStalenessTolerance)
         {
             retryAfter = retryAfter.AddDays(1);
         }

@@ -696,6 +696,37 @@ public sealed class DispatchExecutionTests
 
     kernel.RetryTask(goal.Id, task.Id, "Retry after provider window.");
     Assert.Equal<DateTimeOffset?>(null, task.SubscriptionRetryAfter);
+    Assert.Single(task.VerificationHistory);
+    Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(task, out _));
+
+    var restoredAfterRetry = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot(), clock);
+    Assert.False(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(
+        restoredAfterRetry.GetTask(goal.Id, task.Id),
+        out _));
+}
+
+    [Xunit.Fact(DisplayName = "Bare_clock_retry_time_32_minutes_before_completion_remains_on_the_same_day")]
+    public void BareClockRetryTimeShortlyBeforeCompletionRemainsOnSameDay()
+{
+    var completedAt = DateTimeOffset.Parse("2026-08-08T17:30:31Z");
+
+    Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(
+        SubscriptionLimitVerification("codex exec", completedAt),
+        out var retryAfter));
+
+    Assert.Equal(DateTimeOffset.Parse("2026-08-08T16:58:00Z"), retryAfter);
+}
+
+    [Xunit.Theory(DisplayName = "Bare_clock_retry_time_preserves_same_day_and_unambiguous_next_day_references")]
+    [Xunit.InlineData("2026-08-08T16:30:00Z", "2026-08-08T16:58:00Z")]
+    [Xunit.InlineData("2026-08-08T18:30:00Z", "2026-08-09T16:58:00Z")]
+    public void BareClockRetryTimePreservesUnambiguousDayReference(string completedAtText, string expectedRetryAfterText)
+{
+    Assert.True(DispatchFailureClassifier.TryGetSubscriptionLimitRetryAfter(
+        SubscriptionLimitVerification("codex exec", DateTimeOffset.Parse(completedAtText)),
+        out var retryAfter));
+
+    Assert.Equal(DateTimeOffset.Parse(expectedRetryAfterText), retryAfter);
 }
 
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_fails_task_on_typed_provider_rate_limit_without_output_text")]

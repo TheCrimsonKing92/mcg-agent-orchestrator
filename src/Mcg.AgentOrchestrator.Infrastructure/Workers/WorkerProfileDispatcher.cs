@@ -575,7 +575,8 @@ public static class WorkerProfileDispatcher
 
             if (IsTaskRetryDeferred(task, now, out var retryAfter))
             {
-                findings.Add($"blocked: subscription retry deferred until {retryAfter:u}");
+                findings.Add(
+                    $"blocked: subscription retry deferred until {retryAfter:u}; source: {DispatchFailureClassifier.DescribeSubscriptionRetrySource(task)}");
             }
 
             if (DispatchFailureClassifier.TryGetProviderSubscriptionCooldown(
@@ -1400,7 +1401,8 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        throw new InvalidOperationException($"Task '{task.Id}' subscription retry deferred until {retryAfter:u}.");
+        throw new InvalidOperationException(
+            $"Task '{task.Id}' subscription retry deferred until {retryAfter:u}; source: {DispatchFailureClassifier.DescribeSubscriptionRetrySource(task)}.");
     }
 
     private static void EnsureRepeatedSubscriptionLimitReviewed(TaskSpec task)
