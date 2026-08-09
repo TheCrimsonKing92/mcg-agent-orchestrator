@@ -6,6 +6,10 @@ public sealed class SandboxCommitBlockedFailureTests
         "Implemented the removal, but blocked on committing by `.git` metadata permissions.\n" +
         "WORKER_RESULT:\nfiles: src/Foo.cs, tests/FooTests.cs\nmodel_fit: adequate\nEND_WORKER_RESULT";
 
+    private const string CompletedWorkerResultStdout =
+        "Implemented the requested changes.\n" +
+        "WORKER_RESULT:\nfiles: src/Foo.cs, tests/FooTests.cs\nmodel_fit: adequate\nEND_WORKER_RESULT";
+
     private static TaskVerificationRecord Verification(int exitCode, string stdout, string stderr) =>
         new("codex exec", "C:\\repo", exitCode, stdout, stderr, DateTimeOffset.UtcNow);
 
@@ -36,7 +40,7 @@ public sealed class SandboxCommitBlockedFailureTests
     {
         var verification = Verification(
             1,
-            WorkerResultStdout,
+            CompletedWorkerResultStdout,
             "dotnet.cmd: CreateProcessAsUserW 1312: A specified logon session does not exist. It may already have been terminated.");
 
         Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
@@ -47,10 +51,21 @@ public sealed class SandboxCommitBlockedFailureTests
     {
         var verification = Verification(
             1,
-            WorkerResultStdout,
+            CompletedWorkerResultStdout,
             "git.exe: CreateProcessAsUserW failed 1312: A specified logon session does not exist.");
 
         Assert.False(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
+    }
+
+    [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_true_when_1312_and_positive_commit_block_evidence_overlap")]
+    public void TrueWhen1312AndPositiveCommitBlockEvidenceOverlap()
+    {
+        var verification = Verification(
+            1,
+            WorkerResultStdout,
+            "git.exe: CreateProcessAsUserW failed 1312: A specified logon session does not exist.");
+
+        Assert.True(DispatchFailureClassifier.IsSandboxCommitBlockedFailure(Task(), verification));
     }
 
     [Xunit.Fact(DisplayName = "IsSandboxCommitBlockedFailure_reads_log_paths_for_evidence_outside_retained_excerpt")]
