@@ -977,8 +977,8 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Equal(RecoveryRecommendation.CommitAndVerify, outcome.RecoveryRecommendation);
     }
 
-    [Xunit.Fact(DisplayName = "Sandbox1312 producer paths emit the same canonical rule and outcome class")]
-    public void Sandbox1312ProducerPathsEmitSameRuleAndOutcomeClass()
+    [Xunit.Fact(DisplayName = "Sandbox1312 producer paths emit launch-failure environmental classification")]
+    public void Sandbox1312ProducerPathsEmitLaunchFailureEnvironmentalClassification()
     {
         var direct = DispatchFailureClassifier.ClassifyProviderFailure(
             ProviderFailureKind.Sandbox1312,
@@ -992,11 +992,13 @@ public sealed class DispatchOutcomeClassifyTests
                 ProviderFailureKind = ProviderFailureKind.Sandbox1312
             });
 
-        Xunit.Assert.Equal("provider-sandbox-1312", TaskOutcomeClassifier.TryExtractRule(direct.ClassifierReceipt));
+        Xunit.Assert.Equal(DispatchOutcomeKind.LaunchFailure, direct.Kind);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, direct.RecoveryRecommendation);
+        Xunit.Assert.Equal("provider-sandbox-launch-1312", TaskOutcomeClassifier.TryExtractRule(direct.ClassifierReceipt));
         Xunit.Assert.Equal(
             TaskOutcomeClassifier.TryExtractRule(direct.ClassifierReceipt),
             TaskOutcomeClassifier.TryExtractRule(dispatch.ClassifierReceipt));
-        Xunit.Assert.Equal(TaskOutcomeClass.ManufacturedFixed, direct.OutcomeClass);
+        Xunit.Assert.Equal(TaskOutcomeClass.Environmental, direct.OutcomeClass);
         Xunit.Assert.Equal(direct.OutcomeClass, dispatch.OutcomeClass);
         Xunit.Assert.Equal(direct.OutcomeClass, TaskOutcomeClassifier.TryExtractClass(dispatch.ClassifierReceipt));
     }

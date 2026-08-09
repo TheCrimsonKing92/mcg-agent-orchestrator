@@ -253,7 +253,7 @@ private static void AutoVerifyFromGitEvidence(CliExecutionContext context, Goal 
     var sandboxBlockedIds = goal.Tasks
         .Where(t => t.Status == WorkTaskStatus.Failed &&
             t.LastVerification is { Succeeded: false } verification &&
-            DispatchFailureClassifier.IsSandboxCommitBlockedFailure(verification))
+            DispatchFailureClassifier.Classify(t, verification).Kind == DispatchOutcomeKind.SandboxCommitBlocked)
         .Select(t => t.Id)
         .ToHashSet();
 

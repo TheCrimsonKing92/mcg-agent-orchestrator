@@ -1179,7 +1179,9 @@ public sealed class BackgroundDispatchRunner
         }
         var task = kernel.GetTask(goalId, taskId);
         var goal = kernel.GetGoal(goalId);
+        var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
         if (CanReconcileWrapperExit(recoveryDecision) &&
+            hasRoleCapability &&
             exitCode != 0 &&
             hasChildExitRecord &&
             childExitRecord.ExitCode == 0)
@@ -1192,7 +1194,8 @@ public sealed class BackgroundDispatchRunner
                     decisionStandardOutput,
                     decisionStandardError,
                     allowNoChangedFiles: true,
-                    requireNoBlockers: true))
+                    requireNoBlockers: true,
+                    roleCapability: dispatchRoleCapability))
             {
                 exitCode = 0;
                 wrapperExitReconciled = true;
@@ -1317,9 +1320,9 @@ public sealed class BackgroundDispatchRunner
             var commitAttempted = false;
             var commitAttempt = default(CommitWorktreeEditsResult);
             var sandboxCommitBlocked = HasSandboxCommitBlockedEvidence(
+                task.RequiredRole,
                 decisionStandardOutput,
-                decisionStandardError,
-                providerFailureKind);
+                decisionStandardError);
             var lowIntegrityConfinementEvidence = HasLowIntegrityConfinementEvidence(
                 task.LastDispatch,
                 processRecord,
@@ -1763,7 +1766,10 @@ public sealed class BackgroundDispatchRunner
             standardOutput,
             standardError,
             allowNoChangedFiles: true,
-            requireNoBlockers: true);
+            requireNoBlockers: true,
+            DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var roleCapability)
+                ? roleCapability
+                : null);
         if (CanCompleteHungWrapperWithoutChangeEvidence(
                 task,
                 hasPopulatedStandardOutput,
@@ -1881,12 +1887,15 @@ public sealed class BackgroundDispatchRunner
     }
 
     private static bool HasSandboxCommitBlockedEvidence(
+        AgentRole role,
         string standardOutput,
-        string standardError,
-        ProviderFailureKind providerFailureKind)
+        string standardError)
     {
-        return providerFailureKind == ProviderFailureKind.Sandbox1312 ||
-            DispatchFailureClassifier.IsSandboxCommitBlockedFailure(1, standardOutput, standardError);
+        return DispatchFailureClassifier.IsSandboxCommitBlockedFailure(
+            role,
+            1,
+            standardOutput,
+            standardError);
     }
 
     private static bool HasLowIntegrityConfinementEvidence(
@@ -2013,14 +2022,16 @@ public sealed class BackgroundDispatchRunner
         string standardOutput,
         string standardError,
         bool allowNoChangedFiles = false,
-        bool requireNoBlockers = false)
+        bool requireNoBlockers = false,
+        DispatchRoleOutputCapability? roleCapability = null)
     {
         if (WorkerResultParser.TryParseSuccessfulResult(
                 $"{standardOutput}\n{standardError}",
                 out _,
                 out _,
                 allowNoChangedFiles,
-                requireNoBlockers))
+                requireNoBlockers,
+                allowReadOnlyTestStatuses: roleCapability == DispatchRoleOutputCapability.ReadOnly))
         {
             return true;
         }
@@ -2040,7 +2051,8 @@ public sealed class BackgroundDispatchRunner
                         out _,
                         out _,
                         allowNoChangedFiles,
-                        requireNoBlockers))
+                        requireNoBlockers,
+                        allowReadOnlyTestStatuses: roleCapability == DispatchRoleOutputCapability.ReadOnly))
                 {
                     return true;
                 }

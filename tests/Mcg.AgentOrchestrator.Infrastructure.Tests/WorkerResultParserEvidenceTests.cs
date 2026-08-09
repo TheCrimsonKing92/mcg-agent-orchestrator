@@ -40,6 +40,30 @@ public sealed class WorkerResultParserEvidenceTests
         }
     }
 
+    [Xunit.Theory(DisplayName = "WorkerResultParser_read_only_success_policy_accepts_only_known_non_failing_statuses")]
+    [Xunit.InlineData("pass - source inspection complete", true)]
+    [Xunit.InlineData("not-run - read-only task", true)]
+    [Xunit.InlineData("deferred - implementation verification belongs to Developer", true)]
+    [Xunit.InlineData("inconclusive - external artifact was unavailable", true)]
+    [Xunit.InlineData("fail - source contract violated", false)]
+    [Xunit.InlineData("inspection complete", false)]
+    public void WorkerResultParserReadOnlySuccessPolicyAcceptsOnlyKnownNonFailingStatuses(
+        string tests,
+        bool expected)
+    {
+        var text = WorkerResultBlock("source inspection", tests);
+
+        var parsed = WorkerResultParser.TryParseSuccessfulResult(
+            text,
+            out _,
+            out _,
+            allowNoChangedFiles: true,
+            requireNoBlockers: true,
+            allowReadOnlyTestStatuses: true);
+
+        Assert.Equal(expected, parsed);
+    }
+
     [Xunit.Theory(DisplayName = "WorkerResultParser_rejects_noncanonical_premise_invalid")]
     [Xunit.InlineData("premise-invalid")]
     [Xunit.InlineData("premise-invalid: required API does not exist")]

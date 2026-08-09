@@ -115,7 +115,8 @@ internal static class WorkerResultParser
         out Dictionary<string, string> fields,
         out string diagnostic,
         bool allowNoChangedFiles = false,
-        bool requireNoBlockers = false)
+        bool requireNoBlockers = false,
+        bool allowReadOnlyTestStatuses = false)
     {
         if (!TryParseResult(text, out var result, out diagnostic))
         {
@@ -130,11 +131,24 @@ internal static class WorkerResultParser
             return false;
         }
 
-        if (!HasSubstantiveValue(fields, "tests") ||
-            result.TestsStatus is TestsStatus.NotRun or TestsStatus.Inconclusive ||
-            (result.TestsStatus == TestsStatus.Unknown &&
-             (fields["tests"].Equals("not-run", StringComparison.OrdinalIgnoreCase) ||
-              fields["tests"].Equals("not run", StringComparison.OrdinalIgnoreCase))))
+        if (!HasSubstantiveValue(fields, "tests"))
+        {
+            diagnostic = "WORKER_RESULT has no completed test evidence.";
+            return false;
+        }
+
+        if (allowReadOnlyTestStatuses)
+        {
+            if (result.TestsStatus is TestsStatus.Unknown or TestsStatus.Fail)
+            {
+                diagnostic = "WORKER_RESULT has no recognized non-failing read-only test status.";
+                return false;
+            }
+        }
+        else if (result.TestsStatus is TestsStatus.NotRun or TestsStatus.Inconclusive ||
+                 (result.TestsStatus == TestsStatus.Unknown &&
+                  (fields["tests"].Equals("not-run", StringComparison.OrdinalIgnoreCase) ||
+                   fields["tests"].Equals("not run", StringComparison.OrdinalIgnoreCase))))
         {
             diagnostic = "WORKER_RESULT has no completed test evidence.";
             return false;
