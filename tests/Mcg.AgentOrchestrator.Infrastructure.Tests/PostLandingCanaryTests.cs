@@ -119,13 +119,16 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
 
         Assert.Equal(
             PostLandingCanaryFailureReason.InfrastructureError,
-            PostLandingCanaryCommand.ClassifyFailure(noChecks));
+            PostLandingCanaryCommand.ClassifyFailure(noChecks, executedTestCount: 0));
         Assert.Equal(
             PostLandingCanaryFailureReason.InfrastructureError,
-            PostLandingCanaryCommand.ClassifyFailure(interference));
+            PostLandingCanaryCommand.ClassifyFailure(interference, executedTestCount: 0));
         Assert.Equal(
             PostLandingCanaryFailureReason.Reject,
-            PostLandingCanaryCommand.ClassifyFailure(productReject));
+            PostLandingCanaryCommand.ClassifyFailure(productReject, executedTestCount: 1));
+        Assert.Equal(
+            PostLandingCanaryFailureReason.Reject,
+            PostLandingCanaryCommand.ClassifyFailure(productReject, executedTestCount: 0));
     }
 
     [Xunit.Fact(DisplayName = "Canary fault classifier uses positive evidence for known and unexpected dispositions")]
@@ -485,6 +488,49 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         var cleared = circuit.Clear("engine repaired and independently verified");
         Assert.Equal(AcceptanceEngineHealth.Healthy, cleared.Health);
         Assert.False(ConductorBatchLoop.IsAcceptanceEngineCircuitHoldRequired(GoalStatus.Verified, cleared));
+    }
+
+    [Xunit.Fact(DisplayName = "A canary with an empty accept receipt trips the circuit as a verdict failure")]
+    public async Task EmptyReceiptTripsCircuitAsVerdictFailure()
+    {
+        using var fixture = new CanaryTestFixture();
+        var (coordinator, circuit) = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => Task.FromResult(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.EmptyReceipt,
+                "fixture started but produced no completed-test receipt"))),
+            maxAttempts: 1);
+
+        var disposition = await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-empty-receipt", ["engine/empty-receipt"]),
+            CancellationToken.None);
+
+        Assert.Equal(PostLandingCanaryDisposition.Failed, disposition);
+        var failed = circuit.Read();
+        Assert.Equal(AcceptanceEngineHealth.Unhealthy, failed.Health);
+        Assert.Equal("empty-receipt", failed.FailureReason);
+    }
+
+    [Xunit.Fact(DisplayName = "A canary infrastructure failure remains unverified and tells the operator")]
+    public async Task InfrastructureFailureRemainsUnverifiedAndRaisesOperatorItem()
+    {
+        using var fixture = new CanaryTestFixture();
+        var (coordinator, circuit) = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => Task.FromResult(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.InfrastructureError,
+                "receipt directory preflight was not writable"))),
+            maxAttempts: 1);
+
+        var disposition = await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-infrastructure-failure", ["engine/infrastructure-failure"]),
+            CancellationToken.None);
+
+        Assert.Equal(PostLandingCanaryDisposition.Abandoned, disposition);
+        Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
+        var item = Assert.Single(await fixture.OperatorItems.GetAttentionQueueAsync());
+        Assert.Equal("Post-landing canary never evaluated sha-infrastructure-failure", item.Subject);
+        Assert.Contains("UNVERIFIED after 1 attempts", item.Body, StringComparison.Ordinal);
+        Assert.Contains("receipt directory preflight was not writable", item.Body, StringComparison.Ordinal);
+        Assert.Contains("run-event:", item.Body, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Hard timeout cancels the runner, abandons unverified at the retry cap, and keeps process-tree kill path")]
@@ -1243,6 +1289,9 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             Assert.NotEmpty(Directory.GetFiles(
                 logDirectory,
                 $"post-landing-canary-{landingSha}-*.err.log"));
+            Assert.NotEmpty(Directory.GetFiles(
+                logDirectory,
+                $"post-landing-canary-{landingSha}-*.trx"));
             Assert.Equal(
                 statusBefore,
                 GoalAcceptanceVerifier.ResolveGitText(

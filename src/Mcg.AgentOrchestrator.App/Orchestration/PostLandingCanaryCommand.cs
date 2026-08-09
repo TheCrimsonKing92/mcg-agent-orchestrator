@@ -53,7 +53,7 @@ internal static class PostLandingCanaryCommand
                         "accept verdict had an empty or missing core-tests receipt")
                     : new PostLandingCanaryProbeResult(
                         false,
-                        ClassifyFailure(verification),
+                        ClassifyFailure(verification, executedTestCount),
                         executedTestCount,
                         verification.OutputTail ?? "gate returned a reject verdict");
         }
@@ -73,8 +73,12 @@ internal static class PostLandingCanaryCommand
         return probe.Green ? 0 : 1;
     }
 
-    internal static PostLandingCanaryFailureReason ClassifyFailure(AcceptanceVerificationResult verification)
+    internal static PostLandingCanaryFailureReason ClassifyFailure(
+        AcceptanceVerificationResult verification,
+        int executedTestCount)
     {
+        // Missing gate checks or explicit environment interference are canary-infrastructure failures.
+        // A gate rejection with checks remains a verdict failure even if its reporter did not flush a TRX.
         if (verification.Checks is null or { Count: 0 } ||
             verification.Checks.Any(check =>
                 string.Equals(
