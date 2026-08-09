@@ -142,6 +142,35 @@ public sealed class ConductorDriverTests
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, verification);
     }
 
+    private static void FailStructuredReviewerRound(
+        AgentOrchestratorKernel kernel,
+        Goal goal,
+        TaskSpec reviewer,
+        string command,
+        IReadOnlyList<ReviewFinding> findings)
+    {
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: review",
+            "tests: pass - inspected evidence",
+            $"blockers: {string.Join("; ", findings.Select(finding => finding.Description))}",
+            $"findings: {JsonSerializer.Serialize(findings)}",
+            "touched_anchors: []",
+            "verdict: needs-work",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            command,
+            "C:\\tmp",
+            1,
+            stdout,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: "C:\\tmp\\reviewer.out.log",
+            WorkerResultPresent: true));
+    }
+
     private static void SeedReviewerIdentityViolation(
         AgentOrchestratorKernel kernel,
         Goal goal,
@@ -184,6 +213,14 @@ public sealed class ConductorDriverTests
     }
 
     private static string ReviewerPassWithAdvisory(string stableId, ReviewFindingLocation location) =>
+        ReviewerPassWithFinding(new ReviewFinding(
+            stableId,
+            ReviewFindingState.Open,
+            location,
+            "Readability suggestion.",
+            FindingSeverity.Advisory));
+
+    private static string ReviewerPassWithFinding(ReviewFinding finding) =>
         string.Join(
             Environment.NewLine,
             "WORKER_RESULT:",
@@ -191,7 +228,7 @@ public sealed class ConductorDriverTests
             "commands: review",
             "tests: pass - inspected evidence",
             "blockers: none",
-            $"findings: {JsonSerializer.Serialize(new[] { new ReviewFinding(stableId, ReviewFindingState.Open, location, "Readability suggestion.", FindingSeverity.Advisory) })}",
+            $"findings: {JsonSerializer.Serialize(new[] { finding })}",
             "touched_anchors: []",
             "verdict: pass",
             "END_WORKER_RESULT");
@@ -2593,6 +2630,75 @@ public sealed class ConductorDriverTests
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_identity_violation_salvages_needs_work_for_developer")]
+    public void ConductorDriverReviewerIdentityViolationSalvagesNeedsWorkForDeveloper()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(t => t.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var priorLocation = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        DispatchTask(kernel, goal, reviewer, "review-1");
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, "prior-commit");
+        FailStructuredReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "review-1",
+            [new ReviewFinding("F-CARRIED", ReviewFindingState.Open, priorLocation, "Carried blocker remains.")]);
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck");
+        DispatchTask(kernel, goal, reviewer, "review-2");
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, "current-commit");
+        FailStructuredReviewerRound(
+            kernel,
+            goal,
+            reviewer,
+            "review-2",
+            [
+                new ReviewFinding(
+                    "F-CARRIED",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/Moved.cs", "Moved.Run", "guard"),
+                    "Carried blocker remains."),
+                new ReviewFinding(
+                    "F-NEW",
+                    ReviewFindingState.Open,
+                    new ReviewFindingLocation("src/New.cs", "New.Run"),
+                    "New blocker also remains.")
+            ]);
+
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Equal(
+            ReviewFindingConvergence.IdentityMovedViolationCode,
+            reviewer.LastVerification!.ReviewFindingContractViolation?.Code);
+        Assert.Equal(priorLocation, reviewer.LastVerification.MergedReviewFindings!.Single(item => item.StableId == "F-CARRIED").Location);
+
+        TaskId? retriedTaskId = null;
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (gid, tid, message, roundKind) =>
+            {
+                retriedTaskId = tid;
+                retryMessage = message;
+                return kernel.RetryTask(gid, tid, message, retryRoundKind: roundKind);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(developer.Id, retriedTaskId);
+        Assert.Contains("F-CARRIED", retryMessage, StringComparison.Ordinal);
+        Assert.Contains("F-NEW", retryMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("contract-repair", retryMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_structured_open_findings_retry_when_blockers_is_none")]
     public void ConductorDriverStructuredOpenFindingsRetryWhenBlockersIsNone()
     {
@@ -2752,6 +2858,96 @@ public sealed class ConductorDriverTests
             evt.TaskId == developer.Id &&
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_tester_identity_violation_salvages_failure_for_developer")]
+    public void ConductorDriverTesterIdentityViolationSalvagesFailureForDeveloper()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var developer = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
+        var tester = goal.Tasks.Single(t => t.RequiredRole == AgentRole.Tester);
+        PassVerification(kernel, goal, developer, hasCommittedChanges: true);
+
+        var priorLocation = new ReviewFindingLocation("tests/A.cs", "A.Tests", "guard");
+        DispatchTask(kernel, goal, tester, "test-1");
+        kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, "prior-commit");
+        kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, new TaskVerificationRecord(
+            "test-1",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithFinding(
+                new ReviewFinding(
+                    "T-1",
+                    ReviewFindingState.Open,
+                    priorLocation,
+                    "Residual behavior test still fails.")),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+
+        kernel.RetryTask(goal.Id, tester.Id, "recheck");
+        DispatchTask(kernel, goal, tester, "test-2");
+        kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, "current-commit");
+        var blocker = "Residual behavior test still fails.";
+        var moved = new ReviewFinding(
+            "T-1",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("tests/B.cs", "B.Tests", "guard"),
+            blocker);
+        var stdout = string.Join(
+            Environment.NewLine,
+            "WORKER_RESULT:",
+            "files: none",
+            "commands: focused test",
+            "tests: fail - one residual failure",
+            "commit: none",
+            $"blockers: {blocker}",
+            $"findings: {JsonSerializer.Serialize(new[] { moved })}",
+            "touched_anchors: []",
+            "verdict: needs-work",
+            "model_fit: fixture/model - adequate - focused test",
+            "skills: none",
+            "confidence: high",
+            "END_WORKER_RESULT");
+        kernel.RecordDispatchExecutionResult(goal.Id, tester.Id, new TaskVerificationRecord(
+            "test-2",
+            "C:\\tmp",
+            1,
+            stdout,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: "C:\\tmp\\tester.out.log",
+            WorkerResultPresent: true));
+
+        Assert.Equal(WorkTaskStatus.Failed, tester.Status);
+        Assert.Equal(
+            ReviewFindingConvergence.IdentityMovedViolationCode,
+            tester.LastVerification!.ReviewFindingContractViolation?.Code);
+        Assert.Equal(priorLocation, Assert.Single(tester.LastVerification.MergedReviewFindings!).Location);
+        Assert.True(WorkerResultBlockers.TryGetTestsStatus(tester.LastVerification, out var testsStatus));
+        Assert.Equal(WorkerResultBlockers.TestsStatus.Fail, testsStatus);
+        Assert.True(WorkerResultBlockers.TryFindHardFailureBlocker(tester.LastVerification, out _));
+
+        TaskId? retriedTaskId = null;
+        string? retryMessage = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => DispatchStartOutcome.Started(),
+            retryTaskWithRoundKind: (gid, tid, message, roundKind) =>
+            {
+                retriedTaskId = tid;
+                retryMessage = message;
+                return kernel.RetryTask(gid, tid, message, retryRoundKind: roundKind);
+            });
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(
+            developer.Id == retriedTaskId,
+            $"Expected Developer retry but got {retriedTaskId?.Value ?? "none"}; outcome={result.Outcome}.");
+        Assert.Contains(blocker, retryMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("contract-repair", retryMessage, StringComparison.OrdinalIgnoreCase);
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 

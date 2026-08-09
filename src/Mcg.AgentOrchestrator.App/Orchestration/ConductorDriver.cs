@@ -1252,6 +1252,15 @@ internal sealed class ConductorDriver
             return false;
         }
 
+        if ((violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
+                ReviewFindingConvergence.RecycledAnchorIdentityViolationCode) &&
+            reviewerTask.LastVerification.MergedReviewFindings is not null)
+        {
+            // The kernel retained the prior form of the invalid transition and accepted the rest of
+            // the substantive round. Let normal Reviewer/Tester convergence route its real blockers.
+            return false;
+        }
+
         IReadOnlyList<ReviewFinding> canonicalLedger;
         try
         {

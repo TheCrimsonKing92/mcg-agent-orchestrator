@@ -379,7 +379,9 @@ public sealed partial class AgentOrchestratorKernel
                 $"submitted_location={violation.SubmittedLocation?.ToString() ?? "none"}; " +
                 $"reviewer_wall_ms={reviewerWallMilliseconds}.");
 
-            if (task.RequiredRole == AgentRole.Tester)
+            if (task.RequiredRole == AgentRole.Tester &&
+                !(ReviewFindingConvergence.IsRejectedIdentityTransitionRound(violation) &&
+                  verification.MergedReviewFindings is not null))
             {
                 ReportTaskProgress(
                     goalId,
@@ -471,6 +473,7 @@ public sealed partial class AgentOrchestratorKernel
                 task.LastDispatch?.ReviewRetryCap,
                 out mergedFindings,
                 out var findingDiagnostic,
+                out _,
                 out _,
                 out _))
         {
@@ -652,14 +655,15 @@ public sealed partial class AgentOrchestratorKernel
                 out var mergedFindings,
                 out _,
                 out var violation,
+                out var identityTransitionSalvaged,
                 out var canonicalizations))
         {
             return verification with
             {
                 ReviewFindingContractViolation = violation,
-                MergedReviewFindings = violation?.Code is
-                        ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode or
-                        ReviewFindingConvergence.MissingReviewRetryCapReceiptViolationCode
+                MergedReviewFindings = violation is not null &&
+                    (ReviewFindingConvergence.IsRejectedCapResolutionRound(violation) ||
+                     identityTransitionSalvaged)
                     ? mergedFindings
                     : null
             };
@@ -687,13 +691,16 @@ public sealed partial class AgentOrchestratorKernel
         out IReadOnlyList<ReviewFinding> state,
         out string diagnostic,
         out ReviewFindingContractViolation? violation,
+        out bool identityTransitionSalvaged,
         out IReadOnlyList<ReviewFindingIdentityCanonicalization> canonicalizations)
     {
         state = [];
         diagnostic = string.Empty;
         violation = null;
+        identityTransitionSalvaged = false;
         canonicalizations = [];
         var latestFindingOccurrences = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        string? lastAcceptedReviewedCommit = null;
         var historicalVerifications = goal.Tasks
             .Where(candidate => candidate.RequiredRole == role)
             .SelectMany(candidate => candidate.VerificationHistory)
@@ -709,7 +716,9 @@ public sealed partial class AgentOrchestratorKernel
             var isCurrentRound = ReferenceEquals(verification, currentVerification);
             if (!isCurrentRound &&
                 verification.ReviewFindingContractViolation is { } historicalViolation &&
-                !ReviewFindingConvergence.IsRejectedCapResolutionRound(historicalViolation))
+                !ReviewFindingConvergence.IsRejectedCapResolutionRound(historicalViolation) &&
+                !(ReviewFindingConvergence.IsRejectedIdentityTransitionRound(historicalViolation) &&
+                  verification.MergedReviewFindings is not null))
             {
                 // The durable violation marks this worker-authored round as rejected. Replaying it would
                 // let an invalid structural transition mutate the accepted ledger.
@@ -755,9 +764,14 @@ public sealed partial class AgentOrchestratorKernel
                 }
                 else
                 {
-                    state = verification.ReviewFindingContractViolation is { } rejectedCapResolution
-                        ? ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, rejectedCapResolution)
-                        : ReviewFindingConvergence.ApplyRound(state, round);
+                    state = verification.ReviewFindingContractViolation switch
+                    {
+                        { } rejected when ReviewFindingConvergence.IsRejectedCapResolutionRound(rejected) =>
+                            ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, rejected),
+                        { } rejected when ReviewFindingConvergence.IsRejectedIdentityTransitionRound(rejected) =>
+                            ReviewFindingConvergence.ApplyRejectedIdentityTransitionRound(state, round, rejected),
+                        _ => ReviewFindingConvergence.ApplyRound(state, round)
+                    };
                 }
                 var conductorOutcomes = (verification.MergedReviewFindings ?? [])
                     .Where(finding => finding.EvidenceOutcome is not null)
@@ -772,23 +786,174 @@ public sealed partial class AgentOrchestratorKernel
                         : finding)
                     .ToArray();
                 foreach (var finding in round.Findings.Where(finding =>
-                             verification.ReviewFindingContractViolation is not { } rejectedCapResolution ||
-                             !ReviewFindingConvergence.IsRejectedCapResolutionTransition(rejectedCapResolution, finding.StableId)))
+                             verification.ReviewFindingContractViolation is not { } rejectedTransition ||
+                             (!ReviewFindingConvergence.IsRejectedCapResolutionTransition(rejectedTransition, finding.StableId) &&
+                              !ReviewFindingConvergence.IsRejectedIdentityTransition(rejectedTransition, finding.StableId))))
                 {
                     latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
                 }
                 state = ApplyHumanInputSupersedeFindingResolutions(goal, state, latestFindingOccurrences);
+                if (!string.IsNullOrWhiteSpace(verification.ReviewedCommit))
+                {
+                    lastAcceptedReviewedCommit = verification.ReviewedCommit.Trim();
+                }
             }
             catch (ReviewFindingConvergenceException ex)
             {
                 // Reject only the round being recorded. A HISTORICAL round that cannot be folded was already
                 // rejected when it was recorded; replaying it must not block every later review from being
                 // evaluated, and must not report a stale violation as though it described the new submission.
+                if (ReviewFindingConvergence.CanCanonicalizeIdentityTransitions(ex.Violation) &&
+                    SameNonEmptyReviewedCommit(lastAcceptedReviewedCommit, verification.ReviewedCommit))
+                {
+                    var priorState = state;
+                    if (isCurrentRound && role == AgentRole.Reviewer)
+                    {
+                        try
+                        {
+                            if (reviewRetryCap is { IsAtCap: true })
+                            {
+                                ReviewFindingConvergence.ValidateResolutionAtCap(
+                                    priorState,
+                                    round,
+                                    goal.EffectiveAcceptanceCriteriaCorrections,
+                                    currentVerification.ReviewedCommit,
+                                    evidenceReceipts);
+                            }
+                            else if (reviewRetryCap is null)
+                            {
+                                ReviewFindingConvergence.ValidateResolutionWithoutCapReceipt(
+                                    priorState,
+                                    round,
+                                    goal.EffectiveAcceptanceCriteriaCorrections,
+                                    currentVerification.ReviewedCommit,
+                                    evidenceReceipts);
+                            }
+                        }
+                        catch (ReviewFindingConvergenceException validationException)
+                        {
+                            if (ReviewFindingConvergence.IsRejectedCapResolutionRound(validationException.Violation))
+                            {
+                                try
+                                {
+                                    state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(
+                                        priorState,
+                                        round,
+                                        validationException.Violation);
+                                }
+                                catch (ReviewFindingConvergenceException)
+                                {
+                                    // The filtered round can still contain the identity transition that
+                                    // brought execution here. Preserve the accepted ledger and record the
+                                    // original cap violation instead of discarding the whole verification.
+                                    state = priorState;
+                                }
+                            }
+
+                            diagnostic = $"{validationException.Code}: {validationException.Message}";
+                            violation = validationException.Violation;
+                            return false;
+                        }
+                    }
+
+                    IReadOnlyList<ReviewFindingIdentityCanonicalization> identityCanonicalizations;
+                    try
+                    {
+                        state = ReviewFindingConvergence.ApplyCanonicalizedIdentityTransitionRound(
+                            priorState,
+                            round,
+                            ex.Violation,
+                            out identityCanonicalizations);
+                    }
+                    catch (ReviewFindingConvergenceException canonicalizedRoundException)
+                    {
+                        // Canonicalizing the identity can expose a different invalid transition that the
+                        // initial identity check intentionally evaluated first (for example, an untouched
+                        // resolved-to-open transition). Retain the pre-round ledger and record that typed
+                        // violation instead of letting the second exception discard the verification.
+                        state = priorState;
+                        if (isCurrentRound)
+                        {
+                            diagnostic = $"{canonicalizedRoundException.Code}: {canonicalizedRoundException.Message}";
+                            violation = canonicalizedRoundException.Violation;
+                            identityTransitionSalvaged = true;
+                            return false;
+                        }
+
+                        continue;
+                    }
+                    var canonicalizedOutcomes = (verification.MergedReviewFindings ?? [])
+                        .Where(finding => finding.EvidenceOutcome is not null)
+                        .ToDictionary(finding => finding.StableId, StringComparer.Ordinal);
+                    state = state
+                        .Select(finding => canonicalizedOutcomes.TryGetValue(finding.StableId, out var authoritative)
+                            ? finding with
+                            {
+                                EvidenceRequest = authoritative.EvidenceRequest ?? finding.EvidenceRequest,
+                                EvidenceOutcome = authoritative.EvidenceOutcome
+                            }
+                            : finding)
+                        .ToArray();
+                    foreach (var finding in round.Findings)
+                    {
+                        latestFindingOccurrences[finding.StableId] = verification.CompletedAt;
+                    }
+                    state = ApplyHumanInputSupersedeFindingResolutions(goal, state, latestFindingOccurrences);
+                    if (isCurrentRound)
+                    {
+                        canonicalizations = identityCanonicalizations;
+                        return true;
+                    }
+
+                    lastAcceptedReviewedCommit = verification.ReviewedCommit!.Trim();
+                    continue;
+                }
+
                 if (isCurrentRound)
                 {
                     if (ReviewFindingConvergence.IsRejectedCapResolutionRound(ex.Violation))
                     {
-                        state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, ex.Violation);
+                        var priorState = state;
+                        try
+                        {
+                            state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(
+                                priorState,
+                                round,
+                                ex.Violation);
+                        }
+                        catch (ReviewFindingConvergenceException)
+                        {
+                            // Keep the original typed cap violation authoritative if applying the valid
+                            // subset exposes another invalid transition.
+                            state = priorState;
+                        }
+                    }
+
+                    if (ReviewFindingConvergence.IsRejectedIdentityTransitionRound(ex.Violation) &&
+                        !string.IsNullOrWhiteSpace(lastAcceptedReviewedCommit) &&
+                        !string.IsNullOrWhiteSpace(verification.ReviewedCommit))
+                    {
+                        var priorState = state;
+                        try
+                        {
+                            state = ReviewFindingConvergence.ApplyRejectedIdentityTransitionRound(
+                                priorState,
+                                round,
+                                ex.Violation);
+                        }
+                        catch (ReviewFindingConvergenceException salvagedRoundException)
+                        {
+                            // Applying the non-identity portion of the round can expose another invalid
+                            // transition. Preserve the accepted ledger while still recording the more
+                            // specific typed violation on this verification.
+                            state = priorState;
+                            diagnostic = $"{salvagedRoundException.Code}: {salvagedRoundException.Message}";
+                            violation = salvagedRoundException.Violation;
+                            identityTransitionSalvaged = true;
+                            return false;
+                        }
+
+                        identityTransitionSalvaged = true;
                     }
 
                     diagnostic = $"{ex.Code}: {ex.Message}";
@@ -800,6 +965,11 @@ public sealed partial class AgentOrchestratorKernel
 
         return true;
     }
+
+    private static bool SameNonEmptyReviewedCommit(string? prior, string? current) =>
+        !string.IsNullOrWhiteSpace(prior) &&
+        !string.IsNullOrWhiteSpace(current) &&
+        string.Equals(prior.Trim(), current.Trim(), StringComparison.OrdinalIgnoreCase);
 
     private static string BuildCompletionMessageWithAdvisoryBlocker(
         string message,

@@ -3247,8 +3247,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Assert.Null(tester.LastProcess);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_rejects_moved_finding_when_identical_commits_provide_no_touch_proof")]
-    public void WorkerProfileDispatcherRejectsMovedFindingWhenIdenticalCommitsProvideNoTouchProof()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_canonicalizes_moved_finding_when_identical_commits_provide_no_touch_proof")]
+    public void WorkerProfileDispatcherCanonicalizesMovedFindingWhenIdenticalCommitsProvideNoTouchProof()
     {
         var root = CreateSeededDispatchRepository();
         var promptRoot = Path.Combine(root, "prompts");
@@ -3327,11 +3327,14 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
                 DateTimeOffset.Parse("2026-08-08T11:04:00Z"),
                 WorkerResultPresent: true));
 
-        Assert.Equal(WorkTaskStatus.Failed, tester.Status);
+        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
         Assert.Equal(unchangedCommit, tester.LastVerification!.ReviewedCommit);
-        Assert.Equal(
-            ReviewFindingConvergence.IdentityMovedViolationCode,
-            tester.LastVerification.ReviewFindingContractViolation!.Code);
+        Assert.Null(tester.LastVerification.ReviewFindingContractViolation);
+        Assert.Equal(priorLocation, Assert.Single(tester.LastVerification.MergedReviewFindings!).Location);
+        Assert.Contains(goal.Timeline, item =>
+            item.TaskId == tester.Id &&
+            item.Kind == ProgressKind.TaskNote &&
+            item.Message.Contains("canonical_stable_id=reported-goals-may-lack-timeline-evidence", StringComparison.Ordinal));
     }
 
     private static string AfcTesterOutput(ReviewFinding finding) => string.Join(

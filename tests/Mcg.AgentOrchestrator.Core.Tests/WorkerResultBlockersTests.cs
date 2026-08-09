@@ -661,6 +661,29 @@ public sealed class WorkerResultBlockersTests
     }
 
     [Xunit.Fact]
+    public void ApplyRound_BracketedPackedLineRange_MatchesSeparateHunkPresentation()
+    {
+        var previous = new[]
+        {
+            new ReviewFinding(
+                "F-1",
+                ReviewFindingState.Open,
+                new ReviewFindingLocation("src/A.cs", "TryGetProviderSubscriptionCooldown", "lines 1585-1626"),
+                "Missing guard.")
+        };
+        var submittedLocation = new ReviewFindingLocation(
+            "src/A.cs",
+            "TryGetProviderSubscriptionCooldown [lines 1585-1626]");
+        var next = new ReviewFindingRound(
+            [new ReviewFinding("F-1", ReviewFindingState.Open, submittedLocation, "Missing guard.")],
+            []);
+
+        var state = ReviewFindingConvergence.ApplyRound(previous, next);
+
+        Assert.Equal(submittedLocation, Assert.Single(state).Location);
+    }
+
+    [Xunit.Fact]
     public void ApplyRound_IdenticalRenderedLocations_ReportsNormalizedRegions()
     {
         var previousLocation = new ReviewFindingLocation("src/A.cs", "GoalStatus", "current block");
