@@ -2305,6 +2305,87 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
+    public async Task FocusedEvidence_UmbrellaAliasRoutesMovedClassOnlyToOwningExtractedProject()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [ "{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests", "1" ]
+                  },
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [ "{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests", "1" ]
+                  }
+                ]
+              },
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var providerDirectory = Path.Combine(
+            root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "ProviderEnvironment");
+        Directory.CreateDirectory(providerDirectory);
+        File.WriteAllText(
+            Path.Combine(providerDirectory, "ProviderDefaultTests.cs"),
+            "sealed class ProviderDefaultTests { }");
+        var goalId = new GoalId(Guid.NewGuid().ToString("N"));
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        8,
+                        "Minimum expected tests was set to 1, but 0 tests were selected."));
+                }
+
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunFocusedEvidenceAsync(
+                root,
+                goalId,
+                "Infrastructure.Tests: FullyQualifiedName~ProviderDefaultTests");
+
+            Assert.True(result.Accepted);
+            Assert.True(result.Passed);
+            var check = Assert.Single(result.Checks);
+            Assert.Contains("Infrastructure.ProviderEnvironment.Tests", check.Name, StringComparison.Ordinal);
+            Assert.DoesNotContain(calls, call => IsMtpExecutableCall(
+                call,
+                "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+            Assert.Single(calls, call => IsMtpExecutableCall(
+                call,
+                "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task FocusedEvidence_MixedRequest_ReportsFocusedAndMappedProjectReason()
     {
         var (result, calls) = await RunMappedEvidenceAsync(
@@ -7885,6 +7966,24 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             "tests/Core.Tests/Core.Tests.csproj");
 
         Assert.Equal(["tests/Core.Tests/FooTests.cs"], core);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_treats_rename_sources_as_deleted_from_their_former_project")]
+    public void GoalAcceptanceVerifierTreatsRenameSourcesAsDeletedFromTheirFormerProject()
+    {
+        var deleted = GoalAcceptanceVerifier.ParseDeletedTestFiles("""
+            M	tests/Infrastructure.Tests/UnchangedTests.cs
+            D	tests/Infrastructure.Tests/DeletedTests.cs
+            R100	tests/Infrastructure.Tests/MovedTests.cs	tests/Infrastructure.Tests/Extracted/MovedTests.cs
+            A	tests/Infrastructure.Tests/AddedTests.cs
+            """);
+
+        Assert.Equal(
+            [
+                "tests/Infrastructure.Tests/DeletedTests.cs",
+                "tests/Infrastructure.Tests/MovedTests.cs"
+            ],
+            deleted);
     }
 
     private static string? SetAcceptanceTimeoutEnvironment(string? value)

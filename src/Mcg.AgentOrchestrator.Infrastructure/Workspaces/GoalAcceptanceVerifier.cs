@@ -602,6 +602,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (!TryBuildFocusedEvidenceChecks(
                 request,
                 engineSettings,
+                worktreePath,
                 out var focusedChecks,
                 out var coverage,
                 out var rejection))
@@ -1407,6 +1408,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool TryBuildFocusedEvidenceChecks(
         string request,
         AcceptanceGateEngineSettings engineSettings,
+        string worktreePath,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
         out FocusedEvidenceCoverage coverage,
         out string rejection)
@@ -1450,6 +1452,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     out rejection))
             {
                 return false;
+            }
+
+            if (filter is not null && IsInfrastructureTestProject(project))
+            {
+                project = ResolveExtractedFocusedEvidenceProject(
+                    worktreePath,
+                    engineSettings,
+                    filter) ?? project;
             }
 
             totalTargets += targetCount;
@@ -1508,6 +1518,46 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ? "explicit-focused-and-mapped-project-request"
                 : hasFocusedFilters ? "explicit-focused-mapping" : "explicit-mapped-project-request");
         return true;
+    }
+
+    private static string? ResolveExtractedFocusedEvidenceProject(
+        string worktreePath,
+        AcceptanceGateEngineSettings engineSettings,
+        string filter)
+    {
+        var classFileNames = Regex.Matches(
+                filter,
+                @"FullyQualifiedName\s*~\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)",
+                RegexOptions.IgnoreCase)
+            .Select(match => match.Groups["value"].Value.Split('.').Last() + ".cs")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (classFileNames.Length == 0)
+        {
+            return null;
+        }
+
+        var matchingProjects = engineSettings.MtpInvocations
+            .Select(invocation => NormalizePath(invocation.Project))
+            .Where(project => IsExtractedInfrastructureTestProject(project!))
+            .Where(project =>
+            {
+                var projectDirectory = Path.GetDirectoryName(
+                    Path.Combine(worktreePath, project!.Replace('/', Path.DirectorySeparatorChar)));
+                return !string.IsNullOrWhiteSpace(projectDirectory) &&
+                    Directory.Exists(projectDirectory) &&
+                    classFileNames.All(classFileName => Directory.EnumerateFiles(
+                            projectDirectory,
+                            "*.cs",
+                            SearchOption.AllDirectories)
+                        .Any(path => Path.GetFileName(path).Equals(
+                            classFileName,
+                            StringComparison.OrdinalIgnoreCase)));
+            })
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return matchingProjects.Length == 1 ? matchingProjects[0] : null;
     }
 
     internal static bool TryResolveFocusedEvidenceProject(
