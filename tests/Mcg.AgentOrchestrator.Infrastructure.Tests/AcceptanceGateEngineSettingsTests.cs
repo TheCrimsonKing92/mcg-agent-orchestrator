@@ -7,12 +7,15 @@ public sealed class AcceptanceGateEngineSettingsTests
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_checked_in_manifest_splits_heavy_lanes_without_narrowing_coverage")]
     public void AcceptanceGateEngineCheckedInManifestSplitsHeavyLanesWithoutNarrowingCoverage()
     {
-        var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var settings = AcceptanceGateEngineSettings.Load(repositoryRoot);
+        var startupContract = GoalAcceptanceVerifier.ValidateStartupContract(repositoryRoot);
 
         Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(18, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(17, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(4, startupContract.ManifestCheckCount);
         var expectedEstimates = new Dictionary<string, double>(StringComparer.Ordinal)
         {
             ["Cli"] = 11.4,
@@ -29,7 +32,6 @@ public sealed class AcceptanceGateEngineSettingsTests
             ["Dotnet build slots"] = 201.2,
             ["Goal acceptance verifier"] = 30.5,
             ["Goal acceptance build slots"] = 326.0,
-            ["Provider environment"] = 11.3,
             ["Remainder balance A"] = 136.6,
             ["Remainder balance B"] = 33.1,
             ["Remainder"] = 176.6
@@ -99,6 +101,24 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "RealProcessShardBetaSmokeTests",
                 "WorkerDispatchJobAccountingTests"
             ]);
+
+        const string providerProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/" +
+            "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
+        _ = settings.ResolveMtpInvocation(providerProject);
+
+        using var manifest = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
+        var providerCheck = manifest.RootElement.GetProperty("checks")
+            .EnumerateArray()
+            .Single(check => check.GetProperty("name").GetString() == "provider environment tests");
+        Xunit.Assert.Equal(providerProject, providerCheck.GetProperty("project").GetString());
+        Xunit.Assert.Equal(2.04, providerCheck.GetProperty("estimatedSerialSeconds").GetDouble());
+        Xunit.Assert.Equal(
+            ["xunit:EnvMutation"],
+            providerCheck.GetProperty("exclusiveResourceKeys")
+                .EnumerateArray()
+                .Select(key => key.GetString()));
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_partition_verdict_full_rerun_cadence_defaults_and_loads")]

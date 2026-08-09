@@ -28,7 +28,4 @@ public sealed class JobAccountingCollection : Xunit.ICollectionFixture<IsolatedD
 // Process-spawning/worker-dispatch tests mutate process-wide env vars and shared config stores.
 [Xunit.CollectionDefinition(TestCollections.ProcessSpawning, DisableParallelization = true)]
 public sealed class ProcessSpawningCollection;
-
-// Provider discovery tests temporarily replace provider env vars such as OLLAMA_* and OPENAI_*.
-[Xunit.CollectionDefinition(TestCollections.ProviderEnvironment, DisableParallelization = true)]
-public sealed class ProviderEnvironmentCollection;
+// Extracted modules own their remaining collection definitions.
