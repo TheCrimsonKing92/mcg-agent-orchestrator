@@ -58,6 +58,84 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
         Assert.Contains("rule=round-20", artifact, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "CitedPriorEvidenceResolver_collapses_duplicate_verification_rows_before_pairing_receipts")]
+    public void CollapsesDuplicateVerificationRowsBeforePairingReceipts()
+    {
+        var snapshot = CreatePriorGoalSnapshot(
+            PriorGoalId,
+            PriorTaskId,
+            Enumerable.Range(1, 9)
+                .Select(number => ($"round-{number:D2}", number % 2, 0))
+                .ToArray());
+        var taskSnapshot = snapshot.Tasks.Single();
+        snapshot = snapshot with
+        {
+            Tasks =
+            [
+                taskSnapshot with
+                {
+                    VerificationHistory = taskSnapshot.VerificationHistory!
+                        .SelectMany(verification => Enumerable.Repeat(verification, 4))
+                        .ToArray()
+                }
+            ]
+        };
+        var (goal, task) = CreateCurrentGoal("Use goal cbf7b22e evidence.");
+
+        var artifact = new CitedPriorEvidenceResolver(new FakeReader([snapshot])).Resolve(goal, task)!;
+
+        Assert.Contains("Rounds: 9; showing newest 8.", artifact, StringComparison.Ordinal);
+        Assert.Contains("Truncated rounds: 1 older rounds omitted.", artifact, StringComparison.Ordinal);
+        Assert.Equal(8, CountOccurrences(artifact, "- task="));
+        Assert.Equal(8, CountOccurrences(artifact, "classifier_receipt: CLASSIFIER"));
+        Assert.DoesNotContain("none stored for this round", artifact, StringComparison.Ordinal);
+        Assert.DoesNotContain("rule=round-01", artifact, StringComparison.Ordinal);
+        for (var round = 2; round <= 9; round++)
+        {
+            Assert.Equal(1, CountOccurrences(artifact, $"rule=round-{round:D2}"));
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "CitedPriorEvidenceResolver_prioritizes_explicit_citations_and_upgrades_bare_duplicates")]
+    public void PrioritizesExplicitCitationsAndUpgradesBareDuplicates()
+    {
+        var snapshots = Enumerable.Range(1, 5)
+            .Select(number => CreatePriorGoalSnapshot(
+                $"{number}{new string((char)('0' + number), 7)}11223344556677889900aabb",
+                $"a{number:D7}11223344556677889900aabb",
+                []))
+            .ToArray();
+        var objective = "`11111111` `22222222` `33333333`; goal 33333333; goal 44444444; goal 55555555.";
+        var (goal, task) = CreateCurrentGoal(objective);
+
+        var artifact = new CitedPriorEvidenceResolver(new FakeReader(snapshots)).Resolve(goal, task)!;
+
+        Assert.Contains("Citation selection order: explicit goal/task citations first, then bare identifiers; encounter order breaks ties.", artifact, StringComparison.Ordinal);
+        Assert.Contains("prior_evidence_package=v1; cited_entities=5; packaged_entities=4", artifact, StringComparison.Ordinal);
+        Assert.Contains("Truncated cited entities: 1 omitted after relevance ordering. Omitted citations: cited unspecified `22222222`.", artifact, StringComparison.Ordinal);
+        Assert.DoesNotContain("## Cited unspecified `22222222`", artifact, StringComparison.Ordinal);
+        Assert.True(artifact.IndexOf("## Cited goal `33333333`", StringComparison.Ordinal) < artifact.IndexOf("## Cited goal `44444444`", StringComparison.Ordinal));
+        Assert.True(artifact.IndexOf("## Cited goal `44444444`", StringComparison.Ordinal) < artifact.IndexOf("## Cited goal `55555555`", StringComparison.Ordinal));
+        Assert.True(artifact.IndexOf("## Cited goal `55555555`", StringComparison.Ordinal) < artifact.IndexOf("## Cited goal `11111111`", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "CitedPriorEvidenceResolver_distinguishes_missing_round_receipt_from_lookup_failure")]
+    public void DistinguishesMissingRoundReceiptFromLookupFailure()
+    {
+        var snapshot = CreatePriorGoalSnapshot(PriorGoalId, PriorTaskId, [("stored-nowhere", 0, 0)]) with
+        {
+            Timeline = []
+        };
+        var (goal, task) = CreateCurrentGoal("Use goal cbf7b22e evidence.");
+
+        var withoutReceipt = new CitedPriorEvidenceResolver(new FakeReader([snapshot])).Resolve(goal, task)!;
+        var failedLookup = new CitedPriorEvidenceResolver(new ThrowingReader()).Resolve(goal, task)!;
+
+        Assert.Contains("classifier_receipt: unavailable (none stored for this round)", withoutReceipt, StringComparison.Ordinal);
+        Assert.DoesNotContain("lookup failed", withoutReceipt, StringComparison.Ordinal);
+        Assert.Contains("Records unavailable for cited goal `cbf7b22e`: historical store lookup failed (InvalidOperationException: fixture lookup failure)", failedLookup, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "CitedPriorEvidenceResolver_task_citation_limits_evidence_to_that_task")]
     public void TaskCitationLimitsEvidenceToThatTask()
     {
@@ -309,5 +387,14 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
                 .Take(limit)
                 .ToArray();
         }
+    }
+
+    private sealed class ThrowingReader : ICitedPriorEvidenceReader
+    {
+        public IReadOnlyList<GoalSnapshot> FindGoals(string idPrefix, int limit) =>
+            throw new InvalidOperationException("fixture lookup failure");
+
+        public IReadOnlyList<CitedPriorTaskMatch> FindTasks(string idPrefix, int limit) =>
+            throw new InvalidOperationException("fixture lookup failure");
     }
 }

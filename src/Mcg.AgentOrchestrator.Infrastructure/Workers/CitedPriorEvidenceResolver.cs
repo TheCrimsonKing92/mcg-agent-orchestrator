@@ -61,12 +61,16 @@ public sealed class CitedPriorEvidenceResolver
             return null;
         }
 
-        var selected = selectors.Take(MaxCitedEntities).ToArray();
+        var orderedSelectors = selectors
+            .OrderBy(selector => selector.Kind == CitedPriorEvidenceKind.Unspecified ? 1 : 0)
+            .ToArray();
+        var selected = orderedSelectors.Take(MaxCitedEntities).ToArray();
         var headerLines = new List<string>
         {
             "# Cited Prior Goal And Task Evidence",
             string.Empty,
             "Historical classifier receipts are reproduced as stored; they are not reclassified using current code.",
+            "Citation selection order: explicit goal/task citations first, then bare identifiers; encounter order breaks ties.",
             $"Limits: {MaxCitedEntities} cited entities, {MaxRoundsPerEntity} newest rounds per entity, and {MaxUtf8Bytes:N0} UTF-8 bytes total. Oldest rounds are omitted first.",
             $"Measurement marker: prior_evidence_package=v1; cited_entities={selectors.Count}; packaged_entities={selected.Length}.",
             string.Empty
@@ -74,8 +78,8 @@ public sealed class CitedPriorEvidenceResolver
 
         if (selectors.Count > selected.Length)
         {
-            var omitted = string.Join(", ", selectors.Skip(selected.Length).Select(DescribeSelector));
-            headerLines.Add($"> Truncated cited entities: {selectors.Count - selected.Length} omitted after the first {MaxCitedEntities} distinct citations. Omitted citations: {omitted}.");
+            var omitted = string.Join(", ", orderedSelectors.Skip(selected.Length).Select(DescribeSelector));
+            headerLines.Add($"> Truncated cited entities: {selectors.Count - selected.Length} omitted after relevance ordering. Omitted citations: {omitted}.");
             headerLines.Add(string.Empty);
         }
 
@@ -88,7 +92,7 @@ public sealed class CitedPriorEvidenceResolver
             }
             catch (Exception ex)
             {
-                sections.Add(BuildUnavailable(selector, $"historical store read failed ({ex.GetType().Name}: {Sanitize(ex.Message, MaxReasonChars)})"));
+                sections.Add(BuildUnavailable(selector, $"historical store lookup failed ({ex.GetType().Name}: {Sanitize(ex.Message, MaxReasonChars)})"));
             }
         }
 
@@ -111,18 +115,31 @@ public sealed class CitedPriorEvidenceResolver
         fields.Add(task.VerificationPlan);
 
         var selectors = new List<CitedPriorEvidenceSelector>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var selectorIndexes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var field in fields.Where(value => !string.IsNullOrWhiteSpace(value)))
         {
             foreach (Match match in CitationPattern.Matches(field!))
             {
                 var (kind, token) = ReadMatch(match);
-                if (string.IsNullOrEmpty(token) || IsCurrentIdentifier(token, goal.Id.Value, task.Id.Value) || !seen.Add(token))
+                if (string.IsNullOrEmpty(token) || IsCurrentIdentifier(token, goal.Id.Value, task.Id.Value))
                 {
                     continue;
                 }
 
-                selectors.Add(new CitedPriorEvidenceSelector(kind, token.ToLowerInvariant()));
+                token = token.ToLowerInvariant();
+                if (selectorIndexes.TryGetValue(token, out var existingIndex))
+                {
+                    if (selectors[existingIndex].Kind == CitedPriorEvidenceKind.Unspecified &&
+                        kind != CitedPriorEvidenceKind.Unspecified)
+                    {
+                        selectors[existingIndex] = new CitedPriorEvidenceSelector(kind, token);
+                    }
+
+                    continue;
+                }
+
+                selectorIndexes[token] = selectors.Count;
+                selectors.Add(new CitedPriorEvidenceSelector(kind, token));
             }
         }
 
@@ -230,7 +247,7 @@ public sealed class CitedPriorEvidenceResolver
 
         var roundBlocks = shown.Select(round =>
             $"- task={round.TaskId}; timestamp={round.Timestamp:O}; {round.Summary}{Environment.NewLine}" +
-            $"  classifier_receipt: {round.ClassifierReceipt ?? "unavailable (no stored classifier receipt paired with this verification)"}").ToArray();
+            $"  classifier_receipt: {round.ClassifierReceipt ?? "unavailable (none stored for this round)"}").ToArray();
         return new CitedEvidenceSection(selector, preamble, roundBlocks);
     }
 
@@ -243,12 +260,15 @@ public sealed class CitedPriorEvidenceResolver
                 : [task.LastVerification];
         var verifications = verificationSource
             .OrderBy(record => record.CompletedAt)
+            // BuildRounds is task-scoped, so completion time is the stable identity of a stored round.
+            .DistinctBy(record => record.CompletedAt)
             .ToArray();
         var receipts = goal.Timeline
             .Where(evt => string.Equals(evt.TaskId, task.Id, StringComparison.OrdinalIgnoreCase))
             .Where(evt => evt.Kind is ProgressKind.TaskNote or ProgressKind.OperatorTaskNote)
             .Where(evt => evt.Message.Contains("CLASSIFIER ", StringComparison.OrdinalIgnoreCase))
             .OrderBy(evt => evt.OccurredAt)
+            .DistinctBy(evt => new { evt.OccurredAt, evt.Message })
             .ToArray();
         var used = new bool[receipts.Length];
         var rounds = new List<CitedRound>();
