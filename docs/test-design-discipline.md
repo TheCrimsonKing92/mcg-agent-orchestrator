@@ -40,6 +40,9 @@ l. **A test earns its authority only by being shown capable of failing.** A test
 
 Spec refinement checks feasibility before asking how a criterion will be measured or asserted. Treat every acceptance criterion as an obligation of the executing worker role unless it is explicitly moved to the `OPERATOR-OWNED / post-landing` set. A capability-demand criterion is infeasible when the role profile says the worker cannot exercise or observe the required boundary, including concurrent or multiple goals, the live conductor or behavior spanning multiple ticks, whole-host or wall-clock performance, and build/acceptance slots or other sandbox-forbidden operations. Bare words such as `goal`, `host`, `tick`, and `test` are never enough: a rule must match both a capability verb and a resource the role lacks.
 
+Use [`role-capability-matrix.md`](role-capability-matrix.md) to assign the evidence owner before refinement;
+the feasibility detector is a deliberately narrow backstop, not a replacement for that authoring pass.
+
 An infeasible criterion raises a fixed-HIGH feasibility clarification before any measurement/assertion-shape question for that criterion. Dispatch remains blocked until the operator chooses exactly one disposition: re-scope and re-check the replacement, move the criterion to `OPERATOR-OWNED / post-landing`, or supply a worker-accessible reproducing scenario. The criterion must never silently pass through because a measurement-method clarification was answered. Independently, every worker brief sanctions an honest `BLOCKED` report that names the missing capability or scenario.
 
 This first deterministic table is intentionally closed to those four categories. Network access, production credentials, and cross-repository requirements are known follow-up shapes; add each only with its own capability-demand rule, positive fixture, and measured false-positive receipt.
