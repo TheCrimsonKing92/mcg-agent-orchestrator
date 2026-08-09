@@ -13,10 +13,12 @@ Core, App, and Infrastructure directly and owns its two small test helpers. The 
 the module directory, so each source test is compiled by exactly one project.
 
 The gate now runs this project as a broad project check. Its measured manifest estimate remains 2.04
-seconds. The check uses `xunit:EnvMutation`, which improves the old manifest: the dedicated process is
-isolated from the parent assembly, while the key prevents it from overlapping the Worker profiles and
-Worker dispatch lanes that also mutate process-wide environment. The module-local collection remains
-`DisableParallelization` because its own tests still share environment variables.
+seconds. Extracted Infrastructure test projects join the same scheduled shard batch as the parent lanes,
+so both the estimate and `xunit:EnvMutation` are consumed by the batch scheduler. The key prevents this
+process from overlapping the Worker profiles and Worker dispatch lanes that also mutate process-wide
+environment; `GoalAcceptanceVerifier_extracted_infrastructure_project_joins_scheduled_shard_batch`
+pins that behavior. The module-local collection remains `DisableParallelization` because its own tests
+still share environment variables.
 
 The 3,367-test figure in the goal text is stale for this HEAD. A temporary pre-split project built over
 the same source set discovers 3,375 unattended cases through the 18 original manifest filters after the
@@ -24,6 +26,24 @@ gate's HostIntegration and AcceptanceOptIn exclusions. After extraction, the 17 
 3,357 cases and the new broad project discovers 18, for the same 3,375 aggregate. The temporary baseline
 project was removed after the comparison. The acceptance TRX receipt
 must confirm those two executed-project counts before the next extraction begins.
+
+### Build-graph skipping receipt (2026-08-09)
+
+The sanctioned worker build first built Infrastructure, the parent test project, and ProviderEnvironment
+with `Invoke-WorkerBuildCheck.ps1` (exit 0, zero errors). Immediately before and after a second build of
+only `Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`, the extracted assembly had these values:
+
+| Observation | SHA-256 | LastWriteTimeUtc |
+| --- | --- | --- |
+| Before unrelated parent-project build | `51CF4E8FE4E67D081B551649591C037772901E46874EF750100B78EEA494C722` | `2026-08-09T07:31:42.6168670Z` |
+| After unrelated parent-project build | `51CF4E8FE4E67D081B551649591C037772901E46874EF750100B78EEA494C722` | `2026-08-09T07:31:42.6168670Z` |
+
+The exact second command was
+`.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-WorkerBuildCheck.ps1 tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`;
+it exited 0 with zero errors. Both the hash and timestamp remained unchanged, demonstrating that the
+unrelated parent test-module build did not rewrite the extracted output. The policy regression
+`GoalAcceptanceVerifier_skips_extracted_project_for_unrelated_parent_test_change` separately requires the
+gate to emit a dependency-closure skip receipt without invoking the extracted executable.
 
 ## Proposed projects after the first slice
 
@@ -45,3 +65,8 @@ must confirm those two executed-project counts before the next extraction begins
 Each later extraction follows the same gate: one project, one positive manifest check, an explicit MTP
 invocation, unchanged aggregate TRX count, and a cached-output receipt showing an unrelated module change
 does not rewrite the extracted assembly.
+
+The two first-slice helpers are intentionally module-local while only one extracted project exists. Before
+the next extraction copies either helper again, create a non-test `Infrastructure.Testing` support project,
+move shared fixtures there, and reference it from both test projects. Module-specific fixtures stay with
+their owning test assembly.

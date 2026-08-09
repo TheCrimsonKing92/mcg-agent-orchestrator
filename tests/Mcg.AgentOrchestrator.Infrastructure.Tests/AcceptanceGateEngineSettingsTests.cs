@@ -119,6 +119,15 @@ public sealed class AcceptanceGateEngineSettingsTests
             providerCheck.GetProperty("exclusiveResourceKeys")
                 .EnumerateArray()
                 .Select(key => key.GetString()));
+
+        var solutionText = File.ReadAllText(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln"));
+        var trustedTestProjects = GoalAcceptanceVerifier.DiscoverTrustedTestProjects(repositoryRoot, repositoryRoot);
+        Xunit.Assert.All(
+            trustedTestProjects,
+            project => Xunit.Assert.Contains(
+                project.Replace('/', '\\'),
+                solutionText,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_partition_verdict_full_rerun_cadence_defaults_and_loads")]
