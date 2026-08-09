@@ -64,7 +64,15 @@ internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetN
 
     var fileWarnings = new List<string>();
     var highestPresetWorkerCap = ConductorAutonomyPolicy.All.Max(policy => policy.MaxConcurrentPaidWorkers);
-    if (loaded.MaxConcurrentPaidWorkers > highestPresetWorkerCap)
+    if (loaded.MaxConcurrentPaidWorkers > ConductorBatchLoop.WorkerAdmissionCapacity)
+    {
+        fileWarnings.Add(
+            $"Policy file '{policyPath}' sets maxConcurrentPaidWorkers={loaded.MaxConcurrentPaidWorkers}, " +
+            $"above worker admission capacity {ConductorBatchLoop.WorkerAdmissionCapacity}; configured concurrency will be clamped " +
+            $"to {ConductorBatchLoop.WorkerAdmissionCapacity} normally and " +
+            $"{Math.Max(0, ConductorBatchLoop.WorkerAdmissionCapacity - 1)} while a gate-ready goal reserves one admission slot.");
+    }
+    else if (loaded.MaxConcurrentPaidWorkers > highestPresetWorkerCap)
     {
         fileWarnings.Add(
             $"Policy file '{policyPath}' sets maxConcurrentPaidWorkers={loaded.MaxConcurrentPaidWorkers}, " +
@@ -74,7 +82,7 @@ internal static ConductorPolicyResolution ResolveConductorPolicy(string? presetN
     return new ConductorPolicyResolution(loaded, $"file:{policyPath}", fileWarnings);
 }
 
-private static void PrintConductorPolicyWarnings(ConductorPolicyResolution resolution)
+internal static void PrintConductorPolicyWarnings(ConductorPolicyResolution resolution)
 {
     foreach (var warning in resolution.Warnings)
     {

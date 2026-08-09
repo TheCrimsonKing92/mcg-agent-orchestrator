@@ -18,6 +18,12 @@ internal sealed record PreReviewEvidenceContext(
     bool NoApplicableTests,
     bool MappingNeedsInput);
 
+internal sealed record WorkerAdmissionSnapshot(
+    int ConfiguredWorkerCap,
+    int AdmissionCapacity,
+    int ReservedGateSlots,
+    int EffectiveWorkerCap);
+
 internal sealed class ConductorDriver
 {
     private const int MaxCriterionRetryEvidenceLines = 30;
@@ -101,6 +107,20 @@ internal sealed class ConductorDriver
     internal Action<ConductorLandingReceipt>? SuccessfulLandingSink { get; set; }
     internal Action<GoalId>? DispatchRecordWriteSucceededSink { get; set; }
     internal Func<string?>? LandingMutationBlocker { get; set; }
+
+    internal WorkerAdmissionSnapshot GetWorkerAdmissionSnapshot(ConductorAutonomyPolicy policy)
+    {
+        var admissionCapacity = Math.Max(0, _getWorkerAdmissionCapacity());
+        var reservedGateSlots = _hasGateReadyGoal() ? 1 : 0;
+        var effectiveWorkerCap = Math.Min(
+            policy.MaxConcurrentPaidWorkers,
+            Math.Max(0, admissionCapacity - reservedGateSlots));
+        return new WorkerAdmissionSnapshot(
+            policy.MaxConcurrentPaidWorkers,
+            admissionCapacity,
+            reservedGateSlots,
+            effectiveWorkerCap);
+    }
 
     public ConductorDriver(
         AgentOrchestratorKernel kernel,
@@ -2327,19 +2347,13 @@ internal sealed class ConductorDriver
         GoalLifecycleState fromState)
     {
         var running = _getRunningPaidWorkerCount();
-        var workerCap = policy.MaxConcurrentPaidWorkers;
-        if (_hasGateReadyGoal())
-        {
-            // Reserve one paid-worker admission slot for the ready gate. The pool this draws
-            // from is the worker-admission capacity, deliberately decoupled from the
-            // parallel-acceptance width / build-concurrency slot count so a running gate does
-            // not starve paid-worker admission down to 1.
-            workerCap = Math.Min(workerCap, Math.Max(0, _getWorkerAdmissionCapacity() - 1));
-        }
+        var workerAdmission = GetWorkerAdmissionSnapshot(policy);
+        var workerCap = workerAdmission.EffectiveWorkerCap;
 
         if (running >= workerCap)
         {
-            var reservedGateSlot = workerCap < policy.MaxConcurrentPaidWorkers;
+            var reservedGateSlot = workerAdmission.ReservedGateSlots > 0 &&
+                                   workerCap < policy.MaxConcurrentPaidWorkers;
             if (reservedGateSlot)
             {
                 Console.WriteLine(

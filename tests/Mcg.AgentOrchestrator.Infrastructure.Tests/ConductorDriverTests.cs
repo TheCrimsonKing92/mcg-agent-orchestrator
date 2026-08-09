@@ -1148,7 +1148,10 @@ public sealed class ConductorDriverTests
     public void ConductorDriverWorkspaceReadyReservesAcceptanceCapacityNotBuildPermitCount()
     {
         var (_, goal) = SimpleGoal();
-        var policy = ConductorAutonomyPolicy.Conservative;
+        var policy = ConductorAutonomyPolicy.Conservative with
+        {
+            MaxConcurrentPaidWorkers = ConductorBatchLoop.WorkerAdmissionCapacity
+        };
         var dispatchCalled = false;
 
         // The gate reservation draws from the paid-worker ADMISSION pool (WorkerAdmissionCapacity),
@@ -1175,25 +1178,28 @@ public sealed class ConductorDriverTests
     public void ConductorDriverGateReservationDrawsFromWorkerAdmissionNotAcceptanceWidth()
     {
         // Decoupling guard: parallel-acceptance WIDTH stays aligned with build concurrency (2)
-        // while the paid-worker ADMISSION pool the gate reservation draws from is independent (4).
+        // while the paid-worker ADMISSION pool the gate reservation draws from is independent (9).
         // These are two distinct concepts and must not share one constant.
         Assert.Equal(
             DotnetBuildEnvironmentManager.BuildConcurrencySlotCount,
             ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
         Assert.Equal(2, ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
-        Assert.Equal(4, ConductorBatchLoop.WorkerAdmissionCapacity);
+        Assert.Equal(9, ConductorBatchLoop.WorkerAdmissionCapacity);
         Assert.NotEqual(
             ConductorBatchLoop.DefaultParallelAcceptanceCapacity,
             ConductorBatchLoop.WorkerAdmissionCapacity);
 
         var (_, goal) = SimpleGoal();
-        var policy = ConductorAutonomyPolicy.Conservative; // MaxConcurrentPaidWorkers = 4
+        var policy = ConductorAutonomyPolicy.Conservative with
+        {
+            MaxConcurrentPaidWorkers = ConductorBatchLoop.WorkerAdmissionCapacity
+        };
         var dispatchCalled = false;
 
         // Paid workers already running == acceptance width (2) while a gate is ready. If the
         // reservation were (wrongly) drawn from acceptance width, the cap would collapse to
-        // min(4, 2 - 1) = 1 and admission would be held. Decoupled from worker admission the
-        // cap is min(4, 4 - 1) = 3, so the third worker is still admitted during the gate.
+        // min(9, 2 - 1) = 1 and admission would be held. Decoupled from worker admission the
+        // cap is min(9, 9 - 1) = 8, so the third worker is still admitted during the gate.
         var driver = MakeDriver(
             getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
             getRunningCount: () => ConductorBatchLoop.DefaultParallelAcceptanceCapacity,

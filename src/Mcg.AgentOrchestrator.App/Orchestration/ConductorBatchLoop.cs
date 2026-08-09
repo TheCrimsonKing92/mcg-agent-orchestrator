@@ -31,10 +31,11 @@ internal sealed class ConductorBatchLoop
         DotnetBuildEnvironmentManager.BuildConcurrencySlotCount;
     // Paid-worker ADMISSION pool that the gate-slot reservation (ConductorDriver worker-cap)
     // draws from. Deliberately INDEPENDENT of build concurrency / acceptance width: coding
-    // workers do not hold build slots, so reserving one of these for a ready gate still
-    // admits ~3 paid workers (WorkerAdmissionCapacity - 1), preserving pre-de-slotting
-    // throughput. Do NOT tie this to BuildConcurrencySlotCount or DefaultParallelAcceptanceCapacity.
-    internal const int WorkerAdmissionCapacity = 4;
+    // workers do not hold build slots. The pool supports the current operator-configured target
+    // of eight paid workers plus one stable gate slot (observed board demand, 2026-08-08).
+    // Provider cooldowns are handled separately; memory-aware scaling is not yet implemented.
+    // Do NOT tie this to BuildConcurrencySlotCount or DefaultParallelAcceptanceCapacity.
+    internal const int WorkerAdmissionCapacity = 9;
     internal const int DefaultUnscopedStallTickThreshold = 3;
     internal static readonly TimeSpan DefaultGoalStallThreshold = TimeSpan.FromMinutes(10);
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
@@ -303,9 +304,12 @@ internal sealed class ConductorBatchLoop
                 previousSuccessfulLandingSink?.Invoke(receipt);
             };
         }
+        var workerAdmission = driver.GetWorkerAdmissionSnapshot(policy);
         EmitProgress(
             $"LOOP_START policy={Sanitize(policy.Name)} policySource={SanitizeReason(policySource)} maxIterations={maxIterations?.ToString() ?? "none"} " +
-            $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")}" +
+            $"maxDurationSeconds={(maxDuration.HasValue ? ((int)maxDuration.Value.TotalSeconds).ToString() : "none")} " +
+            $"configuredWorkerCap={workerAdmission.ConfiguredWorkerCap} workerAdmissionCapacity={workerAdmission.AdmissionCapacity} " +
+            $"reservedGateSlots={workerAdmission.ReservedGateSlots} effectiveWorkerCap={workerAdmission.EffectiveWorkerCap}" +
             (string.IsNullOrWhiteSpace(journalMode) ? string.Empty : $" journalMode={Sanitize(journalMode)}"));
 
         while (true)
