@@ -489,6 +489,8 @@ public sealed class ConductorBatchLoopTests
             Assert.Contains("POLICY_RELOAD tick=2", output, StringComparison.Ordinal);
             Assert.Contains("oldMaxConcurrentPaidWorkers=1", output, StringComparison.Ordinal);
             Assert.Contains("newMaxConcurrentPaidWorkers=8", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("MaxTotalBudget", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("PerProviderBudgetCaps", output, StringComparison.Ordinal);
             var events = File.ReadAllText(eventLogPath);
             Assert.Contains("\"eventKind\":\"policy-warning\"", events, StringComparison.Ordinal);
             Assert.Contains("\"eventKind\":\"policy-reload\"", events, StringComparison.Ordinal);
