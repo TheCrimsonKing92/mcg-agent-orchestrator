@@ -197,18 +197,18 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             busyTimeoutMilliseconds ?? _writeTelemetry.Options.BusyTimeoutMilliseconds,
             _statementObserver);
 
-    // Cap on retrying a transient SQLITE_BUSY/LOCKED before giving up. busy_timeout (30s) handles the
-    // simple lock-wait, but the deadlock-avoidance path (and pooling artifacts) can still surface an
-    // immediate BUSY; this bounded retry turns that into a brief wait instead of a fatal throw that
-    // would kill a conduct --loop on a concurrent writer.
-    private static bool IsTransientLock(SqliteException ex) =>
+    // Shared bounded retry for transient SQLITE_BUSY/LOCKED during write-lock acquisition. Callers
+    // must keep the operation limited to acquisition so a side-effecting transaction body is never
+    // re-executed. busy_timeout handles simple lock waits; immediate BUSY still needs this backoff.
+    internal static bool IsTransientLock(SqliteException ex) =>
         ex.SqliteErrorCode == 5 /* SQLITE_BUSY */ || ex.SqliteErrorCode == 6 /* SQLITE_LOCKED */;
 
-    private static async Task<T> WithBusyRetryAsync<T>(
+    internal static async Task<T> WithBusyRetryAsync<T>(
         Func<Task<T>> operation,
         CancellationToken ct,
         TimeSpan? retryBudget = null,
-        int maxBusyRetries = int.MaxValue)
+        int maxBusyRetries = int.MaxValue,
+        Func<int, TimeSpan, CancellationToken, Task>? retryDelay = null)
     {
         var budget = retryBudget ?? TimeSpan.FromMilliseconds(StateDbConnectionFactory.DefaultBusyTimeoutMilliseconds);
         var stopwatch = Stopwatch.StartNew();
@@ -228,7 +228,10 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 var delay = TimeSpan.FromMilliseconds(Math.Min(delayMs, Math.Max(0, remaining.TotalMilliseconds)));
                 if (delay <= TimeSpan.Zero)
                     throw;
-                await Task.Delay(delay, ct);
+                if (retryDelay is null)
+                    await Task.Delay(delay, ct);
+                else
+                    await retryDelay(attempt, delay, ct);
                 delayMs = Math.Min(delayMs * 2, 1000);
             }
         }

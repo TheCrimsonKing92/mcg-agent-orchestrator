@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -22,6 +23,7 @@ internal sealed class ConductorBatchLoop
     internal const int DefaultMaxBusyWriteAttempts = 1;
     internal const int DispatchRecordContentionSkipLimit = 5;
     internal const int DefaultGracefulDetachCheckpointAttempts = 3;
+    internal const int JanitorialFailureEscalationThreshold = 3;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
     // Parallel-acceptance WIDTH: how many landing-acceptance gates may run concurrently.
@@ -63,6 +65,8 @@ internal sealed class ConductorBatchLoop
     private readonly Func<double> _writeJitter;
     private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
     private readonly TimeSpan _blockedRecheckHeartbeatInterval;
+    // Janitorial phases run only on the conductor loop thread; acceptance work never mutates this state.
+    private readonly Dictionary<string, int> _consecutiveJanitorialFailures = new(StringComparer.Ordinal);
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
     private static readonly AsyncLocal<RetryDiagnosticCoalescer?> CurrentRetryDiagnostics = new();
     private static readonly object ParallelAcceptanceFairnessGate = new();
@@ -148,6 +152,7 @@ internal sealed class ConductorBatchLoop
         string policySource = "preset",
         Func<ConductorPolicyResolution>? reloadPolicy = null)
     {
+        _consecutiveJanitorialFailures.Clear();
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
         var previousRetryDiagnostics = CurrentRetryDiagnostics.Value;
         var previousSuccessfulLandingSink = driver.SuccessfulLandingSink;
@@ -1623,16 +1628,48 @@ internal sealed class ConductorBatchLoop
             $"LOOP_RELAUNCH_ROLLBACK tick={tick} goal={goalId} phase={SanitizeHandoffDetail(phase)} " +
             $"rolledBack=true continuing=true reason={SanitizeHandoffDetail(reason)}");
 
-    private static T? RunJanitorialPhase<T>(string phase, int tick, Func<T> action)
+    private T? RunJanitorialPhase<T>(
+        string phase,
+        int tick,
+        Func<T> action)
     {
         try
         {
-            return action();
+            var result = action();
+
+            if (_consecutiveJanitorialFailures.Remove(phase, out var skippedTicks))
+            {
+                EmitProgress(
+                    $"LOOP_JANITORIAL_RECOVERED tick={tick} phase={SanitizeHandoffDetail(phase)} skippedTicks={skippedTicks}");
+            }
+
+            return result;
+        }
+        catch (SqliteException ex) when (SqliteOrchestratorStateRepository.IsTransientLock(ex))
+        {
+            RecordFailure(ex, transient: true);
+            return default;
         }
         catch (Exception ex)
         {
-            EmitProgress($"LOOP_JANITORIAL_FAILED tick={tick} phase={SanitizeHandoffDetail(phase)} exception={ex.GetType().Name} message={SanitizeHandoffDetail(ex.Message)}");
+            RecordFailure(ex, transient: false);
             return default;
+        }
+
+        void RecordFailure(Exception exception, bool transient)
+        {
+            var consecutiveFailures = _consecutiveJanitorialFailures.GetValueOrDefault(phase) + 1;
+            _consecutiveJanitorialFailures[phase] = consecutiveFailures;
+            EmitProgress(
+                $"LOOP_JANITORIAL_FAILED tick={tick} phase={SanitizeHandoffDetail(phase)} transient={transient.ToString().ToLowerInvariant()} " +
+                $"attempts=1 consecutiveFailures={consecutiveFailures} exception={exception.GetType().Name} " +
+                $"message={SanitizeHandoffDetail(exception.Message)}");
+            if (consecutiveFailures == JanitorialFailureEscalationThreshold)
+            {
+                EmitProgress(
+                    $"LOOP_JANITORIAL_DEGRADED tick={tick} phase={SanitizeHandoffDetail(phase)} " +
+                    $"consecutiveFailures={consecutiveFailures} workDeferred=true");
+            }
         }
     }
 
@@ -1652,7 +1689,7 @@ internal sealed class ConductorBatchLoop
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
             return;
 
-        var required = kind is "loop-relaunch-rollback" or "goal-stalled" or "sweep-blocker" or
+        var required = kind is "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or
             "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or
             "blocked-recheck-heartbeat" or "policy-reload-failed" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
@@ -1703,6 +1740,10 @@ internal sealed class ConductorBatchLoop
             "LOOP_RELAUNCH_REBUILD" => "loop-relaunch",
             "LOOP_RELAUNCH_ROLLBACK" => "loop-relaunch-rollback",
             "LOOP_JANITORIAL_FAILED" => "loop-janitorial-failure",
+            "LOOP_JANITORIAL_DEGRADED" => "loop-janitorial-degraded",
+            "LOOP_JANITORIAL_RECOVERED" => "loop-janitorial-recovered",
+            "LOOP_JANITORIAL_RETRYING" => "loop-janitorial-retry",
+            "LOOP_JANITORIAL_RETRY_SUCCEEDED" => "loop-janitorial-retry",
             "LOOP_START" => "loop-start",
             "LOOP_STOP" => "loop-stop",
             "POLICY_RELOAD" => "policy-reload",

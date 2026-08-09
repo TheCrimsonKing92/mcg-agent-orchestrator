@@ -27,11 +27,24 @@ public interface IReconcileSweepRemediationStore
 public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationStore
 {
     private readonly string _dbPath;
+    private readonly int _busyTimeoutSeconds;
+    private readonly Func<int, TimeSpan, CancellationToken, Task>? _busyRetryDelay;
 
     public ReconcileSweepRemediationStore(string dbPath)
+        : this(dbPath, busyTimeoutSeconds: 5, busyRetryDelay: null)
+    {
+    }
+
+    internal ReconcileSweepRemediationStore(
+        string dbPath,
+        int busyTimeoutSeconds,
+        Func<int, TimeSpan, CancellationToken, Task>? busyRetryDelay)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        ArgumentOutOfRangeException.ThrowIfNegative(busyTimeoutSeconds);
         _dbPath = Path.GetFullPath(dbPath);
+        _busyTimeoutSeconds = busyTimeoutSeconds;
+        _busyRetryDelay = busyRetryDelay;
         Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
         using var connection = Open();
         EnsureSchema(connection);
@@ -269,7 +282,7 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
             Pooling = false,
-            DefaultTimeout = 5
+            DefaultTimeout = _busyTimeoutSeconds
         }.ToString());
         connection.Open();
         return connection;
@@ -323,7 +336,17 @@ public sealed class ReconcileSweepRemediationStore : IReconcileSweepRemediationS
             reader.IsDBNull(4) ? null : DateTimeOffset.Parse(reader.GetString(4), System.Globalization.CultureInfo.InvariantCulture));
     }
 
-    private static void BeginImmediate(SqliteConnection connection) => Execute(connection, "BEGIN IMMEDIATE");
+    // Retry only write-lock acquisition. Once BEGIN IMMEDIATE succeeds, each caller executes its
+    // side-effecting transaction body exactly once.
+    private void BeginImmediate(SqliteConnection connection) =>
+        SqliteOrchestratorStateRepository.WithBusyRetryAsync(
+            () =>
+            {
+                Execute(connection, "BEGIN IMMEDIATE");
+                return Task.FromResult(true);
+            },
+            CancellationToken.None,
+            retryDelay: _busyRetryDelay).GetAwaiter().GetResult();
     private static void Commit(SqliteConnection connection) => Execute(connection, "COMMIT");
     private static void Rollback(SqliteConnection connection)
     {
