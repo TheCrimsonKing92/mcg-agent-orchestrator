@@ -363,8 +363,9 @@ internal static partial class CliCommandHandlers
 
                     if (open.Count == 0)
                     {
-                        throw new InvalidOperationException(
-                            $"Goal '{goal.Id.Value}' matched, but it has no open attention items to dismiss.");
+                        Console.WriteLine(
+                            $"Dismissed 0 of 0 open attention item(s) for goal '{goal.Id.Value}'.");
+                        return false;
                     }
 
                     var dismissed = open.Count(item =>

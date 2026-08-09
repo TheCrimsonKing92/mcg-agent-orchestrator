@@ -146,6 +146,58 @@ public sealed class CliCommandTestsAttentionCommands : CliCommandTestBase
         Xunit.Assert.Contains("No goal found matching prefix 'cross-goal'", displayArtifact.Message, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_attention_goal_dismissal_resolves_all_owned_items_and_is_idempotent")]
+    public async Task CliAttentionGoalDismissalResolvesAllOwnedItemsAndIsIdempotent()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(new GoalId("abcddcba111111111111111111111111"), "Target attention");
+        var other = kernel.CreateGoal(new GoalId("dcbaabcd222222222222222222222222"), "Other attention");
+        var store = CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory);
+        var targetVerify = await store.RaiseAsync(
+            CollaborationItemType.Verify,
+            target.Id.Value,
+            "Target verification",
+            "Dismiss this item");
+        var targetDecision = await store.RaiseAsync(
+            CollaborationItemType.Decision,
+            target.Id.Value,
+            "Target decision",
+            "Dismiss this item too");
+        var otherItem = await store.RaiseAsync(
+            CollaborationItemType.Verify,
+            other.Id.Value,
+            "Other verification",
+            "Keep this item");
+
+        var dismissed = ExecuteCliAndCapture(
+            ["attention", "dismiss", target.Id.Value[..8]],
+            kernel,
+            workspace);
+        var repeated = ExecuteCliAndCapture(
+            ["attention", "dismiss", target.Id.Value[..8]],
+            kernel,
+            workspace);
+
+        Xunit.Assert.Equal(
+            $"Dismissed 2 of 2 open attention item(s) for goal '{target.Id.Value}'.{Environment.NewLine}",
+            dismissed);
+        Xunit.Assert.Equal(
+            $"Dismissed 0 of 0 open attention item(s) for goal '{target.Id.Value}'.{Environment.NewLine}",
+            repeated);
+        var items = await store.ListAsync();
+        Xunit.Assert.Equal(
+            CollaborationItemStatus.Resolved,
+            items.Single(item => item.Id == targetVerify.Id).Status);
+        Xunit.Assert.Equal(
+            CollaborationItemStatus.Resolved,
+            items.Single(item => item.Id == targetDecision.Id).Status);
+        Xunit.Assert.Equal(
+            CollaborationItemStatus.Raised,
+            items.Single(item => item.Id == otherItem.Id).Status);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_attention_show_goal_prefix_filters_unrelated_items")]
     public async Task CliAttentionShowGoalPrefixFiltersUnrelatedItems()
