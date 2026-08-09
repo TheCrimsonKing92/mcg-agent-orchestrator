@@ -1323,11 +1323,13 @@ public sealed class BackgroundDispatchRunner
                 task.RequiredRole,
                 decisionStandardOutput,
                 decisionStandardError);
+            var sandboxCommitOnBehalfEvidence =
+                sandboxCommitBlocked || providerFailureKind == ProviderFailureKind.Sandbox1312;
             var lowIntegrityConfinementEvidence = HasLowIntegrityConfinementEvidence(
                 task.LastDispatch,
                 processRecord,
                 decisionStandardError,
-                sandboxCommitBlocked);
+                sandboxCommitOnBehalfEvidence);
             var successfulWorkerResult = HasSuccessfulWorkerResult(
                 processRecord.WorkingDirectory,
                 decisionStandardOutput,
@@ -1353,7 +1355,7 @@ public sealed class BackgroundDispatchRunner
             var shouldCommitDirtyWorktree =
                 recoveryDecision?.Action != DispatchRecoveryAction.PreserveInterruptedWork &&
                 ((exitCode == 0 && (normalIntegrityCommitEvidence || lowIntegrityConfinementEvidence)) ||
-                 (task.LastDispatch.SandboxLowIntegrity && sandboxCommitBlocked) ||
+                 (task.LastDispatch.SandboxLowIntegrity && sandboxCommitOnBehalfEvidence) ||
                  (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit && lowIntegrityConfinementEvidence));
 
             if (!worktreeEvidence.IsClean &&
@@ -1902,14 +1904,14 @@ public sealed class BackgroundDispatchRunner
         TaskDispatchRecord? dispatch,
         TaskProcessRecord processRecord,
         string standardError,
-        bool sandboxCommitBlocked)
+        bool sandboxCommitOnBehalfEvidence)
     {
         if (dispatch?.SandboxLowIntegrity != true)
         {
             return false;
         }
 
-        return sandboxCommitBlocked ||
+        return sandboxCommitOnBehalfEvidence ||
             HasCompletedSandboxPreparationEvent(standardError) ||
             HasLowIntegritySetupArtifact(processRecord.WorkingDirectory);
     }
