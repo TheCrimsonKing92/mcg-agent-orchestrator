@@ -77,7 +77,6 @@ public sealed record FocusedEvidenceTargetCoverage(
     IReadOnlyList<string> CheckNames);
 
 public sealed record FocusedEvidenceCoverage(
-    bool CollapseEngaged,
     IReadOnlyList<FocusedEvidenceTargetCoverage> TargetToChecks,
     string ExecutionMode = "focused",
     string ExecutionReason = "explicit-focused-mapping");
@@ -144,6 +143,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
     private const string PartitionVerdictJournalOperation = "acceptance:partition-verdict";
     private const string PartitionVerdictCacheJournalOperation = "acceptance:partition-verdict-cache";
+    private const int FocusedEvidenceShortTimeoutTargetLimit = 4;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
@@ -750,7 +750,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var planSummary = FormatFocusedEvidencePlanSummary(focusedChecks, coverage);
+        var planSummary = FormatFocusedEvidencePlanSummary(coverage);
         var summary = failed is null
             ? $"{checks.Count} check(s) passed; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
             : $"{failed.Name} exit {failed.ExitCode}; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
@@ -1400,7 +1400,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         out string rejection)
     {
         checks = [];
-        coverage = new FocusedEvidenceCoverage(CollapseEngaged: false, TargetToChecks: []);
+        coverage = new FocusedEvidenceCoverage(TargetToChecks: []);
         rejection = string.Empty;
         var items = request
             .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
@@ -1411,6 +1411,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var validated = new List<(string Target, string Project, string? Filter)>();
+        var totalTargets = 0;
         foreach (var item in items)
         {
             var project = InfrastructureTestsProject;
@@ -1433,19 +1434,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     expression,
                     allowMappedProject: hasExplicitProject,
                     out var filter,
-                    out _,
+                    out var targetCount,
                     out rejection))
             {
                 return false;
             }
 
+            totalTargets += targetCount;
             validated.Add((item, project, filter));
         }
 
-        // The former global four-target limit rejected larger mappings. Its overflow fix replaced
-        // every focused filter with whole-project evidence, even though normalization below already
-        // validates each combined MTP filter. Preserve those validated filters instead: this keeps
-        // the request bounded by its explicit reviewer mapping without silently broadening coverage.
+        // Historical rule: more than four focused targets collapsed to one whole-project check per
+        // project (and 18 Infrastructure lanes). It optimized process/check count and replaced the
+        // earlier hard rejection of mappings over four targets; no filter-length or runner failure
+        // was recorded. Keep every validated filter, while retaining the old path's manifest-default
+        // timeout for wide mappings so serial focused execution does not lose its completion budget.
         var built = new List<AcceptanceManifestCheck>();
         var targetToChecks = new List<FocusedEvidenceTargetCoverage>();
         foreach (var item in validated)
@@ -1464,7 +1467,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 Arguments = item.Filter is null
                     ? ["--verbosity", "minimal"]
                     : ["--verbosity", "minimal", "--filter", item.Filter],
-                TimeoutMinutes = 10
+                TimeoutMinutes = totalTargets <= FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
             };
             built.Add(check);
             targetToChecks.Add(new FocusedEvidenceTargetCoverage(item.Target, [check.Name]));
@@ -1474,7 +1477,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var hasMappedProjects = validated.Any(item => item.Filter is null);
         checks = built;
         coverage = new FocusedEvidenceCoverage(
-            CollapseEngaged: false,
             TargetToChecks: targetToChecks,
             ExecutionMode: hasFocusedFilters && hasMappedProjects
                 ? "mixed"
@@ -1583,15 +1585,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string FormatReceiptPaths(IReadOnlyList<string> paths) =>
         paths.Count == 0 ? "none" : string.Join(", ", paths);
 
-    private static string FormatFocusedEvidencePlanSummary(
-        IReadOnlyList<AcceptanceManifestCheck> checks,
-        FocusedEvidenceCoverage coverage)
-    {
-        var summary = $"mode={coverage.ExecutionMode} reason={coverage.ExecutionReason}";
-        return coverage.CollapseEngaged
-            ? $"{summary}; {string.Join(", ", checks.Select(check => check.Name))}"
-            : summary;
-    }
+    private static string FormatFocusedEvidencePlanSummary(FocusedEvidenceCoverage coverage) =>
+        $"mode={coverage.ExecutionMode} reason={coverage.ExecutionReason}";
 
     private static List<AcceptanceManifestCheck> BuildDeferredChecks(
         AcceptanceManifestCheck? solutionCheck,
@@ -2404,19 +2399,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var standardPrefix = "infrastructure tests: ";
-        var collapsedPrefix = "reviewer mapped project evidence: Infrastructure.Tests (collapsed from ";
         string? partitionName = null;
         if (check.Name.StartsWith(standardPrefix, StringComparison.OrdinalIgnoreCase))
         {
             partitionName = check.Name[standardPrefix.Length..];
-        }
-        else if (check.Name.StartsWith(collapsedPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            var separator = check.Name.LastIndexOf(": ", StringComparison.Ordinal);
-            if (separator >= collapsedPrefix.Length)
-            {
-                partitionName = check.Name[(separator + 2)..];
-            }
         }
 
         if (string.IsNullOrWhiteSpace(partitionName))

@@ -32,7 +32,7 @@ public sealed class ConductorDriverTests
     {
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal(
-            "Collapsed pre-review evidence goal",
+            "Pre-review evidence goal",
             [
                 new TaskSpec(TaskId.New(), "Implement the change", AgentRole.Developer),
                 new TaskSpec(TaskId.New(), "Review the change", AgentRole.Reviewer)
@@ -525,24 +525,6 @@ public sealed class ConductorDriverTests
             ],
             OutcomeReason: outcomeReason);
     }
-
-    private static FocusedEvidenceRunResult CollapsedPreReviewEvidence(
-        string request,
-        IReadOnlyList<string> targets,
-        IReadOnlyList<string> checkNames) =>
-        new(
-            request,
-            Accepted: true,
-            Passed: true,
-            Summary: $"focused evidence passed: {checkNames.Count} collapsed check(s)",
-            Checks: checkNames
-                .Select(name => new AcceptanceCheckResult(name, true, 0, "Passed"))
-                .ToArray(),
-            Coverage: new FocusedEvidenceCoverage(
-                CollapseEngaged: true,
-                TargetToChecks: targets
-                    .Select(target => new FocusedEvidenceTargetCoverage(target, checkNames))
-                    .ToArray()));
 
     private static PreReviewEvidenceReceipt GreenPreReviewReceipt(Goal goal, string sha) =>
         new(
@@ -4754,141 +4736,7 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
-    public void PreReview_CollapsedLaneCoverage_DispatchesReviewer()
-    {
-        var (kernel, goal) = ReviewGoalWithoutTester();
-        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
-        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        PassVerification(kernel, goal, developer);
-        var target = "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests,DeltaTests,EpsilonTests";
-        var laneChecks = Enumerable.Range(1, 18).Select(index => $"infrastructure-lane-{index}").ToArray();
-        var reviewerDispatches = 0;
-        var testerRetries = 0;
-        var escalations = 0;
-        var driver = MakeDriver(
-            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
-                "c48b3be5",
-                [target],
-                target,
-                "One focused request maps to Infrastructure.Tests.",
-                NoApplicableTests: false,
-                MappingNeedsInput: false),
-            runFocusedEvidence: (_, request) => CollapsedPreReviewEvidence(request, [target], laneChecks) with
-            {
-                Coverage = new FocusedEvidenceCoverage(
-                    CollapseEngaged: true,
-                    TargetToChecks: [new FocusedEvidenceTargetCoverage(target, [laneChecks[0]])])
-            },
-            recordPreReviewEvidence: (goalId, taskId, receipt) =>
-                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
-            retryTaskWithRoundKind: (_, _, _, _) =>
-            {
-                testerRetries++;
-                throw new InvalidOperationException("Collapsed coverage must not route to Tester.");
-            },
-            dispatchAndStart: _ =>
-            {
-                reviewerDispatches++;
-                return DispatchStartOutcome.Started();
-            },
-            writeEscalation: (_, _, _) => escalations++);
-
-        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-
-        Assert.Equal(1, reviewerDispatches);
-        Assert.Equal(0, testerRetries);
-        Assert.Equal(0, escalations);
-        Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
-        Assert.Contains(reviewer.PreReviewEvidenceReceipt?.Advisories ?? [], advisory => advisory.Contains("17 check(s)", StringComparison.Ordinal));
-        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
-    }
-
-    [Xunit.Fact]
-    public void PreReview_ManyTargetsOneLane_DispatchesReviewer()
-    {
-        var (kernel, goal) = SoftwareGoal();
-        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
-        {
-            PassVerification(kernel, goal, task);
-        }
-
-        var targets = new[] { "Infrastructure.Tests: AlphaTests", "Infrastructure.Tests: BetaTests" };
-        var dispatches = 0;
-        var driver = MakeDriver(
-            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
-                "shared-lane-sha",
-                targets,
-                string.Join("; ", targets),
-                "Two focused targets collapse to one project lane.",
-                NoApplicableTests: false,
-                MappingNeedsInput: false),
-            runFocusedEvidence: (_, request) => CollapsedPreReviewEvidence(request, targets, ["shared-lane"]),
-            recordPreReviewEvidence: (goalId, taskId, receipt) =>
-                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
-            dispatchAndStart: _ =>
-            {
-                dispatches++;
-                return DispatchStartOutcome.Started();
-            });
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-
-        Assert.Equal(1, dispatches);
-        Assert.Equal("Infrastructure.Tests: AlphaTests | Infrastructure.Tests: BetaTests", reviewer.PreReviewEvidenceReceipt?.Checks.Single().Command);
-    }
-
-    [Xunit.Fact]
-    public void PreReview_MissingCollapsedTarget_RetriesTester()
-    {
-        var (kernel, goal) = SoftwareGoal();
-        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
-        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
-        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
-        {
-            PassVerification(kernel, goal, task);
-        }
-
-        var target = "Infrastructure.Tests: MissingTests";
-        TaskId? retriedTask = null;
-        var driver = MakeDriver(
-            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
-                "missing-coverage-sha",
-                [target],
-                target,
-                "Focused target should map to a lane.",
-                NoApplicableTests: false,
-                MappingNeedsInput: false),
-            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
-                request,
-                Accepted: true,
-                Passed: true,
-                Summary: "wrong lane ran",
-                Checks: [new AcceptanceCheckResult("orphan-lane", true, 0, "Passed")],
-                Coverage: new FocusedEvidenceCoverage(
-                    CollapseEngaged: true,
-                    TargetToChecks: [new FocusedEvidenceTargetCoverage(target, ["missing-lane"])])),
-            recordPreReviewEvidence: (goalId, taskId, receipt) =>
-                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
-            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
-            {
-                retriedTask = taskId;
-                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
-            },
-            dispatchAndStart: _ => DispatchStartOutcome.Started());
-
-        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
-
-        Assert.Equal(tester.Id, retriedTask);
-        Assert.Equal(PreReviewEvidenceDisposition.MappingNeedsInput, reviewer.PreReviewEvidenceReceipt?.Disposition);
-        Assert.Contains(reviewer.PreReviewEvidenceReceipt?.Advisories ?? [], advisory => advisory.Contains("orphan-lane", StringComparison.Ordinal));
-    }
-
-    [Xunit.Fact]
-    public void PreReview_EmptyCollapsedEvidence_RetriesTester()
+    public void PreReview_EmptyFocusedEvidence_RetriesTester()
     {
         var (kernel, goal) = SoftwareGoal();
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
@@ -4909,7 +4757,12 @@ public sealed class ConductorDriverTests
                 "Focused target should map to a lane.",
                 NoApplicableTests: false,
                 MappingNeedsInput: false),
-            runFocusedEvidence: (_, request) => CollapsedPreReviewEvidence(request, [target], []),
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: true,
+                Summary: "focused evidence returned no checks",
+                Checks: []),
             recordPreReviewEvidence: (goalId, taskId, receipt) =>
                 kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -4943,7 +4796,12 @@ public sealed class ConductorDriverTests
                 "Focused target should map to a lane.",
                 NoApplicableTests: false,
                 MappingNeedsInput: false),
-            runFocusedEvidence: (_, request) => CollapsedPreReviewEvidence(request, [target], []),
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: true,
+                Summary: "focused evidence returned no checks",
+                Checks: []),
             recordPreReviewEvidence: (goalId, taskId, receipt) =>
                 kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
             recordPreReviewMappingEscalationSuppressed: (goalId, taskId, sha, count) =>

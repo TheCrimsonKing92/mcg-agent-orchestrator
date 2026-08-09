@@ -2210,9 +2210,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var check = Assert.Single(result.Checks);
         Assert.StartsWith("reviewer focused evidence: Infrastructure.Tests ", check.Name, StringComparison.Ordinal);
         Assert.Contains("mode=focused reason=explicit-focused-mapping", result.Summary);
-        Assert.DoesNotContain("collapsed from", result.Summary);
         Assert.NotNull(result.Coverage);
-        Assert.False(result.Coverage.CollapseEngaged);
         Assert.Equal("focused", result.Coverage.ExecutionMode);
         Assert.Equal("explicit-focused-mapping", result.Coverage.ExecutionReason);
         var targetCoverage = Assert.Single(result.Coverage.TargetToChecks);
@@ -2273,7 +2271,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
-    public async Task FocusedEvidence_NativeProjectRequest_HasNoCollapseMarker()
+    public async Task FocusedEvidence_NativeProjectRequest_ReportsProjectMode()
     {
         var (nativeProjectResult, _) = await RunMappedEvidenceAsync("Infrastructure.Tests: mapped-project");
         Assert.True(nativeProjectResult.Accepted);
@@ -2281,8 +2279,36 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Equal(
             "reviewer mapped project evidence: Infrastructure.Tests",
             nativeProjectResult.Checks.Single().Name);
-        Assert.DoesNotContain("collapsed from", nativeProjectResult.Summary);
         Assert.Contains("mode=project reason=explicit-mapped-project-request", nativeProjectResult.Summary);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_MixedRequest_ReportsFocusedAndMappedProjectReason()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: AlphaTests; Core.Tests: mapped-project");
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        Assert.Equal(
+            [
+                "reviewer focused evidence: Infrastructure.Tests FullyQualifiedName~AlphaTests",
+                "reviewer mapped project evidence: Core.Tests"
+            ],
+            result.Checks.Select(check => check.Name));
+        Assert.Contains(
+            "mode=mixed reason=explicit-focused-and-mapped-project-request",
+            result.Summary);
+        Assert.Equal("mixed", result.Coverage?.ExecutionMode);
+        Assert.Equal("explicit-focused-and-mapped-project-request", result.Coverage?.ExecutionReason);
+        var testCalls = calls
+            .Where(call =>
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests") ||
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+            .ToArray();
+        Assert.Equal(2, testCalls.Length);
+        Assert.Contains("--filter-class", testCalls[0]);
+        Assert.DoesNotContain("--filter-class", testCalls[1]);
     }
 
     [Xunit.Fact]
@@ -2340,7 +2366,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
-    public async Task FocusedEvidence_FilteredCheckTimesOut_RemainsFailedAndReportsMode()
+    public async Task FocusedEvidence_WideFilteredCheckTimesOut_UsesManifestBudgetAndReportsMode()
     {
         var observedTimeouts = new List<TimeSpan>();
         var (result, _) = await RunMappedEvidenceAsync(
@@ -2350,7 +2376,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
         Assert.True(result.Accepted);
         Assert.False(result.Passed);
-        Assert.Contains(TimeSpan.FromMinutes(10), observedTimeouts);
+        Assert.Contains(TimeSpan.FromMinutes(40), observedTimeouts);
         var check = Assert.Single(result.Checks);
         Assert.False(check.Passed);
         Assert.Contains("reviewer-focused-evidence", check.Name);
