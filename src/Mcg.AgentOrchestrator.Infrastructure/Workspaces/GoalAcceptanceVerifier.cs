@@ -4579,8 +4579,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 .ToArray();
             var candidateDiscoverySnapshot = TestCoverageInvariant.ParseDiscovery(
                 candidateDiscovery.Output,
-                bareTestList: UsesMicrosoftTestingPlatform(broadCheck),
-                repositoryRoot: worktreePath);
+                bareTestList: UsesMicrosoftTestingPlatform(broadCheck));
             var coverage = TestCoverageInvariant.Evaluate(
                 candidateDiscoverySnapshot.Tests,
                 partitions,

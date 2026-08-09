@@ -309,30 +309,63 @@ internal static class TestCoverageInvariant
             .Where(discovered => !accountedTests.Any(accounted => IdentitiesMatch(discovered, accounted)))
             .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var attributionReceipts = new List<string>();
 
         if (mainDiscoveredTests is not null)
         {
             var normalizedDeletedTestFiles = (deletedTestFiles ?? [])
                 .Select(path => NormalizeSourcePath(path, repositoryRoot: null))
                 .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             var deletedClassNames = normalizedDeletedTestFiles
                 .Select(Path.GetFileNameWithoutExtension)
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .ToArray();
             // Structured MTP discovery identifies the source file directly. Prefer that exact
-            // attribution over the legacy filename/class-name heuristic; missing or ambiguous
-            // structured metadata deliberately earns no deletion credit.
-            var deletedMainTestCount = mainDiscoveredTestSourceFiles is not null
-                ? mainDiscoveredTests.Count(mainTest =>
-                    mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) &&
-                    normalizedDeletedTestFiles.Contains(sourceFile, StringComparer.OrdinalIgnoreCase))
-                : mainDiscoveredTests.Count(mainTest =>
+            // attribution over the legacy filename/class-name heuristic. Location metadata is
+            // optional, however, so an unattributed deleted file retains at most the legacy
+            // one-test credit and emits a named receipt instead of silently tightening the gate.
+            int deletedMainTestCount;
+            var unmatchedDeletedFileCount = 0;
+            if (mainDiscoveredTestSourceFiles is not null)
+            {
+                deletedMainTestCount = 0;
+                var unattributedDeletedFiles = new List<string>();
+                foreach (var deletedTestFile in normalizedDeletedTestFiles)
+                {
+                    var attributedTestCount = mainDiscoveredTests.Count(mainTest =>
+                        mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) &&
+                        IsUsableRepositoryRelativeSourcePath(sourceFile) &&
+                        sourceFile.Equals(deletedTestFile, StringComparison.OrdinalIgnoreCase));
+                    if (attributedTestCount > 0)
+                    {
+                        deletedMainTestCount += attributedTestCount;
+                    }
+                    else
+                    {
+                        unattributedDeletedFiles.Add(deletedTestFile);
+                    }
+                }
+
+                var testsWithoutUsableAttribution = mainDiscoveredTests.Count(mainTest =>
+                    !mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) ||
+                    !IsUsableRepositoryRelativeSourcePath(sourceFile));
+                unmatchedDeletedFileCount = Math.Min(
+                    unattributedDeletedFiles.Count,
+                    testsWithoutUsableAttribution);
+                for (var index = 0; index < unattributedDeletedFiles.Count; index++)
+                {
+                    attributionReceipts.Add(
+                        $"cross-generation-attribution:source=mtp-json-location,file={unattributedDeletedFiles[index]},status=unattributed,fallback=legacy-one-per-file,credit={(index < unmatchedDeletedFileCount ? 1 : 0)}");
+                }
+            }
+            else
+            {
+                deletedMainTestCount = mainDiscoveredTests.Count(mainTest =>
                     deletedClassNames.Any(className =>
                         IdentityBelongsToDeletedTestFile(mainTest, className!)));
-            var unmatchedDeletedFileCount = mainDiscoveredTestSourceFiles is not null
-                ? 0
-                : Math.Min(
+                unmatchedDeletedFileCount = Math.Min(
                     deletedClassNames.Count(className =>
                         !mainDiscoveredTests.Any(mainTest =>
                             IdentityBelongsToDeletedTestFile(mainTest, className!))),
@@ -340,6 +373,7 @@ internal static class TestCoverageInvariant
                         !HasClassQualifiedIdentity(mainTest) &&
                         !deletedClassNames.Any(className =>
                             IdentityBelongsToDeletedTestFile(mainTest, className!))));
+            }
             var minimumCandidateCount = Math.Max(
                 0,
                 mainDiscoveredTests.Count - deletedMainTestCount - unmatchedDeletedFileCount);
@@ -354,6 +388,10 @@ internal static class TestCoverageInvariant
         var summary = passed
             ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, partitions={partitions.Count}"
             : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
+        if (attributionReceipts.Count > 0)
+        {
+            summary += $"; {string.Join("; ", attributionReceipts)}";
+        }
         var failureClassification = passed
             ? null
             : partitions.Any(partition =>
@@ -393,6 +431,12 @@ internal static class TestCoverageInvariant
         return separator > 0 && separator < normalized.Length - 1;
     }
 
+    private static bool IsUsableRepositoryRelativeSourcePath(string path) =>
+        !string.IsNullOrWhiteSpace(path) &&
+        !Path.IsPathRooted(path) &&
+        !path.Equals("..", StringComparison.Ordinal) &&
+        !path.StartsWith("../", StringComparison.Ordinal);
+
     private static string NormalizeSourcePath(string? path, string? repositoryRoot)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -404,8 +448,12 @@ internal static class TestCoverageInvariant
         if (!string.IsNullOrWhiteSpace(repositoryRoot) && Path.IsPathRooted(normalized))
         {
             var relative = Path.GetRelativePath(repositoryRoot, normalized);
-            if (!relative.Equals("..", StringComparison.Ordinal) &&
-                !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            if (relative.Equals("..", StringComparison.Ordinal) ||
+                relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                return string.Empty;
+            }
+            else
             {
                 normalized = relative;
             }

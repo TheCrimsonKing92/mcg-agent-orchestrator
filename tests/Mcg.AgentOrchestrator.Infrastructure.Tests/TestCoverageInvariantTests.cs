@@ -312,6 +312,31 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_uses_loud_legacy_credit_when_MTP_location_is_missing")]
+    public void TestCoverageInvariantUsesLoudLegacyCreditWhenMtpLocationIsMissing()
+    {
+        var trx = WriteTrxWithMethodIdentity(("1", "current test", "Passed", "CurrentTests.Runs"));
+        try
+        {
+            var mainDiscovery = ParseMtpDiscoveryWithoutLocations("current test", "removed test");
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(["current test"], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("lane", true, [trx])],
+                mainDiscovery.Tests,
+                ["tests/Example.Tests/RemovedTests.cs"],
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest);
+
+            Xunit.Assert.True(result.Passed);
+            Xunit.Assert.Contains(
+                "cross-generation-attribution:source=mtp-json-location,file=tests/Example.Tests/RemovedTests.cs,status=unattributed,fallback=legacy-one-per-file,credit=1",
+                result.Summary);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_rejects_tests_dropped_from_a_retained_file")]
     public void TestCoverageInvariantRejectsTestsDroppedFromRetainedFile()
     {
@@ -748,6 +773,24 @@ public sealed class TestCoverageInvariantTests
             json,
             bareTestList: true,
             repositoryRoot: repositoryRoot);
+    }
+
+    private static TestDiscoverySnapshot ParseMtpDiscoveryWithoutLocations(params string[] tests)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            tests = tests.Select((test, index) => new
+            {
+                uid = $"test-{index:D4}",
+                displayName = test
+            })
+        });
+
+        return TestCoverageInvariant.ParseDiscovery(
+            json,
+            bareTestList: true,
+            repositoryRoot: Path.GetTempPath());
     }
 
     private static string WriteTrxAt(
