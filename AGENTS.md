@@ -5,6 +5,7 @@ Owns: shared repository discipline plus Codex harness operating guidance.
 Counterpart: CLAUDE.md owns Claude Code harness operating guidance and links back to AGENTS.md for shared discipline.
 Rule: Agents editing shared-discipline content must update BOTH AGENTS.md and CLAUDE.md counterpart-contract blocks and shared-anchor lists, or move the content to docs/operator-runbook.md or another shared home.
 Operator procedure home: docs/operator-runbook.md owns harness-neutral operate/observe/recover procedures, including conductor stop and relaunch semantics; counterpart files point there instead of duplicating them.
+Role capability home: docs/role-capability-matrix.md owns the enforcement-sourced worker capability and acceptance-criterion routing matrix; counterpart files point there instead of duplicating it.
 Shared anchors:
 - output-discipline
 - retry-and-loop-control
@@ -105,6 +106,7 @@ The gates verify "did the output match the spec," never "was the spec right" —
 - **Ownership / lifecycle / hosting — decide it.** Where it lives, its lifecycle, its dependencies. Never offer "host here OR there"; collapse options into a decision or escalate the genuine fork to the human. Don't pass under-determination downstream.
 - **Own the seams.** If work spans goals/files, name the integration contract and make integration verification a first-class, OWNED step — the bugs live in the unowned seams between locally-green pieces. ("Built but not wired": a "make X work end-to-end" goal that touches only Infrastructure + tests and no App/host/CLI is almost certainly not reachable.)
 - **Verification class.** Tag it: TEST-VERIFIABLE (pure logic → automated gate suffices) vs REAL-WORLD-DEPENDENT (external/UX/integration → a green test is NOT "done"; ship a human/real-world checklist as the gate). Fake-API unit tests cannot prove an integration works; that takes a real round-trip.
+- **Criterion owner / role feasibility.** Before assigning a criterion, name who will satisfy it and check the enforcement-sourced [`role-capability-matrix`](docs/role-capability-matrix.md). Route evidence no worker can produce to acceptance, the operator, or context-packaging explicitly in the brief.
 
 Separate the axes when scoping: WHERE it applies (which goals) vs HOW it's implemented (stage/role/function) vs WHAT the increment limits (depth vs coverage) — conflating them produces contradictory specs.
 

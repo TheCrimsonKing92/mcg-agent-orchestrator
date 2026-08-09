@@ -275,6 +275,18 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         AssertHelpCommandDoesNotResolveGoal(["conduct", "--loop", "--help"], "Usage: conduct <goal-id-prefix>");
     }
 
+    [Xunit.Fact(DisplayName = "Cli_goal_help_points_to_role_capability_matrix")]
+    public void CliGoalHelpPointsToRoleCapabilityMatrix()
+    {
+        var root = CreateTempDirectory();
+        var output = ExecuteCliAndCapture(
+            ["goal", "--help"],
+            new AgentOrchestratorKernel(),
+            CreateRefinedWorkspace(root));
+
+        Xunit.Assert.Contains("docs/role-capability-matrix.md", output, StringComparison.Ordinal);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_conduct_loop_watch_accepts_poll_seconds_and_default")]
     public void CliConductLoopWatchAcceptsPollSecondsAndDefault()

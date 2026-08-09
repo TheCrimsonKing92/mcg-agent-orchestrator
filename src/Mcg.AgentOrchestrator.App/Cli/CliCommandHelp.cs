@@ -85,7 +85,7 @@ internal static class CliCommandHelp
 
     private static readonly CommandHelpEntry Goal = new(
         GoalUsage,
-        "Create a goal.",
+        "Create a goal. Before authoring criteria, assign evidence owners using docs/role-capability-matrix.md.",
         new[] { "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--backlog-coverage", "--text-file", "--brief-file", "--help", "-h" }
             .ToHashSet(StringComparer.OrdinalIgnoreCase),
         ValidateFlags: false);
