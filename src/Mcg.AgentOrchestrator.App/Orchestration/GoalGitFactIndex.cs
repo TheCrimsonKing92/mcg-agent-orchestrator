@@ -3,13 +3,22 @@ using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
+internal enum GoalBranchContentState
+{
+    NotChecked,
+    EquivalentToMain,
+    AbsentFromMain,
+    Inconclusive
+}
+
 internal sealed record GoalBranchFacts(
     bool IsAcceptedOrVerifiedGitGoal,
     bool IsCompletedGitGoal,
     bool HasRegisteredWorktree,
     bool HasGoalBranch,
     bool HasGoalBranchArtifact,
-    bool BranchAlreadyLanded);
+    bool BranchAlreadyLanded,
+    GoalBranchContentState ContentState);
 
 internal sealed class GoalGitFactIndex(
     string executionDirectory,
@@ -19,6 +28,8 @@ internal sealed class GoalGitFactIndex(
     IReadOnlySet<string> registeredWorktreePaths,
     string? mainSha)
 {
+    private readonly Dictionary<string, GoalBranchContentState> branchContentStates = new(StringComparer.Ordinal);
+
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
         (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
 
@@ -67,6 +78,9 @@ internal sealed class GoalGitFactIndex(
         var branchAlreadyLanded = isAcceptedOrVerifiedGitGoal &&
             hasGoalBranchArtifact &&
             (!hasGoalBranch || mergedGoalBranches.Contains(branch));
+        var contentState = isAcceptedOrVerifiedGitGoal && hasGoalBranch && !branchAlreadyLanded
+            ? GetBranchContentState(branch)
+            : GoalBranchContentState.NotChecked;
 
         return new GoalBranchFacts(
             isAcceptedOrVerifiedGitGoal,
@@ -74,7 +88,8 @@ internal sealed class GoalGitFactIndex(
             hasRegisteredWorktree,
             hasGoalBranch,
             hasGoalBranchArtifact,
-            branchAlreadyLanded);
+            branchAlreadyLanded,
+            contentState);
     }
 
     public string BuildGoalEvidenceKey(Goal goal)
@@ -90,6 +105,54 @@ internal sealed class GoalGitFactIndex(
             $"tip={(hasTip ? tip : "absent")}",
             $"worktree={(registeredWorktree ? "present" : "absent")}",
             $"merged={(merged ? "true" : "false")}");
+    }
+
+    private GoalBranchContentState GetBranchContentState(string branch)
+    {
+        if (branchContentStates.TryGetValue(branch, out var cached))
+        {
+            return cached;
+        }
+
+        var state = mainSha is null
+            ? GoalBranchContentState.Inconclusive
+            : ClassifyCherryResult(RunGit(executionDirectory, "cherry", mainSha, branch));
+        branchContentStates[branch] = state;
+        return state;
+    }
+
+    internal static GoalBranchContentState ClassifyCherryResult(GitCli.GitResult result)
+    {
+        if (result.ExitCode != 0)
+        {
+            return GoalBranchContentState.Inconclusive;
+        }
+
+        var lines = result.Output.Split(
+            ['\r', '\n'],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0)
+        {
+            return GoalBranchContentState.Inconclusive;
+        }
+
+        var hasAbsentCommit = false;
+        foreach (var line in lines)
+        {
+            var parts = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length != 2 ||
+                parts[0] is not ("+" or "-") ||
+                !IsObjectId(parts[1]))
+            {
+                return GoalBranchContentState.Inconclusive;
+            }
+
+            hasAbsentCommit |= parts[0] == "+";
+        }
+
+        return hasAbsentCommit
+            ? GoalBranchContentState.AbsentFromMain
+            : GoalBranchContentState.EquivalentToMain;
     }
 
     private static GitCli.GitResult RunGit(string executionDirectory, params string[] args) =>
@@ -132,6 +195,9 @@ internal sealed class GoalGitFactIndex(
 
     private static bool IsSingleToken(string value) =>
         value.Length > 0 && !value.Any(char.IsWhiteSpace);
+
+    private static bool IsObjectId(string value) =>
+        value.Length is 40 or 64 && value.All(Uri.IsHexDigit);
 
     private static HashSet<string> EmptySet() =>
         new(StringComparer.Ordinal);

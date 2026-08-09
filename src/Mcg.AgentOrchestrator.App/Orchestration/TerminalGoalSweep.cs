@@ -587,6 +587,51 @@ internal static class TerminalGoalSweep
                 branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
             }
 
+            var equivalentBranchTip = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain
+                ? branchFactIndex.TryGetGoalBranchTip(goal.Id)
+                : null;
+            if (!blockedByDirtyWorktree &&
+                blockers.Count == 0 &&
+                goal.Status == GoalStatus.Completed &&
+                equivalentBranchTip is not null)
+            {
+                var removeResult = GoalWorktrees.RemoveSupersededTerminal(
+                    executionDirectory,
+                    goal.Id,
+                    kernel,
+                    equivalentBranchTip,
+                    branchFacts.HasRegisteredWorktree,
+                    branchFacts.HasGoalBranch);
+                AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
+
+                if (removeResult.IsComplete)
+                {
+                    var evidence = BuildSupersededBranchEvidence(goal, removeResult.Message);
+                    RecordTerminalDisposition(
+                        kernel,
+                        executionDirectory,
+                        goal,
+                        GoalTerminalDispositionKind.Retired,
+                        evidence);
+                    repairs.Add(new TerminalGoalSweepRepair(
+                        "completed-branch-superseded",
+                        evidence,
+                        "retired"));
+                }
+                else
+                {
+                    blockers.Add(new TerminalGoalSweepBlocker(
+                        "completed-branch-superseded",
+                        BuildSupersededBranchEvidence(goal, removeResult.Message),
+                        $"conduct {prefix} --loop",
+                        goal.Id,
+                        prefix));
+                }
+
+                results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
+                continue;
+            }
+
             if (!blockedByDirtyWorktree &&
                 branchFacts.IsAcceptedOrVerifiedGitGoal &&
                 branchFacts.HasGoalBranchArtifact &&
@@ -605,10 +650,18 @@ internal static class TerminalGoalSweep
                     branchFacts = branchFactIndex.BuildGoalBranchFacts(goal);
                 }
 
+                var contentEquivalent = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain;
                 blockers.Add(new TerminalGoalSweepBlocker(
-                    "completed-branch-unmerged",
-                    $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
-                    BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
+                    contentEquivalent ? "completed-branch-superseded" : "completed-branch-unmerged",
+                    contentEquivalent
+                        ? BuildSupersededBranchEvidence(goal, "retirement required")
+                        : $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}; contentCheck={branchFacts.ContentState.ToString().ToLowerInvariant()}",
+                    contentEquivalent
+                        ? TerminalGoalRemedy.OperatorOnly(
+                            goal.Id,
+                            prefix,
+                            $"conduct {prefix} --loop")
+                        : BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
                 results.Add(new TerminalGoalSweepGoalResult(originalGoal.Id, prefix, repairs, blockers));
                 continue;
             }
@@ -1016,10 +1069,18 @@ internal static class TerminalGoalSweep
                 branchFacts.HasGoalBranchArtifact &&
                 !branchFacts.BranchAlreadyLanded)
             {
+                var contentEquivalent = branchFacts.ContentState == GoalBranchContentState.EquivalentToMain;
                 blockers.Add(new TerminalGoalSweepBlocker(
-                    "completed-branch-unmerged",
-                    $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}",
-                    BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
+                    contentEquivalent ? "completed-branch-superseded" : "completed-branch-unmerged",
+                    contentEquivalent
+                        ? BuildSupersededBranchEvidence(goal, "retirement required")
+                        : $"{goal.Status.ToString().ToLowerInvariant()} goal still has unmerged branch {GoalWorktrees.BranchName(goal.Id)}; contentCheck={branchFacts.ContentState.ToString().ToLowerInvariant()}",
+                    contentEquivalent
+                        ? TerminalGoalRemedy.OperatorOnly(
+                            goal.Id,
+                            prefix,
+                            $"conduct {prefix} --loop")
+                        : BuildAcceptanceRemedy(executionDirectory, goal, prefix, branchFactIndex)));
             }
 
             if (blockers.Count > 0)
@@ -1193,7 +1254,11 @@ internal static class TerminalGoalSweep
         blocker.Kind is "terminal-dirty-worktree" or
             "terminal-live-dispatch" or
             "stale-terminal-excluded" or
-            "completed-branch-unmerged";
+            "completed-branch-unmerged" or
+            "completed-branch-superseded";
+
+    private static string BuildSupersededBranchEvidence(Goal goal, string cleanupDetail) =>
+        $"completed goal branch {GoalWorktrees.BranchName(goal.Id)} is not merged by ancestry, but git cherry found every branch commit already upstream; action=retire; cleanup={cleanupDetail}";
 
     private static int CountGlobalStaleTerminalExclusions(IEnumerable<TerminalGoalSweepGoalResult> results) =>
         results.Sum(goal => goal.Blockers.Count(blocker => blocker.Kind == "stale-terminal-excluded"));

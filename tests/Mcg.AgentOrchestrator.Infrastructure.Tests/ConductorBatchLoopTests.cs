@@ -6764,7 +6764,11 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains(records, record =>
             record.EventKind == "blocked-recheck-heartbeat" &&
             record.Detail.Contains("rechecks=1", StringComparison.Ordinal) &&
-            record.Detail.Contains($"{goal.Id.Value[..8]}:completed-branch-unmerged", StringComparison.Ordinal));
+            record.Detail.Contains($"{goal.Id.Value[..8]}:completed-branch-unmerged(recurrences=1)", StringComparison.Ordinal));
+        Assert.Contains(records, record =>
+            record.EventKind == "blocked-recheck-heartbeat" &&
+            record.Detail.Contains("rechecks=3", StringComparison.Ordinal) &&
+            record.Detail.Contains($"{goal.Id.Value[..8]}:completed-branch-unmerged(recurrences=3)", StringComparison.Ordinal));
         Assert.Contains(records, record =>
             record.EventKind == "loop-stop" &&
             record.Detail.Contains("rechecks=3", StringComparison.Ordinal));

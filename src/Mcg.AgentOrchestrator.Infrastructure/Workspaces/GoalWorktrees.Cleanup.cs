@@ -53,6 +53,33 @@ public static partial class GoalWorktrees
             bypassCleanupBackoff: true,
             hooks ?? GoalWorktreeCleanupHooks.Default);
 
+    public static GoalWorktreeRemoveResult RemoveSupersededTerminal(
+        string executionDirectory,
+        GoalId goalId,
+        AgentOrchestratorKernel kernel,
+        string expectedBranchTip,
+        bool hasRegisteredWorktree,
+        bool hasBranch,
+        GoalWorktreeCleanupHooks? hooks = null)
+    {
+        if (kernel.GetGoal(goalId).Status != GoalStatus.Completed)
+        {
+            throw new InvalidOperationException("Superseded branch cleanup requires a completed goal.");
+        }
+
+        return Remove(
+            executionDirectory,
+            goalId,
+            kernel,
+            GitCli.DefaultTimeoutMilliseconds,
+            hasRegisteredWorktree,
+            hasBranch,
+            forceTerminalCleanup: false,
+            bypassCleanupBackoff: false,
+            hooks ?? GoalWorktreeCleanupHooks.Default,
+            expectedSupersededBranchTip: expectedBranchTip);
+    }
+
     public static GoalWorktreeRemoveResult Remove(
         string executionDirectory,
         GoalId goalId,
@@ -116,7 +143,8 @@ public static partial class GoalWorktrees
         bool? precomputedHasBranch,
         bool forceTerminalCleanup,
         bool bypassCleanupBackoff,
-        GoalWorktreeCleanupHooks hooks)
+        GoalWorktreeCleanupHooks hooks,
+        string? expectedSupersededBranchTip = null)
     {
         var cleanupBudget = GoalWorktreeCleanupBudget.Start(gitTimeoutMilliseconds, hooks.CleanupElapsedMilliseconds());
         var path = WorktreePath(executionDirectory, goalId);
@@ -287,6 +315,7 @@ public static partial class GoalWorktrees
         if (hasBranch)
         {
             if (!forceTerminalCleanup &&
+                expectedSupersededBranchTip is null &&
                 !IsBranchAncestorOfHead(executionDirectory, branch, cleanupBudget.RemainingMilliseconds))
             {
                 return new GoalWorktreeRemoveResult(
@@ -296,12 +325,20 @@ public static partial class GoalWorktrees
                     ConductorRetryCommand(goalId));
             }
 
-            branchRemoval = GitCli.Run(
-                executionDirectory,
-                cleanupBudget.RemainingMilliseconds,
-                "branch",
-                forceTerminalCleanup ? "-D" : "-d",
-                branch);
+            branchRemoval = expectedSupersededBranchTip is not null
+                ? GitCli.Run(
+                    executionDirectory,
+                    cleanupBudget.RemainingMilliseconds,
+                    "update-ref",
+                    "-d",
+                    $"refs/heads/{branch}",
+                    expectedSupersededBranchTip)
+                : GitCli.Run(
+                    executionDirectory,
+                    cleanupBudget.RemainingMilliseconds,
+                    "branch",
+                    forceTerminalCleanup ? "-D" : "-d",
+                    branch);
         }
 
         if (Directory.Exists(path))
@@ -330,10 +367,14 @@ public static partial class GoalWorktrees
         if (!hasBranch || branchRemoval is { ExitCode: 0 })
         {
             var completeMessage = branchRemoval is { ExitCode: 0 }
-                ? $"Removed workspace and merged branch {branch}."
+                ? expectedSupersededBranchTip is not null
+                    ? $"Removed workspace and superseded branch {branch}."
+                    : $"Removed workspace and merged branch {branch}."
                 : "Removed workspace.";
             var incompleteMessage = branchRemoval is { ExitCode: 0 }
-                ? $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete."
+                ? expectedSupersededBranchTip is not null
+                    ? $"Removed workspace and superseded branch {branch}, but leftover directory cleanup is incomplete."
+                    : $"Removed workspace and merged branch {branch}, but leftover directory cleanup is incomplete."
                 : "Removed workspace, but leftover directory cleanup is incomplete.";
             var ephemeralCleanup = SweepOwnedEphemeralDirectories(executionDirectory, goalId, kernel, hooks);
             ephemeralCleanup = SweepGoalBuildArtifacts(executionDirectory, goalId, ephemeralCleanup, hooks);
