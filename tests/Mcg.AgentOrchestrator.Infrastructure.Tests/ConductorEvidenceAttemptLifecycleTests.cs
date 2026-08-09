@@ -284,7 +284,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
                     request,
                     Accepted: true,
                     Passed: true,
-                    Summary: "passed",
+                    Summary: "1 check(s) passed; mode=focused reason=explicit-focused-mapping; receipts: zero.trx",
                     Checks:
                     [
                         new AcceptanceCheckResult(
@@ -301,6 +301,9 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             Assert.Equal("passed", end.GetProperty("outcome").GetString());
             Assert.Equal(JsonValueKind.Number, end.GetProperty("tests_executed").ValueKind);
             Assert.Equal(0, end.GetProperty("tests_executed").GetInt64());
+            Assert.Equal(
+                "1 check(s) passed; mode=focused reason=explicit-focused-mapping; receipts: zero.trx",
+                end.GetProperty("detail").GetString());
         }
         finally
         {

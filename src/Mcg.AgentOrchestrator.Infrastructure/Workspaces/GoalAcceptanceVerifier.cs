@@ -78,7 +78,9 @@ public sealed record FocusedEvidenceTargetCoverage(
 
 public sealed record FocusedEvidenceCoverage(
     bool CollapseEngaged,
-    IReadOnlyList<FocusedEvidenceTargetCoverage> TargetToChecks);
+    IReadOnlyList<FocusedEvidenceTargetCoverage> TargetToChecks,
+    string ExecutionMode = "focused",
+    string ExecutionReason = "explicit-focused-mapping");
 
 public interface IGoalAcceptanceVerifier
 {
@@ -142,7 +144,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
     private const string PartitionVerdictJournalOperation = "acceptance:partition-verdict";
     private const string PartitionVerdictCacheJournalOperation = "acceptance:partition-verdict-cache";
-    private const int MaxFocusedEvidenceTargets = 4;
     public const string AcceptanceAttemptTrxPrefixVariable = "MCG_ACCEPTANCE_GATE_ATTEMPT_TRX_PREFIX";
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
@@ -590,7 +591,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         if (!TryBuildFocusedEvidenceChecks(
                 request,
-                engineSettings.InfrastructureTestLanes,
                 out var focusedChecks,
                 out var coverage,
                 out var rejection))
@@ -750,10 +750,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        var collapseSummary = FormatFocusedEvidenceCollapseSummary(focusedChecks, coverage.CollapseEngaged);
+        var planSummary = FormatFocusedEvidencePlanSummary(focusedChecks, coverage);
         var summary = failed is null
-            ? $"{checks.Count} check(s) passed{collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
-            : $"{failed.Name} exit {failed.ExitCode}{collapseSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
+            ? $"{checks.Count} check(s) passed; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
+            : $"{failed.Name} exit {failed.ExitCode}; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
         return new FocusedEvidenceArmRunResult(
             arm,
             sha,
@@ -1395,7 +1395,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static bool TryBuildFocusedEvidenceChecks(
         string request,
-        IReadOnlyList<AcceptanceTestLane> infrastructureTestLanes,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
         out FocusedEvidenceCoverage coverage,
         out string rejection)
@@ -1412,7 +1411,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var validated = new List<(string Target, string Project, string? Filter)>();
-        var totalTargets = 0;
         foreach (var item in items)
         {
             var project = InfrastructureTestsProject;
@@ -1435,132 +1433,56 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     expression,
                     allowMappedProject: hasExplicitProject,
                     out var filter,
-                    out var targetCount,
+                    out _,
                     out rejection))
             {
                 return false;
             }
 
-            totalTargets += targetCount;
             validated.Add((item, project, filter));
         }
 
+        // The former global four-target limit rejected larger mappings. Its overflow fix replaced
+        // every focused filter with whole-project evidence, even though normalization below already
+        // validates each combined MTP filter. Preserve those validated filters instead: this keeps
+        // the request bounded by its explicit reviewer mapping without silently broadening coverage.
         var built = new List<AcceptanceManifestCheck>();
         var targetToChecks = new List<FocusedEvidenceTargetCoverage>();
-        if (totalTargets > MaxFocusedEvidenceTargets)
+        foreach (var item in validated)
         {
-            var emittedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var item in validated)
+            var check = new AcceptanceManifestCheck
             {
-                if (!emittedProjects.Add(item.Project))
-                {
-                    continue;
-                }
-
-                var projectCheck = new AcceptanceManifestCheck
-                {
-                    Name = $"reviewer mapped project evidence: {ProjectLabel(item.Project)} " +
-                        $"(collapsed from {totalTargets} focused targets)",
-                    Type = "dotnet-test",
-                    Runner = "mtp",
-                    Project = item.Project,
-                    Arguments = ["--verbosity", "minimal"]
-                };
-                if (IsInfrastructureTestProject(item.Project))
-                {
-                    built.AddRange(ExpandBroadInfrastructureCheck(projectCheck, infrastructureTestLanes));
-                }
-                else
-                {
-                    built.Add(projectCheck);
-                }
-            }
-
-            foreach (var item in validated)
-            {
-                targetToChecks.Add(new FocusedEvidenceTargetCoverage(
-                    item.Target,
-                    built
-                        .Where(check =>
-                            string.Equals(check.Project, item.Project, StringComparison.OrdinalIgnoreCase) &&
-                            FocusedTargetMatchesCheck(item.Filter, check))
-                        .Select(check => check.Name)
-                        .ToArray()));
-            }
-        }
-        else
-        {
-            foreach (var item in validated)
-            {
-                var check = new AcceptanceManifestCheck
-                {
-                    Name = item.Filter is null
-                        ? $"reviewer mapped project evidence: {ProjectLabel(item.Project)}"
-                        : $"reviewer focused evidence: {ProjectLabel(item.Project)} {item.Filter}",
-                    Type = "dotnet-test",
-                    // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
-                    // without this the check defaults to the VSTest runner and fails on .NET 10 with
-                    // "VSTest target is no longer supported", making every reviewer evidence run fail.
-                    Runner = "mtp",
-                    Project = item.Project,
-                    Arguments = item.Filter is null
-                        ? ["--verbosity", "minimal"]
-                        : ["--verbosity", "minimal", "--filter", item.Filter],
-                    TimeoutMinutes = 10
-                };
-                built.Add(check);
-                targetToChecks.Add(new FocusedEvidenceTargetCoverage(item.Target, [check.Name]));
-            }
+                Name = item.Filter is null
+                    ? $"reviewer mapped project evidence: {ProjectLabel(item.Project)}"
+                    : $"reviewer focused evidence: {ProjectLabel(item.Project)} {item.Filter}",
+                Type = "dotnet-test",
+                // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
+                // without this the check defaults to the VSTest runner and fails on .NET 10 with
+                // "VSTest target is no longer supported", making every reviewer evidence run fail.
+                Runner = "mtp",
+                Project = item.Project,
+                Arguments = item.Filter is null
+                    ? ["--verbosity", "minimal"]
+                    : ["--verbosity", "minimal", "--filter", item.Filter],
+                TimeoutMinutes = 10
+            };
+            built.Add(check);
+            targetToChecks.Add(new FocusedEvidenceTargetCoverage(item.Target, [check.Name]));
         }
 
+        var hasFocusedFilters = validated.Any(item => item.Filter is not null);
+        var hasMappedProjects = validated.Any(item => item.Filter is null);
         checks = built;
         coverage = new FocusedEvidenceCoverage(
-            CollapseEngaged: totalTargets > MaxFocusedEvidenceTargets,
-            TargetToChecks: targetToChecks);
+            CollapseEngaged: false,
+            TargetToChecks: targetToChecks,
+            ExecutionMode: hasFocusedFilters && hasMappedProjects
+                ? "mixed"
+                : hasFocusedFilters ? "focused" : "project",
+            ExecutionReason: hasFocusedFilters && hasMappedProjects
+                ? "explicit-focused-and-mapped-project-request"
+                : hasFocusedFilters ? "explicit-focused-mapping" : "explicit-mapped-project-request");
         return true;
-    }
-
-    private static bool FocusedTargetMatchesCheck(
-        string? focusedFilter,
-        AcceptanceManifestCheck check)
-    {
-        if (string.IsNullOrWhiteSpace(focusedFilter) ||
-            !TryExtractFilter(check.Arguments, out var checkFilter))
-        {
-            return true;
-        }
-
-        var focusedClasses = Regex.Matches(
-                focusedFilter,
-                @"FullyQualifiedName\s*~\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)",
-                RegexOptions.IgnoreCase)
-            .Select(match => match.Groups["value"].Value)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        return focusedClasses.Length == 0 ||
-            focusedClasses.Any(testClass => MtpFilterSelectsClass(checkFilter, testClass));
-    }
-
-    private static bool MtpFilterSelectsClass(string filter, string testClass)
-    {
-        var translated = TranslateMtpFilter(filter).ToArray();
-        var includes = new List<string>();
-        var excludes = new List<string>();
-        for (var index = 0; index + 1 < translated.Length; index += 2)
-        {
-            var value = translated[index + 1].Trim('*');
-            if (translated[index].Equals("--filter-class", StringComparison.OrdinalIgnoreCase))
-            {
-                includes.Add(value);
-            }
-            else if (translated[index].Equals("--filter-not-class", StringComparison.OrdinalIgnoreCase))
-            {
-                excludes.Add(value);
-            }
-        }
-
-        return (includes.Count == 0 || includes.Any(value => testClass.Contains(value, StringComparison.OrdinalIgnoreCase))) &&
-            !excludes.Any(value => testClass.Contains(value, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool TryResolveFocusedEvidenceProject(string alias, out string project)
@@ -1661,11 +1583,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string FormatReceiptPaths(IReadOnlyList<string> paths) =>
         paths.Count == 0 ? "none" : string.Join(", ", paths);
 
-    private static string FormatFocusedEvidenceCollapseSummary(
+    private static string FormatFocusedEvidencePlanSummary(
         IReadOnlyList<AcceptanceManifestCheck> checks,
-        bool collapsed)
+        FocusedEvidenceCoverage coverage)
     {
-        return collapsed ? $"; {string.Join(", ", checks.Select(check => check.Name))}" : string.Empty;
+        var summary = $"mode={coverage.ExecutionMode} reason={coverage.ExecutionReason}";
+        return coverage.CollapseEngaged
+            ? $"{summary}; {string.Join(", ", checks.Select(check => check.Name))}"
+            : summary;
     }
 
     private static List<AcceptanceManifestCheck> BuildDeferredChecks(
