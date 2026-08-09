@@ -107,18 +107,14 @@ public sealed class AcceptanceGateEngineSettingsTests
             "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
         _ = settings.ResolveMtpInvocation(providerProject);
 
-        using var manifest = System.Text.Json.JsonDocument.Parse(
-            File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")));
-        var providerCheck = manifest.RootElement.GetProperty("checks")
-            .EnumerateArray()
-            .Single(check => check.GetProperty("name").GetString() == "provider environment tests");
-        Xunit.Assert.Equal(providerProject, providerCheck.GetProperty("project").GetString());
-        Xunit.Assert.Equal(2.04, providerCheck.GetProperty("estimatedSerialSeconds").GetDouble());
-        Xunit.Assert.Equal(
-            ["xunit:EnvMutation"],
-            providerCheck.GetProperty("exclusiveResourceKeys")
-                .EnumerateArray()
-                .Select(key => key.GetString()));
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(
+            File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")))!;
+        var providerCheck = manifest["checks"]!.AsArray()
+            .Select(check => check!.AsObject())
+            .Single(check => check["name"]?.GetValue<string>() == "provider environment tests");
+        Xunit.Assert.Equal(providerProject, providerCheck["project"]?.GetValue<string>());
+        Xunit.Assert.False(providerCheck.ContainsKey("estimatedSerialSeconds"));
+        Xunit.Assert.False(providerCheck.ContainsKey("exclusiveResourceKeys"));
 
         var solutionText = File.ReadAllText(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln"));
         var trustedTestProjects = GoalAcceptanceVerifier.DiscoverTrustedTestProjects(repositoryRoot, repositoryRoot);

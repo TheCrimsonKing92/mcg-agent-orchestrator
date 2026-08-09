@@ -2283,6 +2283,28 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
+    public void FocusedEvidence_ExtractedInfrastructureAliasesResolveFromRegisteredMtpProjects()
+    {
+        const string providerProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/" +
+            "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
+        var settings = new AcceptanceGateEngineSettings
+        {
+            MtpInvocations =
+            [
+                new AcceptanceMtpInvocation { Project = providerProject }
+            ]
+        };
+
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            "Infrastructure.ProviderEnvironment.Tests",
+            settings,
+            out var resolved));
+        Assert.Equal(providerProject, resolved);
+        Assert.Equal("Infrastructure.ProviderEnvironment.Tests", GoalAcceptanceVerifier.ProjectLabel(resolved));
+    }
+
+    [Xunit.Fact]
     public async Task FocusedEvidence_MixedRequest_ReportsFocusedAndMappedProjectReason()
     {
         var (result, calls) = await RunMappedEvidenceAsync(
@@ -3119,7 +3141,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 "infrastructure tests: Dotnet build slots",
                 "infrastructure tests: Goal acceptance verifier",
                 "infrastructure tests: Goal acceptance build slots",
-                "infrastructure tests: Provider environment",
                 "infrastructure tests: Remainder balance A",
                 "infrastructure tests: Remainder balance B",
                 "infrastructure tests: Remainder"
@@ -3435,8 +3456,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 ["alpha-only", "Beta-only", " shared-a "]));
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_extracted_infrastructure_project_joins_scheduled_shard_batch")]
-    public async Task GoalAcceptanceVerifierExtractedInfrastructureProjectJoinsScheduledShardBatch()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_extracted_infrastructure_project_does_not_claim_shard_scheduler_metadata")]
+    public async Task GoalAcceptanceVerifierExtractedInfrastructureProjectDoesNotClaimShardSchedulerMetadata()
     {
         GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
         GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
@@ -3492,9 +3513,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                   "name": "provider environment tests",
                   "type": "dotnet-test",
                   "runner": "mtp",
-                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
-                  "estimatedSerialSeconds": 200,
-                  "exclusiveResourceKeys": [ "xunit:EnvMutation" ]
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj"
                 }
               ],
               "forbiddenChangedPathGlobs": []
@@ -3551,7 +3570,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             Assert.True(result.Passed);
             Assert.Equal(
-                ["provider environment tests", "infrastructure tests: Worker profiles"],
+                ["infrastructure tests: Worker profiles"],
                 acquisitionOrder);
         }
         finally

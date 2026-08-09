@@ -12,20 +12,29 @@ in the former Provider environment lane, all 18 discovered cases are facts, and 
 Core, App, and Infrastructure directly and owns its two small test helpers. The parent project excludes
 the module directory, so each source test is compiled by exactly one project.
 
-The gate now runs this project as a broad project check. Its measured manifest estimate is 11.3
-seconds. Extracted Infrastructure test projects join the same scheduled shard batch as the parent lanes,
-so both the estimate and `xunit:EnvMutation` are consumed by the batch scheduler. The key prevents this
-process from overlapping the Worker profiles and Worker dispatch lanes that also mutate process-wide
-environment; `GoalAcceptanceVerifier_extracted_infrastructure_project_joins_scheduled_shard_batch`
-pins that behavior. The module-local collection remains `DisableParallelization` because its own tests
-still share environment variables.
+The gate now runs this project as a broad project check. Extracted projects currently use the verifier's
+sequential check path, not the parent project's infrastructure-lane scheduler, so the check intentionally
+declares neither `estimatedSerialSeconds` nor `exclusiveResourceKeys`: those fields are not consumed on
+this path. `GoalAcceptanceVerifier_extracted_infrastructure_project_does_not_claim_shard_scheduler_metadata`
+pins that boundary. The module-local collection remains `DisableParallelization` because its own tests
+still share environment variables. Cross-project scheduling belongs to goal `780f1790`; this slice does
+not claim an `xunit:EnvMutation` exclusion that the current scheduler cannot enforce.
 
 The 3,367-test figure in the goal text is stale for this HEAD. A temporary pre-split project built over
-the same source set discovers 3,375 unattended cases through the 18 original manifest filters after the
+the same source set discovered 3,375 unattended cases through the 18 original manifest filters after the
 gate's HostIntegration and AcceptanceOptIn exclusions. After extraction, the 17 parent lanes discover
 3,357 cases and the new broad project discovers 18, for the same 3,375 aggregate. The temporary baseline
-project was removed after the comparison. The acceptance TRX receipt
-must confirm those two executed-project counts before the next extraction begins.
+project was removed after the comparison. Executed-count evidence is recorded below; discovery alone is
+not treated as proof that the move preserved execution.
+
+| Executed slice | Command shape | Total | Passed | Failed | Skipped |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Before, current `main` parent project | `Invoke-TestSummary.ps1` with `FullyQualifiedName~ProviderDefaultTests|FullyQualifiedName~ProviderProbeTests` | 18 | 18 | 0 | 0 |
+| After, extracted project | `Invoke-TestSummary.ps1 -Target ...Infrastructure.ProviderEnvironment.Tests.csproj` | 18 | 18 | 0 | 0 |
+
+Both commands completed on 2026-08-09. Together with the 3,375 versus 3,357+18 discovery comparison,
+this shows that the moved slice is neither dropped nor duplicated without requiring a second full
+3,000-test execution merely to repeat tests unaffected by the extraction.
 
 ### Build-graph skipping receipt (2026-08-09)
 
@@ -35,11 +44,11 @@ only `Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`, the extracted assembly
 
 | Observation | SHA-256 | LastWriteTimeUtc |
 | --- | --- | --- |
-| Before unrelated parent-project build | `715C261A334EF0785F354BAB87EA275B17ED586EA27CFC0378C19986E5870B30` | `2026-08-09T10:11:02.3025428Z` |
-| After unrelated parent-project build | `715C261A334EF0785F354BAB87EA275B17ED586EA27CFC0378C19986E5870B30` | `2026-08-09T10:11:02.3025428Z` |
+| Before unrelated parent-project build | `27F8F1E61D61DEB66BBB25715831451B1E0CAB112B3AAA13C1B425CEC5E3F558` | `2026-08-09T13:40:09.4040485Z` |
+| After unrelated parent-project build | `27F8F1E61D61DEB66BBB25715831451B1E0CAB112B3AAA13C1B425CEC5E3F558` | `2026-08-09T13:40:09.4040485Z` |
 
 The exact second command was
-`.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-WorkerBuildCheck.ps1 tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`;
+`.\scripts\Invoke-WorkerBuildCheck.ps1 tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`;
 it exited 0 with zero errors. Both the hash and timestamp remained unchanged, demonstrating that the
 unrelated parent test-module build did not rewrite the extracted output. The policy regression
 `GoalAcceptanceVerifier_skips_extracted_project_for_unrelated_parent_test_change` separately requires the

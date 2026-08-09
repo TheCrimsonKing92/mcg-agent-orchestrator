@@ -242,9 +242,7 @@
       "type": "dotnet-test",
       "runner": "mtp",
       "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
-      "arguments": [ "--verbosity", "minimal" ],
-      "estimatedSerialSeconds": 2.04,
-      "exclusiveResourceKeys": [ "xunit:EnvMutation" ]
+      "arguments": [ "--verbosity", "minimal" ]
     }
   ],
   "forbiddenChangedPathGlobs": [
