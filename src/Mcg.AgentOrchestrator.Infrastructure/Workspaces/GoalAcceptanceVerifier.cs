@@ -4484,7 +4484,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             var discoveryDecodeFault = candidateDiscovery.Output.Contains('\uFFFD', StringComparison.Ordinal);
-            IReadOnlySet<string>? mainDiscoveredTests = null;
+            TestDiscoverySnapshot? mainDiscoverySnapshot = null;
             var mainProjectPath = Path.Combine(
                 mainWorktreePath,
                 broadCheck.Project!.Replace('/', Path.DirectorySeparatorChar));
@@ -4553,9 +4553,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 }
 
                 discoveryDecodeFault |= mainDiscovery.Output.Contains('\uFFFD', StringComparison.Ordinal);
-                mainDiscoveredTests = TestCoverageInvariant.ParseDiscoveredTests(
+                mainDiscoverySnapshot = TestCoverageInvariant.ParseDiscovery(
                     mainDiscovery.Output,
-                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck));
+                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck),
+                    repositoryRoot: mainWorktreePath);
             }
 
             IEnumerable<AcceptanceManifestCheck> partitionChecks = IsBroadInfrastructureTestCheck(broadCheck)
@@ -4576,14 +4577,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         result?.TestResultIsExplicitCrossAttemptReuse == true);
                 })
                 .ToArray();
+            var candidateDiscoverySnapshot = TestCoverageInvariant.ParseDiscovery(
+                candidateDiscovery.Output,
+                bareTestList: UsesMicrosoftTestingPlatform(broadCheck),
+                repositoryRoot: worktreePath);
             var coverage = TestCoverageInvariant.Evaluate(
-                TestCoverageInvariant.ParseDiscoveredTests(
-                    candidateDiscovery.Output,
-                    bareTestList: UsesMicrosoftTestingPlatform(broadCheck)),
+                candidateDiscoverySnapshot.Tests,
                 partitions,
-                mainDiscoveredTests,
+                mainDiscoverySnapshot?.Tests,
                 DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
-                currentAttemptId);
+                currentAttemptId,
+                mainDiscoverySnapshot?.SourceFilesByTest);
             if (!coverage.Passed)
             {
                 var details = new List<string>
@@ -4777,6 +4781,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 "--progress",
                 "off",
                 "--list-tests",
+                "json",
                 "--filter-not-trait",
                 "Category=HostIntegration"
             ]);

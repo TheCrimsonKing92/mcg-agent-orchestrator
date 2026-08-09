@@ -219,26 +219,47 @@ public sealed class TestCoverageInvariantTests
             gatedProject,
             _ => extractedProject);
         var candidate = Enumerable.Range(0, 3439)
-            .Select(index => $"CurrentCoverageTests.Case{index:D4}")
+            .Select(index => $"current coverage case {index:D4}")
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var moved = Enumerable.Range(0, 6)
-            .Select(index => $"ProviderEnvironmentTests.Case{index:D2}")
+            .Select(index => (
+                Name: $"provider environment case {index:D2}",
+                SourceFile: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentTests.cs"))
             .Concat(Enumerable.Range(0, 7)
-                .Select(index => $"ProviderEnvironmentIsolationTests.Case{index:D2}"));
-        var main = candidate.Concat(moved).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var trx = WriteTrx(candidate
-            .Select((name, index) => (index.ToString(), name, "Passed"))
+                .Select(index => (
+                    Name: $"provider isolation case {index:D2}",
+                    SourceFile: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironmentIsolationTests.cs")))
+            .ToArray();
+        var mainDiscovery = ParseMtpDiscovery(
+            candidate
+                .Select(name => (
+                    Name: name,
+                    SourceFile: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CurrentCoverageTests.cs"))
+                .Concat(moved)
+                .ToArray());
+        var trx = WriteTrxWithMethodIdentity(candidate
+            .Select((name, index) => (
+                index.ToString(),
+                name,
+                "Passed",
+                $"CurrentCoverageTests.Case{index:D4}"))
             .ToArray());
         try
         {
             var partitions = new[] { new TestPartitionCoverage("lane", true, [trx]) };
 
-            var receipt = TestCoverageInvariant.Evaluate(candidate, partitions, main, deleted);
+            var receipt = TestCoverageInvariant.Evaluate(
+                candidate,
+                partitions,
+                mainDiscovery.Tests,
+                deleted,
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest);
             var oneShort = TestCoverageInvariant.Evaluate(
                 candidate.Take(3438).ToHashSet(StringComparer.OrdinalIgnoreCase),
                 partitions,
-                main,
-                deleted);
+                mainDiscovery.Tests,
+                deleted,
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest);
 
             Xunit.Assert.Equal(
                 [
@@ -247,6 +268,7 @@ public sealed class TestCoverageInvariantTests
                 ],
                 deleted);
             Xunit.Assert.True(receipt.Passed);
+            Xunit.Assert.False(oneShort.Passed);
             Xunit.Assert.Contains(
                 "cross-generation-count:candidate=3438,minimum=3439,main=3452,deleted=13",
                 oneShort.MissingTests);
@@ -257,26 +279,32 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "TestCoverageInvariant_counts_deleted_test_file")]
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_credits_single_test_file_once_from_discovery_metadata")]
     public void TestCoverageInvariantCountsDeletedTestFile()
     {
-        var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
+        var trx = WriteTrxWithMethodIdentity(("1", "current test", "Passed", "CurrentTests.Runs"));
         try
         {
-            var candidate = new HashSet<string>(["CurrentTests.Runs"], StringComparer.OrdinalIgnoreCase);
-            var main = new HashSet<string>(
-                ["CurrentTests.Runs", "RemovedTests.WasPresentOnMain"],
-                StringComparer.OrdinalIgnoreCase);
+            var candidate = new HashSet<string>(["current test"], StringComparer.OrdinalIgnoreCase);
+            var mainDiscovery = ParseMtpDiscovery(
+                ("current test", "tests/Example.Tests/CurrentTests.cs"),
+                ("removed test", "tests/Example.Tests/RemovedTests.cs"));
             var partitions = new[] { new TestPartitionCoverage("lane", true, [trx]) };
             var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
                 "D\ttests/Example.Tests/RemovedTests.cs",
                 "tests/Example.Tests/Example.Tests.csproj",
                 _ => throw new InvalidOperationException("Deletion rows do not resolve a destination project."));
 
-            var allowed = TestCoverageInvariant.Evaluate(candidate, partitions, main, deleted);
+            var allowed = TestCoverageInvariant.Evaluate(
+                candidate,
+                partitions,
+                mainDiscovery.Tests,
+                deleted,
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest);
 
             Xunit.Assert.Equal(["tests/Example.Tests/RemovedTests.cs"], deleted);
             Xunit.Assert.True(allowed.Passed);
+            Xunit.Assert.Empty(allowed.MissingTests);
         }
         finally
         {
@@ -287,13 +315,13 @@ public sealed class TestCoverageInvariantTests
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_rejects_tests_dropped_from_a_retained_file")]
     public void TestCoverageInvariantRejectsTestsDroppedFromRetainedFile()
     {
-        var trx = WriteTrx(("1", "CurrentTests.Runs", "Passed"));
+        var trx = WriteTrxWithMethodIdentity(("1", "current test", "Passed", "CurrentTests.Runs"));
         try
         {
-            var candidate = new HashSet<string>(["CurrentTests.Runs"], StringComparer.OrdinalIgnoreCase);
-            var main = new HashSet<string>(
-                ["CurrentTests.Runs", "RetainedTests.WasDropped"],
-                StringComparer.OrdinalIgnoreCase);
+            var candidate = new HashSet<string>(["current test"], StringComparer.OrdinalIgnoreCase);
+            var mainDiscovery = ParseMtpDiscovery(
+                ("current test", "tests/Example.Tests/RetainedTests.cs"),
+                ("vanished test", "tests/Example.Tests/RetainedTests.cs"));
             var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
                 "M\ttests/RetainedTests.cs",
                 "tests/Example.Tests/Example.Tests.csproj",
@@ -302,10 +330,12 @@ public sealed class TestCoverageInvariantTests
             var rejected = TestCoverageInvariant.Evaluate(
                 candidate,
                 [new TestPartitionCoverage("lane", true, [trx])],
-                main,
-                deleted);
+                mainDiscovery.Tests,
+                deleted,
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest);
 
             Xunit.Assert.Empty(deleted);
+            Xunit.Assert.False(rejected.Passed);
             Xunit.Assert.Contains(
                 "cross-generation-count:candidate=1,minimum=2,main=2,deleted=0",
                 rejected.MissingTests);
@@ -682,6 +712,43 @@ public sealed class TestCoverageInvariantTests
         WriteTrxWithMethodIdentityAt(
             Path.Combine(Path.GetTempPath(), $"coverage-{Guid.NewGuid():N}.trx"),
             tests.Select(test => (test.Id, test.Name, test.Outcome, test.Name)).ToArray());
+
+    private static TestDiscoverySnapshot ParseMtpDiscovery(
+        params (string Name, string SourceFile)[] tests)
+    {
+        var repositoryRoot = Path.Combine(Path.GetTempPath(), $"main-discovery-{Guid.NewGuid():N}");
+        var json = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            tests = tests.Select((test, index) => new
+            {
+                uid = $"test-{index:D4}",
+                displayName = test.Name,
+                type = new
+                {
+                    assemblyFullName = "Example.Tests, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null",
+                    typeName = Path.GetFileNameWithoutExtension(test.SourceFile),
+                    methodName = $"Case{index:D4}",
+                    methodArity = 0,
+                    returnTypeFullName = "System.Void",
+                    parameterTypeFullNames = Array.Empty<string>()
+                },
+                location = new
+                {
+                    file = Path.Combine(
+                        repositoryRoot,
+                        test.SourceFile.Replace('/', Path.DirectorySeparatorChar)),
+                    lineStart = index + 1,
+                    lineEnd = index + 1
+                }
+            })
+        });
+
+        return TestCoverageInvariant.ParseDiscovery(
+            json,
+            bareTestList: true,
+            repositoryRoot: repositoryRoot);
+    }
 
     private static string WriteTrxAt(
         string path,
