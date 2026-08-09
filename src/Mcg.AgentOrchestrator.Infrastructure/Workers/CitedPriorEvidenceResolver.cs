@@ -62,34 +62,37 @@ public sealed class CitedPriorEvidenceResolver
         }
 
         var selected = selectors.Take(MaxCitedEntities).ToArray();
-        var lines = new List<string>
+        var headerLines = new List<string>
         {
             "# Cited Prior Goal And Task Evidence",
             string.Empty,
             "Historical classifier receipts are reproduced as stored; they are not reclassified using current code.",
             $"Limits: {MaxCitedEntities} cited entities, {MaxRoundsPerEntity} newest rounds per entity, and {MaxUtf8Bytes:N0} UTF-8 bytes total. Oldest rounds are omitted first.",
+            $"Measurement marker: prior_evidence_package=v1; cited_entities={selectors.Count}; packaged_entities={selected.Length}.",
             string.Empty
         };
 
         if (selectors.Count > selected.Length)
         {
-            lines.Add($"> Truncated cited entities: {selectors.Count - selected.Length} omitted after the first {MaxCitedEntities} distinct citations.");
-            lines.Add(string.Empty);
+            var omitted = string.Join(", ", selectors.Skip(selected.Length).Select(DescribeSelector));
+            headerLines.Add($"> Truncated cited entities: {selectors.Count - selected.Length} omitted after the first {MaxCitedEntities} distinct citations. Omitted citations: {omitted}.");
+            headerLines.Add(string.Empty);
         }
 
+        var sections = new List<CitedEvidenceSection>();
         foreach (var selector in selected)
         {
             try
             {
-                AddResolvedSelector(lines, selector);
+                sections.Add(ResolveSelector(selector));
             }
             catch (Exception ex)
             {
-                AddUnavailable(lines, selector, $"historical store read failed ({ex.GetType().Name}: {Sanitize(ex.Message, MaxReasonChars)})");
+                sections.Add(BuildUnavailable(selector, $"historical store read failed ({ex.GetType().Name}: {Sanitize(ex.Message, MaxReasonChars)})"));
             }
         }
 
-        return BoundUtf8(string.Join(Environment.NewLine, lines).TrimEnd());
+        return RenderBounded(headerLines, sections);
     }
 
     internal static IReadOnlyList<CitedPriorEvidenceSelector> ExtractSelectors(Goal goal, TaskSpec task)
@@ -126,97 +129,82 @@ public sealed class CitedPriorEvidenceResolver
         return selectors;
     }
 
-    private void AddResolvedSelector(List<string> lines, CitedPriorEvidenceSelector selector)
+    private CitedEvidenceSection ResolveSelector(CitedPriorEvidenceSelector selector)
     {
-        switch (selector.Kind)
+        return selector.Kind switch
         {
-            case CitedPriorEvidenceKind.Goal:
-                AddGoalLookup(lines, selector);
-                break;
-            case CitedPriorEvidenceKind.Task:
-                AddTaskLookup(lines, selector);
-                break;
-            default:
-                AddUnspecifiedLookup(lines, selector);
-                break;
-        }
+            CitedPriorEvidenceKind.Goal => ResolveGoalLookup(selector),
+            CitedPriorEvidenceKind.Task => ResolveTaskLookup(selector),
+            _ => ResolveUnspecifiedLookup(selector)
+        };
     }
 
-    private void AddGoalLookup(List<string> lines, CitedPriorEvidenceSelector selector)
+    private CitedEvidenceSection ResolveGoalLookup(CitedPriorEvidenceSelector selector)
     {
         var matches = _reader.FindGoals(selector.Token, LookupLimit);
         if (matches.Count == 0)
         {
-            AddUnavailable(lines, selector, "no goal id matched the cited prefix");
-            return;
+            return BuildUnavailable(selector, "no goal id matched the cited prefix");
         }
 
         if (matches.Count > 1)
         {
-            AddUnavailable(lines, selector, "the cited goal prefix is ambiguous");
-            return;
+            return BuildUnavailable(selector, "the cited goal prefix is ambiguous");
         }
 
-        AddGoalEvidence(lines, selector, matches[0], taskFilter: null);
+        return BuildGoalEvidence(selector, matches[0], taskFilter: null);
     }
 
-    private void AddTaskLookup(List<string> lines, CitedPriorEvidenceSelector selector)
+    private CitedEvidenceSection ResolveTaskLookup(CitedPriorEvidenceSelector selector)
     {
         var matches = _reader.FindTasks(selector.Token, LookupLimit);
         if (matches.Count == 0)
         {
-            AddUnavailable(lines, selector, "no task id matched the cited prefix");
-            return;
+            return BuildUnavailable(selector, "no task id matched the cited prefix");
         }
 
         if (matches.Count > 1)
         {
-            AddUnavailable(lines, selector, "the cited task prefix is ambiguous");
-            return;
+            return BuildUnavailable(selector, "the cited task prefix is ambiguous");
         }
 
-        AddGoalEvidence(lines, selector, matches[0].Goal, matches[0].Task.Id);
+        return BuildGoalEvidence(selector, matches[0].Goal, matches[0].Task.Id);
     }
 
-    private void AddUnspecifiedLookup(List<string> lines, CitedPriorEvidenceSelector selector)
+    private CitedEvidenceSection ResolveUnspecifiedLookup(CitedPriorEvidenceSelector selector)
     {
         var goals = _reader.FindGoals(selector.Token, LookupLimit);
         var tasks = _reader.FindTasks(selector.Token, LookupLimit);
         if (goals.Count + tasks.Count == 0)
         {
-            AddUnavailable(lines, selector, "no goal or task id matched the cited selector");
-            return;
+            return BuildUnavailable(selector, "no goal or task id matched the cited selector");
         }
 
         if (goals.Count + tasks.Count > 1)
         {
-            AddUnavailable(lines, selector, "the cited selector is ambiguous across goal/task records");
-            return;
+            return BuildUnavailable(selector, "the cited selector is ambiguous across goal/task records");
         }
 
-        if (goals.Count == 1)
-        {
-            AddGoalEvidence(lines, selector, goals[0], taskFilter: null);
-        }
-        else
-        {
-            AddGoalEvidence(lines, selector, tasks[0].Goal, tasks[0].Task.Id);
-        }
+        return goals.Count == 1
+            ? BuildGoalEvidence(selector, goals[0], taskFilter: null)
+            : BuildGoalEvidence(selector, tasks[0].Goal, tasks[0].Task.Id);
     }
 
-    private static void AddGoalEvidence(
-        List<string> lines,
+    private static CitedEvidenceSection BuildGoalEvidence(
         CitedPriorEvidenceSelector selector,
         GoalSnapshot goal,
         string? taskFilter)
     {
         var kind = taskFilter is null ? "goal" : "task";
-        lines.Add($"## Cited {kind} `{selector.Token}`");
-        lines.Add(string.Empty);
-        lines.Add($"Resolved goal: `{goal.Id}`.");
+        var preamble = new List<string>
+        {
+            $"## Cited {kind} `{selector.Token}`",
+            string.Empty,
+            $"Resolved goal: `{goal.Id}`."
+        };
         if (taskFilter is not null)
         {
-            lines.Add($"Resolved task: `{taskFilter}`.");
+            preamble.Add($"Resolved task: `{taskFilter}`.");
         }
 
         var taskIds = taskFilter is null
@@ -229,26 +217,21 @@ public sealed class CitedPriorEvidenceResolver
             .ToArray();
         var shown = rounds.TakeLast(MaxRoundsPerEntity).ToArray();
 
-        lines.Add($"Rounds: {rounds.Length}; showing newest {shown.Length}.");
+        preamble.Add($"Rounds: {rounds.Length}; showing newest {shown.Length}.");
         if (rounds.Length > shown.Length)
         {
-            lines.Add($"> Truncated rounds: {rounds.Length - shown.Length} older rounds omitted.");
+            preamble.Add($"> Truncated rounds: {rounds.Length - shown.Length} older rounds omitted.");
         }
 
         if (shown.Length == 0)
         {
-            lines.Add("- No verification or classifier receipt records were available.");
-            lines.Add(string.Empty);
-            return;
+            preamble.Add("- No verification or classifier receipt records were available.");
         }
 
-        foreach (var round in shown)
-        {
-            lines.Add($"- task={round.TaskId}; timestamp={round.Timestamp:O}; {round.Summary}");
-            lines.Add($"  classifier_receipt: {round.ClassifierReceipt ?? "unavailable (no stored classifier receipt paired with this verification)"}");
-        }
-
-        lines.Add(string.Empty);
+        var roundBlocks = shown.Select(round =>
+            $"- task={round.TaskId}; timestamp={round.Timestamp:O}; {round.Summary}{Environment.NewLine}" +
+            $"  classifier_receipt: {round.ClassifierReceipt ?? "unavailable (no stored classifier receipt paired with this verification)"}").ToArray();
+        return new CitedEvidenceSection(selector, preamble, roundBlocks);
     }
 
     private static IReadOnlyList<CitedRound> BuildRounds(GoalSnapshot goal, TaskSnapshot task)
@@ -335,12 +318,16 @@ public sealed class CitedPriorEvidenceResolver
         return $"exit_code={verification.ExitCode}; child_exit_code={verification.ChildExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}; duration_ms={duration}; worker_result={workerResult}; blockers={blockers}";
     }
 
-    private static void AddUnavailable(List<string> lines, CitedPriorEvidenceSelector selector, string reason)
+    private static CitedEvidenceSection BuildUnavailable(CitedPriorEvidenceSelector selector, string reason)
     {
-        lines.Add($"## Cited {selector.Kind.ToString().ToLowerInvariant()} `{selector.Token}`");
-        lines.Add(string.Empty);
-        lines.Add($"> Records unavailable for cited {selector.Kind.ToString().ToLowerInvariant()} `{selector.Token}`: {Sanitize(reason, MaxReasonChars)}.");
-        lines.Add(string.Empty);
+        return new CitedEvidenceSection(
+            selector,
+            [
+                $"## Cited {selector.Kind.ToString().ToLowerInvariant()} `{selector.Token}`",
+                string.Empty,
+                $"> Records unavailable for cited {selector.Kind.ToString().ToLowerInvariant()} `{selector.Token}`: {Sanitize(reason, MaxReasonChars)}."
+            ],
+            []);
     }
 
     private static (CitedPriorEvidenceKind Kind, string Token) ReadMatch(Match match)
@@ -369,28 +356,84 @@ public sealed class CitedPriorEvidenceResolver
         return sanitized.Length <= maxChars ? sanitized : sanitized[..(maxChars - 3)] + "...";
     }
 
-    private static string BoundUtf8(string value)
+    private static string RenderBounded(IReadOnlyList<string> headerLines, IReadOnlyList<CitedEvidenceSection> sections)
     {
-        if (Encoding.UTF8.GetByteCount(value) <= MaxUtf8Bytes)
+        var allRoundCounts = sections.Select(section => section.RoundBlocks.Count).ToArray();
+        var complete = Render(headerLines, sections, allRoundCounts, byteCapReached: false);
+        if (Encoding.UTF8.GetByteCount(complete) <= MaxUtf8Bytes)
         {
-            return value;
+            return complete;
         }
 
-        const string notice = "\n\n> UTF-8 byte cap reached: additional resolved evidence was truncated at 20,000 bytes.";
-        var byteBudget = MaxUtf8Bytes - Encoding.UTF8.GetByteCount(notice);
-        var chars = value.Length;
-        while (chars > 0 && Encoding.UTF8.GetByteCount(value.AsSpan(0, chars)) > byteBudget)
+        var includedRoundCounts = new int[sections.Count];
+        for (var depth = 0; depth < MaxRoundsPerEntity; depth++)
         {
-            chars--;
+            var addedAtThisDepth = false;
+            for (var sectionIndex = 0; sectionIndex < sections.Count; sectionIndex++)
+            {
+                if (includedRoundCounts[sectionIndex] >= sections[sectionIndex].RoundBlocks.Count)
+                {
+                    continue;
+                }
+
+                includedRoundCounts[sectionIndex]++;
+                var candidate = Render(headerLines, sections, includedRoundCounts, byteCapReached: true);
+                if (Encoding.UTF8.GetByteCount(candidate) <= MaxUtf8Bytes)
+                {
+                    addedAtThisDepth = true;
+                }
+                else
+                {
+                    includedRoundCounts[sectionIndex]--;
+                }
+            }
+
+            if (!addedAtThisDepth)
+            {
+                break;
+            }
         }
 
-        if (chars > 0 && char.IsHighSurrogate(value[chars - 1]))
-        {
-            chars--;
-        }
-
-        return value[..chars].TrimEnd() + notice;
+        return Render(headerLines, sections, includedRoundCounts, byteCapReached: true);
     }
+
+    private static string Render(
+        IReadOnlyList<string> headerLines,
+        IReadOnlyList<CitedEvidenceSection> sections,
+        IReadOnlyList<int> includedRoundCounts,
+        bool byteCapReached)
+    {
+        var lines = new List<string>(headerLines);
+        for (var sectionIndex = 0; sectionIndex < sections.Count; sectionIndex++)
+        {
+            var section = sections[sectionIndex];
+            lines.AddRange(section.Preamble);
+            var included = includedRoundCounts[sectionIndex];
+            lines.AddRange(section.RoundBlocks.Skip(section.RoundBlocks.Count - included));
+            var omitted = section.RoundBlocks.Count - included;
+            if (omitted > 0)
+            {
+                lines.Add($"> UTF-8 byte cap omission for {DescribeSelector(section.Selector)}: {omitted} resolved rounds omitted; {included} newest rounds included.");
+            }
+
+            lines.Add(string.Empty);
+        }
+
+        if (byteCapReached)
+        {
+            lines.Add($"> UTF-8 byte cap reached: round details were bounded at {MaxUtf8Bytes:N0} bytes; every selected citation and its exact omission count remain above.");
+        }
+
+        return string.Join(Environment.NewLine, lines).TrimEnd();
+    }
+
+    private static string DescribeSelector(CitedPriorEvidenceSelector selector) =>
+        $"cited {selector.Kind.ToString().ToLowerInvariant()} `{selector.Token}`";
+
+    private sealed record CitedEvidenceSection(
+        CitedPriorEvidenceSelector Selector,
+        IReadOnlyList<string> Preamble,
+        IReadOnlyList<string> RoundBlocks);
 
     private sealed record CitedRound(
         string TaskId,

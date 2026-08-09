@@ -30,6 +30,7 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
         Assert.NotNull(artifact);
         Assert.Equal(1, reader.GoalReads);
         Assert.Equal(0, reader.TaskReads);
+        Assert.Contains("prior_evidence_package=v1; cited_entities=1; packaged_entities=1", artifact, StringComparison.Ordinal);
         Assert.Equal(3, CountOccurrences(artifact!, "classifier_receipt: CLASSIFIER"));
         Assert.Equal(2, CountOccurrences(artifact!, "rule=required-file-change-evidence-missing"));
         Assert.Contains("rule=succeeded-dispatch-completion-evidence", artifact, StringComparison.Ordinal);
@@ -87,7 +88,7 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
     [Xunit.Fact(DisplayName = "CitedPriorEvidenceResolver_applies_utf8_byte_cap_with_notice")]
     public void AppliesUtf8ByteCapWithNotice()
     {
-        var snapshots = Enumerable.Range(1, 4)
+        var snapshots = Enumerable.Range(1, 3)
             .Select(entity => CreatePriorGoalSnapshot(
                 $"{entity:D8}11223344556677889900aabb",
                 $"{entity + 10:D8}11223344556677889900aabb",
@@ -95,13 +96,21 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
                     .Select(round => ($"entity-{entity}-round-{round}-" + new string('x', 1100), 1, 0))
                     .ToArray()))
             .ToArray();
-        var citations = string.Join(" ", snapshots.Select(snapshot => $"goal {snapshot.Id[..8]}"));
+        var citations = string.Join(" ", snapshots.Select(snapshot => $"goal {snapshot.Id[..8]}")) + " goal feedface";
         var (goal, task) = CreateCurrentGoal(citations);
 
         var artifact = new CitedPriorEvidenceResolver(new FakeReader(snapshots)).Resolve(goal, task)!;
 
         Assert.True(Encoding.UTF8.GetByteCount(artifact) <= CitedPriorEvidenceResolver.MaxUtf8Bytes);
         Assert.Contains("UTF-8 byte cap reached", artifact, StringComparison.Ordinal);
+        foreach (var snapshot in snapshots)
+        {
+            Assert.Matches(
+                $@"UTF-8 byte cap omission for cited goal `{snapshot.Id[..8]}`: [1-8] resolved rounds omitted; [0-7] newest rounds included\.",
+                artifact);
+        }
+        Assert.Contains("## Cited goal `feedface`", artifact, StringComparison.Ordinal);
+        Assert.Contains("Records unavailable for cited goal `feedface`", artifact, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "CitedPriorEvidenceResolver_no_citation_performs_no_read_and_creates_no_artifact")]
