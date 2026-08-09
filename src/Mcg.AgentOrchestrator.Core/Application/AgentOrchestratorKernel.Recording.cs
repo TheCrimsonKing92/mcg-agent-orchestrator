@@ -834,10 +834,20 @@ public sealed partial class AgentOrchestratorKernel
                         {
                             if (ReviewFindingConvergence.IsRejectedCapResolutionRound(validationException.Violation))
                             {
-                                state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(
-                                    priorState,
-                                    round,
-                                    validationException.Violation);
+                                try
+                                {
+                                    state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(
+                                        priorState,
+                                        round,
+                                        validationException.Violation);
+                                }
+                                catch (ReviewFindingConvergenceException)
+                                {
+                                    // The filtered round can still contain the identity transition that
+                                    // brought execution here. Preserve the accepted ledger and record the
+                                    // original cap violation instead of discarding the whole verification.
+                                    state = priorState;
+                                }
                             }
 
                             diagnostic = $"{validationException.Code}: {validationException.Message}";
@@ -903,7 +913,20 @@ public sealed partial class AgentOrchestratorKernel
                 {
                     if (ReviewFindingConvergence.IsRejectedCapResolutionRound(ex.Violation))
                     {
-                        state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(state, round, ex.Violation);
+                        var priorState = state;
+                        try
+                        {
+                            state = ReviewFindingConvergence.ApplyRejectedCapResolutionRound(
+                                priorState,
+                                round,
+                                ex.Violation);
+                        }
+                        catch (ReviewFindingConvergenceException)
+                        {
+                            // Keep the original typed cap violation authoritative if applying the valid
+                            // subset exposes another invalid transition.
+                            state = priorState;
+                        }
                     }
 
                     if (ReviewFindingConvergence.IsRejectedIdentityTransitionRound(ex.Violation) &&

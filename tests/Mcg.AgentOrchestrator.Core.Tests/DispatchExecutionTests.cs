@@ -1360,6 +1360,70 @@ public sealed class DispatchExecutionTests
         Assert.NotEqual(GoalStatus.Verified, goal.Status);
     }
 
+    [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_cap_rejection_preserves_round_when_identity_canonicalization_reenters")]
+    public void RecordDispatchExecutionResultCapRejectionPreservesRoundWhenIdentityCanonicalizationReenters()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var reviewer = new TaskSpec(TaskId.New(), "Review result", AgentRole.Reviewer);
+        var goal = kernel.CreateGoal("Retain the accepted ledger when cap and identity validation overlap", [reviewer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli", "review-1", "C:\\repo", clock.UtcNow, BaseCommit: "same-commit"));
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-1",
+            "C:\\repo",
+            1,
+            StructuredReviewerResult(
+                "needs-work",
+                """[{"stable_id":"F-CAP","state":"open","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking"},{"stable_id":"A-1","state":"open","location":{"file":"src/B.cs","region":"B.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
+                "Missing guard."),
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true));
+
+        clock.Advance();
+        kernel.RetryTask(goal.Id, reviewer.Id, "cap-round recheck");
+        kernel.RecordTaskDispatch(goal.Id, reviewer.Id, new TaskDispatchRecord(
+            "codex-cli",
+            "review-2",
+            "C:\\repo",
+            clock.UtcNow,
+            BaseCommit: "same-commit",
+            ReviewFindingTouchedAnchors: [],
+            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors.",
+            ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-2",
+            "C:\\repo",
+            0,
+            StructuredReviewerResult(
+                "pass",
+                """[{"stable_id":"F-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run"},"description":"Missing guard.","severity":"blocking"},{"stable_id":"A-1","state":"open","location":{"file":"src/C.cs","region":"C.Run"},"description":"Readability suggestion.","severity":"advisory"}]""",
+                "none"),
+            string.Empty,
+            clock.UtcNow,
+            WorkerResultPresent: true));
+
+        Assert.Equal(2, reviewer.VerificationHistory.Count);
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Equal(
+            ReviewFindingConvergence.UnprovenResolutionAtCapViolationCode,
+            reviewer.LastVerification!.ReviewFindingContractViolation?.Code);
+        Assert.Collection(
+            reviewer.LastVerification.MergedReviewFindings!,
+            retained =>
+            {
+                Assert.Equal("A-1", retained.StableId);
+                Assert.Equal(new ReviewFindingLocation("src/B.cs", "B.Run"), retained.Location);
+            },
+            retained =>
+            {
+                Assert.Equal("F-CAP", retained.StableId);
+                Assert.Equal(ReviewFindingState.Open, retained.State);
+            });
+    }
+
     [Xunit.Fact(DisplayName = "RecordDispatchExecutionResult_rejected_cap_round_does_not_clear_blocker_on_retry")]
     public void RecordDispatchExecutionResultRejectedCapRoundDoesNotClearBlockerOnRetry()
     {
