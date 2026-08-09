@@ -4736,6 +4736,106 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
+    public void PreReview_MultipleFocusedChecks_PreserveOneToOneReceiptMapping()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        string[] targets =
+        [
+            "Core.Tests: DispatchOutcomeClassifyTests",
+            "Infrastructure.Tests: WorkerDispatchTestsWorkerResultClassification"
+        ];
+        var dispatches = 0;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "multi-focused-sha",
+                targets,
+                string.Join("; ", targets),
+                "Two focused targets map to two checks.",
+                NoApplicableTests: false,
+                MappingNeedsInput: false),
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: true,
+                Summary: "two focused checks passed",
+                Checks:
+                [
+                    new AcceptanceCheckResult("core focused check", true, 0, null),
+                    new AcceptanceCheckResult("infrastructure focused check", true, 0, null)
+                ]),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            dispatchAndStart: _ =>
+            {
+                dispatches++;
+                return DispatchStartOutcome.Started();
+            });
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(1, dispatches);
+        Assert.Equal(PreReviewEvidenceDisposition.Green, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Equal(targets, reviewer.PreReviewEvidenceReceipt?.Checks.Select(check => check.Command));
+    }
+
+    [Xunit.Fact]
+    public void PreReview_PartialFocusedEvidence_RetriesTester()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.TakeWhile(task => task.Id != reviewer.Id))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        string[] targets =
+        [
+            "Core.Tests: DispatchOutcomeClassifyTests",
+            "Infrastructure.Tests: WorkerDispatchTestsWorkerResultClassification"
+        ];
+        TaskId? retriedTaskId = null;
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getPreReviewEvidenceContext: _ => new PreReviewEvidenceContext(
+                "partial-focused-sha",
+                targets,
+                string.Join("; ", targets),
+                "Two focused targets require two checks.",
+                NoApplicableTests: false,
+                MappingNeedsInput: false),
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: true,
+                Passed: true,
+                Summary: "only one focused check returned",
+                Checks: [new AcceptanceCheckResult("partial focused check", true, 0, null)]),
+            recordPreReviewEvidence: (goalId, taskId, receipt) =>
+                kernel.RecordPreReviewEvidence(goalId, taskId, receipt),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retriedTaskId = taskId;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            dispatchAndStart: _ => DispatchStartOutcome.Started());
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(tester.Id, retriedTaskId);
+        Assert.Equal(PreReviewEvidenceDisposition.MappingNeedsInput, reviewer.PreReviewEvidenceReceipt?.Disposition);
+        Assert.Equal(
+            "(unmapped: check/command cardinality mismatch)",
+            reviewer.PreReviewEvidenceReceipt?.Checks.Single().Command);
+    }
+
+    [Xunit.Fact]
     public void PreReview_EmptyFocusedEvidence_RetriesTester()
     {
         var (kernel, goal) = SoftwareGoal();
