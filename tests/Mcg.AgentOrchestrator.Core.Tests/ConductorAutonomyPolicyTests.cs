@@ -268,7 +268,22 @@ public sealed class ConductorAutonomyPolicyTests
         var restored = ConductorAutonomyPolicy.ParseJson(legacyJson);
         var reserialized = restored.ToJson();
 
-        Assert.Equal(ConductorAutonomyPolicy.Conservative, restored);
+        Assert.Equal(ConductorAutonomyPolicy.Conservative.Name, restored.Name);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers,
+            restored.MaxConcurrentPaidWorkers);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.MaxCriterionRetries,
+            restored.MaxCriterionRetries);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.AutoPromoteRiskThreshold,
+            restored.AutoPromoteRiskThreshold);
+        foreach (var state in Enum.GetValues<GoalLifecycleState>())
+        {
+            Assert.Equal(
+                ConductorAutonomyPolicy.Conservative.TransitionMap[state],
+                restored.TransitionMap[state]);
+        }
         Assert.DoesNotContain("maxTotalBudget", reserialized, StringComparison.Ordinal);
         Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
     }
@@ -285,7 +300,22 @@ public sealed class ConductorAutonomyPolicyTests
         var restored = ConductorAutonomyPolicy.ParseJson(legacyJson);
         var reserialized = restored.ToJson();
 
-        Assert.Equal(ConductorAutonomyPolicy.Conservative, restored);
+        Assert.Equal(ConductorAutonomyPolicy.Conservative.Name, restored.Name);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers,
+            restored.MaxConcurrentPaidWorkers);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.MaxCriterionRetries,
+            restored.MaxCriterionRetries);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.AutoPromoteRiskThreshold,
+            restored.AutoPromoteRiskThreshold);
+        foreach (var state in Enum.GetValues<GoalLifecycleState>())
+        {
+            Assert.Equal(
+                ConductorAutonomyPolicy.Conservative.TransitionMap[state],
+                restored.TransitionMap[state]);
+        }
         Assert.DoesNotContain("maxTotalBudget", reserialized, StringComparison.Ordinal);
         Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
     }
