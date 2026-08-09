@@ -12,7 +12,7 @@ in the former Provider environment lane, all 18 discovered cases are facts, and 
 Core, App, and Infrastructure directly and owns its two small test helpers. The parent project excludes
 the module directory, so each source test is compiled by exactly one project.
 
-The gate now runs this project as a broad project check. Its measured manifest estimate remains 2.04
+The gate now runs this project as a broad project check. Its measured manifest estimate is 11.3
 seconds. Extracted Infrastructure test projects join the same scheduled shard batch as the parent lanes,
 so both the estimate and `xunit:EnvMutation` are consumed by the batch scheduler. The key prevents this
 process from overlapping the Worker profiles and Worker dispatch lanes that also mutate process-wide
@@ -35,8 +35,8 @@ only `Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`, the extracted assembly
 
 | Observation | SHA-256 | LastWriteTimeUtc |
 | --- | --- | --- |
-| Before unrelated parent-project build | `51CF4E8FE4E67D081B551649591C037772901E46874EF750100B78EEA494C722` | `2026-08-09T07:31:42.6168670Z` |
-| After unrelated parent-project build | `51CF4E8FE4E67D081B551649591C037772901E46874EF750100B78EEA494C722` | `2026-08-09T07:31:42.6168670Z` |
+| Before unrelated parent-project build | `715C261A334EF0785F354BAB87EA275B17ED586EA27CFC0378C19986E5870B30` | `2026-08-09T10:11:02.3025428Z` |
+| After unrelated parent-project build | `715C261A334EF0785F354BAB87EA275B17ED586EA27CFC0378C19986E5870B30` | `2026-08-09T10:11:02.3025428Z` |
 
 The exact second command was
 `.\scripts\Invoke-RepoScript.ps1 scripts\Invoke-WorkerBuildCheck.ps1 tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj`;
