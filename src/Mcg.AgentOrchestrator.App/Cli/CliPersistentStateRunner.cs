@@ -1728,7 +1728,8 @@ internal static class CliPersistentStateRunner
             loadStarted.Elapsed,
             ("goal", goalId.Value[..8]),
             ("goalCount", 1));
-        var initialGoalJson = JsonSerializer.Serialize(ExportGoalSnapshot(kernel, goalId));
+        var initialGoalSnapshot = ExportGoalSnapshot(kernel, goalId);
+        var initialGoalJson = JsonSerializer.Serialize(initialGoalSnapshot);
 
         var reconcileStarted = System.Diagnostics.Stopwatch.StartNew();
         var targetSweep = TerminalGoalSweep.Run(kernel, workspace.ExecutionDirectory, goalId);
@@ -1757,6 +1758,9 @@ internal static class CliPersistentStateRunner
         {
             PersistSingleGoalSnapshot(stateRepository, checkpoint, goalId);
         }
+
+        AcceptanceMergeGuardPreflightResult PrepareAcceptanceMergeGuard(AcceptanceMergeGuardPreflightRequest request)
+            => PrepareAcceptanceMergeGuardState(stateRepository, initialGoalSnapshot, kernel, request);
 
         AcceptanceMergeCommitResult Finalize(AcceptanceMergeCommitRequest request)
         {
@@ -1829,7 +1833,8 @@ internal static class CliPersistentStateRunner
             finalizeAcceptanceMerge: Finalize,
             acceptanceVerifier: acceptanceVerifier,
             phaseTimings: phaseTimings,
-            registerAcceptanceGuardAbort: () => acceptanceGuardAborted = true);
+            registerAcceptanceGuardAbort: () => acceptanceGuardAborted = true,
+            prepareAcceptanceMergeGuard: PrepareAcceptanceMergeGuard);
 
         currentGoal = updatedCurrentGoal;
 
@@ -1875,6 +1880,114 @@ internal static class CliPersistentStateRunner
         }
     }
 
+    private static AcceptanceMergeGuardPreflightResult PrepareAcceptanceMergeGuardState(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        GoalSnapshot initialSnapshot,
+        AgentOrchestratorKernel proposedKernel,
+        AcceptanceMergeGuardPreflightRequest request)
+    {
+        var initialKernel = KernelFromGoalSnapshot(initialSnapshot);
+        var initialGuard = AcceptanceMergeGuard.Capture(initialKernel, request.GoalId);
+        if (AcceptanceMergeGuard.Compare(initialGuard, request.ProposedGuard) is null)
+        {
+            var currentSnapshot = stateRepository.LoadGoalAsync(request.GoalId).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException($"Goal '{request.GoalId.Value}' no longer exists; acceptance cannot continue.");
+            var currentGuard = AcceptanceMergeGuard.Capture(KernelFromGoalSnapshot(currentSnapshot), request.GoalId);
+            return new AcceptanceMergeGuardPreflightResult(
+                currentGuard,
+                AcceptanceMergeGuard.Compare(request.ProposedGuard, currentGuard));
+        }
+
+        return stateRepository.TransactGoalAsync(
+                request.GoalId,
+                (snapshot, _) =>
+                {
+                    if (snapshot is null)
+                    {
+                        throw new InvalidOperationException($"Goal '{request.GoalId.Value}' no longer exists; acceptance cannot continue.");
+                    }
+
+                    var currentKernel = KernelFromGoalSnapshot(snapshot);
+                    var currentGuard = AcceptanceMergeGuard.Capture(currentKernel, request.GoalId);
+                    if (AcceptanceMergeGuard.Compare(request.ProposedGuard, currentGuard) is null)
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, AcceptanceMergeGuardPreflightResult Result)>(
+                            (false, snapshot, new AcceptanceMergeGuardPreflightResult(currentGuard, null)));
+                    }
+
+                    if (AcceptanceMergeGuard.Compare(initialGuard, currentGuard) is { } concurrentMismatch)
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, AcceptanceMergeGuardPreflightResult Result)>(
+                            (false, snapshot, new AcceptanceMergeGuardPreflightResult(currentGuard, concurrentMismatch)));
+                    }
+
+                    ReplayAcceptancePreflightRepairs(initialSnapshot, proposedKernel, currentKernel, request.GoalId);
+                    var preparedGuard = AcceptanceMergeGuard.Capture(currentKernel, request.GoalId);
+                    if (AcceptanceMergeGuard.Compare(request.ProposedGuard, preparedGuard) is { } repairMismatch)
+                    {
+                        return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, AcceptanceMergeGuardPreflightResult Result)>(
+                            (false, snapshot, new AcceptanceMergeGuardPreflightResult(preparedGuard, repairMismatch)));
+                    }
+
+                    var preparedSnapshot = ExportGoalSnapshot(currentKernel, request.GoalId);
+                    return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, AcceptanceMergeGuardPreflightResult Result)>(
+                        (true, preparedSnapshot, new AcceptanceMergeGuardPreflightResult(preparedGuard, null)));
+                })
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static void ReplayAcceptancePreflightRepairs(
+        GoalSnapshot initialSnapshot,
+        AgentOrchestratorKernel proposedKernel,
+        AgentOrchestratorKernel currentKernel,
+        GoalId goalId)
+    {
+        var initialKernel = KernelFromGoalSnapshot(initialSnapshot);
+        var initialGoal = initialKernel.GetGoal(goalId);
+        var proposedGoal = proposedKernel.GetGoal(goalId);
+        var currentGoal = currentKernel.GetGoal(goalId);
+
+        foreach (var proposedTask in proposedGoal.Tasks)
+        {
+            var initialTask = initialGoal.Tasks.Single(task => task.Id == proposedTask.Id);
+            if (!SameAcceptancePreflightValue(initialTask.LastVerification, proposedTask.LastVerification) &&
+                proposedTask.LastVerification is { } verification)
+            {
+                currentKernel.RecordTaskVerification(goalId, proposedTask.Id, verification);
+            }
+        }
+
+        if (initialGoal.Status == GoalStatus.Completed && proposedGoal.Status == GoalStatus.Verified)
+        {
+            currentKernel.NormalizePrematureCompletedGoalToVerified(
+                goalId,
+                "acceptance: persisted the Completed-to-Verified repair before verification.");
+        }
+        else if (initialGoal.Status == GoalStatus.Verifying && proposedGoal.Status == GoalStatus.Verified)
+        {
+            currentKernel.ReconcileGoalAcceptanceVerified(
+                goalId,
+                "acceptance: persisted the Verifying-to-Verified repair before verification.");
+        }
+        else if (proposedGoal.Status == GoalStatus.Verified && currentKernel.GetGoal(goalId).Status != GoalStatus.Verified)
+        {
+            currentKernel.ReconcileGoalVerificationStatus(
+                goalId,
+                "acceptance: persisted task verification repairs before verification.");
+        }
+
+        if (proposedGoal.LatestAcceptanceFailure is null &&
+            initialGoal.LatestAcceptanceFailure is not null &&
+            SameAcceptancePreflightValue(currentGoal.LatestAcceptanceFailure, initialGoal.LatestAcceptanceFailure))
+        {
+            currentKernel.ClearAcceptanceFailure(goalId);
+        }
+    }
+
+    private static bool SameAcceptancePreflightValue<T>(T left, T right) =>
+        string.Equals(JsonSerializer.Serialize(left), JsonSerializer.Serialize(right), StringComparison.Ordinal);
+
     private static bool ExecuteAcceptanceQueueOutsideTransaction(
         IReadOnlyList<string> args,
         ITransactionalOrchestratorStateRepository stateRepository,
@@ -1887,6 +2000,7 @@ internal static class CliPersistentStateRunner
         IGoalAcceptanceVerifier? acceptanceVerifier = null)
     {
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        var initialGoalSnapshots = kernel.ExportSnapshot().Goals.ToDictionary(snapshot => snapshot.Id, StringComparer.Ordinal);
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
 
         void Persist(AgentOrchestratorKernel checkpoint) =>
@@ -1903,7 +2017,12 @@ internal static class CliPersistentStateRunner
             channel,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
             Persist,
-            acceptanceVerifier: acceptanceVerifier);
+            acceptanceVerifier: acceptanceVerifier,
+            prepareAcceptanceMergeGuard: request => PrepareAcceptanceMergeGuardState(
+                stateRepository,
+                initialGoalSnapshots[request.GoalId.Value],
+                kernel,
+                request));
 
         if (shouldSave)
         {

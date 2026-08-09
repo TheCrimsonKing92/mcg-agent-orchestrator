@@ -32,7 +32,8 @@ public static bool ExecuteCommand(
     Action<string>? registerPostCommitFailure = null,
     TextReader? standardInput = null,
     bool? isStandardInputRedirected = null,
-    Action? registerAcceptanceGuardAbort = null)
+    Action? registerAcceptanceGuardAbort = null,
+    Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
@@ -58,7 +59,8 @@ public static bool ExecuteCommand(
         registerPostCommitFailure: registerPostCommitFailure,
         standardInput: standardInput,
         isStandardInputRedirected: isStandardInputRedirected,
-        registerAcceptanceGuardAbort: registerAcceptanceGuardAbort)
+        registerAcceptanceGuardAbort: registerAcceptanceGuardAbort,
+        prepareAcceptanceMergeGuard: prepareAcceptanceMergeGuard)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),

@@ -135,9 +135,12 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             Console.WriteLine($"Acceptance history: superseded failure is historical for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}.");
         }
 
-        expectedMergeGuard = AcceptanceMergeGuard.Capture(context.Kernel, goal.Id);
-        var freshPreflightGuard = AcceptanceMergeGuard.Capture(context.ReloadKernel(), goal.Id);
-        if (AcceptanceMergeGuard.Compare(expectedMergeGuard, freshPreflightGuard) is { } preflightMismatch)
+        var proposedMergeGuard = AcceptanceMergeGuard.Capture(context.Kernel, goal.Id);
+        var preflightGuard = context.PrepareAcceptanceMergeGuard(new AcceptanceMergeGuardPreflightRequest(
+            goal.Id,
+            proposedMergeGuard));
+        expectedMergeGuard = preflightGuard.CurrentGuard;
+        if (preflightGuard.GuardAbort is { } preflightMismatch)
         {
             var preflightAbort = new AcceptanceMergeCommitResult(
                 false,

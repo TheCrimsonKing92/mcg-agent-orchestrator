@@ -580,6 +580,8 @@ public abstract class CliCommandTestBase
 
         public Action<AgentOrchestratorKernel>? BeforeNextLoadAsync { get; set; }
 
+        public Action<AgentOrchestratorKernel>? BeforeNextLoadGoalAsync { get; set; }
+
         public Action<CancellationToken>? BeforeSaveCommit { get; set; }
 
         public Action<AgentOrchestratorKernel>? BeforeGoalCasRetry { get; set; }
@@ -769,6 +771,12 @@ public abstract class CliCommandTestBase
 
         public Task<GoalSnapshot?> LoadGoalAsync(GoalId goalId, CancellationToken cancellationToken = default)
         {
+            if (BeforeNextLoadGoalAsync is { } before)
+            {
+                BeforeNextLoadGoalAsync = null;
+                before(_kernel);
+            }
+
             RecordLoadBoundary();
             LoadGoalCount++;
             LoadedGoalIds.Add(goalId.Value);

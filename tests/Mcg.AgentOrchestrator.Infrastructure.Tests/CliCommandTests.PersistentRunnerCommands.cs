@@ -1257,9 +1257,10 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.True(verifierObservedUnlockedState);
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Equal(2, repository.TransactionCount);
-        Xunit.Assert.Equal(1, repository.LoadCount);
+        Xunit.Assert.Equal(0, repository.LoadCount);
         Xunit.Assert.Equal(1, repository.LoadGoalsCount);
-        Xunit.Assert.Equal([goal.Id.Value], repository.LoadedGoalIds);
+        Xunit.Assert.Equal(1, repository.LoadGoalCount);
+        Xunit.Assert.Equal(2, repository.LoadedGoalIds.Count(id => id == goal.Id.Value));
         Xunit.Assert.False(repository.IsInTransaction);
         Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "feature.txt")));
         Xunit.Assert.Contains("PHASE_TIMING command=acceptance phase=startup-goal-resolve", output);
@@ -1586,7 +1587,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var verifier = new ProbeAcceptanceVerifier(() => throw new InvalidOperationException("Verifier must not run after a preflight mismatch."));
         var repository = new InMemoryTransactionalStateRepository(kernel)
         {
-            BeforeNextLoadAsync = stored =>
+            BeforeNextLoadGoalAsync = stored =>
                 stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Concurrent conductor mutation.")
         };
         IReadOnlyList<AgentDefinition> persistentAgents = agents;
@@ -1611,6 +1612,95 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var storedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
         Xunit.Assert.Equal(GoalStatus.Active, storedGoal.Status);
         Xunit.Assert.Equal(WorkTaskStatus.Running, storedGoal.Tasks.Single(candidate => candidate.Id == task.Id).Status);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_preflight_persists_completed_normalization_before_guard")]
+    public void PersistentRunnerAcceptancePreflightPersistsCompletedNormalizationBeforeGuard()
+    {
+        var root = CreateShortAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement normalized landing", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Normalize completed acceptance persistently", [task]);
+            cleanupGoalId = goal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            kernel.ActivateGoal(goal.Id, agents);
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
+            CommitGoalWork(root, goal.Id, "normalized.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
+            goal = kernel.GetGoal(goal.Id);
+            Goal? currentGoal = goal;
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+
+            var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance", "--skip-verify", "--keep-workspace", "--no-record"],
+                repository,
+                CreateRefinedWorkspace(root),
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Contains("Acceptance repair: normalized raw Completed goal", output, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("result=aborted", output, StringComparison.OrdinalIgnoreCase);
+            Xunit.Assert.Equal(GoalStatus.Completed, repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id).Status);
+            Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "normalized.txt")));
+            Xunit.Assert.True(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_preflight_persists_git_auto_verification_before_guard")]
+    public void PersistentRunnerAcceptancePreflightPersistsGitAutoVerificationBeforeGuard()
+    {
+        var root = CreateShortAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Implement auto-verified landing", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Auto-verify acceptance persistently", [task]);
+            cleanupGoalId = goal.Id;
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            kernel.ActivateGoal(goal.Id, agents);
+            CommitGoalWork(root, goal.Id, "auto-verified.txt", "goal work");
+            Goal? currentGoal = goal;
+            var repository = new InMemoryTransactionalStateRepository(kernel);
+
+            var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["acceptance", "--skip-verify", "--keep-workspace", "--no-record"],
+                repository,
+                CreateRefinedWorkspace(root),
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Contains("Auto-verified task", output, StringComparison.Ordinal);
+            Xunit.Assert.DoesNotContain("result=aborted", output, StringComparison.OrdinalIgnoreCase);
+            var storedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+            Xunit.Assert.Equal(GoalStatus.Completed, storedGoal.Status);
+            Xunit.Assert.Equal(WorkTaskStatus.Completed, storedGoal.Tasks.Single(candidate => candidate.Id == task.Id).Status);
+            Xunit.Assert.NotNull(storedGoal.Tasks.Single(candidate => candidate.Id == task.Id).LastVerification);
+            Xunit.Assert.Equal("goal work", File.ReadAllText(Path.Combine(root, "auto-verified.txt")));
+            Xunit.Assert.True(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_guard_worktree_head_change_remains_blocked")]

@@ -28,7 +28,8 @@ internal sealed class CliExecutionContext(
     Action<string>? registerPostCommitFailure = null,
     TextReader? standardInput = null,
     bool? isStandardInputRedirected = null,
-    Action? registerAcceptanceGuardAbort = null)
+    Action? registerAcceptanceGuardAbort = null,
+    Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -128,6 +129,19 @@ public Action ReacquireConductLoopLease { get; } = reacquireConductLoopLease ?? 
 public AcceptanceMergeCommitResult FinalizeAcceptanceMerge(AcceptanceMergeCommitRequest request) =>
     finalizeAcceptanceMerge?.Invoke(request) ?? request.Merge();
 
+public AcceptanceMergeGuardPreflightResult PrepareAcceptanceMergeGuard(AcceptanceMergeGuardPreflightRequest request)
+{
+    if (prepareAcceptanceMergeGuard is not null)
+    {
+        return prepareAcceptanceMergeGuard(request);
+    }
+
+    var currentGuard = AcceptanceMergeGuard.Capture(ReloadKernel([request.GoalId.Value]), request.GoalId);
+    return new AcceptanceMergeGuardPreflightResult(
+        currentGuard,
+        AcceptanceMergeGuard.Compare(request.ProposedGuard, currentGuard));
+}
+
 public void RegisterAcceptanceGuardAbort() => registerAcceptanceGuardAbort?.Invoke();
 
 public AcceptanceHostStopResult StopAcceptanceHosts(AcceptanceHostStopRequest request) =>
@@ -177,6 +191,14 @@ internal sealed record AcceptanceMergeCommitRequest(
     bool PassingGateReceiptRecorded,
     Func<AcceptanceMergeCommitResult> Merge,
     string CompletionReason);
+
+internal sealed record AcceptanceMergeGuardPreflightRequest(
+    GoalId GoalId,
+    AcceptanceMergeGuardSnapshot ProposedGuard);
+
+internal sealed record AcceptanceMergeGuardPreflightResult(
+    AcceptanceMergeGuardSnapshot CurrentGuard,
+    AcceptanceMergeGuardMismatch? GuardAbort);
 
 internal sealed record AcceptanceMergeCommitResult(
     bool FastForwarded,
