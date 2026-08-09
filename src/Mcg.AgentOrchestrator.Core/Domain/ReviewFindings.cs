@@ -644,6 +644,84 @@ public static class ReviewFindingConvergence
         return ApplyRound(previous, rejectedRound with { Findings = acceptedFindings });
     }
 
+    internal static bool IsRejectedIdentityTransitionRound(ReviewFindingContractViolation violation) =>
+        violation.Code is IdentityMovedViolationCode or RecycledAnchorIdentityViolationCode;
+
+    internal static bool IsRejectedIdentityTransition(
+        ReviewFindingContractViolation violation,
+        string submittedStableId) =>
+        IsRejectedIdentityTransitionRound(violation) &&
+        (string.Equals(violation.SubmittedStableId, submittedStableId, StringComparison.Ordinal) ||
+         (violation.IdentityMismatches ?? []).Any(mismatch =>
+             string.Equals(mismatch.SubmittedStableId, submittedStableId, StringComparison.Ordinal)));
+
+    internal static bool CanCanonicalizeIdentityTransitions(ReviewFindingContractViolation violation) =>
+        IsRejectedIdentityTransitionRound(violation) &&
+        (violation.IdentityMismatches ?? []).Count > 0 &&
+        violation.IdentityMismatches!.All(mismatch =>
+            mismatch.Code == IdentityMovedViolationCode &&
+            string.Equals(mismatch.PriorStableId, mismatch.SubmittedStableId, StringComparison.Ordinal));
+
+    internal static IReadOnlyList<ReviewFinding> ApplyCanonicalizedIdentityTransitionRound(
+        IReadOnlyList<ReviewFinding> previous,
+        ReviewFindingRound round,
+        ReviewFindingContractViolation violation,
+        out IReadOnlyList<ReviewFindingIdentityCanonicalization> canonicalizations)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(round);
+        ArgumentNullException.ThrowIfNull(violation);
+
+        if (!CanCanonicalizeIdentityTransitions(violation))
+        {
+            throw new ArgumentException(
+                $"Violation '{violation.Code}' cannot be canonicalized to prior identity anchors.",
+                nameof(violation));
+        }
+
+        var mismatches = violation.IdentityMismatches!
+            .ToDictionary(mismatch => mismatch.SubmittedStableId, StringComparer.Ordinal);
+        canonicalizations = mismatches.Values
+            .Select(mismatch => new ReviewFindingIdentityCanonicalization(
+                mismatch.PriorStableId,
+                mismatch.SubmittedStableId,
+                mismatch.PriorLocation))
+            .OrderBy(item => item.PriorStableId, StringComparer.Ordinal)
+            .ToArray();
+        var canonicalizedFindings = round.Findings
+            .Select(finding => mismatches.TryGetValue(finding.StableId, out var mismatch)
+                ? finding with { Location = mismatch.PriorLocation }
+                : finding)
+            .ToArray();
+
+        return ApplyRound(previous, round with { Findings = canonicalizedFindings });
+    }
+
+    internal static IReadOnlyList<ReviewFinding> ApplyRejectedIdentityTransitionRound(
+        IReadOnlyList<ReviewFinding> previous,
+        ReviewFindingRound rejectedRound,
+        ReviewFindingContractViolation violation)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+        ArgumentNullException.ThrowIfNull(rejectedRound);
+        ArgumentNullException.ThrowIfNull(violation);
+
+        if (!IsRejectedIdentityTransitionRound(violation))
+        {
+            throw new ArgumentException(
+                $"Violation '{violation.Code}' is not a rejected identity transition.",
+                nameof(violation));
+        }
+
+        var acceptedFindings = rejectedRound.Findings
+            .Where(finding => !IsRejectedIdentityTransition(violation, finding.StableId))
+            .ToArray();
+
+        // Reject only the submitted anchor transition. The prior form remains in the ledger while
+        // unrelated findings and transitions in the same substantive round remain authoritative.
+        return ApplyRound(previous, rejectedRound with { Findings = acceptedFindings });
+    }
+
     public static void ValidateResolutionAtCap(
         IReadOnlyList<ReviewFinding> previous,
         ReviewFindingRound nextRound,
@@ -1027,7 +1105,7 @@ public static class ReviewFindingConvergence
         var normalized = Regex.Replace(region.Trim(), @"\s+", " ").ToLowerInvariant();
         var withoutLineRange = Regex.Replace(
             normalized,
-            @"(?:\s*:\s*\d+(?:\s*-\s*\d+)?|\s*\[\s*\d+(?:\s*-\s*\d+)?\s*\]|\s+l\d+\s*-\s*l?\d+|\s+lines?\s+\d+\s*-\s*\d+|(?<!\d)\d+\s*-\s*\d+)\s*$",
+            @"(?:\s*:\s*\d+(?:\s*-\s*\d+)?|\s*\[\s*(?:lines?\s+)?\d+(?:\s*-\s*\d+)?\s*\]|\s+l\d+\s*-\s*l?\d+|\s+lines?\s+\d+\s*-\s*\d+|(?<!\d)\d+\s*-\s*\d+)\s*$",
             string.Empty).TrimEnd();
         if (withoutLineRange.Length > 0)
         {
