@@ -27,7 +27,8 @@ internal sealed class CliExecutionContext(
     Func<IReadOnlyCollection<string>, AgentOrchestratorKernel>? reloadKernelForGoals = null,
     Action<string>? registerPostCommitFailure = null,
     TextReader? standardInput = null,
-    bool? isStandardInputRedirected = null)
+    bool? isStandardInputRedirected = null,
+    Action? registerAcceptanceGuardAbort = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -127,6 +128,8 @@ public Action ReacquireConductLoopLease { get; } = reacquireConductLoopLease ?? 
 public AcceptanceMergeCommitResult FinalizeAcceptanceMerge(AcceptanceMergeCommitRequest request) =>
     finalizeAcceptanceMerge?.Invoke(request) ?? request.Merge();
 
+public void RegisterAcceptanceGuardAbort() => registerAcceptanceGuardAbort?.Invoke();
+
 public AcceptanceHostStopResult StopAcceptanceHosts(AcceptanceHostStopRequest request) =>
     stopAcceptanceHosts?.Invoke(request) ?? AcceptanceHostStopper.Stop(request);
 
@@ -171,6 +174,7 @@ internal sealed record AcceptanceMergeCommitRequest(
     GoalId GoalId,
     AcceptanceMergeGuardSnapshot ExpectedGuard,
     string? TestedWorktreeHead,
+    bool PassingGateReceiptRecorded,
     Func<AcceptanceMergeCommitResult> Merge,
     string CompletionReason);
 

@@ -1110,6 +1110,47 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
     }
 
+    [Xunit.Fact(DisplayName = "TerminalGoalSweep_acceptance_guard_abort_without_gate_does_not_claim_receipt")]
+    public void TerminalGoalSweepAcceptanceGuardAbortWithoutGateDoesNotClaimReceipt()
+    {
+        var root = CreateAcceptanceRepository();
+        GoalId? cleanupGoalId = null;
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Report an abort without a passing gate", [task]);
+            cleanupGoalId = goal.Id;
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            CommitGoalWork(root, goal.Id, "src/aborted-without-gate.txt", "goal work");
+            kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Verified);
+            var branchHead = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
+            var mainHead = RunGitOutput(root, "rev-parse", "main").Trim();
+            GoalOperationJournal.AcceptanceAborted(
+                root,
+                goal,
+                "acceptance",
+                branchHead,
+                mainHead,
+                "Acceptance aborted:state-guard before verification.");
+
+            var acceptance = GoalAcceptanceStatusProjector.Build(kernel, kernel.GetGoal(goal.Id), root);
+            var acceptanceAbort = Assert.Single(acceptance.Blockers.Where(candidate => candidate.Kind == GoalAcceptanceBlockerKind.AcceptanceAborted));
+            Assert.Contains("no passing gate receipt was recorded", acceptanceAbort.SuggestedAction, StringComparison.OrdinalIgnoreCase);
+            var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, root, goal.Id).Blockers);
+
+            Assert.Equal(TerminalGoalRemedyVerb.OperatorCommand, blocker.Remedy.Verb);
+            Assert.Contains("no passing gate receipt was recorded", blocker.Command, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("receipt none remains recorded", blocker.Command, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
 
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_conduct_loop_early_exits_print_blocker")]
     public void TerminalGoalSweepConductLoopEarlyExitsPrintBlocker()

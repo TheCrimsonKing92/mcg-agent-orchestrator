@@ -1500,6 +1500,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains("Goal.Status", output);
         Xunit.Assert.Contains("expected Verified, actual Active", output);
         Xunit.Assert.Contains("result=aborted", output);
+        Xunit.Assert.Contains("No passing gate receipt was recorded", output);
+        Xunit.Assert.DoesNotContain("passing gate receipt remains recorded", output, StringComparison.OrdinalIgnoreCase);
         Xunit.Assert.DoesNotContain("retry acceptance", output, StringComparison.OrdinalIgnoreCase);
         var storedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
         Xunit.Assert.Null(storedGoal.LatestAcceptanceFailure);
@@ -1550,6 +1552,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(1, verifier.RunCount);
         Xunit.Assert.Contains("Tasks added/removed", output);
         Xunit.Assert.Contains("result=aborted", output);
+        Xunit.Assert.Contains("passing gate receipt remains recorded", output, StringComparison.OrdinalIgnoreCase);
         var restored = repository.LoadAsync().GetAwaiter().GetResult();
         Xunit.Assert.Equal(GoalStatus.Verified, restored.GetGoal(goal.Id).Status);
         Xunit.Assert.Null(restored.GetGoal(goal.Id).LatestAcceptanceFailure);
@@ -1579,29 +1582,35 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             task.Id,
             ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-06-25T15:00:00Z")));
         CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
-        var concurrent = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
-        concurrent.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Concurrent conductor mutation.");
+        kernel.RecordAcceptanceFailure(goal.Id, ["superseded failure"], "old-candidate", "old-main");
         var verifier = new ProbeAcceptanceVerifier(() => throw new InvalidOperationException("Verifier must not run after a preflight mismatch."));
-        var context = new CliExecutionContext(
-            kernel,
-            CreateRefinedWorkspace(root),
-            new InMemoryModelProviderRegistry([]),
-            agents,
-            WorkerProfileCatalog.Default(),
-            goal,
-            reloadKernel: () => concurrent)
+        var repository = new InMemoryTransactionalStateRepository(kernel)
         {
-            AcceptanceVerifier = verifier,
-            StableSlotSelector = (_, _) => throw new InvalidOperationException("Build slot must not be acquired after a preflight mismatch.")
+            BeforeNextLoadAsync = stored =>
+                stored.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Running, "Concurrent conductor mutation.")
         };
+        IReadOnlyList<AgentDefinition> persistentAgents = agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
 
-        var output = CaptureConsole(() =>
-            Xunit.Assert.False(CliCommandHandlers.RunAcceptanceWorkspaceMergeCore(context)));
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            repository,
+            CreateRefinedWorkspace(root),
+            ref persistentAgents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier));
 
         Xunit.Assert.Equal(0, verifier.RunCount);
         Xunit.Assert.Contains("stage=preflight-state-guard", output);
         Xunit.Assert.Contains("Goal.Status expected Verified, actual Active", output);
-        Xunit.Assert.Null(kernel.GetGoal(goal.Id).LatestAcceptanceFailure);
+        Xunit.Assert.Contains("No passing gate receipt was recorded", output);
+        var storedGoal = repository.LoadAsync().GetAwaiter().GetResult().GetGoal(goal.Id);
+        Xunit.Assert.Equal(GoalStatus.Active, storedGoal.Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, storedGoal.Tasks.Single(candidate => candidate.Id == task.Id).Status);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_acceptance_guard_worktree_head_change_remains_blocked")]

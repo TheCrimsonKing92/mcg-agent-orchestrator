@@ -1114,11 +1114,13 @@ internal static class TerminalGoalSweep
             .FirstOrDefault(entry => passedGate is null || entry.At >= passedGate.At);
         if (newerGuardAbort is not null)
         {
-            var receipt = passedGate?.IdempotencyKey ?? "none";
+            var guidance = passedGate is null
+                ? $"Quiesce conductor mutations for goal {prefix}, then run acceptance {prefix}; no passing gate receipt was recorded for this candidate."
+                : $"Quiesce conductor mutations for goal {prefix}, then run acceptance {prefix}; prior passing gate receipt {passedGate.IdempotencyKey} remains recorded.";
             return TerminalGoalRemedy.OperatorOnly(
                 goal.Id,
                 prefix,
-                $"Quiesce conductor mutations for goal {prefix}, then run acceptance {prefix}; prior passing gate receipt {receipt} remains recorded.");
+                guidance);
         }
 
         var artifact = passedGate is null || string.IsNullOrWhiteSpace(branchHeadSha)

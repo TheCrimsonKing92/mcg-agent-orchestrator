@@ -31,7 +31,8 @@ public static bool ExecuteCommand(
     Func<IReadOnlyCollection<string>, AgentOrchestratorKernel>? reloadKernelForGoals = null,
     Action<string>? registerPostCommitFailure = null,
     TextReader? standardInput = null,
-    bool? isStandardInputRedirected = null)
+    bool? isStandardInputRedirected = null,
+    Action? registerAcceptanceGuardAbort = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
@@ -56,7 +57,8 @@ public static bool ExecuteCommand(
         reloadKernelForGoals: reloadKernelForGoals,
         registerPostCommitFailure: registerPostCommitFailure,
         standardInput: standardInput,
-        isStandardInputRedirected: isStandardInputRedirected)
+        isStandardInputRedirected: isStandardInputRedirected,
+        registerAcceptanceGuardAbort: registerAcceptanceGuardAbort)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),

@@ -1773,7 +1773,10 @@ internal static class CliPersistentStateRunner
                         var currentGuard = AcceptanceMergeGuard.Capture(transactionKernel, request.GoalId);
                         if (AcceptanceMergeGuard.Compare(request.ExpectedGuard, currentGuard) is { } stateMismatch)
                         {
-                            var guardedResult = GuardedAcceptanceAbort(request.GoalId, stateMismatch);
+                            var guardedResult = GuardedAcceptanceAbort(
+                                request.GoalId,
+                                stateMismatch,
+                                request.PassingGateReceiptRecorded);
                             return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
                                 (false, snapshot, (guardedResult, snapshot)));
                         }
@@ -1781,7 +1784,10 @@ internal static class CliPersistentStateRunner
                         var currentHead = ResolveWorktreeHead(workspace.ExecutionDirectory, request.GoalId);
                         if (AcceptanceMergeGuard.CompareWorktreeHead(request.TestedWorktreeHead, currentHead) is { } headMismatch)
                         {
-                            var guardedResult = GuardedAcceptanceAbort(request.GoalId, headMismatch);
+                            var guardedResult = GuardedAcceptanceAbort(
+                                request.GoalId,
+                                headMismatch,
+                                request.PassingGateReceiptRecorded);
                             return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, (AcceptanceMergeCommitResult Result, GoalSnapshot Snapshot) Result)>(
                                 (false, snapshot, (guardedResult, snapshot)));
                         }
@@ -1822,7 +1828,8 @@ internal static class CliPersistentStateRunner
             Persist,
             finalizeAcceptanceMerge: Finalize,
             acceptanceVerifier: acceptanceVerifier,
-            phaseTimings: phaseTimings);
+            phaseTimings: phaseTimings,
+            registerAcceptanceGuardAbort: () => acceptanceGuardAborted = true);
 
         currentGoal = updatedCurrentGoal;
 
@@ -1832,6 +1839,11 @@ internal static class CliPersistentStateRunner
             {
                 PersistIfTargetGoalChangedSinceLoad(kernel, goalId, initialGoalJson);
             }
+            return shouldSave;
+        }
+
+        if (acceptanceGuardAborted)
+        {
             return shouldSave;
         }
 
@@ -1920,9 +1932,10 @@ internal static class CliPersistentStateRunner
 
     private static AcceptanceMergeCommitResult GuardedAcceptanceAbort(
         GoalId goalId,
-        AcceptanceMergeGuardMismatch mismatch)
+        AcceptanceMergeGuardMismatch mismatch,
+        bool passingGateReceiptRecorded)
     {
-        var reason = AcceptanceMergeGuard.BuildAbortMessage(goalId, mismatch, verificationPassed: true);
+        var reason = AcceptanceMergeGuard.BuildAbortMessage(goalId, mismatch, passingGateReceiptRecorded);
         return new AcceptanceMergeCommitResult(false, reason, mismatch);
     }
 

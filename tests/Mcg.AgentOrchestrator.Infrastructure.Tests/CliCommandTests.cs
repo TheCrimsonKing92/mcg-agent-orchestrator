@@ -578,6 +578,8 @@ public abstract class CliCommandTestBase
 
         public Action<AgentOrchestratorKernel>? BeforeNextTransaction { get; set; }
 
+        public Action<AgentOrchestratorKernel>? BeforeNextLoadAsync { get; set; }
+
         public Action<CancellationToken>? BeforeSaveCommit { get; set; }
 
         public Action<AgentOrchestratorKernel>? BeforeGoalCasRetry { get; set; }
@@ -591,6 +593,12 @@ public abstract class CliCommandTestBase
             if (ThrowOnLoadAsync)
             {
                 throw new InvalidOperationException("LoadAsync is not allowed for this test.");
+            }
+
+            if (BeforeNextLoadAsync is { } before)
+            {
+                BeforeNextLoadAsync = null;
+                before(_kernel);
             }
 
             RecordLoadBoundary();

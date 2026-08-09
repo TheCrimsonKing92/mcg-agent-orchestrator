@@ -108,11 +108,11 @@ internal static class AcceptanceMergeGuard
     public static string BuildAbortMessage(
         GoalId goalId,
         AcceptanceMergeGuardMismatch mismatch,
-        bool verificationPassed) =>
+        bool passingGateReceiptRecorded) =>
         $"Goal '{goalId.Value[..8]}' acceptance merge aborted: {mismatch.Describe()}. " +
-        (verificationPassed
-            ? "The passing verification was retained; quiesce conductor mutations for this goal before the next landing attempt."
-            : "Acceptance stopped before verification; quiesce conductor mutations for this goal before trying again.");
+        (passingGateReceiptRecorded
+            ? "The passing gate receipt remains recorded; quiesce conductor mutations for this goal before the next landing attempt."
+            : "No passing gate receipt was recorded for this attempt; quiesce conductor mutations for this goal before trying again.");
 
     private static string FormatTaskIds(IReadOnlyList<string> taskIds)
     {

@@ -141,7 +141,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
         {
             var preflightAbort = new AcceptanceMergeCommitResult(
                 false,
-                AcceptanceMergeGuard.BuildAbortMessage(goal.Id, preflightMismatch, verificationPassed: false),
+                AcceptanceMergeGuard.BuildAbortMessage(goal.Id, preflightMismatch, passingGateReceiptRecorded: false),
                 preflightMismatch);
             RecordAcceptanceGuardAbort(
                 context,
@@ -437,6 +437,7 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
             goal.Id,
             expectedMergeGuard ?? AcceptanceMergeGuard.Capture(context.Kernel, goal.Id),
             testedWorktreeHead,
+            PassingGateReceiptRecorded: verification is { Passed: true },
             Merge: () =>
             {
                 var pendingRollback = GoalRollbackPlanner.CapturePendingAcceptance(context.Workspace.ExecutionDirectory, goal.Id);
@@ -833,6 +834,7 @@ private static void RecordAcceptanceGuardAbort(
     AcceptanceVerificationResult? verification,
     string stage)
 {
+    context.RegisterAcceptanceGuardAbort();
     var detail = abort.Message ?? "Acceptance merge aborted because a landing guard changed.";
     var field = abort.GuardAbort?.Field ?? "unknown";
     GoalOperationJournal.AcceptanceAborted(
@@ -844,11 +846,14 @@ private static void RecordAcceptanceGuardAbort(
         $"Acceptance aborted:state-guard for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {detail}",
         acceptanceAttemptStartedAt,
         GoalOperationJournal.TryExtractBaseBuildCacheReceipt(verification));
+    var abortEvent =
+        $"ACCEPTANCE goal={goal.Id.Value[..8]} result=aborted stage={stage} field={FormatConductEventChecks([field])} checks={FormatConductEventChecks([detail])}";
     AppendConductEvent(
         context,
         "acceptance",
         goal.Id,
-        $"ACCEPTANCE goal={goal.Id.Value[..8]} result=aborted stage={stage} field={FormatConductEventChecks([field])} checks={FormatConductEventChecks([detail])}");
+        abortEvent);
+    Console.WriteLine(abortEvent);
     Console.WriteLine(
         $"BLOCKER step=acceptance-state-guard reason=aborted field=\"{EscapeBlockerDetail(field)}\" " +
         $"detail=\"{EscapeBlockerDetail(detail)}\" action=\"Quiesce conductor mutations for this goal before another landing attempt; do not use a bare retry while the goal is changing.\"");
