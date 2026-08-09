@@ -30,15 +30,13 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.False(ConductorAutonomyPolicy.Manual.AllowsAutonomousHighRiskOwnership);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_presets_have_positive_budget_and_workers")]
-    public void ConductorAutonomyPolicyPresetsHavePositiveBudgetAndWorkers()
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_presets_have_positive_worker_and_evidence_caps")]
+    public void ConductorAutonomyPolicyPresetsHavePositiveWorkerAndEvidenceCaps()
     {
         foreach (var policy in ConductorAutonomyPolicy.All)
         {
             Assert.True(policy.MaxConcurrentPaidWorkers > 0,
                 $"{policy.Name}: MaxConcurrentPaidWorkers must be > 0");
-            Assert.True(policy.MaxTotalBudget > 0,
-                $"{policy.Name}: MaxTotalBudget must be > 0");
             Assert.True(policy.MaxFocusedEvidenceRunsPerRound > 0,
                 $"{policy.Name}: MaxFocusedEvidenceRunsPerRound must be > 0");
         }
@@ -164,15 +162,6 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Contains(errors, e => e.Contains("maxConcurrentPaidWorkers", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_negative_budget")]
-    public void ConductorAutonomyPolicyValidationRejectsNegativeBudget()
-    {
-        var policy = ConductorAutonomyPolicy.Conservative with { MaxTotalBudget = -1m };
-        var errors = policy.Validate();
-        Assert.True(errors.Count > 0);
-        Assert.Contains(errors, e => e.Contains("maxTotalBudget", StringComparison.Ordinal));
-    }
-
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_nonpositive_focused_evidence_cap")]
     public void ConductorAutonomyPolicyValidationRejectsNonpositiveFocusedEvidenceCap()
     {
@@ -181,19 +170,6 @@ public sealed class ConductorAutonomyPolicyTests
 
         Assert.Contains(errors, error =>
             error.Contains("maxFocusedEvidenceRunsPerRound", StringComparison.Ordinal));
-    }
-
-    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_provider_cap_exceeding_total")]
-    public void ConductorAutonomyPolicyValidationRejectsProviderCapExceedingTotal()
-    {
-        var policy = ConductorAutonomyPolicy.Conservative with
-        {
-            MaxTotalBudget = 5m,
-            PerProviderBudgetCaps = new Dictionary<string, decimal> { ["anthropic"] = 10m }
-        };
-        var errors = policy.Validate();
-        Assert.True(errors.Count > 0);
-        Assert.Contains(errors, e => e.Contains("anthropic", StringComparison.Ordinal) && e.Contains("exceeds", StringComparison.Ordinal));
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_missing_lifecycle_state")]
@@ -220,7 +196,8 @@ public sealed class ConductorAutonomyPolicyTests
 
         Assert.Equal(original.Name, restored.Name);
         Assert.Equal(original.MaxConcurrentPaidWorkers, restored.MaxConcurrentPaidWorkers);
-        Assert.Equal(original.MaxTotalBudget, restored.MaxTotalBudget);
+        Assert.DoesNotContain("maxTotalBudget", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("perProviderBudgetCaps", json, StringComparison.Ordinal);
         Assert.Equal(original.MaxEmptyOutputDispatchRetries, restored.MaxEmptyOutputDispatchRetries);
         Assert.Equal(original.MaxEmptyOutputAutoRecoverCycles, restored.MaxEmptyOutputAutoRecoverCycles);
         Assert.Equal(original.EmptyOutputRetryInitialDelaySeconds, restored.EmptyOutputRetryInitialDelaySeconds);
@@ -249,23 +226,98 @@ public sealed class ConductorAutonomyPolicyTests
             "Manual AutoPromoteRiskThreshold should round-trip as null");
     }
 
-    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_JSON_round_trip_with_provider_caps")]
-    public void ConductorAutonomyPolicyJsonRoundTripWithProviderCaps()
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_ignores_retired_budget_keys")]
+    public void ConductorAutonomyPolicyParseJsonIgnoresRetiredBudgetKeys()
     {
-        var original = ConductorAutonomyPolicy.Permissive with
-        {
-            PerProviderBudgetCaps = new Dictionary<string, decimal>
+        var currentJson = ConductorAutonomyPolicy.Permissive.ToJson();
+        var legacyJson = """
             {
-                ["anthropic"] = 15m,
-                ["openai"] = 10m
-            }
-        };
-        var json = original.ToJson();
-        var restored = ConductorAutonomyPolicy.ParseJson(json);
+              "maxTotalBudget": 20.0,
+              "perProviderBudgetCaps": {
+                "anthropic": 15.0,
+                "openai": 10.0
+              },
+            """ + currentJson[1..];
 
-        Assert.True(restored.PerProviderBudgetCaps is not null);
-        Assert.Equal(15m, restored.PerProviderBudgetCaps!["anthropic"]);
-        Assert.Equal(10m, restored.PerProviderBudgetCaps!["openai"]);
+        var restored = ConductorAutonomyPolicy.ParseJson(legacyJson);
+        var reserialized = restored.ToJson();
+
+        Assert.Equal(ConductorAutonomyPolicy.Permissive.Name, restored.Name);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Permissive.MaxConcurrentPaidWorkers,
+            restored.MaxConcurrentPaidWorkers);
+        foreach (var state in Enum.GetValues<GoalLifecycleState>())
+        {
+            Assert.Equal(
+                ConductorAutonomyPolicy.Permissive.TransitionMap[state],
+                restored.TransitionMap[state]);
+        }
+        Assert.DoesNotContain("maxTotalBudget", reserialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_ignores_malformed_retired_total_budget")]
+    public void ConductorAutonomyPolicyParseJsonIgnoresMalformedRetiredTotalBudget()
+    {
+        var currentJson = ConductorAutonomyPolicy.Conservative.ToJson();
+        var legacyJson = """
+            {
+              "maxTotalBudget": "not-a-budget",
+            """ + currentJson[1..];
+
+        var restored = ConductorAutonomyPolicy.ParseJson(legacyJson);
+        var reserialized = restored.ToJson();
+
+        Assert.Equal(ConductorAutonomyPolicy.Conservative.Name, restored.Name);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers,
+            restored.MaxConcurrentPaidWorkers);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.MaxCriterionRetries,
+            restored.MaxCriterionRetries);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.AutoPromoteRiskThreshold,
+            restored.AutoPromoteRiskThreshold);
+        foreach (var state in Enum.GetValues<GoalLifecycleState>())
+        {
+            Assert.Equal(
+                ConductorAutonomyPolicy.Conservative.TransitionMap[state],
+                restored.TransitionMap[state]);
+        }
+        Assert.DoesNotContain("maxTotalBudget", reserialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_ignores_malformed_retired_provider_budget_caps")]
+    public void ConductorAutonomyPolicyParseJsonIgnoresMalformedRetiredProviderBudgetCaps()
+    {
+        var currentJson = ConductorAutonomyPolicy.Conservative.ToJson();
+        var legacyJson = """
+            {
+              "perProviderBudgetCaps": ["not-a-provider-map"],
+            """ + currentJson[1..];
+
+        var restored = ConductorAutonomyPolicy.ParseJson(legacyJson);
+        var reserialized = restored.ToJson();
+
+        Assert.Equal(ConductorAutonomyPolicy.Conservative.Name, restored.Name);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers,
+            restored.MaxConcurrentPaidWorkers);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.MaxCriterionRetries,
+            restored.MaxCriterionRetries);
+        Assert.Equal(
+            ConductorAutonomyPolicy.Conservative.AutoPromoteRiskThreshold,
+            restored.AutoPromoteRiskThreshold);
+        foreach (var state in Enum.GetValues<GoalLifecycleState>())
+        {
+            Assert.Equal(
+                ConductorAutonomyPolicy.Conservative.TransitionMap[state],
+                restored.TransitionMap[state]);
+        }
+        Assert.DoesNotContain("maxTotalBudget", reserialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_rejects_invalid_JSON")]
@@ -283,7 +335,6 @@ public sealed class ConductorAutonomyPolicyTests
             {
               "name": "test",
               "maxConcurrentPaidWorkers": 1,
-              "maxTotalBudget": 5.0,
               "autoPromoteRiskThreshold": "DocsOnly",
               "transitionMap": {
                 "Created": "Auto",
@@ -302,7 +353,6 @@ public sealed class ConductorAutonomyPolicyTests
             {
               "name": "test",
               "maxConcurrentPaidWorkers": 1,
-              "maxTotalBudget": 5.0,
               "autoPromoteRiskThreshold": "NotARealTier",
               "transitionMap": {}
             }
@@ -318,7 +368,6 @@ public sealed class ConductorAutonomyPolicyTests
             {
               "name": "test",
               "maxConcurrentPaidWorkers": 1,
-              "maxTotalBudget": 5.0,
               "autoPromoteRiskThreshold": "DocsOnly",
               "transitionMap": {
                 "Created": "Maybe"

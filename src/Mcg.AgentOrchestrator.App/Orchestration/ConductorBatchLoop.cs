@@ -2382,20 +2382,13 @@ internal sealed class ConductorBatchLoop
 
     private static string FormatPolicyValues(string prefix, ConductorAutonomyPolicy policy)
     {
-        var providerCaps = policy.PerProviderBudgetCaps is null
-            ? "none"
-            : string.Join(',', policy.PerProviderBudgetCaps
-                .OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
-                .Select(entry => $"{Sanitize(entry.Key)}:{entry.Value}"));
         var transitions = string.Join(',', policy.TransitionMap
             .OrderBy(entry => entry.Key)
             .Select(entry => $"{entry.Key}:{entry.Value}"));
 
         return $"{prefix}Name={Sanitize(policy.Name)} " +
                $"{prefix}MaxConcurrentPaidWorkers={policy.MaxConcurrentPaidWorkers} " +
-               $"{prefix}MaxTotalBudget={policy.MaxTotalBudget} " +
                $"{prefix}MaxCriterionRetries={policy.MaxCriterionRetries} " +
-               $"{prefix}PerProviderBudgetCaps={providerCaps} " +
                $"{prefix}AutoPromoteRiskThreshold={policy.AutoPromoteRiskThreshold?.ToString() ?? "none"} " +
                $"{prefix}MaxEmptyOutputDispatchRetries={policy.MaxEmptyOutputDispatchRetries} " +
                $"{prefix}MaxEmptyOutputAutoRecoverCycles={policy.MaxEmptyOutputAutoRecoverCycles} " +

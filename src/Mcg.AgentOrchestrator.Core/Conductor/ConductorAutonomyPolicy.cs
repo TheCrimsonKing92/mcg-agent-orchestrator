@@ -23,15 +23,13 @@ public enum ChangeRiskTier
     Broad = 4
 }
 
-// Immutable autonomy envelope for the upcoming conductor. Controls concurrency, budget caps,
+// Immutable autonomy envelope for the upcoming conductor. Controls concurrency, retry limits,
 // risk-gated auto-promotion at Merged, and per-lifecycle-state Auto/Escalate decisions.
 // Load from .orchestrator/conductor-policy.json or use a named preset.
 public sealed record ConductorAutonomyPolicy(
     string Name,
     int MaxConcurrentPaidWorkers,
-    decimal MaxTotalBudget,
     int MaxCriterionRetries,
-    IReadOnlyDictionary<string, decimal>? PerProviderBudgetCaps,
     ChangeRiskTier? AutoPromoteRiskThreshold,
     IReadOnlyDictionary<GoalLifecycleState, ConductorTransitionDecision> TransitionMap,
     int MaxEmptyOutputDispatchRetries = 8,
@@ -55,9 +53,7 @@ public sealed record ConductorAutonomyPolicy(
     public static ConductorAutonomyPolicy Conservative { get; } = new(
         "Conservative",
         MaxConcurrentPaidWorkers: 4,
-        MaxTotalBudget: 5.00m,
         MaxCriterionRetries: 1,
-        PerProviderBudgetCaps: null,
         AutoPromoteRiskThreshold: ChangeRiskTier.DocsOnly,
         TransitionMap: new Dictionary<GoalLifecycleState, ConductorTransitionDecision>
         {
@@ -83,19 +79,15 @@ public sealed record ConductorAutonomyPolicy(
     public static ConductorAutonomyPolicy Permissive { get; } = new(
         "Permissive",
         MaxConcurrentPaidWorkers: 5,
-        MaxTotalBudget: 20.00m,
         MaxCriterionRetries: 2,
-        PerProviderBudgetCaps: null,
         AutoPromoteRiskThreshold: ChangeRiskTier.Broad,
         TransitionMap: BuildUniformMap(ConductorTransitionDecision.Auto));
 
-    // Escalate everything; no autonomous transitions regardless of risk or budget.
+    // Escalate everything; no autonomous transitions regardless of risk.
     public static ConductorAutonomyPolicy Manual { get; } = new(
         "Manual",
         MaxConcurrentPaidWorkers: 1,
-        MaxTotalBudget: 2.00m,
         MaxCriterionRetries: 0,
-        PerProviderBudgetCaps: null,
         AutoPromoteRiskThreshold: null,
         TransitionMap: BuildUniformMap(ConductorTransitionDecision.Escalate));
 
@@ -139,9 +131,6 @@ public sealed record ConductorAutonomyPolicy(
         if (MaxConcurrentPaidWorkers <= 0)
             errors.Add($"maxConcurrentPaidWorkers must be greater than zero (got {MaxConcurrentPaidWorkers}).");
 
-        if (MaxTotalBudget <= 0)
-            errors.Add($"maxTotalBudget must be greater than zero (got {MaxTotalBudget}).");
-
         if (MaxCriterionRetries < 0)
             errors.Add($"maxCriterionRetries must be zero or greater (got {MaxCriterionRetries}).");
 
@@ -172,17 +161,6 @@ public sealed record ConductorAutonomyPolicy(
         if (MaxFocusedEvidenceRunsPerRound <= 0)
             errors.Add($"maxFocusedEvidenceRunsPerRound must be greater than zero (got {MaxFocusedEvidenceRunsPerRound}).");
 
-        if (PerProviderBudgetCaps is not null)
-        {
-            foreach (var (provider, cap) in PerProviderBudgetCaps)
-            {
-                if (cap <= 0)
-                    errors.Add($"perProviderBudgetCaps[\"{provider}\"] must be greater than zero (got {cap}).");
-                else if (cap > MaxTotalBudget)
-                    errors.Add($"perProviderBudgetCaps[\"{provider}\"] ({cap}) exceeds maxTotalBudget ({MaxTotalBudget}).");
-            }
-        }
-
         foreach (var state in AllStates)
         {
             if (!TransitionMap.ContainsKey(state))
@@ -199,7 +177,6 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine("{");
         sb.AppendLine($"  \"name\": {JsonStr(Name)},");
         sb.AppendLine($"  \"maxConcurrentPaidWorkers\": {MaxConcurrentPaidWorkers},");
-        sb.AppendLine($"  \"maxTotalBudget\": {MaxTotalBudget},");
         sb.AppendLine($"  \"maxCriterionRetries\": {MaxCriterionRetries},");
         sb.AppendLine($"  \"maxEmptyOutputDispatchRetries\": {MaxEmptyOutputDispatchRetries},");
         sb.AppendLine($"  \"maxEmptyOutputAutoRecoverCycles\": {MaxEmptyOutputAutoRecoverCycles},");
@@ -209,22 +186,6 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"reviewAutoRetryWarningRound\": {ReviewAutoRetryWarningRound},");
         sb.AppendLine($"  \"reviewAutoRetryStopRound\": {ReviewAutoRetryStopRound},");
         sb.AppendLine($"  \"maxFocusedEvidenceRunsPerRound\": {MaxFocusedEvidenceRunsPerRound},");
-
-        if (PerProviderBudgetCaps is { Count: > 0 })
-        {
-            sb.AppendLine("  \"perProviderBudgetCaps\": {");
-            var caps = PerProviderBudgetCaps.ToArray();
-            for (var i = 0; i < caps.Length; i++)
-            {
-                var comma = i < caps.Length - 1 ? "," : "";
-                sb.AppendLine($"    {JsonStr(caps[i].Key)}: {caps[i].Value}{comma}");
-            }
-            sb.AppendLine("  },");
-        }
-        else
-        {
-            sb.AppendLine("  \"perProviderBudgetCaps\": null,");
-        }
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
             ? $"  \"autoPromoteRiskThreshold\": {JsonStr(AutoPromoteRiskThreshold.Value.ToString())},"
@@ -268,7 +229,6 @@ public sealed record ConductorAutonomyPolicy(
                 throw new FormatException(
                     $"conductor-policy.json{src}: name is required and must be a non-empty string.");
             var maxWorkers = RequireInt(root, "maxConcurrentPaidWorkers", src);
-            var maxBudget = RequireDecimal(root, "maxTotalBudget", src);
             var maxCriterionRetries = root.TryGetProperty("maxCriterionRetries", out _)
                 ? RequireInt(root, "maxCriterionRetries", src)
                 : 1;
@@ -296,21 +256,6 @@ public sealed record ConductorAutonomyPolicy(
             var maxFocusedEvidenceRunsPerRound = root.TryGetProperty("maxFocusedEvidenceRunsPerRound", out _)
                 ? RequireInt(root, "maxFocusedEvidenceRunsPerRound", src)
                 : 2;
-
-            IReadOnlyDictionary<string, decimal>? providerCaps = null;
-            if (root.TryGetProperty("perProviderBudgetCaps", out var capsEl)
-                && capsEl.ValueKind == JsonValueKind.Object)
-            {
-                var caps = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-                foreach (var prop in capsEl.EnumerateObject())
-                {
-                    if (!prop.Value.TryGetDecimal(out var cap))
-                        throw new FormatException(
-                            $"conductor-policy.json{src}: perProviderBudgetCaps[\"{prop.Name}\"] must be a number.");
-                    caps[prop.Name] = cap;
-                }
-                providerCaps = caps;
-            }
 
             ChangeRiskTier? riskThreshold = null;
             if (root.TryGetProperty("autoPromoteRiskThreshold", out var thresholdEl)
@@ -349,9 +294,7 @@ public sealed record ConductorAutonomyPolicy(
             var policy = new ConductorAutonomyPolicy(
                 name,
                 maxWorkers,
-                maxBudget,
                 maxCriterionRetries,
-                providerCaps,
                 riskThreshold,
                 transitionMap,
                 maxEmptyOutputDispatchRetries,
@@ -426,14 +369,6 @@ public sealed record ConductorAutonomyPolicy(
         if (!root.TryGetProperty(property, out var el) || !el.TryGetInt32(out var value))
             throw new FormatException(
                 $"conductor-policy.json{src}: {property} is required and must be an integer.");
-        return value;
-    }
-
-    private static decimal RequireDecimal(JsonElement root, string property, string src)
-    {
-        if (!root.TryGetProperty(property, out var el) || !el.TryGetDecimal(out var value))
-            throw new FormatException(
-                $"conductor-policy.json{src}: {property} is required and must be a number.");
         return value;
     }
 

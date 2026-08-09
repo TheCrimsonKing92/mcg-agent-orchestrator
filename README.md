@@ -472,11 +472,13 @@ At each state the conductor decides `Auto` (proceed) or `Escalate` (pause and pa
 
 ### Autonomy policy presets
 
-| Preset | Workers | Budget | Auto-promote threshold | Merging |
-|---|---|---|---|---|
-| `Conservative` *(default)* | 2 | $5 | DocsOnly changes only | Escalates for code/build changes |
-| `Permissive` | 5 | $20 | All change types (DocsOnly → Broad) | Auto for all passing changes |
-| `Manual` | 1 | $2 | None | Escalates at every step |
+| Preset | Workers | Auto-promote threshold | Merging |
+|---|---|---|---|
+| `Conservative` *(default)* | 4 | DocsOnly changes only | Escalates for code/build changes |
+| `Permissive` | 5 | All change types (DocsOnly → Broad) | Auto for all passing changes |
+| `Manual` | 1 | None | Escalates at every step |
+
+Conductor policy currently provides no cost ceiling because the shipped providers do not expose comparable, authoritative spend. Retired budget keys in older policy files are accepted and ignored.
 
 **`Auto`** means the conductor proceeds without human sign-off. **`Escalate`** means the conductor writes a blocker to the operator inbox (and pages Discord) and returns without advancing the state.
 
