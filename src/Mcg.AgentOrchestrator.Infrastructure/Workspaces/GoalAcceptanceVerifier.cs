@@ -1071,104 +1071,127 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var maxConcurrentExecutions = allShardsUseMtp
             ? Math.Min(maxConcurrentShards, shardChecks.Count)
             : 1;
-        using var executionSlots = new SemaphoreSlim(
-            maxConcurrentExecutions,
-            maxConcurrentExecutions);
-        var exclusiveResourceLocks = shardChecks
-            .SelectMany(shard => shard.ExclusiveResourceKeys)
-            .Select(key => key.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                key => key,
-                _ => new SemaphoreSlim(1, 1),
-                StringComparer.OrdinalIgnoreCase);
+        var pendingShards = orderedShards.ToList();
+        var activeResourceKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var activeShards = new List<(Task Task, IReadOnlyList<string> ResourceKeys)>();
+        var failures = new List<Exception>();
 
         async Task RunShardAsync(IndexedShard shard)
         {
-            var acquiredResourceLocks = new List<SemaphoreSlim>();
-            var acquiredExecutionSlot = false;
-            try
+            OnInfrastructureShardResourcesAcquiredForTests?.Invoke(shard.Check.Name);
+            var shardClock = Stopwatch.StartNew();
+            var worker = new ShardWorkerLease(
+                primarySlotIndex,
+                primaryLease,
+                primaryBuildPhase);
+            var shardResultsDirectory = ResolveInfrastructureShardResultsDirectory(
+                worker.Lease.Environment);
+            var run = await RunCheckWithPartitionVerdictCacheAsync(
+                shard.Check,
+                cacheContext,
+                worktreePath,
+                goalId,
+                worker.SlotIndex,
+                worker.Lease,
+                worker.BuildPhase,
+                cancellationToken,
+                shardResultsDirectory).ConfigureAwait(false);
+            shardClock.Stop();
+            outcomes[shard.Index] = new ShardRunOutcome(run.Result, run.Retried);
+            EmitShardTimingProgress(
+                goalId,
+                "shard-complete",
+                shard.Check.Name,
+                worker.SlotIndex,
+                shardClock.Elapsed);
+        }
+
+        while (pendingShards.Count > 0 || activeShards.Count > 0)
+        {
+            while (!cancellationToken.IsCancellationRequested &&
+                   activeShards.Count < maxConcurrentExecutions)
             {
-                foreach (var resourceKey in OrderExclusiveResourceKeys(
-                             shard.Check.ExclusiveResourceKeys))
+                var runnableIndex = pendingShards.FindIndex(shard =>
+                    OrderExclusiveResourceKeys(shard.Check.ExclusiveResourceKeys)
+                        .All(key => !activeResourceKeys.Contains(key)));
+                if (runnableIndex < 0)
                 {
-                    var resourceLock = exclusiveResourceLocks[resourceKey];
-                    await resourceLock.WaitAsync(cancellationToken).ConfigureAwait(false);
-                    acquiredResourceLocks.Add(resourceLock);
+                    break;
                 }
 
-                OnInfrastructureShardResourcesAcquiredForTests?.Invoke(shard.Check.Name);
-                await executionSlots.WaitAsync(cancellationToken).ConfigureAwait(false);
-                acquiredExecutionSlot = true;
-                var shardClock = Stopwatch.StartNew();
-                var worker = new ShardWorkerLease(
-                    primarySlotIndex,
-                    primaryLease,
-                    primaryBuildPhase);
-                var shardResultsDirectory = ResolveInfrastructureShardResultsDirectory(
-                    worker.Lease.Environment);
-                var run = await RunCheckWithPartitionVerdictCacheAsync(
-                    shard.Check,
-                    cacheContext,
-                    worktreePath,
-                    goalId,
-                    worker.SlotIndex,
-                    worker.Lease,
-                    worker.BuildPhase,
-                    cancellationToken,
-                    shardResultsDirectory).ConfigureAwait(false);
-                shardClock.Stop();
-                outcomes[shard.Index] = new ShardRunOutcome(run.Result, run.Retried);
-                EmitShardTimingProgress(
-                    goalId,
-                    "shard-complete",
-                    shard.Check.Name,
-                    worker.SlotIndex,
-                    shardClock.Elapsed);
+                var shard = pendingShards[runnableIndex];
+                pendingShards.RemoveAt(runnableIndex);
+                var resourceKeys = OrderExclusiveResourceKeys(shard.Check.ExclusiveResourceKeys)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                foreach (var resourceKey in resourceKeys)
+                {
+                    if (!activeResourceKeys.Add(resourceKey))
+                    {
+                        throw new InvalidOperationException(
+                            $"Infrastructure shard scheduler reserved active resource key '{resourceKey}' twice.");
+                    }
+                }
+
+                activeShards.Add((RunShardAsync(shard), resourceKeys));
+            }
+
+            if (activeShards.Count == 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new InvalidOperationException(
+                    "Infrastructure shard scheduler has pending work but no runnable or active shard.");
+            }
+
+            var completedTask = await Task.WhenAny(
+                activeShards.Select(active => active.Task)).ConfigureAwait(false);
+            var completedIndex = activeShards.FindIndex(active => active.Task == completedTask);
+            var completedResourceKeys = activeShards[completedIndex].ResourceKeys;
+            activeShards.RemoveAt(completedIndex);
+            try
+            {
+                await completedTask.ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
             }
             finally
             {
-                if (acquiredExecutionSlot)
+                foreach (var resourceKey in completedResourceKeys)
                 {
-                    executionSlots.Release();
+                    if (!activeResourceKeys.Remove(resourceKey))
+                    {
+                        throw new InvalidOperationException(
+                            $"Infrastructure shard scheduler released inactive resource key '{resourceKey}'.");
+                    }
                 }
-
-                for (var index = acquiredResourceLocks.Count - 1; index >= 0; index--)
-                {
-                    acquiredResourceLocks[index].Release();
-                }
             }
         }
 
-        try
+        if (failures.Count > 0)
         {
-            await Task.WhenAll(
-                orderedShards.Select(RunShardAsync)).ConfigureAwait(false);
-            wallClock.Stop();
-            if (outcomes.Any(outcome => outcome is null))
-            {
-                throw new InvalidOperationException(
-                    "Concurrent infrastructure shard execution completed without a verdict for every shard.");
-            }
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        }
 
-            EmitShardTimingProgress(
-                goalId,
-                "shards-complete",
-                $"{shardChecks.Count}-infrastructure-shards",
-                primarySlotIndex,
-                wallClock.Elapsed);
-            var completed = outcomes.Select(outcome => outcome!).ToArray();
-            return new CheckBatchResult(
-                completed.Select(outcome => outcome.Result).ToArray(),
-                completed.Any(outcome => outcome.Retried));
-        }
-        finally
+        cancellationToken.ThrowIfCancellationRequested();
+        wallClock.Stop();
+        if (outcomes.Any(outcome => outcome is null))
         {
-            foreach (var resourceLock in exclusiveResourceLocks.Values)
-            {
-                resourceLock.Dispose();
-            }
+            throw new InvalidOperationException(
+                "Concurrent infrastructure shard execution completed without a verdict for every shard.");
         }
+
+        EmitShardTimingProgress(
+            goalId,
+            "shards-complete",
+            $"{shardChecks.Count}-infrastructure-shards",
+            primarySlotIndex,
+            wallClock.Elapsed);
+        var completed = outcomes.Select(outcome => outcome!).ToArray();
+        return new CheckBatchResult(
+            completed.Select(outcome => outcome.Result).ToArray(),
+            completed.Any(outcome => outcome.Retried));
     }
 
     internal static string ResolveInfrastructureShardResultsDirectory(

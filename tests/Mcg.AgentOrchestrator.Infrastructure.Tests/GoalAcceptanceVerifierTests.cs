@@ -3428,13 +3428,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     "name": "Conflict beta",
                     "filter": "FullyQualifiedName~ConflictBetaTests",
                     "estimatedSerialSeconds": 90,
-                    "exclusiveResourceKeys": [ "shared-a", "beta-only" ]
+                    "exclusiveResourceKeys": [ "shared-a", "alpha-only" ]
                   },
                   {
                     "name": "Disjoint",
                     "filter": "FullyQualifiedName~DisjointTests",
                     "estimatedSerialSeconds": 80,
-                    "exclusiveResourceKeys": [ "disjoint" ]
+                    "exclusiveResourceKeys": [ "alpha-only" ]
                   }
                 ],
                 "mtpInvocations": [
@@ -3588,8 +3588,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_cancellation_while_waiting_for_execution_slot_does_not_over_release")]
-    public async Task GoalAcceptanceVerifierCancellationWhileWaitingForExecutionSlotDoesNotOverRelease()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_cancellation_does_not_admit_pending_shards")]
+    public async Task GoalAcceptanceVerifierCancellationDoesNotAdmitPendingShards()
     {
         GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
         GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
@@ -3647,18 +3647,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             }
             """);
         var bothHoldersStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var waiterParked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseHolders = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var holderCount = 0;
         var waiterRan = 0;
         using var cancellation = new CancellationTokenSource();
-        GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = checkName =>
-        {
-            if (checkName.EndsWith(": Resource waiter", StringComparison.Ordinal))
-            {
-                waiterParked.TrySetResult();
-            }
-        };
         try
         {
             async Task<GoalAcceptanceVerifier.CommandResult> RunShardAsync(
@@ -3713,22 +3705,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 cancellationToken: cancellation.Token);
 
             await bothHoldersStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await waiterParked.Task.WaitAsync(TimeSpan.FromSeconds(5));
             cancellation.Cancel();
             releaseHolders.TrySetResult();
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => verification.WaitAsync(TimeSpan.FromSeconds(5)));
             Assert.Equal(0, Volatile.Read(ref waiterRan));
-            Assert.False(
-                verification.Exception?.Flatten().InnerExceptions
-                    .Any(exception => exception is SemaphoreFullException) ?? false,
-                "Cancellation over-released the execution-slot semaphore.");
         }
         finally
         {
             releaseHolders.TrySetResult();
-            GoalAcceptanceVerifier.OnInfrastructureShardResourcesAcquiredForTests = null;
             GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = null;
             GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
             ResetPartitionVerdictKeyHooks();
