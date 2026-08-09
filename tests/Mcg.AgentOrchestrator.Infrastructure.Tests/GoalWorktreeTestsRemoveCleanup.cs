@@ -341,6 +341,51 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact]
+    public void RemoveSupersededTerminal_ChangedTip_KeepsBranch()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(TaskId.New(), "Do work", AgentRole.Developer);
+            var goal = kernel.CreateGoal("Changed superseded branch", [task]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+            kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
+                "manual", repo, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
+            kernel.CompleteGoal(goal.Id, "Completed before superseded cleanup.");
+            var path = GoalWorktrees.Ensure(repo, goal.Id);
+            var branch = GoalWorktrees.BranchName(goal.Id);
+            File.WriteAllText(Path.Combine(path, "first.txt"), "first");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "First commit");
+            var checkedTip = RunGitOutput(path, "rev-parse", "HEAD").Trim();
+            File.WriteAllText(Path.Combine(path, "second.txt"), "second");
+            RunGit(path, "add", "-A");
+            RunGit(path, "commit", "-m", "Changed after equivalence check");
+            var changedTip = RunGitOutput(path, "rev-parse", "HEAD").Trim();
+
+            var result = GoalWorktrees.RemoveSupersededTerminal(
+                repo,
+                goal.Id,
+                kernel,
+                checkedTip,
+                hasRegisteredWorktree: true,
+                hasBranch: true);
+
+            Assert.False(result.IsComplete);
+            Assert.Contains("branch deletion failed", result.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(Directory.Exists(path));
+            Assert.True(BranchExists(repo, branch));
+            Assert.Equal(changedTip, RunGitOutput(repo, "rev-parse", branch).Trim());
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalWorktrees_remove_deletes_receipt_only_dirty_worktree")]
     public void GoalWorktreesRemoveDeletesReceiptOnlyDirtyWorktree()
     {

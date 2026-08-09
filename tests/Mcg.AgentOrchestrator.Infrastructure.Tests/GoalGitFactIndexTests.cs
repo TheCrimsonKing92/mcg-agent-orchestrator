@@ -5,6 +5,23 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalGitFactIndexTests
 {
+    [Xunit.Theory]
+    [Xunit.InlineData(0, "- 1111111111111111111111111111111111111111\n- 2222222222222222222222222222222222222222\n", "EquivalentToMain")]
+    [Xunit.InlineData(0, "- 1111111111111111111111111111111111111111\n+ 2222222222222222222222222222222222222222\n", "AbsentFromMain")]
+    [Xunit.InlineData(1, "", "Inconclusive")]
+    [Xunit.InlineData(0, "", "Inconclusive")]
+    [Xunit.InlineData(0, "unexpected output", "Inconclusive")]
+    [Xunit.InlineData(0, "- not-an-object-id", "Inconclusive")]
+    public void ClassifyCherryResult_Output_ReturnsExpectedState(
+        int exitCode,
+        string output,
+        string expected)
+    {
+        var result = GoalGitFactIndex.ClassifyCherryResult(new GitCli.GitResult(exitCode, output, string.Empty));
+
+        Assert.Equal(expected, result.ToString());
+    }
+
     [Xunit.Fact(DisplayName = "GoalGitFactIndex_parse_branch_tips_keeps_present_and_ignores_malformed_lines")]
     public void GoalGitFactIndexParseBranchTipsKeepsPresentAndIgnoresMalformedLines()
     {
