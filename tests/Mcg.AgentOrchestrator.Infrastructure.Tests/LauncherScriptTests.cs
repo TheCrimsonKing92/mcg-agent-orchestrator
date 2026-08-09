@@ -74,7 +74,7 @@ public sealed class LauncherScriptTests
     {
         var repoRoot = FindLauncherSourceRoot();
         var runbook = File.ReadAllText(Path.Combine(repoRoot, "docs", "operator-runbook.md"));
-        var withoutWarning = runbook.Replace(
+        var withoutWarning = CollapseWhitespace(runbook).Replace(
             "do not bypass the gate",
             string.Empty,
             StringComparison.OrdinalIgnoreCase);
