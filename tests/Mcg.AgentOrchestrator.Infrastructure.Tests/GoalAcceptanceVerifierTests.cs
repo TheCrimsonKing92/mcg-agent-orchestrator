@@ -276,6 +276,8 @@ public sealed class HermeticVerificationEnvironmentTests
         Assert.All(environment.Keys, name => Assert.True(
             GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(name),
             $"Unexpected verification environment variable survived: {name}"));
+        Assert.True(GoalAcceptanceVerifier.IsHermeticVerificationEnvironmentVariable(
+            GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable));
     }
 
     [Xunit.Fact(DisplayName = "Hermetic_verification_scopes_the_NuGet_HTTP_cache_to_the_build_environment")]

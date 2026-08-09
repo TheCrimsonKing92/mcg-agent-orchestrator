@@ -127,7 +127,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             PostLandingCanaryFailureReason.Reject,
             PostLandingCanaryCommand.ClassifyFailure(productReject, executedTestCount: 1));
         Assert.Equal(
-            PostLandingCanaryFailureReason.InfrastructureError,
+            PostLandingCanaryFailureReason.Reject,
             PostLandingCanaryCommand.ClassifyFailure(productReject, executedTestCount: 0));
     }
 
@@ -161,7 +161,7 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
                 PostLandingCanaryFailureReason.EvaluatedArtifactFailure,
                 "landed artifact failed to build")));
         Assert.Equal(
-            PostLandingCanaryFaultDisposition.EnvironmentFault,
+            PostLandingCanaryFaultDisposition.VerdictFailure,
             PostLandingCanaryFailureClassifier.Classify(PostLandingCanaryOutcome.Failed(
                 PostLandingCanaryFailureReason.EmptyReceipt,
                 "evaluation reported green without executing tests")));
@@ -490,8 +490,8 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
         Assert.False(ConductorBatchLoop.IsAcceptanceEngineCircuitHoldRequired(GoalStatus.Verified, cleared));
     }
 
-    [Xunit.Fact(DisplayName = "A canary with no executed-test receipt remains unverified without tripping the circuit")]
-    public async Task EmptyReceiptRemainsUnverifiedWithoutCircuitFailure()
+    [Xunit.Fact(DisplayName = "A canary with an empty accept receipt trips the circuit as a verdict failure")]
+    public async Task EmptyReceiptTripsCircuitAsVerdictFailure()
     {
         using var fixture = new CanaryTestFixture();
         var (coordinator, circuit) = fixture.CreateCoordinator(
@@ -504,12 +504,33 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             new PostLandingCanaryRequest("sha-empty-receipt", ["engine/empty-receipt"]),
             CancellationToken.None);
 
+        Assert.Equal(PostLandingCanaryDisposition.Failed, disposition);
+        var failed = circuit.Read();
+        Assert.Equal(AcceptanceEngineHealth.Unhealthy, failed.Health);
+        Assert.Equal("empty-receipt", failed.FailureReason);
+    }
+
+    [Xunit.Fact(DisplayName = "A canary infrastructure failure remains unverified and tells the operator")]
+    public async Task InfrastructureFailureRemainsUnverifiedAndRaisesOperatorItem()
+    {
+        using var fixture = new CanaryTestFixture();
+        var (coordinator, circuit) = fixture.CreateCoordinator(
+            new FakeRunner((_, _) => Task.FromResult(PostLandingCanaryOutcome.Failed(
+                PostLandingCanaryFailureReason.InfrastructureError,
+                "receipt directory preflight was not writable"))),
+            maxAttempts: 1);
+
+        var disposition = await coordinator.RunAsync(
+            new PostLandingCanaryRequest("sha-infrastructure-failure", ["engine/infrastructure-failure"]),
+            CancellationToken.None);
+
         Assert.Equal(PostLandingCanaryDisposition.Abandoned, disposition);
         Assert.Equal(AcceptanceEngineHealth.Healthy, circuit.Read().Health);
-        var abandoned = Assert.Single((await fixture.RawStore.ReadByTypeSinceAsync(RunEventTypes.PostLandingCanary))
-            .Where(item => item.Operation == "abandoned"));
-        Assert.Equal("Unverified", abandoned.Status);
-        Assert.Contains("no completed-test receipt", abandoned.Detail, StringComparison.Ordinal);
+        var item = Assert.Single(await fixture.OperatorItems.GetAttentionQueueAsync());
+        Assert.Equal("Post-landing canary never evaluated sha-infrastructure-failure", item.Subject);
+        Assert.Contains("UNVERIFIED after 1 attempts", item.Body, StringComparison.Ordinal);
+        Assert.Contains("receipt directory preflight was not writable", item.Body, StringComparison.Ordinal);
+        Assert.Contains("run-event:", item.Body, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "Hard timeout cancels the runner, abandons unverified at the retry cap, and keeps process-tree kill path")]

@@ -77,10 +77,9 @@ internal static class PostLandingCanaryCommand
         AcceptanceVerificationResult verification,
         int executedTestCount)
     {
-        // A rejection without an executed test receipt has no evidence about the landed artifact.
-        // Keep it on the retry/unverified path instead of tripping the acceptance-engine circuit.
-        if (executedTestCount <= 0 ||
-            verification.Checks is null or { Count: 0 } ||
+        // Missing gate checks or explicit environment interference are canary-infrastructure failures.
+        // A gate rejection with checks remains a verdict failure even if its reporter did not flush a TRX.
+        if (verification.Checks is null or { Count: 0 } ||
             verification.Checks.Any(check =>
                 string.Equals(
                     check.FailureClassification,

@@ -594,8 +594,9 @@ internal sealed class PostLandingCanaryRunner : IPostLandingCanaryRunner
         }
 
         // The verifier's generic owner-root discovery cannot identify this temporary Git worktree
-        // (its .git marker is a file), so pin TRX output beside the durable canary process logs.
-        // The run-unique capture prefix prevents cross-run custody and integrity-level collisions.
+        // (its .git marker is a file), so pin TRX output in the durable canary log directory that this
+        // process already created and proved writable. The original UnauthorizedAccessException's
+        // underlying ownership or integrity-level cause was not established.
         internal string ReceiptPrefix => _capturePrefix;
 
         internal (string StdoutPath, string StderrPath) CreateCaptureFiles(string operation)
