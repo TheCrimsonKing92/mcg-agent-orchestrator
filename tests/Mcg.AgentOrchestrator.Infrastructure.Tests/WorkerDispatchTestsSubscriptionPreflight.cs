@@ -1191,6 +1191,24 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 4:58 PM.",
         failureAt));
 
+    var snapshot = kernel.ExportSnapshot();
+    var goalSnapshot = snapshot.Goals.Single(candidate => candidate.Id == goal.Id.Value);
+    var taskSnapshots = goalSnapshot.Tasks
+        .Select(candidate => candidate.Id == developer.Id.Value
+            ? candidate with { SubscriptionRetryAfter = null }
+            : candidate)
+        .ToArray();
+    kernel.ReplaceWithSnapshot(snapshot with
+    {
+        Goals = snapshot.Goals
+            .Select(candidate => candidate.Id == goal.Id.Value
+                ? candidate with { Tasks = taskSnapshots }
+                : candidate)
+            .ToArray()
+    });
+    goal = kernel.GetGoal(goal.Id);
+    developer = goal.Tasks.Single(candidate => candidate.Id == developer.Id);
+
     var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
         kernel,
         goal,
@@ -1215,6 +1233,13 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         failureAt.AddMinutes(30)));
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.Contains("subscription retry deferred until", ex.Message, StringComparison.Ordinal);
+    Assert.Contains("source: verification history record 1 of 1", ex.Message, StringComparison.Ordinal);
+    Assert.Contains($"completed {failureAt:u}", ex.Message, StringComparison.Ordinal);
+
+    kernel.RetryTask(goal.Id, developer.Id, "Operator cleared the history-derived retry deferral.");
+
+    Assert.Single(developer.VerificationHistory);
+    Assert.False(WorkerProfileDispatcher.IsTaskRetryDeferred(developer, failureAt.AddMinutes(30), out _));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_blocks_same_provider_tasks_during_provider_cooldown")]
