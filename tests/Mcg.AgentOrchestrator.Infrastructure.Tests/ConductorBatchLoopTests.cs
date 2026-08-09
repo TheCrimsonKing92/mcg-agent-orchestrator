@@ -9511,15 +9511,25 @@ public sealed class ConductorBatchLoopTests
             $"{Path.GetFileName(logPath)}.pending-*.jsonl"));
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_retries_genuinely_contended_janitorial_database_and_completes_sweep")]
-    public void BatchLoopRetriesGenuinelyContendedJanitorialDatabaseAndCompletesSweep()
+    [Xunit.Fact(DisplayName = "BatchLoop_retries_contended_janitorial_lock_without_reexecuting_sweep")]
+    public void BatchLoopRetriesContendedJanitorialLockWithoutReexecutingSweep()
     {
         var root = CreateTempDirectory("mcg-conduct-janitorial-contention");
         var dbPath = Path.Combine(root, "state.db");
-        var store = new ReconcileSweepRemediationStore(dbPath);
         using var lockHeld = new ManualResetEventSlim();
         using var releaseLock = new ManualResetEventSlim();
         using var lockReleased = new ManualResetEventSlim();
+        var retryDelays = 0;
+        var store = new ReconcileSweepRemediationStore(
+            dbPath,
+            busyTimeoutSeconds: 1,
+            busyRetryDelay: (_, _, _) =>
+            {
+                retryDelays++;
+                releaseLock.Set();
+                Assert.True(lockReleased.Wait(TimeSpan.FromSeconds(5)), "The operator writer must release before retry.");
+                return Task.CompletedTask;
+            });
         var writer = Task.Run(() =>
         {
             using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -9546,7 +9556,6 @@ public sealed class ConductorBatchLoopTests
 
         Assert.True(lockHeld.Wait(TimeSpan.FromSeconds(5)), "The operator writer must hold the database before the sweep starts.");
         var attempts = 0;
-        var retryDelays = 0;
         string output;
         try
         {
@@ -9561,13 +9570,7 @@ public sealed class ConductorBatchLoopTests
                     MakeDriver(),
                     ConductorAutonomyPolicy.Conservative,
                     NoStopPath(),
-                    maxIterations: 1,
-                    busyWriteDelay: _ =>
-                    {
-                        retryDelays++;
-                        releaseLock.Set();
-                        Assert.True(lockReleased.Wait(TimeSpan.FromSeconds(5)), "The operator writer must release before retry.");
-                    }));
+                    maxIterations: 1));
         }
         finally
         {
@@ -9575,10 +9578,8 @@ public sealed class ConductorBatchLoopTests
             Assert.True(writer.Wait(TimeSpan.FromSeconds(10)), "The operator writer must exit.");
         }
 
-        Assert.Equal(2, attempts);
+        Assert.Equal(1, attempts);
         Assert.Equal(1, retryDelays);
-        Assert.Contains("LOOP_JANITORIAL_RETRYING", output, StringComparison.Ordinal);
-        Assert.Contains("LOOP_JANITORIAL_RETRY_SUCCEEDED", output, StringComparison.Ordinal);
         Assert.DoesNotContain("LOOP_JANITORIAL_FAILED", output, StringComparison.Ordinal);
         Assert.Equal("state-key", store.Observe("state-key", "goal-id", "blocker", "evidence", "remedy").StateKey);
 
@@ -9597,6 +9598,10 @@ public sealed class ConductorBatchLoopTests
         var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
         var writer = new ConductEventLogWriter(logPath);
         var attempts = 0;
+        var (kernel, _) = SimpleGoal("held janitorial degraded signal goal");
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningCount: () => ConductorAutonomyPolicy.Conservative.MaxConcurrentPaidWorkers);
 
         var output = AsyncLocalConsoleRouter.Capture(() =>
             new ConductorBatchLoop(
@@ -9607,19 +9612,16 @@ public sealed class ConductorBatchLoopTests
                 },
                 conductEventLogWriter: writer,
                 writeJitter: () => 0).Run(
-                    new AgentOrchestratorKernel(),
-                    MakeDriver(),
+                    kernel,
+                    driver,
                     ConductorAutonomyPolicy.Conservative,
                     NoStopPath(),
-                    maxIterations: ConductorBatchLoop.JanitorialFailureEscalationThreshold,
+                    maxIterations: ConductorBatchLoop.JanitorialFailureEscalationThreshold * 3,
                     watchInterval: TimeSpan.FromMilliseconds(1),
                     sleepFunc: _ => false,
-                    keepAliveWhenIdle: true,
-                    busyWriteDelay: _ => { }));
+                    keepAliveWhenIdle: true));
 
-        Assert.Equal(
-            ConductorBatchLoop.DefaultMaxJanitorialBusyAttempts * ConductorBatchLoop.JanitorialFailureEscalationThreshold,
-            attempts);
+        Assert.Equal(ConductorBatchLoop.JanitorialFailureEscalationThreshold * 3, attempts);
         Assert.Contains("LOOP_JANITORIAL_DEGRADED", output, StringComparison.Ordinal);
         Assert.Contains($"consecutiveFailures={ConductorBatchLoop.JanitorialFailureEscalationThreshold}", output, StringComparison.Ordinal);
 
@@ -9629,27 +9631,34 @@ public sealed class ConductorBatchLoopTests
         Assert.Single(records, record =>
             record.EventKind == "loop-janitorial-degraded" &&
             record.Detail.Contains("workDeferred=true", StringComparison.Ordinal));
+        Assert.Equal(
+            ConductorBatchLoop.JanitorialFailureEscalationThreshold * 3,
+            records.Count(record => record.EventKind == "loop-janitorial-failure"));
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_fails_fast_on_non_transient_janitorial_failure_and_journals_event")]
-    public void BatchLoopFailsFastOnNonTransientJanitorialFailureAndJournalsEvent()
+    [Xunit.Fact(DisplayName = "BatchLoop_reports_non_transient_janitorial_failure_without_retrying_or_stopping")]
+    public void BatchLoopReportsNonTransientJanitorialFailureWithoutRetryingOrStopping()
     {
         var root = CreateTempDirectory("mcg-conduct-events-janitorial");
         var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
         var writer = new ConductEventLogWriter(logPath);
         var kernel = new AgentOrchestratorKernel();
         var driver = MakeDriver();
+        var sweeps = 0;
 
-        Assert.Throws<InvalidOperationException>(() =>
-            AsyncLocalConsoleRouter.Capture(() =>
-                new ConductorBatchLoop(
-                measuredSweep: _ => throw new InvalidOperationException("janitorial access denied"),
+        AsyncLocalConsoleRouter.Capture(() =>
+            new ConductorBatchLoop(
+                measuredSweep: _ =>
+                {
+                    sweeps++;
+                    throw new InvalidOperationException("janitorial access denied");
+                },
                 conductEventLogWriter: writer).Run(
-                kernel,
-                driver,
-                ConductorAutonomyPolicy.Conservative,
-                NoStopPath(),
-                maxIterations: 1)));
+                    kernel,
+                    driver,
+                    ConductorAutonomyPolicy.Conservative,
+                    NoStopPath(),
+                    maxIterations: 1));
 
         var records = File.ReadAllLines(logPath)
             .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
@@ -9657,13 +9666,17 @@ public sealed class ConductorBatchLoopTests
 
         Assert.Contains(records, record =>
             record.EventKind == "loop-janitorial-failure" &&
+            record.Detail.Contains("transient=false", StringComparison.Ordinal) &&
             record.Detail.Contains("exception=InvalidOperationException", StringComparison.Ordinal) &&
             record.Detail.Contains("janitorial_access_denied", StringComparison.Ordinal));
-        Assert.DoesNotContain(records, record => record.EventKind == "loop-stop");
+        Assert.Equal(1, sweeps);
+        Assert.DoesNotContain(records, record =>
+            record.EventKind == "loop-stop" &&
+            record.Detail.Contains("reason=unintended-exit", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_fails_fast_on_non_transient_idle_wake_janitorial_failure_and_journals_event")]
-    public void BatchLoopFailsFastOnNonTransientIdleWakeJanitorialFailureAndJournalsEvent()
+    [Xunit.Fact(DisplayName = "BatchLoop_reports_non_transient_idle_wake_janitorial_failure_without_stopping_unintentionally")]
+    public void BatchLoopReportsNonTransientIdleWakeJanitorialFailureWithoutStoppingUnintentionally()
     {
         var root = CreateTempDirectory("mcg-conduct-events-idle-wake-janitorial");
         var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
@@ -9675,9 +9688,8 @@ public sealed class ConductorBatchLoopTests
 
         try
         {
-            Assert.Throws<InvalidOperationException>(() =>
-                AsyncLocalConsoleRouter.Capture(() =>
-                    new ConductorBatchLoop(
+            AsyncLocalConsoleRouter.Capture(() =>
+                new ConductorBatchLoop(
                     measuredSweep: _ => ++sweeps == 1
                         ? null
                         : throw new InvalidOperationException("idle wake janitorial access denied"),
@@ -9689,7 +9701,7 @@ public sealed class ConductorBatchLoopTests
                     maxIterations: 1,
                     watchInterval: TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds),
                     wakeSignal: wakeSignal,
-                    keepAliveWhenIdle: true)));
+                    keepAliveWhenIdle: true));
 
             var records = File.ReadAllLines(logPath)
                 .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
@@ -9699,7 +9711,10 @@ public sealed class ConductorBatchLoopTests
                 record.EventKind == "loop-janitorial-failure" &&
                 record.Detail.Contains("phase=idle-wake-sweep", StringComparison.Ordinal) &&
                 record.Detail.Contains("idle_wake_janitorial_access_denied", StringComparison.Ordinal));
-            Assert.DoesNotContain(records, record => record.EventKind == "loop-stop");
+            Assert.Equal(2, sweeps);
+            Assert.DoesNotContain(records, record =>
+                record.EventKind == "loop-stop" &&
+                record.Detail.Contains("reason=unintended-exit", StringComparison.Ordinal));
         }
         finally
         {
@@ -9707,8 +9722,8 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "BatchLoop_fails_fast_on_non_transient_watch_wake_janitorial_failure_and_journals_event")]
-    public void BatchLoopFailsFastOnNonTransientWatchWakeJanitorialFailureAndJournalsEvent()
+    [Xunit.Fact(DisplayName = "BatchLoop_reports_non_transient_watch_wake_janitorial_failure_without_stopping_unintentionally")]
+    public void BatchLoopReportsNonTransientWatchWakeJanitorialFailureWithoutStoppingUnintentionally()
     {
         var root = CreateTempDirectory("mcg-conduct-events-watch-wake-janitorial");
         var logPath = Path.Combine(root, ".orchestrator", "logs", ConductEventLogWriter.CurrentFileName);
@@ -9723,9 +9738,8 @@ public sealed class ConductorBatchLoopTests
 
         try
         {
-            Assert.Throws<InvalidOperationException>(() =>
-                AsyncLocalConsoleRouter.Capture(() =>
-                    new ConductorBatchLoop(
+            AsyncLocalConsoleRouter.Capture(() =>
+                new ConductorBatchLoop(
                     measuredSweep: _ => ++sweeps == 1
                         ? null
                         : throw new InvalidOperationException("watch wake janitorial access denied"),
@@ -9736,7 +9750,7 @@ public sealed class ConductorBatchLoopTests
                     stopFile,
                     maxIterations: 1,
                     watchInterval: TimeSpan.FromSeconds(ConductorBatchLoop.DefaultWatchIntervalSeconds),
-                    wakeSignal: wakeSignal)));
+                    wakeSignal: wakeSignal));
 
             var records = File.ReadAllLines(logPath)
                 .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
@@ -9746,7 +9760,10 @@ public sealed class ConductorBatchLoopTests
                 record.EventKind == "loop-janitorial-failure" &&
                 record.Detail.Contains("phase=wake-sweep", StringComparison.Ordinal) &&
                 record.Detail.Contains("watch_wake_janitorial_access_denied", StringComparison.Ordinal));
-            Assert.DoesNotContain(records, record => record.EventKind == "loop-stop");
+            Assert.Equal(2, sweeps);
+            Assert.DoesNotContain(records, record =>
+                record.EventKind == "loop-stop" &&
+                record.Detail.Contains("reason=unintended-exit", StringComparison.Ordinal));
         }
         finally
         {

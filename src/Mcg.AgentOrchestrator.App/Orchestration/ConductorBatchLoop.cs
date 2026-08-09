@@ -23,7 +23,6 @@ internal sealed class ConductorBatchLoop
     internal const int DefaultMaxBusyWriteAttempts = 1;
     internal const int DispatchRecordContentionSkipLimit = 5;
     internal const int DefaultGracefulDetachCheckpointAttempts = 3;
-    internal const int DefaultMaxJanitorialBusyAttempts = 6;
     internal const int JanitorialFailureEscalationThreshold = 3;
     internal const int ParallelAcceptanceTransientFailureCap = 3;
     internal const int ParallelAcceptanceBoundedOvertakeLimit = 1;
@@ -66,6 +65,7 @@ internal sealed class ConductorBatchLoop
     private readonly Func<double> _writeJitter;
     private readonly Func<string, GoalStatus?> _evictedGoalStatusLookup;
     private readonly TimeSpan _blockedRecheckHeartbeatInterval;
+    // Janitorial phases run only on the conductor loop thread; acceptance work never mutates this state.
     private readonly Dictionary<string, int> _consecutiveJanitorialFailures = new(StringComparer.Ordinal);
     private static readonly AsyncLocal<ConductEventLogWriter?> CurrentConductEventLogWriter = new();
     private static readonly AsyncLocal<RetryDiagnosticCoalescer?> CurrentRetryDiagnostics = new();
@@ -400,7 +400,7 @@ internal sealed class ConductorBatchLoop
 
             var preTickTimingLines = new List<string>();
             var sweepClock = Stopwatch.StartNew();
-            var sweepResult = RunJanitorialPhase("sweep", nextTick, () => _sweep(kernel), busyWriteDelay);
+            var sweepResult = RunJanitorialPhase("sweep", nextTick, () => _sweep(kernel));
             foreach (var sweepEvent in sweepResult?.Events ?? [])
             {
                 EmitProgress(sweepEvent);
@@ -409,7 +409,7 @@ internal sealed class ConductorBatchLoop
             {
                 _recoverInterruptedDispatches(kernel);
                 return true;
-            }, busyWriteDelay);
+            });
             if (pendingSelfRelaunch is not null)
             {
                 var activeDispatches = CountRunningDispatches(kernel, onlyGoalId);
@@ -798,12 +798,12 @@ internal sealed class ConductorBatchLoop
                         : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
                     if (idleSleep == WatchSleepResult.WakeSignaled)
                     {
-                        RunJanitorialPhase("idle-wake-sweep", nextTick, () => _sweep(kernel), busyWriteDelay);
+                        RunJanitorialPhase("idle-wake-sweep", nextTick, () => _sweep(kernel));
                         RunJanitorialPhase("idle-wake-recover-interrupted-dispatches", nextTick, () =>
                         {
                             _recoverInterruptedDispatches(kernel);
                             return true;
-                        }, busyWriteDelay);
+                        });
                         TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "idle-wake-sweep", null, busyWriteDelay);
                     }
 
@@ -1369,12 +1369,12 @@ internal sealed class ConductorBatchLoop
 
                 if (sleepResult == WatchSleepResult.WakeSignaled)
                 {
-                    RunJanitorialPhase("wake-sweep", totalTicks, () => _sweep(kernel), busyWriteDelay);
+                    RunJanitorialPhase("wake-sweep", totalTicks, () => _sweep(kernel));
                     RunJanitorialPhase("wake-recover-interrupted-dispatches", totalTicks, () =>
                     {
                         _recoverInterruptedDispatches(kernel);
                         return true;
-                    }, busyWriteDelay);
+                    });
                     TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "wake-sweep", tickLines, busyWriteDelay);
                 }
 
@@ -1631,22 +1631,11 @@ internal sealed class ConductorBatchLoop
     private T? RunJanitorialPhase<T>(
         string phase,
         int tick,
-        Func<T> action,
-        Action<TimeSpan>? busyDelay)
+        Func<T> action)
     {
-        var attempts = 0;
         try
         {
-            var result = SqliteOrchestratorStateRepository.WithBusyRetryAsync(
-                () => Task.FromResult(Invoke()),
-                CancellationToken.None,
-                maxBusyRetries: DefaultMaxJanitorialBusyAttempts,
-                retryDelay: DelayBeforeRetry).GetAwaiter().GetResult();
-            if (attempts > 1)
-            {
-                EmitProgress(
-                    $"LOOP_JANITORIAL_RETRY_SUCCEEDED tick={tick} phase={SanitizeHandoffDetail(phase)} attempts={attempts}");
-            }
+            var result = action();
 
             if (_consecutiveJanitorialFailures.Remove(phase, out var skippedTicks))
             {
@@ -1655,51 +1644,32 @@ internal sealed class ConductorBatchLoop
             }
 
             return result;
-
-            T Invoke()
-            {
-                attempts++;
-                return action();
-            }
-
-            Task DelayBeforeRetry(int attempt, TimeSpan delay, CancellationToken cancellationToken)
-            {
-                if (attempt == 1)
-                {
-                    EmitProgress(
-                        $"LOOP_JANITORIAL_RETRYING tick={tick} phase={SanitizeHandoffDetail(phase)} " +
-                        $"attempt={attempt} nextAttempt={attempt + 1} delayMs={(long)delay.TotalMilliseconds}");
-                }
-
-                if (busyDelay is null)
-                    return Task.Delay(delay, cancellationToken);
-
-                busyDelay(delay);
-                return Task.CompletedTask;
-            }
         }
         catch (SqliteException ex) when (SqliteOrchestratorStateRepository.IsTransientLock(ex))
+        {
+            RecordFailure(ex, transient: true);
+            return default;
+        }
+        catch (Exception ex)
+        {
+            RecordFailure(ex, transient: false);
+            return default;
+        }
+
+        void RecordFailure(Exception exception, bool transient)
         {
             var consecutiveFailures = _consecutiveJanitorialFailures.GetValueOrDefault(phase) + 1;
             _consecutiveJanitorialFailures[phase] = consecutiveFailures;
             EmitProgress(
-                $"LOOP_JANITORIAL_FAILED tick={tick} phase={SanitizeHandoffDetail(phase)} transient=true " +
-                $"attempts={attempts} consecutiveFailures={consecutiveFailures} exception={ex.GetType().Name} " +
-                $"message={SanitizeHandoffDetail(ex.Message)}");
-            if (consecutiveFailures % JanitorialFailureEscalationThreshold == 0)
+                $"LOOP_JANITORIAL_FAILED tick={tick} phase={SanitizeHandoffDetail(phase)} transient={transient.ToString().ToLowerInvariant()} " +
+                $"attempts=1 consecutiveFailures={consecutiveFailures} exception={exception.GetType().Name} " +
+                $"message={SanitizeHandoffDetail(exception.Message)}");
+            if (consecutiveFailures == JanitorialFailureEscalationThreshold)
             {
                 EmitProgress(
                     $"LOOP_JANITORIAL_DEGRADED tick={tick} phase={SanitizeHandoffDetail(phase)} " +
                     $"consecutiveFailures={consecutiveFailures} workDeferred=true");
             }
-            return default;
-        }
-        catch (Exception ex)
-        {
-            EmitProgress(
-                $"LOOP_JANITORIAL_FAILED tick={tick} phase={SanitizeHandoffDetail(phase)} transient=false " +
-                $"attempts={attempts} exception={ex.GetType().Name} message={SanitizeHandoffDetail(ex.Message)}");
-            throw;
         }
     }
 
@@ -1719,7 +1689,7 @@ internal sealed class ConductorBatchLoop
         if (writer is null || !TryClassifyConductEvent(line, out var kind, out var goalId))
             return;
 
-        var required = kind is "loop-relaunch-rollback" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or
+        var required = kind is "loop-relaunch-rollback" or "loop-janitorial-failure" or "loop-janitorial-degraded" or "goal-stalled" or "sweep-blocker" or
             "sweep-remedy-attempt" or "sweep-remedy-result" or "sweep-escalation" or
             "blocked-recheck-heartbeat" or "policy-reload-failed" ||
             line.StartsWith("LOOP_HANDOFF_FAILED ", StringComparison.Ordinal);
