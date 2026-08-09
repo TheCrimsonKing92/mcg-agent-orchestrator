@@ -186,6 +186,10 @@ public sealed class GoalWorktreeTests
         {
             AcceptanceVerifier = verifier,
             Worktrees = worktrees,
+            // These lifecycle tests run inside the acceptance suite's stable build slot.
+            // Keep the fake verifier isolated from the process-wide slot pool so a nested
+            // slot collision cannot bypass it and turn RunCount assertions nondeterministic.
+            StableSlotSelector = (_, _) => CreateFakeStableSlotLease(root),
             RunGoalPollInterval = TimeSpan.FromMilliseconds(1),
             RunGoalSleep = (_, _) => Task.CompletedTask,
             RunGoalOverride = goal =>
@@ -213,6 +217,23 @@ public sealed class GoalWorktreeTests
                     StopEvidence: null));
             }
         };
+    }
+
+    private static DotnetBuildEnvironmentLease CreateFakeStableSlotLease(string root)
+    {
+        var leaseRoot = Path.Combine(root, ".fake-build-slot");
+        Directory.CreateDirectory(leaseRoot);
+        var lockPath = Path.Combine(leaseRoot, $"{Guid.NewGuid():N}.lock");
+        var stream = new FileStream(lockPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        var environment = new DotnetBuildEnvironment(
+            "fake-lifecycle-slot",
+            leaseRoot,
+            Path.Combine(leaseRoot, "artifacts"),
+            lockPath,
+            [],
+            "build-0",
+            BuildPermitIndex: 0);
+        return new DotnetBuildEnvironmentLease(environment, stream);
     }
 
     private static IReadOnlyList<AgentDefinition> EchoAgents() =>
