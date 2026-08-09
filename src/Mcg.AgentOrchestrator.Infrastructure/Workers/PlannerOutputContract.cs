@@ -190,11 +190,17 @@ internal static partial class PlannerOutputContract
         string rejectionDiagnostic,
         out string diagnostic)
     {
+        var payload = Environment.NewLine +
+            "[orchestrator Planner output contract rejection]" + Environment.NewLine +
+            rejectionDiagnostic + Environment.NewLine;
+        if (ReadCapturedOutputTail(standardErrorPath).EndsWith(payload, StringComparison.Ordinal))
+        {
+            diagnostic = string.Empty;
+            return true;
+        }
+
         try
         {
-            var payload = Environment.NewLine +
-                "[orchestrator Planner output contract rejection]" + Environment.NewLine +
-                rejectionDiagnostic + Environment.NewLine;
             var bytes = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(payload);
             using var stream = new FileStream(
                 standardErrorPath,
@@ -432,7 +438,13 @@ internal static partial class PlannerOutputContract
             }
 
             var hasExplicitDirectory = citedPath.Contains('/') || citedPath.Contains('\\');
-            var candidate = Path.IsPathFullyQualified(citedPath)
+            var isFullyQualifiedCitation = Path.IsPathFullyQualified(citedPath);
+            var candidateCasingRoot = isFullyQualifiedCitation
+                ? null
+                : hasExplicitDirectory || contextualDirectory is null
+                    ? workingDirectory
+                    : contextualDirectory;
+            var candidate = isFullyQualifiedCitation
                 ? citedPath
                 : hasExplicitDirectory || contextualDirectory is null
                     ? Path.Combine(workingDirectory, citedPath.Replace('/', Path.DirectorySeparatorChar))
@@ -451,6 +463,7 @@ internal static partial class PlannerOutputContract
                 if (distinctMatches.Length == 1)
                 {
                     candidate = distinctMatches[0].Path;
+                    candidateCasingRoot = Path.GetDirectoryName(candidate);
                     inheritedNewFileMarker = distinctMatches[0].IsNewFile;
                 }
             }
@@ -475,7 +488,7 @@ internal static partial class PlannerOutputContract
                 continue;
             }
 
-            if (PathExistsWithExactCasing(candidate))
+            if (PathExistsWithExactCasing(candidate, candidateCasingRoot))
             {
                 continue;
             }
@@ -485,7 +498,7 @@ internal static partial class PlannerOutputContract
             foreach (var suffix in CandidatePathSuffixes)
             {
                 var suffixedCandidate = candidate + suffix;
-                if (!PathExistsWithExactCasing(suffixedCandidate))
+                if (!PathExistsWithExactCasing(suffixedCandidate, candidateCasingRoot))
                 {
                     continue;
                 }
@@ -543,7 +556,7 @@ internal static partial class PlannerOutputContract
         return true;
     }
 
-    private static bool PathExistsWithExactCasing(string path)
+    private static bool PathExistsWithExactCasing(string path, string? citationCasingRoot)
     {
         try
         {
@@ -552,20 +565,40 @@ internal static partial class PlannerOutputContract
                 return false;
             }
 
-            var fullPath = Path.GetFullPath(path)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var root = Path.GetPathRoot(fullPath);
-            if (string.IsNullOrEmpty(root))
+            var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+            var traversalRoot = citationCasingRoot is null
+                ? Path.GetPathRoot(fullPath)
+                : Path.TrimEndingDirectorySeparator(Path.GetFullPath(citationCasingRoot));
+            if (string.IsNullOrEmpty(traversalRoot))
             {
                 return false;
             }
 
-            var current = root;
-            var relative = fullPath[root.Length..];
+            var current = traversalRoot;
+            var relative = citationCasingRoot is null
+                ? fullPath[traversalRoot.Length..]
+                : Path.GetRelativePath(traversalRoot, fullPath);
             foreach (var segment in relative.Split(
                          [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                          StringSplitOptions.RemoveEmptyEntries))
             {
+                if (segment == ".")
+                {
+                    continue;
+                }
+
+                if (segment == "..")
+                {
+                    var parent = Directory.GetParent(current);
+                    if (parent is null)
+                    {
+                        return false;
+                    }
+
+                    current = parent.FullName;
+                    continue;
+                }
+
                 var exactEntry = Directory
                     .EnumerateFileSystemEntries(current)
                     .FirstOrDefault(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.Ordinal));

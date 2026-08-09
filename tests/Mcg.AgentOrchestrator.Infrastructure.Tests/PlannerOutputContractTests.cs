@@ -295,6 +295,34 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
+    public void PlannerContract_RelativeCitationIgnoresWorkingDirectoryPrefixCasing()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var workingDirectory = CreateTempDirectory();
+        var sourceDirectory = Path.Combine(workingDirectory, "src");
+        Directory.CreateDirectory(sourceDirectory);
+        File.WriteAllText(Path.Combine(sourceDirectory, "ExistingTarget.cs"), "// fixture");
+        var perturbedWorkingDirectory = new string(workingDirectory.Select(character =>
+            char.IsLetter(character)
+                ? char.IsUpper(character) ? char.ToLowerInvariant(character) : char.ToUpperInvariant(character)
+                : character).ToArray());
+        Xunit.Assert.False(string.Equals(workingDirectory, perturbedWorkingDirectory, StringComparison.Ordinal));
+        Xunit.Assert.True(Directory.Exists(perturbedWorkingDirectory));
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "- Extend `src/ExistingTarget.cs` with focused resolver coverage.");
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, perturbedWorkingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_LiveRoundFiveExtensionlessCitationResolves()
     {
         const string receiptCitation = "tests/Mcg.AgentOrchestrator.Core.Tests/DispatchOutcomeClassifyTests";
@@ -388,8 +416,12 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             new string('x', Mcg.AgentOrchestrator.Core.VerificationTextBounds.BoundThreshold * 2),
             clock);
 
-        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
-            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+        var runner = new BackgroundDispatchRunner(clock, isStillRunning: _ => false);
+        runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+        for (var reconciliation = 0; reconciliation < 5; reconciliation++)
+        {
+            runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
+        }
 
         var expected = $"Offending citation: '{citation}'";
         Xunit.Assert.Contains(expected, task.LastVerification!.StandardError, StringComparison.Ordinal);
@@ -399,7 +431,10 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
                 .CreateVerificationLog(task.LastVerification.StandardError, task.LastVerification.StandardErrorPath)
                 .Text,
             StringComparison.Ordinal);
-        Xunit.Assert.Contains(expected, File.ReadAllText(process.StandardErrorPath), StringComparison.Ordinal);
+        var rejectionLog = File.ReadAllText(process.StandardErrorPath);
+        Xunit.Assert.Contains(expected, rejectionLog, StringComparison.Ordinal);
+        const string rejectionMarker = "[orchestrator Planner output contract rejection]";
+        Xunit.Assert.Equal(1, rejectionLog.Split(rejectionMarker, StringSplitOptions.None).Length - 1);
     }
 
     [Xunit.Fact]
