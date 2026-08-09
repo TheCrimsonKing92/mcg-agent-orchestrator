@@ -3434,7 +3434,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     "name": "Disjoint",
                     "filter": "FullyQualifiedName~DisjointTests",
                     "estimatedSerialSeconds": 80,
-                    "exclusiveResourceKeys": [ "alpha-only" ]
+                    "exclusiveResourceKeys": [ "disjoint-only" ]
                   }
                 ],
                 "mtpInvocations": [
