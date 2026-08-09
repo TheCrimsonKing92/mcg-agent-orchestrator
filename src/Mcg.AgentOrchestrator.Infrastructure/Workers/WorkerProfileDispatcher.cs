@@ -176,7 +176,8 @@ public static class WorkerProfileDispatcher
         int? reviewerMergeTreeTotalConflictPathCount = null,
         string? dispatchLane = null,
         string? modelSelectionReason = null,
-        ReviewRetryCapReceipt? reviewRetryCap = null)
+        ReviewRetryCapReceipt? reviewRetryCap = null,
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -208,7 +209,13 @@ public static class WorkerProfileDispatcher
             ref reviewerMergeTreeTotalConflictPathCount);
 
         WorkerCommandTemplate.WriteHandoffFile(goal.Tasks, task.Id, workingDirectory);
-        var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory, preflightFindings);
+        var citedPriorEvidence = citedPriorEvidenceResolver?.Resolve(goal, task);
+        var contextDirectory = WorkerContextArtifacts.Write(
+            goal,
+            task,
+            workingDirectory,
+            preflightFindings,
+            citedPriorEvidence);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
@@ -396,12 +403,21 @@ public static class WorkerProfileDispatcher
         WorkerProfile profile,
         string promptRoot,
         string workingDirectory,
-        DateTimeOffset dispatchedAt)
+        DateTimeOffset dispatchedAt,
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
     {
         var results = new List<WorkerProfileDispatchResult>();
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList())
         {
-            results.Add(PrepareTask(kernel, goal, task, profile, promptRoot, workingDirectory, dispatchedAt));
+            results.Add(PrepareTask(
+                kernel,
+                goal,
+                task,
+                profile,
+                promptRoot,
+                workingDirectory,
+                dispatchedAt,
+                citedPriorEvidenceResolver: citedPriorEvidenceResolver));
         }
 
         return results;
@@ -421,7 +437,8 @@ public static class WorkerProfileDispatcher
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
         Func<string, bool>? commandExists = null,
-        int? reviewAutoRetryStopRound = null)
+        int? reviewAutoRetryStopRound = null,
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
     {
         EnsureTaskNeedsExecution(task);
 
@@ -487,7 +504,8 @@ public static class WorkerProfileDispatcher
                 ? ReviewRetryCapReceipt.Create(
                     goal,
                     reviewAutoRetryStopRound ?? ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
-                : null);
+                : null,
+            citedPriorEvidenceResolver: citedPriorEvidenceResolver);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -1030,7 +1048,8 @@ public static class WorkerProfileDispatcher
         DateTimeOffset dispatchedAt,
         IReadOnlySet<TaskId>? taskIdsToPrepare = null,
         Func<string, bool>? commandExists = null,
-        int? reviewAutoRetryStopRound = null)
+        int? reviewAutoRetryStopRound = null,
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
     {
         return PrepareSubscriptionReadyBatch(
             kernel,
@@ -1042,7 +1061,8 @@ public static class WorkerProfileDispatcher
             dispatchedAt,
             taskIdsToPrepare,
             commandExists,
-            reviewAutoRetryStopRound).Dispatches;
+            reviewAutoRetryStopRound,
+            citedPriorEvidenceResolver).Dispatches;
     }
 
     public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
@@ -1055,7 +1075,8 @@ public static class WorkerProfileDispatcher
         DateTimeOffset dispatchedAt,
         IReadOnlySet<TaskId>? taskIdsToPrepare = null,
         Func<string, bool>? commandExists = null,
-        int? reviewAutoRetryStopRound = null)
+        int? reviewAutoRetryStopRound = null,
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1131,7 +1152,8 @@ public static class WorkerProfileDispatcher
                     ? ReviewRetryCapReceipt.Create(
                         goal,
                         reviewAutoRetryStopRound ?? ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
-                    : null));
+                    : null,
+                citedPriorEvidenceResolver: citedPriorEvidenceResolver));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);

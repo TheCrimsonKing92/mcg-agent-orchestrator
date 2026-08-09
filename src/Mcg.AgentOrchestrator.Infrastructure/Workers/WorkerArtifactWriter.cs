@@ -28,7 +28,8 @@ internal sealed class WorkerArtifactWriter
         Goal goal,
         TaskSpec task,
         string workingDirectory,
-        IReadOnlyList<string>? preflightFindings = null)
+        IReadOnlyList<string>? preflightFindings = null,
+        string? citedPriorEvidence = null)
     {
         var scratchRoot = Path.Combine(workingDirectory, ".orchestrator-context");
         var contextDirectory = Path.Combine(scratchRoot, goal.Id.Value);
@@ -62,6 +63,9 @@ internal sealed class WorkerArtifactWriter
         WriteText(
             Path.Combine(contextDirectory, "prior-task-evidence.md"),
             BuildPriorTaskEvidence(goal.Tasks, task.Id, durablePlannerPlans));
+        WriteOptionalArtifact(
+            Path.Combine(contextDirectory, "prior-goal-evidence.md"),
+            citedPriorEvidence);
         WriteText(Path.Combine(contextDirectory, "deterministic-verification.md"), BuildDeterministicVerification(goal, task, workingDirectory));
         WriteText(Path.Combine(contextDirectory, "workflow-brokers.md"), BuildWorkflowBrokers(goal, task, workingDirectory, plannerUsesDurableResearch));
         WriteText(Path.Combine(contextDirectory, "context-budget.md"), BuildContextBudget(goal, task, workingDirectory, plannerUsesDurableResearch));
@@ -81,7 +85,15 @@ internal sealed class WorkerArtifactWriter
             WriteText(Path.Combine(contextDirectory, "subscription-preflight.md"), BuildPreflight(preflightFindings));
         }
 
-        WriteText(Path.Combine(contextDirectory, "digest.md"), BuildDigest(goal, task, workingDirectory, preflightFindings, plannerUsesDurableResearch));
+        WriteText(
+            Path.Combine(contextDirectory, "digest.md"),
+            BuildDigest(
+                goal,
+                task,
+                workingDirectory,
+                preflightFindings,
+                plannerUsesDurableResearch,
+                !string.IsNullOrEmpty(citedPriorEvidence)));
 
         var guidanceFiles = CopyGuidanceFiles(workingDirectory, contextDirectory);
         WriteText(
@@ -126,7 +138,8 @@ internal sealed class WorkerArtifactWriter
         TaskSpec task,
         string workingDirectory,
         IReadOnlyList<string>? preflightFindings,
-        bool plannerUsesDurableResearch)
+        bool plannerUsesDurableResearch,
+        bool hasCitedPriorEvidence = false)
     {
         var priorTasks = goal.Tasks
             .TakeWhile(t => t.Id != task.Id)
@@ -214,6 +227,10 @@ internal sealed class WorkerArtifactWriter
 
         lines.Add("- prior-task-summaries.md: compact prior task summaries; read before full evidence.");
         lines.Add("- prior-task-evidence.md: fuller prior verification output; read after summaries when needed.");
+        if (hasCitedPriorEvidence)
+        {
+            lines.Add("- prior-goal-evidence.md: bounded classifier receipts and verification summaries for prior goal/task ids cited by the brief.");
+        }
         if (File.Exists(Path.Combine(workingDirectory, ".orchestrator-handoff.md")))
         {
             lines.Add("- .orchestrator-handoff.md: prior task handoff in the working directory.");
@@ -905,6 +922,12 @@ internal sealed class WorkerArtifactWriter
         };
 
         if (!string.IsNullOrWhiteSpace(contextDirectory) &&
+            File.Exists(Path.Combine(contextDirectory, "prior-goal-evidence.md")))
+        {
+            lines.Add("- prior-goal-evidence.md: bounded stored classifier receipts and verification summaries for prior evidence cited by the brief.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(contextDirectory) &&
             File.Exists(Path.Combine(contextDirectory, "research-notes.md")))
         {
             lines.Add("- research-notes.md: complete validated Researcher artifact; pinned and never summarized.");
@@ -958,6 +981,8 @@ internal sealed class WorkerArtifactWriter
     {
         var packageDirectory = Path.Combine(contextDirectory, "packages", taskId.Value);
         Directory.CreateDirectory(packageDirectory);
+        // Optional artifacts must not survive a refresh after their source disappears.
+        File.Delete(Path.Combine(packageDirectory, "prior-goal-evidence.md"));
         foreach (var file in Directory.EnumerateFiles(contextDirectory, "*", SearchOption.TopDirectoryOnly))
         {
             File.Copy(file, Path.Combine(packageDirectory, Path.GetFileName(file)), overwrite: true);
@@ -988,7 +1013,7 @@ internal sealed class WorkerArtifactWriter
             "context-package.json"
         };
 
-        foreach (var optionalArtifact in new[] { "research-notes.md", "planner-plan.md", "source-survey.md" })
+        foreach (var optionalArtifact in new[] { "research-notes.md", "planner-plan.md", "source-survey.md", "prior-goal-evidence.md" })
         {
             if (File.Exists(Path.Combine(contextDirectory, optionalArtifact)))
             {
@@ -1064,6 +1089,7 @@ internal sealed class WorkerArtifactWriter
             "diff-summary.md" => "Compact git status, changed files, and diff stat.",
             "prior-task-summaries.md" => "Compact prior task outcomes and verification summaries.",
             "prior-task-evidence.md" => "Larger prior verification evidence for targeted inspection.",
+            "prior-goal-evidence.md" => "Bounded stored classifier receipts and verification summaries for cited prior goals/tasks.",
             "manifest.md" => "Human-readable artifact descriptions and role priorities.",
             "context-package.json" => "Task-scoped context package metadata and missing-artifact fallback guidance.",
             "subscription-preflight.md" => "Subscription dispatch preflight findings.",
@@ -1077,6 +1103,7 @@ internal sealed class WorkerArtifactWriter
         return relativePath switch
         {
             "prior-task-evidence.md" or "prior-task-summaries.md" => "generated from completed prior task verification records at dispatch preparation",
+            "prior-goal-evidence.md" => "resolved read-only from prior goal/task snapshots explicitly cited by author-controlled brief fields",
             "deterministic-verification.md" => "generated from current task state and prior verification records at dispatch preparation",
             "workflow-brokers.md" => "generated from current task, changed files, verification policy, and deterministic broker availability at dispatch preparation",
             "context-budget.md" => "generated from role, current task, prompt budget constants, prior task count, and selected skill availability at dispatch preparation",
@@ -1099,6 +1126,7 @@ internal sealed class WorkerArtifactWriter
             "diff-summary.md" => ["Developer", "Tester", "Reviewer"],
             "subscription-preflight.md" => ["Developer", "Tester", "Reviewer"],
             "prior-task-evidence.md" => ["Developer", "Tester", "Reviewer"],
+            "prior-goal-evidence.md" => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"],
             "research-notes.md" => ["Planner", "Developer", "Tester", "Reviewer"],
             "planner-plan.md" => ["Developer", "Tester", "Reviewer"],
             "AGENTS.md" => ["Planner", "Researcher", "Developer", "Tester", "Reviewer"],

@@ -15,9 +15,10 @@ public static class WorkerContextArtifacts
         Goal goal,
         TaskSpec task,
         string workingDirectory,
-        IReadOnlyList<string>? preflightFindings = null)
+        IReadOnlyList<string>? preflightFindings = null,
+        string? citedPriorEvidence = null)
     {
-        return new WorkerArtifactWriter().Write(goal, task, workingDirectory, preflightFindings);
+        return new WorkerArtifactWriter().Write(goal, task, workingDirectory, preflightFindings, citedPriorEvidence);
     }
 
     public static IReadOnlyList<WorkerSkillRequirement> SelectSkillRequirements(
