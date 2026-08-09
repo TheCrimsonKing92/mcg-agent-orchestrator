@@ -46,6 +46,13 @@ public sealed class ConductorBatchLoopTests
         return (kernel, goal);
     }
 
+    private static (AgentOrchestratorKernel Kernel, Goal Goal) SoftwareGoal(string objective = "Review retry goal")
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, DefaultAgents(), objective);
+        return (kernel, goal);
+    }
+
     private static void PassVerification(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task)
     {
         PassVerificationAt(kernel, goal, task, DateTimeOffset.UtcNow);
@@ -110,19 +117,19 @@ public sealed class ConductorBatchLoopTests
             WorkerResultPresent: true));
 
         return (kernel, goal, reviewer);
-
-        static string StructuredReviewerResult(ReviewFinding finding, string verdict) => string.Join(
-            Environment.NewLine,
-            "WORKER_RESULT:",
-            "files: none",
-            "commands: review",
-            "tests: pass - inspected evidence",
-            "blockers: exact-blocker - blocking guard remains open",
-            $"findings: {JsonSerializer.Serialize(new[] { finding })}",
-            "touched_anchors: []",
-            $"verdict: {verdict}",
-            "END_WORKER_RESULT");
     }
+
+    private static string StructuredReviewerResult(ReviewFinding finding, string verdict) => string.Join(
+        Environment.NewLine,
+        "WORKER_RESULT:",
+        "files: none",
+        "commands: review",
+        "tests: pass - inspected evidence",
+        "blockers: exact-blocker - blocking guard remains open",
+        $"findings: {JsonSerializer.Serialize(new[] { finding })}",
+        "touched_anchors: []",
+        $"verdict: {verdict}",
+        "END_WORKER_RESULT");
 
     private static Exception SqliteBusy() =>
         new InvalidOperationException("SQLite Error 5: 'database is locked'.");
@@ -10322,6 +10329,97 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains("committed deadbee", human);
         Assert.Contains("(2 files changed, 3m0s)", human);
         Assert.Contains("-> Developer dispatched", human);
+    }
+
+    [Xunit.Fact(DisplayName = "BatchLoop_healthy_reviewer_bounce_emits_single_transition_without_escalation")]
+    public void BatchLoopHealthyReviewerBounceEmitsSingleTransitionWithoutEscalation()
+    {
+        var root = CreateTempDirectory("mcg-reviewer-bounce-events");
+        var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+        var (kernel, goal) = SoftwareGoal("healthy reviewer bounce event counts");
+        var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var now = DateTimeOffset.Parse("2026-08-09T10:00:00Z");
+        StartProcess(kernel, goal, reviewer, now.AddMinutes(-2), "review-candidate", processId: 111);
+        var finding = new ReviewFinding(
+            "AC3-HEALTHY-BOUNCE",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/Test.cs", "Test.Run", "retry target"),
+            "Developer must add the missing focused regression.",
+            FindingSeverity.Blocking);
+        var sweepCalls = 0;
+        Action<AgentOrchestratorKernel> sweep = loopKernel =>
+        {
+            sweepCalls++;
+            if (sweepCalls != 2)
+            {
+                return;
+            }
+
+            loopKernel.RecordDispatchResultCommit(goal.Id, reviewer.Id, "reviewed123456789");
+            var reviewerProcess = loopKernel.GetTask(goal.Id, reviewer.Id).LastProcess!;
+            loopKernel.RecordTaskProcessRefreshed(
+                goal.Id,
+                reviewer.Id,
+                reviewerProcess with { CompletedAt = now, ExitCode = 1 },
+                null);
+            loopKernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+                reviewerProcess.Command,
+                reviewerProcess.WorkingDirectory,
+                1,
+                StructuredReviewerResult(finding, "needs-work"),
+                string.Empty,
+                now,
+                WorkerResultPresent: true));
+        };
+        var reporter = FakeWatchReporter(
+            now,
+            10,
+            0,
+            TimeSpan.FromSeconds(5),
+            [111, 222],
+            [111, 222],
+            ["src/Test.cs"]);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            dispatchAndStart: _ =>
+            {
+                if (developer.Status == WorkTaskStatus.Assigned && developer.LastDispatch is null)
+                {
+                    StartProcess(kernel, goal, developer, now, "retry-candidate", processId: 222);
+                }
+
+                return DispatchStartOutcome.Started();
+            },
+            retryTask: (goalId, taskId, message) => kernel.RetryTask(goalId, taskId, message));
+
+        new ConductorBatchLoop(
+            sweep: sweep,
+            watchProgressReporter: reporter,
+            conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Permissive,
+                NoStopPath(),
+                maxIterations: 2,
+                watchInterval: TimeSpan.FromSeconds(1),
+                sleepFunc: _ => false);
+
+        var records = File.ReadAllLines(logPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                line,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .ToArray();
+        var transition = Assert.Single(records.Where(record => record.EventKind == "watch-transition"));
+        Assert.Equal(goal.Id.Value[..8], transition.GoalId);
+        Assert.Contains("Reviewer=✓", transition.Detail, StringComparison.Ordinal);
+        Assert.Contains("next=Developer", transition.Detail, StringComparison.Ordinal);
+        Assert.Empty(records.Where(record => record.EventKind == "goal-escalation"));
     }
 
     [Xunit.Fact(DisplayName = "WatchProgress_emits_final_transition_before_gated_lifecycle_event")]
