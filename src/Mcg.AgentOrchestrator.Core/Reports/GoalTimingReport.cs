@@ -5,7 +5,12 @@ namespace Mcg.AgentOrchestrator.Core;
 public sealed record GoalTimingReportSnapshot(
     GoalId GoalId,
     string Objective,
+    DateTimeOffset? GoalE2EStartedAt,
+    string GoalE2EStartSource,
+    DateTimeOffset? GoalE2EEndedAt,
+    string GoalE2EEndSource,
     DateTimeOffset? BacklogIntentAt,
+    string? BacklogIntentSource,
     DateTimeOffset? IntakeAt,
     DateTimeOffset? FirstDispatchAt,
     DateTimeOffset? LandedAt,
@@ -27,7 +32,12 @@ public sealed record GoalTimingReportContext(
     DateTimeOffset? LandedAt = null,
     string? LandingSource = null,
     IReadOnlyList<GoalTimingGateSpan>? GateSpans = null,
-    DateTimeOffset? AsOf = null);
+    DateTimeOffset? AsOf = null,
+    string? BacklogIntentSource = null,
+    DateTimeOffset? GoalE2EStartedAt = null,
+    string? GoalE2EStartSource = null,
+    DateTimeOffset? GoalE2EEndedAt = null,
+    string? GoalE2EEndSource = null);
 
 public sealed record GoalHoldTimingReport(
     string State,
@@ -148,19 +158,24 @@ public static class GoalTimingReport
             .OrderBy(evt => evt.OccurredAt)
             .ToList();
         var firstDispatchAt = dispatchEvents.Select(evt => (DateTimeOffset?)evt.OccurredAt).Min();
-        var landedAt = context.LandedAt ?? ResolveLandedAt(goal);
-        var roundsByTask = BuildRounds(goal, dispatchEvents);
+        var goalStart = ResolveGoalE2EStart(goal, context, intakeAt);
+        var landing = ResolveLanding(goal, context);
+        var goalEnd = ResolveGoalE2EEnd(goal, context, landing);
+        var roundsByTask = BuildRounds(goal, dispatchEvents, goalEnd.At);
         var allRounds = roundsByTask
             .SelectMany(task => task.Rounds)
             .OrderBy(round => round.DispatchAt)
             .ToList();
         var gateDuration = ResolveGateDuration(goal, context);
-        var backlogIntentWait = PositiveDuration(intakeAt, context.BacklogIntentAt);
+        var backlogIntentWait = PositiveDuration(goalStart.At, context.BacklogIntentAt);
         var intakeWait = PositiveDuration(firstDispatchAt, intakeAt);
         var handoffWait = AddHandoffWaits(allRounds);
-        var workDuration = allRounds.Aggregate(TimeSpan.Zero, (sum, round) => sum + round.SandboxPrepDuration + round.WorkerRunDuration) + gateDuration;
-        var totalDuration = PositiveDuration(landedAt, context.BacklogIntentAt ?? intakeAt);
-        var landingWait = totalDuration - workDuration - backlogIntentWait - intakeWait - handoffWait;
+        var totalDuration = PositiveDuration(goalEnd.At, goalStart.At);
+        var observedWorkDuration = allRounds.Aggregate(
+            TimeSpan.Zero,
+            (sum, round) => sum + round.SandboxPrepDuration + round.WorkerRunDuration) + gateDuration;
+        var workDuration = observedWorkDuration <= totalDuration ? observedWorkDuration : totalDuration;
+        var landingWait = totalDuration - workDuration - intakeWait - handoffWait;
         if (landingWait < TimeSpan.Zero)
         {
             landingWait = TimeSpan.Zero;
@@ -183,17 +198,22 @@ public static class GoalTimingReport
                 goal.CurrentHold.State,
                 goal.CurrentHold.Blocker,
                 goal.CurrentHold.StartedAt,
-                PositiveDuration(context.AsOf, goal.CurrentHold.StartedAt),
+                PositiveDuration(goalEnd.At, goal.CurrentHold.StartedAt),
                 goal.CurrentHold.StalledAt);
 
         return new GoalTimingReportSnapshot(
             goal.Id,
             goal.Objective,
+            goalStart.At,
+            goalStart.Source ?? "unavailable",
+            goalEnd.At,
+            goalEnd.Source ?? "unavailable",
             context.BacklogIntentAt,
+            context.BacklogIntentSource,
             intakeAt,
             firstDispatchAt,
-            landedAt,
-            context.LandingSource,
+            landing.At,
+            landing.Source,
             backlogIntentWait,
             intakeWait,
             gateDuration,
@@ -224,14 +244,13 @@ public static class GoalTimingReport
             })
             .Where(item =>
                 ResolveTerminalOutcome(item.Goal) == GoalTerminalOutcome.Landed &&
-                item.Timing.LandedAt is not null &&
-                !IsPendingLanding(item.Timing))
+                item.Timing.LandedAt is not null)
             .ToList();
 
         var phaseObservations = new List<PhaseObservation>();
         foreach (var item in items)
         {
-            AddPhase(phaseObservations, "BacklogIntentWait", item.Timing.BacklogIntentWait);
+            AddPhase(phaseObservations, "UpstreamBacklogIntentWait", item.Timing.BacklogIntentWait);
             AddPhase(phaseObservations, "IntakeWait", item.Timing.IntakeToFirstDispatchWait);
             AddPhase(phaseObservations, "Gate", item.Timing.GateDuration);
             AddPhase(phaseObservations, "LandingWait", item.Timing.LandingWait);
@@ -343,7 +362,10 @@ public static class GoalTimingReport
             topWasteSources);
     }
 
-    private static IReadOnlyList<TaskRounds> BuildRounds(Goal goal, IReadOnlyList<ProgressEvent> dispatchEvents)
+    private static IReadOnlyList<TaskRounds> BuildRounds(
+        Goal goal,
+        IReadOnlyList<ProgressEvent> dispatchEvents,
+        DateTimeOffset? reportEnd)
     {
         var rounds = new List<(TaskId TaskId, GoalTimingRoundReport Round)>();
         foreach (var task in goal.Tasks)
@@ -377,6 +399,7 @@ public static class GoalTimingReport
                         (nextTaskDispatch is null || evt.OccurredAt < nextTaskDispatch.Value))
                     ?.OccurredAt;
                 var completedAt = ResolveCompletedAt(task, verification, processStartedAt);
+                var runtimeEndedAt = completedAt ?? Earlier(nextTaskDispatch, reportEnd);
                 var laterSuccess = verifications.Any(candidate =>
                     candidate.CompletedAt > (verification?.CompletedAt ?? dispatch.OccurredAt) &&
                     DispatchFailureClassifier.Classify(task, candidate).Kind == DispatchOutcomeKind.VerifiedSuccess);
@@ -388,7 +411,7 @@ public static class GoalTimingReport
                     processStartedAt,
                     completedAt,
                     ParseSandboxPrepDuration(verification),
-                    PositiveDuration(completedAt, processStartedAt),
+                    PositiveDuration(runtimeEndedAt, processStartedAt),
                     TimeSpan.Zero,
                     value.OutcomeVerdict,
                     value.ValueClass,
@@ -580,22 +603,92 @@ public static class GoalTimingReport
         }
     }
 
-    private static DateTimeOffset? ResolveLandedAt(Goal goal)
+    private static TimingBoundary ResolveGoalE2EStart(
+        Goal goal,
+        GoalTimingReportContext context,
+        DateTimeOffset? intakeAt)
     {
-        if (goal.Status == GoalStatus.Verified)
+        if (context.GoalE2EStartedAt is { } explicitStart)
         {
-            return null;
+            return new TimingBoundary(explicitStart, context.GoalE2EStartSource ?? "context");
         }
 
-        var policyLanding = goal.Timeline
-            .Where(evt => evt.TaskId is null && evt.Kind == ProgressKind.GoalPolicyDecision)
+        if (intakeAt is { } activationAt)
+        {
+            return new TimingBoundary(activationAt, "task-delegated");
+        }
+
+        var createdAt = goal.Timeline
+            .Where(evt => evt.Kind == ProgressKind.GoalCreated)
+            .OrderBy(evt => evt.OccurredAt)
+            .Select(evt => (DateTimeOffset?)evt.OccurredAt)
+            .FirstOrDefault();
+        if (createdAt is not null)
+        {
+            return new TimingBoundary(createdAt, "goal-created");
+        }
+
+        return goal.MetadataCreatedAt is { } metadataCreatedAt
+            ? new TimingBoundary(metadataCreatedAt, "terminal-metadata-created")
+            : new TimingBoundary(null, "unavailable");
+    }
+
+    private static TimingBoundary ResolveLanding(Goal goal, GoalTimingReportContext context)
+    {
+        if (context.LandedAt is { } landedAt)
+        {
+            return new TimingBoundary(landedAt, context.LandingSource ?? "context");
+        }
+
+        return goal is { IsMetadataOnly: true, Status: GoalStatus.Completed, MetadataTerminatedAt: { } metadataTerminatedAt }
+            ? new TimingBoundary(metadataTerminatedAt, "terminal-metadata")
+            : new TimingBoundary(null, null);
+    }
+
+    private static TimingBoundary ResolveGoalE2EEnd(
+        Goal goal,
+        GoalTimingReportContext context,
+        TimingBoundary landing)
+    {
+        if (context.GoalE2EEndedAt is { } explicitEnd)
+        {
+            return new TimingBoundary(explicitEnd, context.GoalE2EEndSource ?? "context");
+        }
+
+        if (landing.At is not null)
+        {
+            return new TimingBoundary(landing.At, landing.Source ?? "landing-evidence");
+        }
+
+        if (goal.IsTerminal && goal.MetadataTerminatedAt is { } metadataTerminatedAt)
+        {
+            return new TimingBoundary(metadataTerminatedAt, "terminal-metadata");
+        }
+
+        if (goal.IsTerminal)
+        {
+            var terminalTimelineAt = goal.Timeline
+                .OrderByDescending(evt => evt.OccurredAt)
+                .Select(evt => (DateTimeOffset?)evt.OccurredAt)
+                .FirstOrDefault();
+            if (terminalTimelineAt is not null)
+            {
+                return new TimingBoundary(terminalTimelineAt, "terminal-timeline");
+            }
+        }
+
+        if (context.AsOf is { } asOf)
+        {
+            return new TimingBoundary(asOf, "sample-time");
+        }
+
+        var latestRecordedAt = goal.Timeline
             .OrderByDescending(evt => evt.OccurredAt)
             .Select(evt => (DateTimeOffset?)evt.OccurredAt)
             .FirstOrDefault();
-        return policyLanding ?? goal.Timeline
-            .OrderByDescending(evt => evt.OccurredAt)
-            .Select(evt => (DateTimeOffset?)evt.OccurredAt)
-            .FirstOrDefault();
+        return latestRecordedAt is not null
+            ? new TimingBoundary(latestRecordedAt, "latest-recorded-event")
+            : new TimingBoundary(null, "unavailable");
     }
 
     private static GoalTerminalOutcome ResolveTerminalOutcome(Goal goal) =>
@@ -606,9 +699,6 @@ public static class GoalTimingReport
             GoalStatus.Failed or GoalStatus.Cancelled or GoalStatus.Superseded => GoalTerminalOutcome.Abandoned,
             _ => GoalTerminalOutcome.Active
         };
-
-    private static bool IsPendingLanding(GoalTimingReportSnapshot timing) =>
-        string.Equals(timing.LandingSource, "pending", StringComparison.OrdinalIgnoreCase);
 
     private static DispatchValueGoalReport BuildDispatchValueGoalReport(
         Goal goal,
@@ -702,11 +792,28 @@ public static class GoalTimingReport
         return duration > TimeSpan.Zero ? duration : TimeSpan.Zero;
     }
 
+    private static DateTimeOffset? Earlier(DateTimeOffset? first, DateTimeOffset? second)
+    {
+        if (first is null)
+        {
+            return second;
+        }
+
+        if (second is null)
+        {
+            return first;
+        }
+
+        return first <= second ? first : second;
+    }
+
     private sealed record DispatchValueClassification(
         DispatchOutcomeKind? OutcomeVerdict,
         DispatchRoundValueClass ValueClass,
         string Evidence,
         string WasteSource);
+
+    private sealed record TimingBoundary(DateTimeOffset? At, string? Source);
 
     private sealed record TaskRounds(TaskId TaskId, IReadOnlyList<GoalTimingRoundReport> Rounds);
 

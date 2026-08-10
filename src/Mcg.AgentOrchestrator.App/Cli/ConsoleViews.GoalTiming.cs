@@ -44,13 +44,20 @@ public static void PrintGoalTimingReport(GoalTimingReportSnapshot report)
         $"Summary: total={FormatDuration(report.TotalDuration)} " +
         $"work={FormatDuration(report.WorkDuration)} ({report.WorkPercent:P0}) " +
         $"wait={FormatDuration(report.WaitDuration)} ({report.WaitPercent:P0}) " +
-        $"backlogIntentWait={FormatDuration(report.BacklogIntentWait)} " +
+        $"e2eStartedAt={FormatTimingTimestamp(report.GoalE2EStartedAt)} e2eStartSource={report.GoalE2EStartSource} " +
+        $"e2eEndedAt={FormatTimingTimestamp(report.GoalE2EEndedAt)} e2eEndSource={report.GoalE2EEndSource} " +
+        $"backlogIntentAt={FormatTimingTimestamp(report.BacklogIntentAt)} " +
+        $"backlogIntentSource={report.BacklogIntentSource ?? "none"} " +
+        $"upstreamBacklogIntentWait={FormatDuration(report.BacklogIntentWait)} " +
         $"intakeWait={FormatDuration(report.IntakeToFirstDispatchWait)} " +
         $"gate={FormatDuration(report.GateDuration)} landingWait={FormatDuration(report.LandingWait)} " +
-        $"landedAt={(report.LandedAt is null ? "n/a" : report.LandedAt.Value.ToString("u"))} " +
-        $"source={report.LandingSource ?? "timeline"}");
+        $"landedAt={(report.LandedAt is null ? "not-landed" : report.LandedAt.Value.ToString("u"))} " +
+        $"landingSource={report.LandingSource ?? "none"}");
     Console.WriteLine();
 }
+
+private static string FormatTimingTimestamp(DateTimeOffset? timestamp) =>
+    timestamp is null ? "absent" : timestamp.Value.ToString("u");
 
 public static void PrintGoalTimingRollup(GoalTimingRollupSnapshot report)
 {
