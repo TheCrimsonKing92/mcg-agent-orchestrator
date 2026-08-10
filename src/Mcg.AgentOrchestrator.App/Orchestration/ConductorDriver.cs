@@ -44,10 +44,6 @@ internal sealed class ConductorDriver
     private static readonly Regex EvidenceClassNamePattern = new(
         @"^[A-Za-z_][A-Za-z0-9_.+`]*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex CandidateShaPattern = new(
-        @"^[0-9a-f]{7,64}$",
-        RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
-
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
@@ -94,6 +90,8 @@ internal sealed class ConductorDriver
     private readonly Func<WorkerSandboxPrepRecoverableAction, bool> _recoverSandboxPrep;
     private readonly Action<Goal, string> _recordMissingBranchRetirement;
     private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
+    private readonly Func<Goal, bool> _isVerificationGateSatisfied;
+    private readonly GateReadyCandidateProjector? _gateReadyCandidateProjector;
     private readonly Func<Goal, int> _getAcceptanceSlotCount;
     private readonly Func<int> _getWorkerAdmissionCapacity;
     private readonly Func<bool> _hasGateReadyGoal;
@@ -737,6 +735,8 @@ internal sealed class ConductorDriver
                 ? InferRecordedFileScopes(goal)
                 : changedFiles;
         };
+        _isVerificationGateSatisfied = goal => kernel.BuildVerificationGate(goal.Id).IsSatisfied;
+        _gateReadyCandidateProjector = GateReadyCandidateProjector.CreateForRepository(dir);
         _getPreReviewEvidenceContext = goal =>
             BuildPreReviewEvidenceContext(
                 TryResolveAcceptanceBranchHead(goal),
@@ -834,7 +834,9 @@ internal sealed class ConductorDriver
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
-        Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null)
+        Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
+        Func<Goal, bool>? isVerificationGateSatisfied = null,
+        GateReadyCandidateProjector? gateReadyCandidateProjector = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -917,6 +919,8 @@ internal sealed class ConductorDriver
         _recoverSandboxPrep = recoverSandboxPrep ?? (action => action.Execute());
         _recordMissingBranchRetirement = recordMissingBranchRetirement ?? ((_, _) => { });
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
+        _isVerificationGateSatisfied = isVerificationGateSatisfied ?? (_ => false);
+        _gateReadyCandidateProjector = gateReadyCandidateProjector;
         _getAcceptanceSlotCount = getAcceptanceSlotCount ?? (_ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
         _getWorkerAdmissionCapacity = getWorkerAdmissionCapacity ?? (() => ConductorBatchLoop.WorkerAdmissionCapacity);
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
@@ -1632,7 +1636,7 @@ internal sealed class ConductorDriver
         }
 
         var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
-        var candidateShaAvailable = candidateSha is not null && CandidateShaPattern.IsMatch(candidateSha);
+        var candidateShaAvailable = ConductorGitRevisionReader.IsValid(candidateSha);
         var telemetryCandidateSha = candidateShaAvailable ? candidateSha! : "unavailable";
 
         var groups = new List<(string Identity, string Request, FindingEvidenceRequest TypedRequest, List<ReviewFinding> Findings)>();
@@ -2103,6 +2107,61 @@ internal sealed class ConductorDriver
             TryResolveAcceptanceBranchHead(goal),
             _executionDirectory is null ? null : TryResolveGitHead(_executionDirectory));
     }
+
+    internal GateReadyCandidateProjectionResult ProjectGateReadyCandidate(
+        Goal goal,
+        ConductorAutonomyPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        ArgumentNullException.ThrowIfNull(policy);
+
+        GoalLifecycleState lifecycleState;
+        try
+        {
+            lifecycleState = GoalLifecycle.ResolveState(goal, GetFacts(goal));
+        }
+        catch
+        {
+            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.LifecycleNotReady);
+        }
+
+        bool gateSatisfied;
+        try
+        {
+            gateSatisfied = _isVerificationGateSatisfied(goal);
+        }
+        catch
+        {
+            return ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.GateNotReady);
+        }
+
+        ChangeRiskTier? changeRiskTier;
+        ConductorTransitionDecision? autoPromotionDisposition;
+        try
+        {
+            changeRiskTier = _classifyChangeRisk(goal);
+            autoPromotionDisposition = changeRiskTier.HasValue
+                ? policy.GetTransitionDecision(GoalLifecycleState.Merged, changeRiskTier.Value)
+                : null;
+        }
+        catch
+        {
+            changeRiskTier = null;
+            autoPromotionDisposition = null;
+        }
+
+        var input = new GateReadyCandidateInput(
+            goal.Id,
+            lifecycleState,
+            gateSatisfied,
+            changeRiskTier,
+            autoPromotionDisposition);
+        return _gateReadyCandidateProjector?.Project(input) ??
+            ExcludedGateReadyCandidate(GateReadyCandidateExclusionReason.RevisionUnknown);
+    }
+
+    private static GateReadyCandidateProjectionResult.Excluded ExcludedGateReadyCandidate(
+        GateReadyCandidateExclusionReason reason) => new(reason);
 
     internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
         ConductorParallelAcceptanceCandidate candidate,
@@ -3408,22 +3467,11 @@ internal sealed class ConductorDriver
     private static (string BranchHead, string MainHead, string Fingerprint) ReadLandingRecheckEvidence(
         string worktreePath)
     {
-        var branchHead = ReadRequiredGitCommit(worktreePath, "HEAD");
-        var mainHead = ReadRequiredGitCommit(worktreePath, "main^{commit}");
-        return (branchHead, mainHead, $"branch={branchHead};main={mainHead}");
-    }
-
-    private static string ReadRequiredGitCommit(string worktreePath, string reference)
-    {
-        var result = GitCli.Run(worktreePath, 5_000, "rev-parse", "--verify", reference);
-        var commit = result.Output.Trim();
-        if (!result.Succeeded || !CandidateShaPattern.IsMatch(commit))
-        {
-            throw new InvalidOperationException(
-                $"Landing escalation recheck could not resolve git reference '{reference}'.");
-        }
-
-        return commit.ToLowerInvariant();
+        var revisions = ConductorGitRevisionReader.ReadRequiredPair(worktreePath);
+        return (
+            revisions.BranchRevision!,
+            revisions.MainRevision!,
+            revisions.Fingerprint);
     }
 
     private string? TryResolveAcceptanceBranchHead(Goal goal)
