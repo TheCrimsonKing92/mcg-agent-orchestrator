@@ -367,6 +367,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_state_outbox_kind ON state_outbox(kind)");
     }
 
+    internal void ApplyStateOutboxLeaseSchemaMigration(SqliteConnection conn)
+    {
+        MigrateStateOutboxColumns(conn);
+        RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_state_outbox_kind ON state_outbox(kind)");
+    }
+
     private void MigrateStateOutboxColumns(SqliteConnection conn)
     {
         AddColumnIfMissing(

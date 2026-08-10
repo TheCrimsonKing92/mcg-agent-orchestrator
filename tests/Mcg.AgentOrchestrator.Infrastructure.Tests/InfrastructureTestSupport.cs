@@ -81,6 +81,52 @@ public static SqliteOrchestratorStateRepository CreateMigratedStateRepository(
         beforeOutboxCommit);
 }
 
+public static void CreateVersion7StateOutboxFixture(
+    string databasePath,
+    bool includeOutboxIndex = true)
+{
+    _ = StateDbMigrations.EnsureUpToDate(databasePath);
+    using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+        $"Data Source={databasePath};Mode=ReadWrite;Pooling=False");
+    connection.Open();
+
+    static void Execute(Microsoft.Data.Sqlite.SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
+    Execute(connection, "BEGIN IMMEDIATE");
+    try
+    {
+        Execute(connection, """
+            CREATE TABLE state_outbox_v7 (
+                id           TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at   TEXT NOT NULL
+            )
+            """);
+        Execute(connection, """
+            INSERT INTO state_outbox_v7 (id, kind, payload_json, created_at)
+            SELECT id, kind, payload_json, created_at
+            FROM state_outbox
+            """);
+        Execute(connection, "DROP TABLE state_outbox");
+        Execute(connection, "ALTER TABLE state_outbox_v7 RENAME TO state_outbox");
+        if (includeOutboxIndex)
+            Execute(connection, "CREATE INDEX ix_state_outbox_kind ON state_outbox(kind)");
+        Execute(connection, "DELETE FROM schema_migrations WHERE migration_number > 7");
+        Execute(connection, "COMMIT");
+    }
+    catch
+    {
+        try { Execute(connection, "ROLLBACK"); } catch { }
+        throw;
+    }
+}
+
 public static void SeedSpecRefinerBinding(OrchestratorWorkspace workspace)
 {
     ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([

@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class StateDbMigrations
 {
     private sealed record Migration(int Number, string Name, Action<SqliteConnection> Apply);
-    private const int CurrentMigrationNumber = 7;
+    private const int CurrentMigrationNumber = 8;
 
     /// <summary>
     /// Reports whether the published state store already has every numbered migration.
@@ -46,6 +46,34 @@ public static class StateDbMigrations
         migrations.Parameters.AddWithValue("$current", CurrentMigrationNumber);
         return Convert.ToInt32(migrations.ExecuteScalar(), CultureInfo.InvariantCulture) ==
             CurrentMigrationNumber;
+    }
+
+    /// <summary>
+    /// Reports whether the state store has published numbered migration history.
+    /// This probe is read-only and distinguishes a stale established store from an
+    /// absent or unpublished bootstrap candidate.
+    /// </summary>
+    internal static bool HasPublishedMigrations(string dbPath)
+    {
+        if (!File.Exists(dbPath))
+            return false;
+
+        using var connection = StateDbConnectionFactory.Open(
+            dbPath,
+            StateDbConnectionProfile.MigrationProbeRead);
+        using var table = connection.CreateCommand();
+        table.CommandText = """
+            SELECT COUNT(*)
+            FROM sqlite_schema
+            WHERE type = 'table'
+              AND name = 'schema_migrations'
+            """;
+        if (Convert.ToInt32(table.ExecuteScalar(), CultureInfo.InvariantCulture) != 1)
+            return false;
+
+        using var migrations = connection.CreateCommand();
+        migrations.CommandText = "SELECT COUNT(*) FROM schema_migrations";
+        return Convert.ToInt32(migrations.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
     }
 
     /// <summary>
@@ -91,7 +119,8 @@ public static class StateDbMigrations
                 new(4, "backlog-intake-records", ApplyBacklogIntakeSchema),
                 new(5, "model-fit-outcome-backfill", repository.ApplyModelFitHistoryBackfillMigration),
                 new(6, "spawn-registry-owner-identity", ApplySpawnRegistryOwnerIdentitySchema),
-                new(CurrentMigrationNumber, "spawn-registry-lifecycle", ApplySpawnRegistryLifecycleSchema)
+                new(7, "spawn-registry-lifecycle", ApplySpawnRegistryLifecycleSchema),
+                new(8, "state-outbox-lease-columns", repository.ApplyStateOutboxLeaseSchemaMigration)
             };
             ValidateMigrationSequence(migrations);
 
