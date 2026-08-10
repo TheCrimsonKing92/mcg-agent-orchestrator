@@ -2923,6 +2923,7 @@ internal static class CliPersistentStateRunner
         value.Equals("--goal", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--backlog-coverage", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase) ||
+        value.Equals("--pipeline", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--role", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--task", StringComparison.OrdinalIgnoreCase) ||
         value.Equals("--autonomy", StringComparison.OrdinalIgnoreCase) ||

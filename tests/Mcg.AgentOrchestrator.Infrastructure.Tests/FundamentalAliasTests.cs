@@ -485,6 +485,41 @@ public sealed class FundamentalAliasTests
         Xunit.Assert.Contains("## Add smoke test coverage", output);
     }
 
+    [Xunit.Fact(DisplayName = "Cli_goal_from_backlog_forwards_pipeline_value_to_creation")]
+    public void CliGoalFromBacklogForwardsPipelineValueToCreation()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, """
+        # Backlog
+
+        ## Update alias help
+
+        Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs. Done when a focused assertion passes.
+        """);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["goal", "Update alias help", "--from-backlog", "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            currentGoal!.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
+    }
+
     // ─── SplitCommand for new aliases ────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "CliArgumentParser_stop_splits_goal_reason_and_mode_flag")]

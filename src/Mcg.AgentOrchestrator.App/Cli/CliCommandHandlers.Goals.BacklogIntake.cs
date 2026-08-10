@@ -26,7 +26,9 @@ private static void AppendGoalAliasFlags(
             continue;
         }
 
-        if (excludedFlags.Any(flag => part.Equals(flag, StringComparison.OrdinalIgnoreCase)) ||
+        if (excludedFlags.Any(flag =>
+                part.Equals(flag, StringComparison.OrdinalIgnoreCase) ||
+                part.StartsWith(flag + "=", StringComparison.OrdinalIgnoreCase)) ||
             (!includeRoleAgentFlags && GoalRoleAgentFlags.ContainsKey(part)))
         {
             if (IsCliValueFlag(part))
@@ -273,9 +275,18 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     var createGoal = HasCliConfirmation(parts, "--create-goal");
     var createSimpleGoal = HasCliConfirmation(parts, "--create-simple-goal");
     var forceReclaim = HasCliConfirmation(parts, "--force-reclaim");
+    var pipelineRequest = ResolveGoalIntakePipelineRequest(parts);
     if (createGoal && createSimpleGoal)
     {
         throw new ArgumentException("Use either --create-goal or --create-simple-goal, not both.");
+    }
+    if (createSimpleGoal)
+    {
+        RejectPipelineForSimpleGoal(pipelineRequest);
+    }
+    if (pipelineRequest is not null && !createGoal)
+    {
+        throw new ArgumentException("--pipeline requires --create-goal for backlog intake.");
     }
 
     var sourceBacklogCoverage = ResolveSourceBacklogCoverage(
@@ -287,17 +298,29 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     var batchFilters = GetBacklogIntakeFilters(context, parts);
     if (batchFilters.Count > 1 && (createGoal || createSimpleGoal))
     {
-        var batchPlans = new List<(string Filter, BacklogIntakePlan Plan)>();
+        var batchPlans = new List<(string Filter, BacklogIntakePlan Plan, GoalObjectivePlan? GoalPlan)>();
         foreach (var filter in batchFilters)
         {
             var itemPlan = BacklogIntakePlanner.Build(context.Workspace.BacklogStorePath, filter, 2);
             ThrowIfAmbiguousBacklogIntakeMatch(filter, itemPlan);
-            batchPlans.Add((filter, itemPlan));
+            GoalObjectivePlan? goalPlan = null;
+            if (createGoal && itemPlan.Items.Count == 1)
+            {
+                goalPlan = BuildGoalObjectivePlan(
+                    context,
+                    itemPlan.Items.Single().SuggestedObjective,
+                    simple: false,
+                    pipelineRequest);
+                GoalObjectivePlanner.ThrowIfBlocked(goalPlan);
+                GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalPlan, context.Agents);
+            }
+
+            batchPlans.Add((filter, itemPlan, goalPlan));
         }
 
         var created = 0;
         var matched = 0;
-        foreach (var (filter, itemPlan) in batchPlans)
+        foreach (var (filter, itemPlan, batchGoalPlan) in batchPlans)
         {
             if (itemPlan.Items.Count == 0)
             {
@@ -331,7 +354,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
             var batchGoal = createSimpleGoal
                 ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
-                : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, batchItem.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter);
+                : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, batchGoalPlan!, context.Workspace, context.Providers, context.EventWriter);
 
             if (!string.IsNullOrEmpty(batchItem.Id))
             {
@@ -344,7 +367,11 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             created++;
             Console.WriteLine(createSimpleGoal
                 ? $"Created simple goal from backlog slice '{batchItem.Heading}'."
-                : $"Created five-role goal from backlog slice '{batchItem.Heading}'.");
+                : $"Created goal from backlog slice '{batchItem.Heading}'.");
+            if (batchGoalPlan is not null)
+            {
+                ConsoleViews.PrintGoalObjectivePlan(batchGoalPlan);
+            }
         }
 
         if (matched == 0)
@@ -389,6 +416,17 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     }
 
     var item = plan.Items.Single();
+    GoalObjectivePlan? goalObjectivePlan = null;
+    if (createGoal)
+    {
+        goalObjectivePlan = BuildGoalObjectivePlan(
+            context,
+            item.SuggestedObjective,
+            simple: false,
+            pipelineRequest);
+        GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
+        GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalObjectivePlan, context.Agents);
+    }
     var backlogItemId = item.Id;
     var sourceBacklogItem = new BacklogStore(context.Workspace.BacklogStorePath)
         .GetByExactIdAsync(backlogItemId).GetAwaiter().GetResult()
@@ -415,7 +453,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
 
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
-        : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter);
+        : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, goalObjectivePlan!, context.Workspace, context.Providers, context.EventWriter);
 
     if (!string.IsNullOrEmpty(backlogItemId))
     {
@@ -424,7 +462,11 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     }
 
     PersistBacklogIntakeGoal(context, item, context.CurrentGoal);
-    Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created five-role goal from backlog slice.");
+    Console.WriteLine(createSimpleGoal ? "Created simple goal from backlog slice." : "Created goal from backlog slice.");
+    if (goalObjectivePlan is not null)
+    {
+        ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+    }
     ConsoleViews.PrintGoal(context.CurrentGoal);
     return true;
 }

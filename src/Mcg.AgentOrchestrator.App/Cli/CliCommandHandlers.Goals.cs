@@ -138,8 +138,68 @@ private static int PersistResolvedParkedHumanWaitsForNextTick(
     return changedGoalIds.Length;
 }
 
-private static GoalObjectivePlan BuildGoalObjectivePlan(CliExecutionContext context, string objective, bool simple) =>
-    GoalObjectivePlanner.Build(objective, simple, context.Kernel.BuildTaskDurationStats());
+private static GoalObjectivePlan BuildGoalObjectivePlan(
+    CliExecutionContext context,
+    string objective,
+    bool simple,
+    GoalIntakePipelineRequest? pipelineRequest = null) =>
+    GoalObjectivePlanner.Build(
+        objective,
+        simple
+            ? GoalIntakePipeline.DeveloperOnly
+            : pipelineRequest?.ToPipelineOverride(),
+        context.Kernel.BuildTaskDurationStats());
+
+private static GoalIntakePipelineRequest? ResolveGoalIntakePipelineRequest(IReadOnlyList<string> parts)
+{
+    var requests = new List<GoalIntakePipelineRequest>();
+    for (var index = 1; index < parts.Count; index++)
+    {
+        var part = parts[index];
+        const string inlinePrefix = "--pipeline=";
+        string? value = null;
+        if (part.StartsWith(inlinePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            value = part[inlinePrefix.Length..];
+        }
+        else if (part.Equals("--pipeline", StringComparison.OrdinalIgnoreCase))
+        {
+            if (index + 1 >= parts.Count || parts[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"--pipeline requires one of: {GoalIntakePipelineRequestParser.AllowedValues}.");
+            }
+
+            value = parts[++index];
+        }
+
+        if (value is null)
+        {
+            continue;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new ArgumentException($"--pipeline requires one of: {GoalIntakePipelineRequestParser.AllowedValues}.");
+        }
+
+        requests.Add(GoalIntakePipelineRequestParser.Parse(value));
+    }
+
+    if (requests.Distinct().Count() > 1)
+    {
+        throw new ArgumentException("Conflicting --pipeline values were supplied; choose exactly one of: auto, five-role.");
+    }
+
+    return requests.Count == 0 ? null : requests[0];
+}
+
+private static void RejectPipelineForSimpleGoal(GoalIntakePipelineRequest? pipelineRequest)
+{
+    if (pipelineRequest is not null)
+    {
+        throw new ArgumentException("--pipeline cannot be combined with a simple-goal request; simple goals always create one Developer task.");
+    }
+}
 
 private static void PrintScopeCollisionAdvisory(
     CliExecutionContext context,
@@ -166,9 +226,11 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return false;
 
         case "goal":
+            var goalPipelineRequest = ResolveGoalIntakePipelineRequest(parts);
             // --simple: delegate to simple-goal (1 Developer task)
             if (HasCliConfirmation(parts, "--simple"))
             {
+                RejectPipelineForSimpleGoal(goalPipelineRequest);
                 var simpleAliasObjective = ResolveBriefObjective(parts, "goal <objective> --simple | goal --brief-file <path> --simple | goal --text-file <path> --simple");
                 var simpleAliasParts = new List<string> { "simple-goal", simpleAliasObjective };
                 AppendGoalAliasFlags(parts, simpleAliasParts, includeRoleAgentFlags: true, "--simple", "--brief-file", "--text-file");
@@ -192,17 +254,18 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     "--confirm-batch-start",
                     "run-goal requires --confirm-batch-start because it starts worker processes.");
                 var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run | goal --text-file <path> --run");
-                var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false);
+                var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false, goalPipelineRequest);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
-                ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
                 PrintScopeCollisionAdvisory(context, runObjective);
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
                 PrintClosedSourceBacklogWarning(runSourceBacklogLink);
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+                GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(runObjectivePlan, runAgents);
+                ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                     context.Kernel,
                     runAgents,
-                    runObjective,
+                    runObjectivePlan,
                     context.Workspace,
                     context.Providers,
                     context.EventWriter,
@@ -211,21 +274,22 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 context.FinalizeGoalCreation(context.CurrentGoal);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
-                AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file");
+                AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file", "--pipeline");
                 return TryExecuteGoalCommand("run-goal", runParts, context);
             }
             var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path> | goal --text-file <path>");
-            var goalObjectivePlan = BuildGoalObjectivePlan(context, goalObjective, simple: false);
+            var goalObjectivePlan = BuildGoalObjectivePlan(context, goalObjective, simple: false, goalPipelineRequest);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
-            ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
             PrintScopeCollisionAdvisory(context, goalObjective);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+            GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalObjectivePlan, goalAgents);
+            ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                 context.Kernel,
                 goalAgents,
-                goalObjective,
+                goalObjectivePlan,
                 context.Workspace,
                 context.Providers,
                 context.EventWriter,
@@ -236,6 +300,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return true;
 
         case "simple-goal":
+            RejectPipelineForSimpleGoal(ResolveGoalIntakePipelineRequest(parts));
             var simpleObjective = ResolveBriefObjective(parts, "simple-goal <objective> | simple-goal --brief-file <path> | simple-goal --text-file <path>");
             var simpleObjectivePlan = BuildGoalObjectivePlan(context, simpleObjective, simple: true);
             GoalObjectivePlanner.ThrowIfBlocked(simpleObjectivePlan);
