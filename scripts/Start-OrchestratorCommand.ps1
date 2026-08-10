@@ -110,6 +110,14 @@ function Test-HasArgument {
     return $false
 }
 
+function Test-IsConductLoop {
+    param([string[]]$Values)
+
+    return $Values.Count -ge 2 -and
+        $Values[0].Equals("conduct", [System.StringComparison]::OrdinalIgnoreCase) -and
+        (Test-HasArgument -Values $Values -Name "--loop")
+}
+
 function Write-LastDriveJournal {
     param(
         [string]$RepositoryRoot,
@@ -119,9 +127,7 @@ function Write-LastDriveJournal {
         [string[]]$CommandArguments
     )
 
-    if ($CommandArguments.Count -lt 2 -or
-        -not $CommandArguments[0].Equals("conduct", [System.StringComparison]::OrdinalIgnoreCase) -or
-        -not (Test-HasArgument -Values $CommandArguments -Name "--loop")) {
+    if (-not (Test-IsConductLoop -Values $CommandArguments)) {
         return
     }
 
@@ -192,6 +198,21 @@ try {
         $launcher
     } else {
         [System.IO.Path]::GetFullPath($AppDll)
+    }
+
+    if (Test-IsConductLoop -Values $Arguments) {
+        $configuredRepositoryRoot = [Environment]::GetEnvironmentVariable(
+            "MCG_ORCHESTRATOR_REPOSITORY_ROOT",
+            "Process")
+        $effectiveRepositoryRoot = if ($usesLauncher -or [string]::IsNullOrWhiteSpace($configuredRepositoryRoot)) {
+            $repoRoot
+        } else {
+            [System.IO.Path]::GetFullPath($configuredRepositoryRoot)
+        }
+        $stopFilePath = [System.IO.Path]::GetFullPath((Join-Path $effectiveRepositoryRoot ".conduct-stop"))
+        if (Test-Path -LiteralPath $stopFilePath -ErrorAction Stop) {
+            throw "Conduct loop launch refused because active stop authority exists at '$stopFilePath'. Deliberately remove the stop file before retrying."
+        }
     }
 
     $logsRoot = Join-Path $repoRoot ".orchestrator\logs"

@@ -754,7 +754,11 @@ public sealed class LauncherScriptTests
         var result = RunInvokeRepoScript(
             sandbox.RepositoryRoot,
             "scripts\\Start-OrchestratorCommand.ps1",
-            new Dictionary<string, string?> { ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.HostPath },
+            new Dictionary<string, string?>
+            {
+                ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.HostPath,
+                ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = sandbox.RepositoryRoot
+            },
             "-Name",
             "batch055",
             "-AppDll",
@@ -789,6 +793,139 @@ public sealed class LauncherScriptTests
         Assert.Equal(
             new[] { "conduct", "--loop", "--watch", "--policy", "Permissive", "--poll-seconds", "15", "--max-duration", "5400" },
             args);
+    }
+
+    [Xunit.Fact]
+    public void ConductLoop_StopFilePresent_RefusesBeforeSideEffects()
+    {
+        using var sandbox = CreateDefaultLauncherSandbox(includeStartCommand: true);
+        var stopFilePath = Path.Combine(sandbox.RepositoryRoot, ".conduct-stop");
+        var stopFileContents = new byte[] { 0x00, 0x53, 0x54, 0x4f, 0x50, 0xff };
+        File.WriteAllBytes(stopFilePath, stopFileContents);
+        File.SetLastWriteTimeUtc(stopFilePath, new DateTime(2026, 7, 9, 12, 34, 56, DateTimeKind.Utc));
+        var stopFileTimestamp = File.GetLastWriteTimeUtc(stopFilePath);
+
+        var launcherPath = Path.Combine(sandbox.RepositoryRoot, "mcg-orchestrator.cmd");
+        Assert.True(File.Exists(launcherPath), $"Expected child seam: {launcherPath}");
+
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Start-OrchestratorCommand.ps1",
+            new Dictionary<string, string?>
+            {
+                ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = sandbox.RepositoryRoot
+            },
+            "-Name",
+            "blocked-loop",
+            "CoNdUcT",
+            "--LoOp");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stdout), result.Stdout);
+        var errorLines = result.Stderr.Split(
+            JsonLineSeparators,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.Single(errorLines);
+        Assert.True(errorLines[0].Length < 1024, errorLines[0]);
+        using var document = JsonDocument.Parse(errorLines[0]);
+        var properties = document.RootElement.EnumerateObject().ToArray();
+        Assert.Single(properties);
+        Assert.Equal("reason", properties[0].Name);
+        Assert.Equal(
+            $"Conduct loop launch refused because active stop authority exists at '{stopFilePath}'. " +
+            "Deliberately remove the stop file before retrying.",
+            properties[0].Value.GetString());
+
+        Assert.False(Directory.Exists(Path.Combine(sandbox.RepositoryRoot, ".orchestrator")));
+        Assert.False(File.Exists(sandbox.InvocationPath), "The child process host must not be invoked.");
+        Assert.Equal(stopFileContents, File.ReadAllBytes(stopFilePath));
+        Assert.Equal(stopFileTimestamp, File.GetLastWriteTimeUtc(stopFilePath));
+    }
+
+    [Xunit.Fact]
+    public void ConductLoop_StopPathDirectory_RefusesBeforeSideEffects()
+    {
+        using var sandbox = CreateStartJournalSandbox();
+        var stopFilePath = Path.Combine(sandbox.RepositoryRoot, ".conduct-stop");
+        Directory.CreateDirectory(stopFilePath);
+
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Start-OrchestratorCommand.ps1",
+            new Dictionary<string, string?>
+            {
+                ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.HostPath,
+                ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = sandbox.RepositoryRoot
+            },
+            "-AppDll",
+            sandbox.EchoScriptPath,
+            "conduct",
+            "--loop");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains(stopFilePath, result.Stderr, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(stopFilePath), "Stop authority directory must remain present.");
+        Assert.False(Directory.Exists(Path.Combine(sandbox.RepositoryRoot, ".orchestrator")));
+        Assert.False(File.Exists(sandbox.InvocationPath), "The child process host must not be invoked.");
+    }
+
+    [Xunit.Fact]
+    public void ConductWithoutLoop_StopFilePresent_LaunchesNormally()
+    {
+        using var sandbox = CreateStartJournalSandbox();
+        var stopFilePath = Path.Combine(sandbox.RepositoryRoot, ".conduct-stop");
+        File.WriteAllText(stopFilePath, "deliberate stop authority");
+
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Start-OrchestratorCommand.ps1",
+            new Dictionary<string, string?>
+            {
+                ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.HostPath,
+                ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = sandbox.RepositoryRoot
+            },
+            "-AppDll",
+            sandbox.EchoScriptPath,
+            "conduct",
+            "--watch");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal(
+            new[] { sandbox.EchoScriptPath, "conduct", "--watch" },
+            document.RootElement.GetProperty("args").EnumerateArray().Select(argument => argument.GetString()).ToArray());
+        Assert.True(File.Exists(stopFilePath), "Non-loop launch must not consume stop authority.");
+    }
+
+    [Xunit.Fact]
+    public void ConductLoop_ConfiguredRoot_UsesChildStopPath()
+    {
+        using var sandbox = CreateStartJournalSandbox();
+        var configuredRoot = Path.Combine(sandbox.RepositoryRoot, "configured-root");
+        Directory.CreateDirectory(configuredRoot);
+        var stopFilePath = Path.Combine(configuredRoot, ".conduct-stop");
+        File.WriteAllText(stopFilePath, "configured-root authority");
+
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Start-OrchestratorCommand.ps1",
+            new Dictionary<string, string?>
+            {
+                ["MCG_ORCHESTRATOR_DOTNET_PATH"] = sandbox.HostPath,
+                ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = configuredRoot
+            },
+            "-AppDll",
+            sandbox.EchoScriptPath,
+            "conduct",
+            "--loop");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains(stopFilePath, result.Stderr, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(sandbox.RepositoryRoot, ".conduct-stop")));
+        Assert.False(Directory.Exists(Path.Combine(sandbox.RepositoryRoot, ".orchestrator")));
+        Assert.False(File.Exists(sandbox.InvocationPath), "The child process host must not be invoked.");
+        Assert.Equal("configured-root authority", File.ReadAllText(stopFilePath));
     }
 
     [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_noops_when_conduct_loop_is_running")]
@@ -2680,9 +2817,11 @@ public sealed class LauncherScriptTests
             Path.Combine(sourceRoot, "scripts", "Start-OrchestratorCommand.ps1"),
             Path.Combine(scriptsPath, "Start-OrchestratorCommand.ps1"));
 
+        var invocationPath = Path.Combine(repositoryRoot, "child-invoked.txt");
         var hostPath = Path.Combine(shimPath, "fake-dotnet.cmd");
-        File.WriteAllText(hostPath, """
+        File.WriteAllText(hostPath, $"""
             @echo off
+            echo invoked>"{invocationPath}"
             powershell.exe -NoProfile -ExecutionPolicy Bypass -File %*
             """.Replace("\n", "\r\n", StringComparison.Ordinal));
 
@@ -2696,7 +2835,7 @@ public sealed class LauncherScriptTests
             $Arguments | ConvertTo-Json -Compress
             """);
 
-        return new StartJournalSandbox(repositoryRoot, hostPath, echoScriptPath);
+        return new StartJournalSandbox(repositoryRoot, hostPath, echoScriptPath, invocationPath);
     }
 
     private static ResumeSandbox CreateResumeSandbox(string processHelperBody)
@@ -3135,11 +3274,13 @@ public sealed class LauncherScriptTests
     private sealed class StartJournalSandbox(
         string repositoryRoot,
         string hostPath,
-        string echoScriptPath) : IDisposable
+        string echoScriptPath,
+        string invocationPath) : IDisposable
     {
         public string RepositoryRoot { get; } = repositoryRoot;
         public string HostPath { get; } = hostPath;
         public string EchoScriptPath { get; } = echoScriptPath;
+        public string InvocationPath { get; } = invocationPath;
 
         public void Dispose()
         {
