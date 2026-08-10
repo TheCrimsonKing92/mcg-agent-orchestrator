@@ -535,9 +535,10 @@ public abstract class CliCommandTestBase
         return output;
     }
 
-    private protected sealed class InMemoryTransactionalStateRepository : ITransactionalOrchestratorStateRepository
+    private protected sealed class InMemoryTransactionalStateRepository : IOrchestratorStateOutboxRepository
     {
         private AgentOrchestratorKernel _kernel;
+        private readonly Dictionary<string, OrchestratorStateOutboxMessage> _outbox = new(StringComparer.Ordinal);
 
         public InMemoryTransactionalStateRepository(AgentOrchestratorKernel kernel)
         {
@@ -762,6 +763,71 @@ public abstract class CliCommandTestBase
                 }
 
                 return result;
+            }
+            finally
+            {
+                IsInTransaction = false;
+            }
+        }
+
+        public async Task<T> TransactWithOutboxAsync<T>(
+            Func<AgentOrchestratorKernel, CancellationToken, Task<(
+                bool ShouldSave,
+                T Result,
+                IReadOnlyList<OrchestratorStateOutboxMessage> OutboxMessages)>> transaction,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            TransactAsyncCount++;
+            if (BeforeNextTransaction is { } before)
+            {
+                BeforeNextTransaction = null;
+                before(_kernel);
+            }
+
+            var transactionKernel = Clone(_kernel);
+            IsInTransaction = true;
+            try
+            {
+                var (shouldSave, result, messages) = await transaction(transactionKernel, cancellationToken);
+                BeforeSaveCommit?.Invoke(cancellationToken);
+                if (shouldSave)
+                    _kernel = Clone(transactionKernel);
+                foreach (var message in messages)
+                    _outbox[message.Id] = message;
+                return result;
+            }
+            finally
+            {
+                IsInTransaction = false;
+            }
+        }
+
+        public Task<IReadOnlyList<OrchestratorStateOutboxMessage>> ListOutboxMessagesAsync(
+            string kind,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<OrchestratorStateOutboxMessage>>(_outbox.Values
+                .Where(message => message.Kind.Equals(kind, StringComparison.Ordinal))
+                .OrderBy(message => message.CreatedAt)
+                .ThenBy(message => message.Id, StringComparer.Ordinal)
+                .ToArray());
+
+        public async Task<bool> TryProcessOutboxMessageAsync(
+            string id,
+            Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
+            CancellationToken cancellationToken = default)
+        {
+            TransactionCount++;
+            TransactAsyncCount++;
+            if (!_outbox.TryGetValue(id, out var message))
+                return false;
+
+            IsInTransaction = true;
+            try
+            {
+                var result = await processor(message, cancellationToken);
+                _outbox.Remove(id);
+                return true;
             }
             finally
             {

@@ -156,6 +156,11 @@ internal static class CliPersistentStateRunner
             return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsGoalCreateDeliveryRetryCommand(args))
+        {
+            return ExecuteGoalCreateDeliveryRetry(args, stateRepository, workspace, ref currentGoal);
+        }
+
         if (IsGoalCreateCommand(args))
         {
             return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -586,6 +591,10 @@ internal static class CliPersistentStateRunner
         args.Count > 0 &&
         args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
         !args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase));
+
+    internal static bool IsGoalCreateDeliveryRetryCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 &&
+        args[0].Equals("goal-delivery-retry", StringComparison.OrdinalIgnoreCase);
 
     internal static bool HasStateDbMigrationAuthority(IReadOnlyList<string> args)
     {
@@ -1603,6 +1612,12 @@ internal static class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
+        if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
+        {
+            throw new InvalidOperationException(
+                "Goal creation requires a state repository with durable outbox support.");
+        }
+
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
         GoalSnapshot? committedSnapshot = null;
@@ -1613,19 +1628,35 @@ internal static class CliPersistentStateRunner
         void FinalizeGoalCreation(Goal goal)
         {
             var preparedSnapshot = kernel.ExportGoalSnapshot(goal.Id);
-            stateRepository.TransactAsync(
+            GoalCreationSideEffectDelivery.BeforeStateCommit?.Invoke(goal.Id);
+            var deliveryMessage = GoalCreationSideEffectDelivery.CreateMessage(
+                goal.Id,
+                deferredCollaborationWriter.SnapshotEffects(),
+                deferredEventWriter.SnapshotEffects());
+            outboxRepository.TransactWithOutboxAsync(
                     (currentKernel, _) =>
                     {
                         ValidateGoalCreationPreconditions(currentKernel, preparedSnapshot, workspace);
                         currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
-                        return Task.FromResult((true, true));
+                        return Task.FromResult((
+                            ShouldSave: true,
+                            Result: true,
+                            OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage]));
                     })
                 .GetAwaiter()
                 .GetResult();
             committedSnapshot = preparedSnapshot;
-            deferredCollaborationWriter.CommitAsync().GetAwaiter().GetResult();
-            deferredEventWriter.CommitTo(
-                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel));
+            try
+            {
+                _ = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, goal.Id);
+                deferredCollaborationWriter.CompleteDelivery();
+                deferredEventWriter.CompleteDeliveryTo(
+                    new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel));
+            }
+            catch (Exception ex)
+            {
+                throw GoalCreationDeliveryIncomplete(goal.Id, ex);
+            }
         }
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
@@ -1661,6 +1692,97 @@ internal static class CliPersistentStateRunner
 
         return shouldSave;
     }
+
+    private static bool ExecuteGoalCreateDeliveryRetry(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref Goal? currentGoal)
+    {
+        if (args.Count != 2 || string.IsNullOrWhiteSpace(args[1]))
+        {
+            throw new InvalidOperationException("Usage: goal-delivery-retry <goal-id-or-prefix>");
+        }
+
+        if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
+        {
+            throw new InvalidOperationException(
+                "goal-delivery-retry requires a state repository with durable outbox support.");
+        }
+
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        var goal = OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, args[1]);
+        try
+        {
+            var result = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, goal.Id);
+            currentGoal = goal;
+            Console.WriteLine(
+                $"GOAL_CREATE_DELIVERY_COMPLETE goal={goal.Id.Value} disposition={result.Disposition.ToString().ToLowerInvariant()}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            throw GoalCreationDeliveryIncomplete(goal.Id, ex);
+        }
+    }
+
+    private static GoalCreationDeliveryResult DeliverGoalCreationSideEffects(
+        IOrchestratorStateOutboxRepository outboxRepository,
+        OrchestratorWorkspace workspace,
+        AgentOrchestratorKernel kernel,
+        GoalId goalId)
+    {
+        OrchestratorStateOutboxProcessingResult? processingResult = null;
+        var claimed = outboxRepository.TryProcessOutboxMessageAsync(
+                GoalCreationSideEffectDelivery.MessageId(goalId.Value),
+                async (message, cancellationToken) =>
+                {
+                    try
+                    {
+                        var receipt = GoalCreationSideEffectDelivery.Deserialize(message);
+                        if (!receipt.GoalId.Equals(goalId.Value, StringComparison.Ordinal) ||
+                            kernel.Goals.All(candidate => candidate.Id != goalId))
+                        {
+                            processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                                $"Goal-creation delivery receipt targets missing or mismatched goal '{receipt.GoalId}'.");
+                            return processingResult;
+                        }
+
+                        await GoalCreationSideEffectDelivery.DeliverAsync(
+                            receipt,
+                            workspace,
+                            kernel,
+                            cancellationToken).ConfigureAwait(false);
+                        processingResult = OrchestratorStateOutboxProcessingResult.Completed;
+                        return processingResult;
+                    }
+                    catch (JsonException ex)
+                    {
+                        processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                            $"Invalid goal-creation delivery receipt: {ex.Message}");
+                        return processingResult;
+                    }
+                })
+            .GetAwaiter()
+            .GetResult();
+
+        if (!claimed)
+            return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.AlreadyDelivered);
+
+        if (processingResult?.Disposition == OrchestratorStateOutboxDisposition.Quarantine)
+        {
+            throw new InvalidOperationException(
+                $"GOAL_CREATE_DELIVERY_INVALID goal={goalId.Value} detail={processingResult.Detail}");
+        }
+
+        return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.Delivered);
+    }
+
+    private static InvalidOperationException GoalCreationDeliveryIncomplete(GoalId goalId, Exception exception) =>
+        new(
+            $"GOAL_CREATE_DELIVERY_INCOMPLETE goal={goalId.Value} " +
+            $"retry=\"goal-delivery-retry {goalId.Value}\" detail={exception.Message}",
+            exception);
 
     private static void ValidateGoalCreationPreconditions(
         AgentOrchestratorKernel currentKernel,

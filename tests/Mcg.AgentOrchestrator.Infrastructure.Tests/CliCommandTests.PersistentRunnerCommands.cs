@@ -7,6 +7,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
@@ -1095,6 +1096,335 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.True(planIndex >= 0 && advisoryIndex > planIndex && goalIndex > advisoryIndex, output);
         Xunit.Assert.Contains("\"historicalTimeEstimate\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"verdict\"", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_delivery_failure_is_durable_and_retry_only")]
+    public async Task PersistentRunnerGoalCreateDeliveryFailureIsDurableAndRetryOnly()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var lifecycleAttempts = 0;
+        GoalCreationSideEffectDelivery.BeforeEffectDelivery = deliveryId =>
+        {
+            if (deliveryId.Contains(":lifecycle:", StringComparison.Ordinal) &&
+                Interlocked.Increment(ref lifecycleAttempts) == 2)
+            {
+                throw new IOException("Injected lifecycle delivery failure.");
+            }
+        };
+
+        InvalidOperationException error;
+        try
+        {
+            error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    ["goal", "Create a goal with durably retryable clarification delivery"],
+                    repository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeEffectDelivery = null;
+        }
+
+        var committedKernel = await repository.LoadAsync();
+        var created = Xunit.Assert.Single(committedKernel.Goals);
+        Xunit.Assert.Contains("GOAL_CREATE_DELIVERY_INCOMPLETE", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"goal-delivery-retry {created.Id.Value}", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.True(lifecycleAttempts >= 2);
+        Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+
+        var collaborationBeforeRetry = await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+            .ListAsync(created.Id.Value);
+        Xunit.Assert.NotEmpty(collaborationBeforeRetry);
+        var eventPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{created.Id.Value}.jsonl");
+        var eventCountBeforeRetry = File.ReadAllLines(eventPath).Length;
+        Xunit.Assert.True(eventCountBeforeRetry >= 1);
+
+        var retryOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal-delivery-retry", created.Id.Value],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("GOAL_CREATE_DELIVERY_COMPLETE", retryOutput, StringComparison.Ordinal);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+        Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        var collaborationAfterRetry = await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+            .ListAsync(created.Id.Value);
+        Xunit.Assert.Equal(
+            collaborationAfterRetry.Count,
+            collaborationAfterRetry.Select(item => item.CorrelationKey).Distinct(StringComparer.Ordinal).Count());
+        Xunit.Assert.Equal(collaborationBeforeRetry.Count, collaborationAfterRetry.Count);
+
+        var deliveredEvents = File.ReadAllLines(eventPath)
+            .Select(line => JsonNode.Parse(line)!.AsObject())
+            .ToArray();
+        Xunit.Assert.True(deliveredEvents.Length > eventCountBeforeRetry);
+        var deliveryIds = deliveredEvents
+            .Select(evt => evt["deliveryId"]?.GetValue<string>())
+            .Where(id => id is not null)
+            .ToArray();
+        Xunit.Assert.Equal(deliveryIds.Length, deliveryIds.Distinct(StringComparer.Ordinal).Count());
+
+        var eventCountAfterRetry = deliveredEvents.Length;
+        var repeatedRetryOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal-delivery-retry", created.Id.Value[..8]],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        Xunit.Assert.Contains("disposition=alreadydelivered", repeatedRetryOutput, StringComparison.Ordinal);
+        Xunit.Assert.Equal(eventCountAfterRetry, File.ReadAllLines(eventPath).Length);
+        Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_analysis_failure_leaves_no_state_or_delivery_trace")]
+    public async Task PersistentRunnerGoalCreateAnalysisFailureLeavesNoStateOrDeliveryTrace()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+            throw new InvalidOperationException("Injected pre-commit analysis failure.");
+        InvalidOperationException error;
+        try
+        {
+            error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    ["goal", "Fail after unlocked analysis and before state commit"],
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+        }
+
+        Xunit.Assert.Contains("Injected pre-commit analysis failure", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+        Xunit.Assert.Empty(await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ListAsync());
+        Xunit.Assert.Empty(Directory.Exists(workspace.GoalLifecycleEventsDirectory)
+            ? Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl")
+            : []);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_rejects_backlog_dependency_change_at_commit")]
+    public async Task PersistentRunnerGoalCreateRejectsBacklogDependencyChangeAtCommit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var dependencyGoal = kernel.CreateGoal("Existing prerequisite goal");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var backlog = new BacklogStore(workspace.BacklogStorePath);
+        var source = await backlog.AddAsync("Dependent goal source");
+        _ = await backlog.AddDependencyAsync(
+            source.Id,
+            new BacklogDependencyTarget(dependencyGoal.Id.Value, BacklogDependencyTargetKind.Goal),
+            goalExists: id => id == dependencyGoal.Id.Value);
+        repository.BeforeNextTransaction = _ =>
+            backlog.RemoveDependencyAsync(source.Id, dependencyGoal.Id.Value).GetAwaiter().GetResult();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["goal", "Create dependent goal", "--backlog-item", source.Id, "--backlog-coverage", "slice"],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
+                ref profiles,
+                ref currentGoal)));
+
+        Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-dependencies-changed", error.Message, StringComparison.Ordinal);
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Equal(dependencyGoal.Id, Xunit.Assert.Single(restored.Goals).Id);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_rejects_missing_dependency_target_at_commit")]
+    public async Task PersistentRunnerGoalCreateRejectsMissingDependencyTargetAtCommit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var dependencyGoal = kernel.CreateGoal("Prerequisite removed during analysis");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var backlog = new BacklogStore(workspace.BacklogStorePath);
+        var source = await backlog.AddAsync("Source whose dependency target disappears");
+        _ = await backlog.AddDependencyAsync(
+            source.Id,
+            new BacklogDependencyTarget(dependencyGoal.Id.Value, BacklogDependencyTargetKind.Goal),
+            goalExists: id => id == dependencyGoal.Id.Value);
+        repository.BeforeNextTransaction = _ =>
+        {
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE backlog_dependencies SET prerequisite_id = $missing WHERE dependent_id = $source";
+            command.Parameters.AddWithValue("$missing", GoalId.New().Value);
+            command.Parameters.AddWithValue("$source", source.Id);
+            Xunit.Assert.Equal(1, command.ExecuteNonQuery());
+        };
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["goal", "Reject missing dependency target", "--backlog-item", source.Id, "--backlog-coverage", "slice"],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
+                ref profiles,
+                ref currentGoal)));
+
+        Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=dependency-target-missing", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(dependencyGoal.Id, Xunit.Assert.Single((await repository.LoadAsync()).Goals).Id);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_keeps_overlap_detected_advisory_nonblocking")]
+    public async Task PersistentRunnerGoalCreateKeepsOverlapDetectedAdvisoryNonblocking()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        _ = kernel.CreateGoal($"Existing work\n\n{BacklogIntakePlanner.TargetScopeHeadingLine}\n- src/Feature/File.cs");
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal", $"Change shared feature\n\n{BacklogIntakePlanner.TargetScopeHeadingLine}\n- src/Feature/File.cs"],
+            repository,
+            workspace,
+            ref agents,
+            new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("overlap-detected", output, StringComparison.Ordinal);
+        Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
+        Xunit.Assert.NotNull(currentGoal);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_preserves_precommit_stdout_bytes")]
+    public void PersistentRunnerGoalCreatePreservesPrecommitStdoutBytes()
+    {
+        const string objective = "Create deterministic goal output for stdout compatibility";
+
+        (string Output, Goal Goal) Run(bool persistent)
+        {
+            var root = CreateTempDirectory();
+            var workspace = CreateRefinedWorkspace(root);
+            ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+                new ModelFunctionBinding(
+                    ModelFunctionPurposes.SpecRefiner,
+                    ModelLane.CheapApi,
+                    new ModelProfile("deterministic-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                    Name: ModelFunctionPurposes.SpecRefiner)
+            ]));
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            var providers = new InMemoryModelProviderRegistry([new DeterministicGoalRefinerProvider()]);
+            Goal? currentGoal = null;
+            var output = persistent
+                ? CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                    ["goal", objective],
+                    new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel()),
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal))
+                : CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                    ["goal", objective],
+                    new AgentOrchestratorKernel(),
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal));
+            return (output, Xunit.Assert.IsType<Goal>(currentGoal));
+        }
+
+        static string PrecommitOutput((string Output, Goal Goal) result)
+        {
+            var goalOutput = $"Goal {result.Goal.Id.Value}";
+            var goalIndex = result.Output.IndexOf(goalOutput, StringComparison.Ordinal);
+            Xunit.Assert.True(goalIndex > 0, result.Output);
+            return result.Output[..goalIndex];
+        }
+
+        var ambientTransactionBaseline = Run(persistent: false);
+        var outsideTransactionCandidate = Run(persistent: true);
+        Xunit.Assert.Equal(
+            PrecommitOutput(ambientTransactionBaseline),
+            PrecommitOutput(outsideTransactionCandidate));
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_rejects_missing_backlog_source_without_side_effects")]
@@ -3904,6 +4234,27 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                       "rationale": "Operator decision required."
                     }
                   ]
+                }
+                ```
+                """;
+            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
+        }
+    }
+
+    private sealed class DeterministicGoalRefinerProvider : IModelProvider
+    {
+        public string ProviderName => "deterministic-refiner";
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            const string response = """
+                ```json
+                {
+                  "behavioralContract": "Create a deterministic goal.",
+                  "acceptanceCriteria": ["The goal output remains compatible."],
+                  "verificationClass": "TestVerifiable",
+                  "decisions": [],
+                  "forks": []
                 }
                 ```
                 """;
