@@ -103,10 +103,11 @@ internal static class AssemblyTempRedirect
 
             try
             {
-                if (fileSystem.DirectoryExists(probeDirectory))
-                {
-                    fileSystem.DeleteDirectory(probeDirectory);
-                }
+                fileSystem.DeleteDirectory(probeDirectory);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // No probe directory remains to poison a later lane.
             }
             catch (Exception ex) when (IsFileSystemFailure(ex))
             {
@@ -224,8 +225,6 @@ internal sealed record TempRootSelectionResult(
 
 internal interface ITempRootFileSystem
 {
-    bool DirectoryExists(string path);
-
     void CreateDirectory(string path);
 
     void CreateProbeFile(string path);
@@ -237,8 +236,6 @@ internal interface ITempRootFileSystem
 
 internal sealed class PhysicalTempRootFileSystem : ITempRootFileSystem
 {
-    public bool DirectoryExists(string path) => Directory.Exists(path);
-
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
 
     public void CreateProbeFile(string path)
@@ -270,6 +267,18 @@ internal sealed record TempRootIntegrityLabelState(bool Exists, bool Low, bool I
 
 internal sealed class IcaclsTempRootIntegrityLabeler : ITempRootIntegrityLabeler
 {
+    private readonly Func<ProcessStartInfo, Process?> startProcess;
+
+    public IcaclsTempRootIntegrityLabeler()
+        : this(Process.Start)
+    {
+    }
+
+    internal IcaclsTempRootIntegrityLabeler(Func<ProcessStartInfo, Process?> startProcess)
+    {
+        this.startProcess = startProcess;
+    }
+
     public TempRootIntegrityLabelState Query(string path)
     {
         if (!File.Exists(path) && !Directory.Exists(path))
@@ -280,7 +289,7 @@ internal sealed class IcaclsTempRootIntegrityLabeler : ITempRootIntegrityLabeler
         try
         {
             var startInfo = CreateStartInfo(path);
-            using var process = Process.Start(startInfo);
+            using var process = startProcess(startInfo);
             if (process is null)
             {
                 return Unlabeled();
@@ -319,7 +328,7 @@ internal sealed class IcaclsTempRootIntegrityLabeler : ITempRootIntegrityLabeler
                 startInfo.ArgumentList.Add("/T");
             }
 
-            using var process = Process.Start(startInfo);
+            using var process = startProcess(startInfo);
             if (process is null)
             {
                 return false;

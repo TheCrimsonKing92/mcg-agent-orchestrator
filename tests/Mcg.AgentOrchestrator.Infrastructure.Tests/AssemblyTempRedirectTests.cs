@@ -22,8 +22,9 @@ public sealed class AssemblyTempRedirectTests
     [Fact]
     public void WindowsAppliesAndVerifiesLowLabelOnExactCandidateBeforeSelection()
     {
-        var fileSystem = new RecordingTempRootFileSystem();
-        var labeler = new RecordingIntegrityLabeler(setResult: true);
+        var events = new List<string>();
+        var fileSystem = new RecordingTempRootFileSystem(events: events);
+        var labeler = new RecordingIntegrityLabeler(setResult: true, events: events);
 
         var selection = Select(
             [Candidate("preferred", requiresLowLabel: true), Candidate("fallback")],
@@ -36,19 +37,33 @@ public sealed class AssemblyTempRedirectTests
         var setCall = Assert.Single(labeler.SetCalls);
         Assert.Equal(("preferred", AssemblyTempRedirect.LowInheritableLevel, false), setCall);
         Assert.Equal(["preferred"], fileSystem.RootAttempts);
+        Assert.Equal(
+            [
+                "create:preferred",
+                "label-query:preferred",
+                "label-set:preferred",
+                "label-query:preferred",
+                "create-probe:preferred",
+                "write:preferred",
+                "delete-file:preferred",
+                "delete-directory:preferred"
+            ],
+            events);
     }
 
     [Theory]
-    [InlineData(false, false, "Label")]
-    [InlineData(true, true, "Write")]
+    [InlineData(false, true, false, "Label")]
+    [InlineData(true, false, false, "Label")]
+    [InlineData(true, true, true, "Write")]
     public void WindowsPreparationFailureFallsBackWithTypedReason(
         bool setResult,
+        bool verifyAfterSet,
         bool failPostLabelWrite,
         string expectedReason)
     {
         var fileSystem = new RecordingTempRootFileSystem(
             failWrites: failPostLabelWrite ? ["preferred"] : []);
-        var labeler = new RecordingIntegrityLabeler(setResult);
+        var labeler = new RecordingIntegrityLabeler(setResult, verifyAfterSet);
 
         var selection = Select(
             [Candidate("preferred", requiresLowLabel: true), Candidate("fallback")],
@@ -84,8 +99,8 @@ public sealed class AssemblyTempRedirectTests
     {
         var fileSystem = new RecordingTempRootFileSystem(
             failCreates: ["create-root"],
-            failWrites: ["write-root"],
-            failCleanup: ["cleanup-root"]);
+            failWrites: ["write-root", "write-cleanup-root"],
+            failCleanup: ["cleanup-root", "write-cleanup-root"]);
         var labeler = new RecordingIntegrityLabeler(setResult: false);
 
         var selection = Select(
@@ -93,7 +108,8 @@ public sealed class AssemblyTempRedirectTests
                 Candidate("create-root"),
                 Candidate("label-root", requiresLowLabel: true),
                 Candidate("write-root"),
-                Candidate("cleanup-root")
+                Candidate("cleanup-root"),
+                Candidate("write-cleanup-root")
             ],
             isWindows: true,
             fileSystem,
@@ -102,7 +118,8 @@ public sealed class AssemblyTempRedirectTests
         Assert.Null(selection.SelectedRoot);
         Assert.Equal(
             "assembly-temp-redirect selected=<none> rejected=" +
-            "create-root:create|label-root:label|write-root:write|cleanup-root:cleanup",
+            "create-root:create|label-root:label|write-root:write|cleanup-root:cleanup|" +
+            "write-cleanup-root:write+cleanup",
             AssemblyTempRedirect.FormatDiagnostic(selection));
         Assert.Contains(Path.Combine("cleanup-root", "probe", "probe.tmp"), fileSystem.DeleteFileAttempts);
         Assert.Contains(Path.Combine("cleanup-root", "probe"), fileSystem.DeleteDirectoryAttempts);
@@ -128,7 +145,8 @@ public sealed class AssemblyTempRedirectTests
     private sealed class RecordingTempRootFileSystem(
         IEnumerable<string>? failCreates = null,
         IEnumerable<string>? failWrites = null,
-        IEnumerable<string>? failCleanup = null) : ITempRootFileSystem
+        IEnumerable<string>? failCleanup = null,
+        ICollection<string>? events = null) : ITempRootFileSystem
     {
         private readonly HashSet<string> directories = [];
         private readonly HashSet<string> files = [];
@@ -142,13 +160,12 @@ public sealed class AssemblyTempRedirectTests
 
         internal List<string> DeleteDirectoryAttempts { get; } = [];
 
-        public bool DirectoryExists(string path) => directories.Contains(path);
-
         public void CreateDirectory(string path)
         {
             if (string.Equals(Path.GetFileName(path), "probe", StringComparison.Ordinal))
             {
                 var root = Path.GetDirectoryName(path)!;
+                events?.Add($"create-probe:{root}");
                 directories.Add(path);
                 if (writeFailures.Contains(root))
                 {
@@ -158,6 +175,7 @@ public sealed class AssemblyTempRedirectTests
                 return;
             }
 
+            events?.Add($"create:{path}");
             RootAttempts.Add(path);
             if (createFailures.Contains(path))
             {
@@ -170,6 +188,7 @@ public sealed class AssemblyTempRedirectTests
         public void CreateProbeFile(string path)
         {
             var root = Path.GetDirectoryName(Path.GetDirectoryName(path)!)!;
+            events?.Add($"write:{root}");
             files.Add(path);
             if (writeFailures.Contains(root))
             {
@@ -181,6 +200,7 @@ public sealed class AssemblyTempRedirectTests
         {
             DeleteFileAttempts.Add(path);
             var root = Path.GetDirectoryName(Path.GetDirectoryName(path)!)!;
+            events?.Add($"delete-file:{root}");
             if (cleanupFailures.Contains(root))
             {
                 throw new IOException("simulated probe-file cleanup denial");
@@ -193,6 +213,7 @@ public sealed class AssemblyTempRedirectTests
         {
             DeleteDirectoryAttempts.Add(path);
             var root = Path.GetDirectoryName(path)!;
+            events?.Add($"delete-directory:{root}");
             if (cleanupFailures.Contains(root) || files.Any(file => Path.GetDirectoryName(file) == path))
             {
                 throw new IOException("simulated probe-directory cleanup denial");
@@ -202,7 +223,10 @@ public sealed class AssemblyTempRedirectTests
         }
     }
 
-    private sealed class RecordingIntegrityLabeler(bool setResult = true) : IWorkerIntegrityLabeler
+    private sealed class RecordingIntegrityLabeler(
+        bool setResult = true,
+        bool verifyAfterSet = true,
+        ICollection<string>? events = null) : IWorkerIntegrityLabeler
     {
         private readonly Dictionary<string, IntegrityLabelState> states = [];
 
@@ -212,6 +236,7 @@ public sealed class AssemblyTempRedirectTests
 
         public IntegrityLabelState Query(string path)
         {
+            events?.Add($"label-query:{path}");
             QueryCalls.Add(path);
             return states.GetValueOrDefault(
                 path,
@@ -220,8 +245,9 @@ public sealed class AssemblyTempRedirectTests
 
         public bool SetIntegrity(string path, string level, bool recursive)
         {
+            events?.Add($"label-set:{path}");
             SetCalls.Add((path, level, recursive));
-            if (setResult)
+            if (setResult && verifyAfterSet)
             {
                 states[path] = new IntegrityLabelState(Exists: true, Low: true, Inheritable: true);
             }

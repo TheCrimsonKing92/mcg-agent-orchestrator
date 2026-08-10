@@ -103,10 +103,11 @@ internal static class AssemblyTempRedirect
 
             try
             {
-                if (fileSystem.DirectoryExists(probeDirectory))
-                {
-                    fileSystem.DeleteDirectory(probeDirectory);
-                }
+                fileSystem.DeleteDirectory(probeDirectory);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // No probe directory remains to poison a later lane.
             }
             catch (Exception ex) when (IsFileSystemFailure(ex))
             {
@@ -224,8 +225,6 @@ internal sealed record TempRootSelectionResult(
 
 internal interface ITempRootFileSystem
 {
-    bool DirectoryExists(string path);
-
     void CreateDirectory(string path);
 
     void CreateProbeFile(string path);
@@ -237,8 +236,6 @@ internal interface ITempRootFileSystem
 
 internal sealed class PhysicalTempRootFileSystem : ITempRootFileSystem
 {
-    public bool DirectoryExists(string path) => Directory.Exists(path);
-
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
 
     public void CreateProbeFile(string path)
