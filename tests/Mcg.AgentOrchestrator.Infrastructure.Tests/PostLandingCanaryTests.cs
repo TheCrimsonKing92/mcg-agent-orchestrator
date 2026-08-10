@@ -1201,13 +1201,17 @@ public sealed class PostLandingCanaryTests : CliCommandTestBase
             {
                 await process.WaitForExitAsync();
 
+                var stdout = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(
+                    stdoutPath,
+                    captureLimitReached: false);
+                var stderr = await GoalAcceptanceVerifier.ReadCapturedFileWithRetryAsync(
+                    stderrPath,
+                    captureLimitReached: false);
                 Assert.True(
                     process.ExitCode == 0,
-                    $"stdout: {File.ReadAllText(stdoutPath)}{Environment.NewLine}" +
-                    $"stderr: {File.ReadAllText(stderrPath)}");
+                    $"stdout: {stdout}{Environment.NewLine}" +
+                    $"stderr: {stderr}");
                 Assert.Equal(expectedArguments, JsonSerializer.Deserialize<string[]>(File.ReadAllText(outputPath)));
-                var stdout = File.ReadAllText(stdoutPath);
-                var stderr = File.ReadAllText(stderrPath);
                 Assert.Contains("native stdout marker", stdout, StringComparison.Ordinal);
                 Assert.DoesNotContain("native stderr marker", stdout, StringComparison.Ordinal);
                 Assert.Contains("native stderr marker", stderr, StringComparison.Ordinal);
