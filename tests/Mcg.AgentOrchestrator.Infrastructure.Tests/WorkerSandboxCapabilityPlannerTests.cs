@@ -65,25 +65,31 @@ public sealed class WorkerSandboxCapabilityPlannerTests
         Assert.True(permittedByOverride.Allowed);
     }
 
-    [Xunit.Theory(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_Codex_file_roles_for_repo_skills_even_with_OS_confinement")]
-    [Xunit.InlineData(AgentRole.Developer)]
-    [Xunit.InlineData(AgentRole.Tester)]
-    public void WorkerSandboxCapabilityPlannerBlocksCodexFileRolesForRepoSkillsEvenWithOsConfinement(AgentRole role)
+    [Xunit.Theory(DisplayName = "WorkerSandboxCapabilityPlanner_allows_typed_Codex_file_roles_for_repo_skills_with_OS_confinement")]
+    [Xunit.InlineData(AgentRole.Developer, "codex-cli")]
+    [Xunit.InlineData(AgentRole.Tester, "codex-cli")]
+    [Xunit.InlineData(AgentRole.Developer, "codex-spark")]
+    [Xunit.InlineData(AgentRole.Developer, "codex-oss-cli")]
+    public void WorkerSandboxCapabilityPlannerAllowsTypedCodexFileRolesForRepoSkillsWithOsConfinement(
+        AgentRole role,
+        string profileName)
     {
         var (goal, task, profile, workingDirectory) = CreateEvaluateFixture(
             "Update .agents/skills/systematic-debugging/SKILL.md",
-            role);
+            role,
+            profileName);
 
         var result = WorkerSandboxCapabilityPlanner.Evaluate(
             goal,
             task,
             profile,
             workingDirectory,
-            sandboxOptions: new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+            sandboxOptions: new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            commandExists: _ => true);
 
-        Assert.False(result.Allowed);
-        Assert.Equal("blocked", result.Status);
-        Assert.Contains("lacks an authorized", result.Detail, StringComparison.Ordinal);
+        Assert.True(result.Allowed, result.Detail);
+        Assert.Equal("repo-skill-write", result.Status);
+        Assert.Contains("orchestrator OS worker sandbox", result.Detail, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_Codex_repo_skills_without_OS_confinement")]
@@ -97,7 +103,8 @@ public sealed class WorkerSandboxCapabilityPlannerTests
             task,
             profile,
             workingDirectory,
-            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            commandExists: _ => true);
 
         Assert.False(result.Allowed);
         Assert.Equal("blocked", result.Status);
@@ -117,7 +124,8 @@ public sealed class WorkerSandboxCapabilityPlannerTests
             task,
             profile,
             workingDirectory,
-            sandboxOptions: new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+            sandboxOptions: new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            commandExists: _ => true);
 
         Assert.False(result.Allowed);
         Assert.Equal("blocked", result.Status);
@@ -142,8 +150,13 @@ public sealed class WorkerSandboxCapabilityPlannerTests
         Assert.DoesNotContain("repo-skill-write", result.Status, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_preserves_Claude_repo_skill_behavior")]
-    public void WorkerSandboxCapabilityPlannerPreservesClaudeRepoSkillBehavior()
+    [Xunit.Theory(DisplayName = "WorkerSandboxCapabilityPlanner_requires_OS_confinement_for_Claude_repo_skill_behavior")]
+    [Xunit.InlineData(true, true, "repo-skill-write")]
+    [Xunit.InlineData(false, false, "blocked")]
+    public void WorkerSandboxCapabilityPlannerRequiresOsConfinementForClaudeRepoSkillBehavior(
+        bool sandboxEnabled,
+        bool expectedAllowed,
+        string expectedStatus)
     {
         var (goal, task, _, workingDirectory) = CreateEvaluateFixture(
             "Update .agents/skills/systematic-debugging/SKILL.md");
@@ -154,15 +167,124 @@ public sealed class WorkerSandboxCapabilityPlannerTests
             task,
             profile,
             workingDirectory,
-            sandboxOptions: new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
+            sandboxOptions: new WorkerSandboxOptions(sandboxEnabled, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget),
+            commandExists: _ => true);
 
-        Assert.True(result.Allowed);
-        Assert.Equal("repo-skill-write", result.Status);
-        Assert.Contains("Claude-compatible", result.Detail, StringComparison.Ordinal);
+        Assert.Equal(expectedAllowed, result.Allowed);
+        Assert.Equal(expectedStatus, result.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_unknown_provider_even_with_Claude_permission_flags")]
+    public void WorkerSandboxCapabilityPlannerBlocksUnknownProviderEvenWithClaudePermissionFlags()
+    {
+        var (goal, task, _, workingDirectory) = CreateEvaluateFixture(
+            "Update .agents/skills/systematic-debugging/SKILL.md");
+        var profile = new WorkerProfile(
+            "custom-worker",
+            "claude -p --model test --permission-mode bypassPermissions");
+
+        var result = WorkerSandboxCapabilityPlanner.Evaluate(
+            goal,
+            task,
+            profile,
+            workingDirectory,
+            sandboxOptions: EnabledSandbox(),
+            commandExists: _ => true);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("blocked", result.Status);
+        Assert.Contains("typed Codex or Claude", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_non_real_Codex_launchers")]
+    [Xunit.InlineData("Write-Output {promptPath}", true)]
+    [Xunit.InlineData("not-codex exec --sandbox {sandboxMode} --cd {workingDirectory}", true)]
+    [Xunit.InlineData("codex exec --sandbox {sandboxMode} --cd {workingDirectory}", false)]
+    public void WorkerSandboxCapabilityPlannerBlocksNonRealCodexLaunchers(
+        string commandTemplate,
+        bool commandExists)
+    {
+        var (goal, task, _, workingDirectory) = CreateEvaluateFixture(
+            "Update .agents/skills/systematic-debugging/SKILL.md");
+        var profile = new WorkerProfile("codex-cli", commandTemplate);
+
+        var result = WorkerSandboxCapabilityPlanner.Evaluate(
+            goal,
+            task,
+            profile,
+            workingDirectory,
+            sandboxOptions: EnabledSandbox(),
+            commandExists: _ => commandExists);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("blocked", result.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_combined_repo_skill_and_git_metadata_target")]
+    public void WorkerSandboxCapabilityPlannerBlocksCombinedRepoSkillAndGitMetadataTarget()
+    {
+        var (goal, task, profile, workingDirectory) = CreateEvaluateFixture(
+            "Update .agents/skills/example/SKILL.md and write .git/config.");
+
+        var result = WorkerSandboxCapabilityPlanner.Evaluate(
+            goal,
+            task,
+            profile,
+            workingDirectory,
+            allowGitReference: true,
+            sandboxOptions: EnabledSandbox(),
+            commandExists: _ => true);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("blocked", result.Status);
+        Assert.Contains(".git internals", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_keeps_generic_SKILL_md_target_blocked")]
+    public void WorkerSandboxCapabilityPlannerKeepsGenericSkillMdTargetBlocked()
+    {
+        var (goal, task, profile, workingDirectory) = CreateEvaluateFixture(
+            "Update SKILL.md with the new workflow.");
+
+        var result = WorkerSandboxCapabilityPlanner.Evaluate(
+            goal,
+            task,
+            profile,
+            workingDirectory,
+            sandboxOptions: EnabledSandbox(),
+            commandExists: _ => true);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("blocked", result.Status);
+        Assert.Contains("include the exact .agents/skills path", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_repo_root_instead_of_linked_worktree")]
+    public void WorkerSandboxCapabilityPlannerBlocksRepoRootInsteadOfLinkedWorktree()
+    {
+        var (goal, task, profile, workingDirectory) = CreateEvaluateFixture(
+            "Update .agents/skills/example/SKILL.md");
+        File.Delete(Path.Combine(workingDirectory, ".git"));
+        Directory.CreateDirectory(Path.Combine(workingDirectory, ".git"));
+
+        var result = WorkerSandboxCapabilityPlanner.Evaluate(
+            goal,
+            task,
+            profile,
+            workingDirectory,
+            sandboxOptions: EnabledSandbox(),
+            commandExists: _ => true);
+
+        Assert.False(result.Allowed);
+        Assert.Equal("blocked", result.Status);
+        Assert.Contains("goal workspace is required", result.Detail, StringComparison.Ordinal);
     }
 
     private static (Goal goal, TaskSpec task, WorkerProfile profile, string workingDirectory)
-        CreateEvaluateFixture(string description, AgentRole role = AgentRole.Developer)
+        CreateEvaluateFixture(
+            string description,
+            AgentRole role = AgentRole.Developer,
+            string profileName = "codex-cli")
     {
         var root = CreateTempDirectory();
         var workingDirectory = Path.Combine(root, "repo");
@@ -172,7 +294,10 @@ public sealed class WorkerSandboxCapabilityPlannerTests
         var taskSpec = new TaskSpec(TaskId.New(), description, role);
         var goal = kernel.CreateGoal(description, [taskSpec]);
         var task = goal.Tasks.Single();
-        var profile = WorkerProfileCatalog.Default().GetRequired("codex-cli");
+        var profile = WorkerProfileCatalog.Default().GetRequired(profileName);
         return (goal, task, profile, workingDirectory);
     }
+
+    private static WorkerSandboxOptions EnabledSandbox() =>
+        new(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 }

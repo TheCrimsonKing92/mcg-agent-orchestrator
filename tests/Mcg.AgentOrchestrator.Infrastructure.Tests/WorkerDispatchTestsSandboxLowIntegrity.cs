@@ -272,13 +272,10 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     }
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_repo_scoped_skill_targets_for_full_permission_profile")]
-    public void WorkerProfileDispatcherPreflightAllowsRepoScopedSkillTargetsForFullPermissionProfile()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_Claude_repo_scoped_skill_targets_with_OS_confinement")]
+    public void WorkerProfileDispatcherPreflightAllowsClaudeRepoScopedSkillTargetsWithOsConfinement()
 {
-    var root = CreateTempDirectory();
-    var workingDirectory = Path.Combine(root, "repo");
-    Directory.CreateDirectory(workingDirectory);
-    File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    var root = CreateSeededDispatchRepository();
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Create .agents/skills/example/SKILL.md", [new TaskSpec(TaskId.New(), "Author .agents/skills/example/SKILL.md", AgentRole.Developer)]);
     var agent = new AgentDefinition(
@@ -290,7 +287,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         Subscription: new SubscriptionLaunchProfile("claude-cli", "claude-sonnet-4-6", "medium"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
-    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var workingDirectory = GoalWorktrees.Ensure(root, goal.Id);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
 
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
         goal,
@@ -299,18 +297,19 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         WorkerProfileCatalog.Default(),
         workingDirectory,
         DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
-        sandboxOptions: sandbox);
+        claudeAuthProbe: () => new ClaudeCliAuthState(true, false, null),
+        sandboxOptions: sandbox,
+        commandExists: _ => true);
 
     Assert.True(preflight.Allowed);
     Assert.Equal("repo-skill-write", preflight.CapabilityStatus);
     Assert.Contains("repo-scoped .agents/skills", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_repo_scoped_skill_full_permission_smoke_creates_and_commits_from_goal_worktree")]
-    public void WorkerProfileDispatcherRepoScopedSkillFullPermissionSmokeCreatesAndCommitsFromGoalWorktree()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_repo_scoped_skill_unknown_launcher_cannot_write_or_commit")]
+    public void WorkerProfileDispatcherRepoScopedSkillUnknownLauncherCannotWriteOrCommit()
 {
     var root = CreateSeededDispatchRepository();
-    var promptRoot = Path.Combine(root, "prompts");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Create .agents/skills/smoke/SKILL.md", [new TaskSpec(TaskId.New(), "Author .agents/skills/smoke/SKILL.md and commit it.", AgentRole.Developer)]);
     var agent = new AgentDefinition(
@@ -330,7 +329,8 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
     var task = goal.Tasks.Single();
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     var dispatchedAt = DateTimeOffset.Parse("2026-06-13T12:00:00Z");
-    var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var sandbox = new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
+    var headBefore = ReadGit(worktree, ["rev-parse", "HEAD"]);
 
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
         goal,
@@ -339,28 +339,16 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         profiles,
         worktree,
         dispatchedAt,
-        sandboxOptions: sandbox);
-    WorkerProfileDispatcher.PrepareSubscriptionTask(
-        kernel,
-        goal,
-        task,
-        [agent],
-        profiles,
-        promptRoot,
-        worktree,
-        dispatchedAt,
-        sandboxOptions: sandbox);
-    var result = RunPowerShellCommand(worktree, task.LastDispatch!.Command);
+        sandboxOptions: sandbox,
+        commandExists: _ => true);
 
-    Assert.True(preflight.Allowed);
-    Assert.Equal("repo-skill-write", preflight.CapabilityStatus);
-    Assert.Equal(0, result.ExitCode);
-    Assert.True(result.StandardOutput.Contains("WORKER_RESULT:", StringComparison.Ordinal));
-    Assert.True(File.Exists(Path.Combine(worktree, ".agents", "skills", "smoke", "SKILL.md")));
+    Assert.False(preflight.Allowed);
+    Assert.Equal("blocked", preflight.CapabilityStatus);
+    Assert.Null(task.LastDispatch);
+    Assert.Null(task.LastProcess);
+    Assert.False(File.Exists(Path.Combine(worktree, ".agents", "skills", "smoke", "SKILL.md")));
     Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
-    Assert.Equal("Add smoke skill", ReadGit(worktree, ["log", "-1", "--pretty=%s"]));
-    var committedFiles = ReadGit(worktree, ["show", "--name-only", "--pretty=", "HEAD"]);
-    Assert.True(committedFiles.Contains(".agents/skills/smoke/SKILL.md", StringComparison.Ordinal));
+    Assert.Equal(headBefore, ReadGit(worktree, ["rev-parse", "HEAD"]));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_low_integrity_dirty_worktree_with_verification_evidence_only_stays_failed")]
@@ -842,6 +830,37 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
                 variables: null);
 
             Assert.Equal("danger-full-access", variables["sandboxMode"]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previous);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_explicit_sandbox_state_drives_Codex_command_mapping")]
+    [Xunit.InlineData(true, "0", "danger-full-access")]
+    [Xunit.InlineData(false, "1", "workspace-write")]
+    public void WorkerProfileDispatcherExplicitSandboxStateDrivesCodexCommandMapping(
+        bool explicitSandboxEnabled,
+        string ambientSandboxValue,
+        string expectedSandboxMode)
+    {
+        var previous = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, ambientSandboxValue);
+            var sandbox = new WorkerSandboxOptions(
+                explicitSandboxEnabled,
+                WorkerSandboxOptions.DefaultAccount,
+                WorkerSandboxOptions.DefaultCredentialTarget);
+
+            var variables = WorkerProfileDispatcher.BuildDispatchVariables(
+                AgentRole.Developer,
+                @"C:\repo",
+                variables: null,
+                sandboxOptions: sandbox);
+
+            Assert.Equal(expectedSandboxMode, variables["sandboxMode"]);
         }
         finally
         {
