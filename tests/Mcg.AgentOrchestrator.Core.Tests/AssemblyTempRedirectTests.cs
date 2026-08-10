@@ -74,6 +74,48 @@ public sealed class AssemblyTempRedirectTests
         Assert.Equal("preferred", Assert.Single(labeler.SetCalls).Path);
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void WindowsLabelerExceptionFallsBackWithTypedLabelReason(
+        bool throwOnQuery,
+        bool throwOnSet)
+    {
+        var fileSystem = new RecordingTempRootFileSystem();
+        var labeler = new RecordingIntegrityLabeler(
+            throwOnQuery: throwOnQuery,
+            throwOnSet: throwOnSet);
+
+        var selection = Select(
+            [Candidate("preferred", requiresLowLabel: true), Candidate("fallback")],
+            isWindows: true,
+            fileSystem,
+            labeler);
+
+        Assert.Equal("fallback", selection.SelectedRoot);
+        Assert.Equal(TempRootRejectionReason.Label, Assert.Single(Assert.Single(selection.Rejections).Reasons));
+        Assert.Equal("preferred", Assert.Single(labeler.QueryCalls));
+        Assert.Equal(throwOnSet ? ["preferred"] : [], labeler.SetCalls.Select(call => call.Path));
+    }
+
+    [Fact]
+    public void WindowsAlreadyLowInheritableCandidateSkipsLabelApplication()
+    {
+        var fileSystem = new RecordingTempRootFileSystem();
+        var labeler = new RecordingIntegrityLabeler(alreadyLow: ["preferred"]);
+
+        var selection = Select(
+            [Candidate("preferred", requiresLowLabel: true), Candidate("fallback")],
+            isWindows: true,
+            fileSystem,
+            labeler);
+
+        Assert.Equal("preferred", selection.SelectedRoot);
+        Assert.Equal(["preferred"], labeler.QueryCalls);
+        Assert.Empty(labeler.SetCalls);
+        Assert.Equal(["preferred"], fileSystem.RootAttempts);
+    }
+
     [Fact]
     public void NonWindowsRetainsDeterministicProbeFallbackWithoutLabelTooling()
     {
@@ -121,6 +163,20 @@ public sealed class AssemblyTempRedirectTests
             AssemblyTempRedirect.FormatDiagnostic(selection));
         Assert.Contains(Path.Combine("cleanup-root", "probe", "probe.tmp"), fileSystem.DeleteFileAttempts);
         Assert.Contains(Path.Combine("cleanup-root", "probe"), fileSystem.DeleteDirectoryAttempts);
+    }
+
+    [Fact]
+    public void DiagnosticNamesSelectedFallbackAfterPriorRejection()
+    {
+        var selection = Select(
+            [Candidate("rejected-root"), Candidate("selected-root")],
+            isWindows: false,
+            new RecordingTempRootFileSystem(failWrites: ["rejected-root"]),
+            new RecordingIntegrityLabeler());
+
+        Assert.Equal(
+            "assembly-temp-redirect selected=selected-root rejected=rejected-root:write",
+            AssemblyTempRedirect.FormatDiagnostic(selection));
     }
 
     private static TempRootSelectionResult Select(
@@ -224,9 +280,15 @@ public sealed class AssemblyTempRedirectTests
     private sealed class RecordingIntegrityLabeler(
         bool setResult = true,
         bool verifyAfterSet = true,
-        ICollection<string>? events = null) : ITempRootIntegrityLabeler
+        ICollection<string>? events = null,
+        IEnumerable<string>? alreadyLow = null,
+        bool throwOnQuery = false,
+        bool throwOnSet = false) : ITempRootIntegrityLabeler
     {
-        private readonly Dictionary<string, TempRootIntegrityLabelState> states = [];
+        private readonly Dictionary<string, TempRootIntegrityLabelState> states =
+            (alreadyLow ?? []).ToDictionary(
+                path => path,
+                _ => new TempRootIntegrityLabelState(Exists: true, Low: true, Inheritable: true));
 
         internal List<string> QueryCalls { get; } = [];
 
@@ -236,6 +298,11 @@ public sealed class AssemblyTempRedirectTests
         {
             events?.Add($"label-query:{path}");
             QueryCalls.Add(path);
+            if (throwOnQuery)
+            {
+                throw new InvalidOperationException("simulated label query failure");
+            }
+
             return states.GetValueOrDefault(
                 path,
                 new TempRootIntegrityLabelState(Exists: true, Low: false, Inheritable: false));
@@ -245,6 +312,11 @@ public sealed class AssemblyTempRedirectTests
         {
             events?.Add($"label-set:{path}");
             SetCalls.Add((path, level, recursive));
+            if (throwOnSet)
+            {
+                throw new InvalidOperationException("simulated label application failure");
+            }
+
             if (setResult && verifyAfterSet)
             {
                 states[path] = new TempRootIntegrityLabelState(Exists: true, Low: true, Inheritable: true);
