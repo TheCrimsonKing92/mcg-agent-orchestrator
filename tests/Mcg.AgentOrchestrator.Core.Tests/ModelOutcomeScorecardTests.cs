@@ -199,6 +199,28 @@ public sealed class ModelOutcomeScorecardTests
         Assert.Equal(TaskOutcomeClass.ManufacturedFixed, classification.Class);
     }
 
+    [Xunit.Fact]
+    public void Timeline_CompletedReconciliation_PreservesOutcomeClass()
+    {
+        var goalId = GoalId.New();
+        var taskId = TaskId.New();
+        var timeline = new[]
+        {
+            new ProgressEvent(
+                goalId,
+                taskId,
+                ProgressKind.TaskNote,
+                "CLASSIFIER rule=committed-worker-result-evidence; outcome_class=reconciled-to-success; " +
+                    "origin_rule=future-classifier-origin; verdict=VerifiedSuccess",
+                DateTimeOffset.UtcNow)
+        };
+
+        var classification = TaskOutcomeClassifier.FromTimeline(timeline, taskId, WorkTaskStatus.Completed);
+
+        Assert.Equal("committed-worker-result-evidence", classification.Rule);
+        Assert.Equal(TaskOutcomeClass.ReconciledToSuccess, classification.Class);
+    }
+
     [Xunit.Fact(DisplayName = "TaskOutcomeClassifier_timeline_recognizes_legacy_sandbox1312_rule_without_outcome_class")]
     public void TaskOutcomeClassifierTimelineRecognizesLegacySandbox1312RuleWithoutOutcomeClass()
     {

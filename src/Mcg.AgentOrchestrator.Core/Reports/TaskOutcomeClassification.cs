@@ -149,9 +149,11 @@ public static class TaskOutcomeClassifier
             .Select(item => item.evt.Message)
             .FirstOrDefault(message => TryExtractRule(message) is not null || TryExtractClass(message) is not null);
         var rule = TryExtractRule(receipt);
-        if (outcome == WorkTaskStatus.Failed && TryExtractClass(receipt) is { } outcomeClass)
+        var recordedClass = TryExtractClass(receipt);
+        if ((outcome == WorkTaskStatus.Failed && recordedClass is not null) ||
+            (outcome == WorkTaskStatus.Completed && recordedClass == TaskOutcomeClass.ReconciledToSuccess))
         {
-            return new TaskOutcomeClassification(rule, outcomeClass);
+            return new TaskOutcomeClassification(rule, recordedClass!.Value);
         }
 
         return Classify(outcome, rule);

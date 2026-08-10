@@ -1179,6 +1179,7 @@ public sealed class BackgroundDispatchRunner
         }
         var task = kernel.GetTask(goalId, taskId);
         var goal = kernel.GetGoal(goalId);
+        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, task.RequiredRole);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
         var completeNonBlockedWorkerResult = hasRoleCapability && HasSuccessfulWorkerResult(
             processRecord.WorkingDirectory,
@@ -1310,10 +1311,12 @@ public sealed class BackgroundDispatchRunner
                 observedExitCode,
                 decisionStandardOutput,
                 decisionStandardError,
+                standardErrorDiagnostic,
                 workerResultPresent,
                 hasCommittedChanges,
                 providerFailureKind,
-                childExitRecord)
+                childExitRecord,
+                recoveryDecision)
             : null;
         var reconcileWrapperExit = ShouldReconcileWrapperExit(new WrapperExitReconciliationEvidence(
             observedExitCode,
@@ -1323,6 +1326,7 @@ public sealed class BackgroundDispatchRunner
             hasRoleCapability,
             dispatchRoleCapability,
             relevantChangeEvidenceAvailable,
+            humanInputDirective.Directive is not null || humanInputDirective.IsMalformed,
             !string.IsNullOrWhiteSpace(orchestratorFailureReason)));
         if (completedWorktreeInspection is { IsAvailable: true, Evidence: var worktreeEvidence })
         {
@@ -1542,7 +1546,6 @@ public sealed class BackgroundDispatchRunner
             exitCode = observedExitCode;
         }
 
-        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, task.RequiredRole);
         var humanInputQuestion = humanInputDirective.Directive?.Question;
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
@@ -1627,26 +1630,46 @@ public sealed class BackgroundDispatchRunner
         evidence.HasKnownRoleCapability &&
         (evidence.RoleCapability != DispatchRoleOutputCapability.RequiresChangeEvidence ||
          evidence.HasRelevantChangeEvidence) &&
+        !evidence.HasTerminalHumanInputDirective &&
         !evidence.HasFatalOrchestratorFailure;
 
-    private static string? ClassifyReconciliationOriginRule(
+    private string? ClassifyReconciliationOriginRule(
         TaskSpec task,
         TaskProcessRecord processRecord,
         int observedRootExitCode,
         string standardOutput,
         string standardError,
+        string? standardErrorDiagnostic,
         bool workerResultPresent,
         bool hasCommittedChanges,
         ProviderFailureKind providerFailureKind,
-        DispatchProcessHost.DispatchChildExitRecord childExitRecord)
+        DispatchProcessHost.DispatchChildExitRecord childExitRecord,
+        DispatchRecoveryDecision? recoveryDecision)
     {
+        var diagnosticStandardError = AppendDiagnostic(standardError, standardErrorDiagnostic ?? string.Empty);
+        var recordedOriginRule = TaskOutcomeClassifier.TryExtractRule(standardOutput) ??
+            TaskOutcomeClassifier.TryExtractRule(diagnosticStandardError);
+        if (!string.IsNullOrWhiteSpace(recordedOriginRule))
+        {
+            return recordedOriginRule;
+        }
+
+        // PreserveInterruptedWork is the typed dirty-dispatch boundary that the failure classifier
+        // reports as dirty-dispatch-recovery after a failed verification is recorded. Capture that
+        // diagnostic origin before successful reconciliation changes the logical task disposition.
+        // This metadata never participates in ShouldReconcileWrapperExit.
+        if (recoveryDecision?.Action == DispatchRecoveryAction.PreserveInterruptedWork)
+        {
+            return "dirty-dispatch-recovery";
+        }
+
         var verification = new TaskVerificationRecord(
             processRecord.Command,
             processRecord.WorkingDirectory,
             observedRootExitCode,
             standardOutput,
-            standardError,
-            DateTimeOffset.UtcNow,
+            diagnosticStandardError,
+            _clock.UtcNow,
             StandardOutputPath: processRecord.StandardOutputPath,
             StandardErrorPath: processRecord.StandardErrorPath,
             WorkerResultPresent: workerResultPresent,
@@ -4443,6 +4466,7 @@ public sealed class BackgroundDispatchRunner
         bool HasKnownRoleCapability,
         DispatchRoleOutputCapability RoleCapability,
         bool HasRelevantChangeEvidence,
+        bool HasTerminalHumanInputDirective,
         bool HasFatalOrchestratorFailure);
 
     private readonly record struct CommitWorktreeEditsResult(bool Succeeded, string Diagnostic)

@@ -2585,13 +2585,18 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     Assert.Equal(WorkTaskStatus.Completed, task.Status);
     Assert.Equal(0, task.LastVerification!.ExitCode);
+    Assert.Equal(1, task.LastVerification.ObservedRootExitCode);
     Assert.Equal(0, task.LastVerification.ChildExitCode);
+    Assert.True(task.LastVerification.ReconciledToSuccess);
     AssertExitCode(process.ExitCodePath, 1);
     Assert.Contains("observed_wrapper_exit_code=1; child_exit_code=0; logical_exit_code=0", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.DoesNotContain(DispatchFailureDiagnosticMarker.Prefix, task.LastVerification.StandardError, StringComparison.Ordinal);
     var classified = DispatchFailureClassifier.Classify(task, task.LastVerification);
     Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, classified.Kind);
+    Assert.Equal(TaskOutcomeClass.ReconciledToSuccess, classified.OutcomeClass);
     Assert.Contains("rule=succeeded-dispatch-completion-evidence", classified.ClassifierReceipt, StringComparison.Ordinal);
+    Assert.Contains("outcome_class=reconciled-to-success", classified.ClassifierReceipt, StringComparison.Ordinal);
+    Assert.Contains("root_exit_code=1; child_exit_code=0", classified.ClassifierReceipt, StringComparison.Ordinal);
 }
 
     [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_read_only_receipt_reconciles_wrapper_failure_before_failure_classification")]
@@ -2620,7 +2625,9 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
         Assert.Equal(WorkTaskStatus.Completed, task.Status);
         Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.Equal(1, task.LastVerification.ObservedRootExitCode);
         Assert.Equal(0, task.LastVerification.ChildExitCode);
+        Assert.True(task.LastVerification.ReconciledToSuccess);
         AssertExitCode(process.ExitCodePath, 1);
         Assert.Contains(
             "observed_wrapper_exit_code=1; child_exit_code=0; logical_exit_code=0",
@@ -2629,7 +2636,105 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.False(GitCli.IsWorktreeDirty(GoalWorktrees.Ensure(root, goal.Id)));
         var classified = DispatchFailureClassifier.Classify(task, task.LastVerification);
         Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, classified.Kind);
+        Assert.Equal(TaskOutcomeClass.ReconciledToSuccess, classified.OutcomeClass);
         Assert.Contains("rule=succeeded-dispatch-completion-evidence", classified.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains("outcome_class=reconciled-to-success", classified.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains("root_exit_code=1; child_exit_code=0", classified.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(
+        "sandbox-commit-blocked",
+        "fatal: Unable to create '.git/index.lock': Permission denied",
+        true)]
+    [Xunit.InlineData(
+        "provider-sandbox-1312",
+        "CreateProcessAsUserW 1312: A specified logon session does not exist.",
+        true)]
+    [Xunit.InlineData("dirty-dispatch-recovery", "", false)]
+    [Xunit.InlineData("future-classifier-origin", "future diagnostic", true)]
+    public void WrapperFailureWithAnyOrigin_ReconcilesFromTypedEvidence(
+        string originRule,
+        string failureEvidence,
+        bool includeOriginReceipt)
+    {
+        var root = CreateSeededDispatchRepository();
+        var now = DateTimeOffset.Parse("2026-08-09T20:00:00Z");
+        var clock = new TestClock(now);
+        var kernel = new AgentOrchestratorKernel(clock);
+        var goal = kernel.CreateGoal("Reconcile typed successful-child evidence");
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var sourcePath = Path.Combine(worktree, "src", "Feature.cs");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+        File.WriteAllText(sourcePath, "internal static class Feature { }");
+        var task = goal.Tasks.First(candidate => candidate.RequiredRole == AgentRole.Developer);
+        var standardOutput = WorkerResultBlock(
+            "src/Feature.cs",
+            ".\\scripts\\Invoke-WorkerBuildCheck.ps1 src/Feature.csproj",
+            "pass - build: 0 errors",
+            commit: "none",
+            blockers: "none");
+        var standardError = includeOriginReceipt
+            ? $"{failureEvidence}{Environment.NewLine}CLASSIFIER rule={originRule}; outcome_class=environmental"
+            : failureEvidence;
+        var process = RecordStaleDeveloperDispatch(
+            kernel,
+            goal,
+            task,
+            worktree,
+            root,
+            now.AddMinutes(-40),
+            originRule,
+            standardOutput,
+            standardError,
+            childExitCode: 0);
+        WriteHeartbeat(
+            process,
+            now.AddMinutes(-31),
+            now.AddMinutes(-31),
+            "completed",
+            new FileInfo(process.StandardOutputPath).Length,
+            new FileInfo(process.StandardErrorPath).Length,
+            childPid: null,
+            ownedCpuMs: 953);
+        Assert.True(WorkerResultParser.TryParseSuccessfulResult(
+            $"{standardOutput}{Environment.NewLine}{standardError}",
+            out var parsedFields,
+            out var parserDiagnostic,
+            allowNoChangedFiles: true,
+            requireNoBlockers: true), parserDiagnostic);
+        Assert.Equal("none", parsedFields["blockers"]);
+        Assert.True(DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var capability));
+        Assert.Equal(DispatchRoleOutputCapability.RequiresChangeEvidence, capability);
+
+        var runner = new BackgroundDispatchRunner(clock, isStillRunning: _ => false);
+        var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(DispatchRecoveryAction.PreserveInterruptedWork, outcome.RecoveryDecision!.Action);
+        runner.ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        var verification = Assert.IsType<TaskVerificationRecord>(task.LastVerification);
+        Assert.Equal(0, verification.ExitCode);
+        Assert.Equal(1, verification.ObservedRootExitCode);
+        Assert.Equal(0, verification.ChildExitCode);
+        Assert.True(verification.WorkerResultPresent);
+        Assert.True(verification.HasCommittedChanges);
+        Assert.True(verification.ReconciledToSuccess);
+        Assert.Equal(originRule, verification.ReconciliationOriginRule);
+        AssertExitCode(process.ExitCodePath, 1);
+        Assert.False(GitCli.IsWorktreeDirty(worktree));
+        Assert.Equal("src/Feature.cs", ReadGit(worktree, ["show", "--pretty=", "--name-only", "HEAD"]));
+
+        var classified = DispatchFailureClassifier.Classify(task, verification);
+        Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, classified.Kind);
+        Assert.Equal(TaskOutcomeClass.ReconciledToSuccess, classified.OutcomeClass);
+        Assert.Contains("rule=committed-worker-result-evidence", classified.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains("outcome_class=reconciled-to-success", classified.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains($"origin_rule={originRule}", classified.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains("exit_code=0; root_exit_code=1", classified.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Contains("child_exit_code=0", classified.ClassifierReceipt, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_child_nonzero_keeps_usable_worker_result_failed")]
@@ -2665,6 +2770,40 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         StringComparison.Ordinal);
 }
 
+    [Xunit.Fact]
+    public void WrapperFailureWithHumanInput_DoesNotReconcile()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-06-02T12:00:00Z"));
+        const string question = "Which behavior should be authoritative?";
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Tester,
+            $"HUMAN_INPUT: {question}{Environment.NewLine}" + WorkerResultBlock(
+                "none",
+                "dotnet test --filter DispatchExecutionTests",
+                "pass - DispatchExecutionTests 5/5",
+                commit: "none",
+                blockers: "none"),
+            string.Empty,
+            clock,
+            taskDescription: "Verify behavior with automated and manual checks",
+            verificationPlan: "Run the focused tests and confirm the acceptance criteria.",
+            childExitCode: 0);
+        File.WriteAllText(process.ExitCodePath, "1");
+
+        var outcome = new BackgroundDispatchRunner(clock)
+            .ReconcileLatestProcess(kernel, goal.Id, task.Id);
+
+        var verification = Assert.IsType<TaskVerificationRecord>(outcome.Verification);
+        Assert.Equal(1, verification.ExitCode);
+        Assert.Equal(1, verification.ObservedRootExitCode);
+        Assert.Equal(0, verification.ChildExitCode);
+        Assert.Equal(question, verification.HumanInputQuestion);
+        Assert.False(verification.ReconciledToSuccess);
+        AssertExitCode(process.ExitCodePath, 1);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconciled_developer_without_change_still_fails_change_evidence")]
     public void BackgroundDispatchRunnerReconciledDeveloperWithoutChangeStillFailsChangeEvidence()
 {
@@ -2690,7 +2829,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
-    Assert.Contains("observed_wrapper_exit_code=1; child_exit_code=0; logical_exit_code=0", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.Equal(1, task.LastVerification.ObservedRootExitCode);
+    Assert.Equal(0, task.LastVerification.ChildExitCode);
+    Assert.False(task.LastVerification.ReconciledToSuccess);
+    Assert.DoesNotContain("logical_exit_code=0", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains(
         DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
         task.LastVerification.StandardError,
@@ -4085,17 +4227,39 @@ private static TaskProcessRecord RecordStaleDeveloperDispatch(
     string worktree,
     string root,
     DateTimeOffset dispatchedAt,
-    string suffix)
+    string suffix,
+    string standardOutput = "",
+    string standardError = "",
+    int? childExitCode = null)
 {
     var logs = Path.Combine(root, "logs");
     Directory.CreateDirectory(logs);
     var stdout = Path.Combine(logs, $"{suffix}.out.log");
     var stderr = Path.Combine(logs, $"{suffix}.err.log");
     var exit = Path.Combine(logs, $"{suffix}.exit.txt");
-    File.WriteAllText(stdout, string.Empty);
-    File.WriteAllText(stderr, string.Empty);
+    var childExit = childExitCode is null ? null : Path.Combine(logs, $"{suffix}.child-exit.json");
+    File.WriteAllText(stdout, standardOutput);
+    File.WriteAllText(stderr, standardError);
+    if (childExit is not null)
+    {
+        File.WriteAllText(
+            childExit,
+            JsonSerializer.Serialize(
+                new DispatchProcessHost.DispatchChildExitRecord(888888, childExitCode!.Value, dispatchedAt.AddMinutes(1)),
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+    }
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("claude-cli", $"claude prompt {suffix}", worktree, dispatchedAt));
-    var process = new TaskProcessRecord(999999, $"claude prompt {suffix}", worktree, stdout, stderr, exit, dispatchedAt, null, null);
+    var process = new TaskProcessRecord(
+        999999,
+        $"claude prompt {suffix}",
+        worktree,
+        stdout,
+        stderr,
+        exit,
+        dispatchedAt,
+        null,
+        null,
+        ChildExitRecordPath: childExit);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     return process;
 }
