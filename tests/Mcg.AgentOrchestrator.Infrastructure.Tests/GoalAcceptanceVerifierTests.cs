@@ -7997,6 +7997,214 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         return root;
     }
 
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_trusted_baseline_CS2012_retries_and_continues_without_failed_verdict")]
+    public async Task GoalAcceptanceVerifierTrustedBaselineCs2012RetriesAndContinuesWithoutFailedVerdict()
+    {
+        var (root, mainRoot) = CreateTrustedBaselineWorkspace();
+        var goalId = GoalId.New();
+        var calls = new List<(string[] Args, string Worktree)>();
+        var mainBuildAttempts = 0;
+        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => mainRoot;
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(null, "foreign-csc", null, false)],
+            "test");
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, worktree, _) =>
+            {
+                calls.Add((args, worktree));
+                if (IsVstestExecution(args))
+                {
+                    WriteVstestTrx(args, "Sample.Tests.Passes");
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                if (args.Contains("--list-tests", StringComparer.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "The following Tests are available:\n    Sample.Tests.Passes"));
+                }
+
+                if (worktree == mainRoot && args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    mainBuildAttempts++;
+                    if (mainBuildAttempts == 1)
+                    {
+                        var lockedPath = Path.Combine(GetArtifactsPath(args), "obj", "Sample.Tests.dll");
+                        return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                            1,
+                            $"CSC : error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
+                    }
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                goalId,
+                changedFiles: ["src/Sample.cs"]);
+
+            Assert.True(result.Passed);
+            Assert.True(result.Retried);
+            Assert.Equal(2, mainBuildAttempts);
+            var structural = Assert.Single(result.Checks!.Where(check => check.Name == "structural test coverage"));
+            Assert.True(structural.Passed);
+            Assert.True(structural.LockRemediationApplied);
+            Assert.DoesNotContain(result.Checks!, check =>
+                check.ResultSummary?.Contains("trusted main baseline build failed", StringComparison.OrdinalIgnoreCase) == true);
+            var baselineCalls = calls
+                .Where(call => call.Worktree == mainRoot &&
+                    call.Args.Length >= 2 &&
+                    call.Args[0] == "dotnet" &&
+                    (call.Args[1] == "build" || call.Args.Contains("--list-tests", StringComparer.OrdinalIgnoreCase)))
+                .ToArray();
+            Assert.NotEmpty(baselineCalls);
+            foreach (var call in baselineCalls)
+            {
+                Assert.Equal(1, call.Args.Count(argument =>
+                    argument.Equals("--artifacts-path", StringComparison.OrdinalIgnoreCase)));
+                Assert.EndsWith(
+                    Path.Combine("artifacts", "main-coverage-baseline"),
+                    GetArtifactsPath(call.Args),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            LockAttribution.AttributeForTests = null;
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+            DeleteDirectoryWithRetry(mainRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_persistent_trusted_baseline_CS2012_is_infrastructure_deferral")]
+    public async Task GoalAcceptanceVerifierPersistentTrustedBaselineCs2012IsInfrastructureDeferral()
+    {
+        var (root, mainRoot) = CreateTrustedBaselineWorkspace();
+        var goalId = GoalId.New();
+        var mainBuildAttempts = 0;
+        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => mainRoot;
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(
+            path,
+            [new BuildLockHolder(null, "foreign-csc", null, false)],
+            "test");
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, worktree, _) =>
+            {
+                if (IsVstestExecution(args))
+                {
+                    WriteVstestTrx(args, "Sample.Tests.Passes");
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                if (args.Contains("--list-tests", StringComparer.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "The following Tests are available:\n    Sample.Tests.Passes"));
+                }
+
+                if (worktree == mainRoot && args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    mainBuildAttempts++;
+                    var lockedPath = Path.Combine(GetArtifactsPath(args), "obj", "Sample.Tests.dll");
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        1,
+                        $"CSC : error CS2012: Cannot open '{lockedPath}' for writing because it is being used by another process."));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var deferred = await Assert.ThrowsAsync<AcceptanceInfrastructureDeferredException>(() => verifier.RunAsync(
+                root,
+                goalId,
+                changedFiles: ["src/Sample.cs"]));
+
+            Assert.Equal("trusted-main-build-lock", deferred.ReasonCode);
+            Assert.NotNull(deferred.BuildLockAttribution);
+            Assert.Equal(2, mainBuildAttempts);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            LockAttribution.AttributeForTests = null;
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+            DeleteDirectoryWithRetry(mainRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_candidate_discovery_compile_error_remains_failed_verdict")]
+    public async Task GoalAcceptanceVerifierCandidateDiscoveryCompileErrorRemainsFailedVerdict()
+    {
+        var (root, mainRoot) = CreateTrustedBaselineWorkspace();
+        var goalId = GoalId.New();
+        var mainBuildAttempts = 0;
+        GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => mainRoot;
+        GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, worktree, _) =>
+            {
+                if (IsVstestExecution(args))
+                {
+                    WriteVstestTrx(args, "Sample.Tests.Passes");
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        0,
+                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                }
+
+                if (worktree == root && args.Contains("--list-tests", StringComparer.OrdinalIgnoreCase))
+                {
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                        1,
+                        "Build FAILED. error CS1002: ; expected"));
+                }
+
+                if (worktree == mainRoot && args.Length >= 2 && args[0] == "dotnet" && args[1] == "build")
+                {
+                    mainBuildAttempts++;
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(
+                root,
+                goalId,
+                changedFiles: ["src/Sample.cs"]);
+
+            Assert.False(result.Passed);
+            var structural = Assert.Single(result.Checks!.Where(check =>
+                check.ResultSummary == "candidate trusted discovery failed"));
+            Assert.Contains("CS1002", structural.OutputTail, StringComparison.Ordinal);
+            Assert.Equal(0, mainBuildAttempts);
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = null;
+            GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = null;
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+            DeleteDirectoryWithRetry(mainRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_trusted_discovery_enumerates_test_projects_omitted_from_manifest")]
     public void GoalAcceptanceVerifierTrustedDiscoveryEnumeratesTestProjectsOmittedFromManifest()
     {
@@ -8096,6 +8304,54 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "forbiddenChangedPathGlobs": []
             }
             """);
+
+    private static (string CandidateRoot, string MainRoot) CreateTrustedBaselineWorkspace()
+    {
+        var candidateRoot = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "maxConcurrentShards": 1,
+                "enforceStructuralCoverage": true
+              },
+              "checks": [
+                { "name": "sample tests", "type": "dotnet-test", "project": "tests/Sample.Tests/Sample.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var mainRoot = Path.Combine(Path.GetTempPath(), "mcg-acceptance-main", Guid.NewGuid().ToString("N"));
+        foreach (var root in new[] { candidateRoot, mainRoot })
+        {
+            var project = Path.Combine(root, "tests", "Sample.Tests", "Sample.Tests.csproj");
+            Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+            File.WriteAllText(project, "<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
+        }
+
+        return (candidateRoot, mainRoot);
+    }
+
+    private static bool IsVstestExecution(string[] args) =>
+        args.Length >= 2 &&
+        args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+        args[1].Equals("test", StringComparison.OrdinalIgnoreCase) &&
+        !args.Contains("--list-tests", StringComparer.OrdinalIgnoreCase);
+
+    private static void WriteVstestTrx(string[] args, string testName)
+    {
+        var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
+        var loggerIndex = Array.IndexOf(args, "--logger");
+        Assert.True(resultsDirectoryIndex >= 0 && resultsDirectoryIndex + 1 < args.Length);
+        Assert.True(loggerIndex >= 0 && loggerIndex + 1 < args.Length);
+        const string prefix = "trx;LogFileName=";
+        Assert.StartsWith(prefix, args[loggerIndex + 1], StringComparison.OrdinalIgnoreCase);
+        var resultsDirectory = args[resultsDirectoryIndex + 1];
+        var fileName = args[loggerIndex + 1][prefix.Length..];
+        Directory.CreateDirectory(resultsDirectory);
+        File.WriteAllText(
+            Path.Combine(resultsDirectory, fileName),
+            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{testName}\"><TestMethod className=\"Sample.Tests\" name=\"Passes\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{testName}\" outcome=\"Passed\" /></Results></TestRun>");
+    }
 
     private static string CreateCheckedInManifestShapeWorkspace() =>
         CreateManifestWorkspace("""

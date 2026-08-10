@@ -4675,7 +4675,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         cached.TestResultPaths is { Count: > 0 } &&
         cached.TestResultPaths.All(path => TryGetFileLength(path) > 0);
 
-    internal async Task<AcceptanceCheckResult> RunStructuralCoverageCheckAsync(
+    private async Task<AcceptanceCheckResult> RunStructuralCoverageCheckAsync(
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
         IReadOnlyList<AcceptanceCheckResult> completedChecks,
         string worktreePath,
@@ -4695,7 +4695,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 outputTail: "Trusted main worktree could not be resolved for cross-generation discovery.");
         }
 
-        var broadChecks = DiscoverTrustedTestProjects(worktreePath, mainWorktreePath)
+        var broadChecks = DiscoverTrustedStructuralCoverageProjects(worktreePath, mainWorktreePath)
             .Select(project => BuildTrustedStructuralCoverageCheck(project, effectiveChecks))
             .ToArray();
         if (broadChecks.Length == 0)
@@ -4927,6 +4927,31 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+    private static IReadOnlyList<string> DiscoverTrustedStructuralCoverageProjects(
+        string candidateWorktreePath,
+        string mainWorktreePath)
+    {
+        var candidateProjects = DiscoverTrustedTestProjects(candidateWorktreePath);
+        IReadOnlyList<string> mainProjects;
+        try
+        {
+            mainProjects = DiscoverTrustedTestProjects(mainWorktreePath);
+        }
+        catch (Exception ex) when (IsBuildArtifactIoException(ex))
+        {
+            throw new AcceptanceInfrastructureDeferredException(
+                "trusted-main-project-discovery-io",
+                exitCode: null,
+                outputTail: ex.Message);
+        }
+
+        return candidateProjects
+            .Concat(mainProjects)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
     private static IReadOnlyList<AcceptanceManifestCheck> EnsureTrustedStructuralCoverageExecutionChecks(
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
@@ -4935,7 +4960,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
         var trustedProjects = string.IsNullOrWhiteSpace(mainWorktreePath)
             ? DiscoverTrustedTestProjects(worktreePath)
-            : DiscoverTrustedTestProjects(worktreePath, mainWorktreePath);
+            : DiscoverTrustedStructuralCoverageProjects(worktreePath, mainWorktreePath);
         var completed = effectiveChecks.ToList();
         foreach (var project in trustedProjects)
         {

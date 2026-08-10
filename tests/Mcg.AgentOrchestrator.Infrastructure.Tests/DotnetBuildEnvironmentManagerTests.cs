@@ -2525,6 +2525,25 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironment_derived_artifacts_path_keeps_arguments_consistent")]
+    public void DotnetBuildEnvironmentDerivedArtifactsPathKeepsArgumentsConsistent()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var original = DotnetBuildEnvironmentManager.CreateAttempt(null, "derive-artifacts");
+        var derivedPath = Path.Combine(original.ArtifactsPath, "main-coverage-baseline");
+
+        var derived = original.DeriveArtifactsPath(derivedPath);
+
+        Assert.Equal(derivedPath, derived.ArtifactsPath);
+        Assert.Equal(original.ArtifactsPath, original.Arguments[Array.IndexOf(original.Arguments.ToArray(), "--artifacts-path") + 1]);
+        var switches = derived.Arguments
+            .Select((argument, index) => (argument, index))
+            .Where(item => item.argument.Equals("--artifacts-path", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var artifactSwitch = Assert.Single(switches);
+        Assert.Equal(derivedPath, derived.Arguments[artifactSwitch.index + 1]);
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_caps_msbuild_parallelism_per_slot")]
     public void DotnetBuildEnvironmentManagerCapsMsbuildParallelismPerSlot()
     {
