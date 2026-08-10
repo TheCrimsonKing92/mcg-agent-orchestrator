@@ -2002,7 +2002,7 @@ public sealed class BackgroundDispatchRunner
     private static bool HasCompletedVerification(string standardOutput, string standardError)
     {
         return HasClassifiedVerificationEvidence(standardOutput, standardError) &&
-            !TryFindFailingTestsInWorkerResult($"{standardOutput}\n{standardError}", out _);
+            !TryFindFailingTestsInWorkerResult(standardOutput, standardError, out _);
     }
 
     private static bool HasSandboxCommitBlockedEvidence(
@@ -2238,11 +2238,22 @@ public sealed class BackgroundDispatchRunner
         return true;
     }
 
-    private static bool TryFindFailingTestsInWorkerResult(string text, out string tests)
+    private static bool TryFindFailingTestsInWorkerResult(
+        string standardOutput,
+        string standardError,
+        out string tests)
     {
+        // stdout and stderr are independently ordered streams. Concatenating them lets a retained
+        // prompt/schema block in noisy stderr supersede the worker's real final stdout result.
+        // Prefer a complete stdout result and consult stderr only when stdout has none.
+        if (WorkerResultParser.TryParseResult(standardOutput, out var result, out _) ||
+            WorkerResultParser.TryParseResult(standardError, out result, out _))
+        {
+            return WorkerResultParser.TestsReportFailure(result, out tests);
+        }
+
         tests = string.Empty;
-        return WorkerResultParser.TryParseResult(text, out var result, out _) &&
-            WorkerResultParser.TestsReportFailure(result, out tests);
+        return false;
     }
 
     private static bool TesterTaskRequestsFileChanges(TaskSpec task)

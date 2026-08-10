@@ -188,6 +188,7 @@ internal static class CliPersistentStateRunner
 
         if (IsGoalScopedTaskMutationCommand(args))
         {
+            CliCommandHelp.ThrowIfInvalidFlags(args);
             if (IsInboxBackedGoalScopedTaskMutationCommand(args))
             {
                 return SubmitGoalScopedTaskOperatorIntent(
@@ -1308,9 +1309,10 @@ internal static class CliPersistentStateRunner
         IOperatorChannel? channel,
         OperatorIntentSubmissionSource submissionSource)
     {
-        var goalId = ResolveGoalScopedTaskMutationGoalId(stateRepository, currentGoal?.Id.Value, args);
-        var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, args);
-        var preparedCommand = CliCommandHandlers.PrepareGoalScopedTaskMutationCommand(args, hasInlineGoalPrefix, workspace);
+        var target = CliArgumentParser.ParseGoalScopedTaskTargetArgs(args);
+        var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, target.Parts);
+        var preparedCommand = CliCommandHandlers.PrepareGoalScopedTaskMutationCommand(target, hasInlineGoalPrefix, workspace);
+        var goalId = ResolveGoalScopedTaskMutationGoalId(stateRepository, currentGoal?.Id.Value, preparedCommand);
         var snapshot = stateRepository.LoadGoalAsync(goalId).GetAwaiter().GetResult()
             ?? throw new KeyNotFoundException($"Goal '{goalId.Value}' was not found.");
         var kernel = KernelFromGoalSnapshot(snapshot, []);
@@ -1324,6 +1326,7 @@ internal static class CliPersistentStateRunner
             goal,
             channel);
         var task = CliCommandHandlers.ResolveGoalScopedTaskMutationTarget(preparedCommand, context);
+        EnsureGoalScopedTaskMutationTargetMatchesSelector(preparedCommand, goal, task);
 
         object payload = preparedCommand.Command switch
         {
@@ -1365,8 +1368,9 @@ internal static class CliPersistentStateRunner
             .GetResult();
         currentGoal = goal;
         Console.WriteLine(
-            $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} goal={goal.Id.Value[..8]} " +
-            $"task={task.Id.Value[..8]} status={persisted.Status}; poll with operator-intent-status {persisted.Id}.");
+            $"Operator intent queued: id={persisted.Id} verb={persisted.Verb} " +
+            $"selector={preparedCommand.SuppliedGoalSelector ?? "current"} goal={goal.Id.Value} " +
+            $"task={task.Id.Value} status={persisted.Status}; poll with operator-intent-status {persisted.Id}.");
         if (!ConductorLoopLease.IsActive(workspace.OrchestratorDirectory))
         {
             Console.WriteLine(ConductorLoopLease.InactiveWarning);
@@ -1468,9 +1472,10 @@ internal static class CliPersistentStateRunner
         ref Goal? currentGoal,
         IOperatorChannel? channel = null)
     {
-        var goalId = ResolveGoalScopedTaskMutationGoalId(stateRepository, currentGoal?.Id.Value, args);
-        var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, args);
-        var preparedCommand = CliCommandHandlers.PrepareGoalScopedTaskMutationCommand(args, hasInlineGoalPrefix, workspace);
+        var target = CliArgumentParser.ParseGoalScopedTaskTargetArgs(args);
+        var hasInlineGoalPrefix = HasInlineGoalPrefixForGoalScopedTaskMutation(stateRepository, target.Parts);
+        var preparedCommand = CliCommandHandlers.PrepareGoalScopedTaskMutationCommand(target, hasInlineGoalPrefix, workspace);
+        var goalId = ResolveGoalScopedTaskMutationGoalId(stateRepository, currentGoal?.Id.Value, preparedCommand);
         var commandAgents = agents;
         var commandProfiles = workerProfiles;
 
@@ -2606,29 +2611,33 @@ internal static class CliPersistentStateRunner
     private static GoalId ResolveGoalScopedTaskMutationGoalId(
         ITransactionalOrchestratorStateRepository stateRepository,
         string? currentGoalId,
-        IReadOnlyList<string> parts)
+        CliCommandHandlers.GoalScopedTaskMutationCommand command)
     {
-        if (parts.Count > 2 && parts[1].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        if (command.SuppliedGoalSelector is { } selector)
         {
-            return ResolveSingleGoalCommandGoalId(stateRepository, currentGoalId, parts[2]);
-        }
-
-        if (parts.Count > 2 &&
-            !parts[2].StartsWith("--", StringComparison.Ordinal) &&
-            (!int.TryParse(parts[1], out _) || parts[1].Length >= 8))
-        {
-            var matches = stateRepository.ListGoalMetadataAsync().GetAwaiter().GetResult()
-                .Where(goal => goal.Id.StartsWith(parts[1], StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (matches.Count > 0)
-            {
-                return matches.Count == 1
-                    ? new GoalId(matches[0].Id)
-                    : throw new InvalidOperationException($"Goal prefix '{parts[1]}' is ambiguous.");
-            }
+            return ResolveSingleGoalCommandGoalId(stateRepository, currentGoalId, selector);
         }
 
         return ResolveSingleGoalCommandGoalId(stateRepository, currentGoalId, idOrPrefix: null);
+    }
+
+    private static void EnsureGoalScopedTaskMutationTargetMatchesSelector(
+        CliCommandHandlers.GoalScopedTaskMutationCommand command,
+        Goal goal,
+        TaskSpec task)
+    {
+        if (command.SuppliedGoalSelector is { } selector &&
+            !goal.Id.Value.StartsWith(selector, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Parsed goal selector '{selector}' resolved to unexpected goal '{goal.Id.Value}'.");
+        }
+
+        if (!goal.Tasks.Any(candidate => candidate.Id == task.Id))
+        {
+            throw new InvalidOperationException(
+                $"Resolved task '{task.Id.Value}' does not belong to goal '{goal.Id.Value}'.");
+        }
     }
 
     private static string? GetOptionalArgument(IReadOnlyList<string> parts, params string[] flags)

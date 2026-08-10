@@ -319,9 +319,10 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     public void StartSubscriptionReadyTasksCheckpointsDispatchRecordBeforeProcessStart()
 {
     var root = CreateTempDirectory();
-    var workspace = OrchestratorWorkspace.ForDirectory(root);
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(workingDirectory);
+    var workspace = OrchestratorWorkspace.ForDirectory(root, workingDirectory);
+    WriteSkill(workingDirectory, "orchestrator-dogfood");
     var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-07-07T12:00:00Z")));
     var planner = new TaskSpec(TaskId.New(), "Plan the dispatch checkpoint.", AgentRole.Planner);
     var goal = kernel.CreateGoal("Checkpoint dispatch record before start", [planner]);
@@ -1136,6 +1137,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     WriteSkill(workingDirectory, "aspnet-core");
     WriteSkill(workingDirectory, "playwright");
     WriteSkill(workingDirectory, "skill-authoring");
+    WriteSkill(workingDirectory, "verification-before-completion");
+    WriteSkill(workingDirectory, "systematic-debugging");
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(
         TaskId.New(),
@@ -1156,9 +1159,135 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("aspnet-core", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("playwright", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("skill-authoring", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("verification-before-completion", selectedSkills, StringComparison.Ordinal);
+    Assert.DoesNotContain("systematic-debugging", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("Status: available", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("WORKER_RESULT skills field", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("skill selection", skillArtifact.GetProperty("summary").GetString()!, StringComparison.Ordinal);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerSkillSelector_routes_hyphenated_worker_skill_signal_in_isolation")]
+    public void WorkerSkillSelectorRoutesHyphenatedWorkerSkillSignalInIsolation()
+    {
+        var workingDirectory = CreateTempDirectory();
+        WriteSkill(workingDirectory, "skill-authoring");
+        var task = new TaskSpec(
+            TaskId.New(),
+            "Document hyphenated worker-skill behavior.",
+            AgentRole.Researcher);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Maintain procedural catalog", [task]);
+
+        var selected = new WorkerSkillSelector().SelectSkillRequirements(goal, task, workingDirectory);
+
+        var skill = Assert.Single(selected);
+        Assert.Equal("skill-authoring", skill.Name);
+        Assert.True(skill.Available);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerSkillSelector_routes_systematic_debugging_at_criterion_retry_two_only")]
+    public void WorkerSkillSelectorRoutesSystematicDebuggingAtCriterionRetryTwoOnly()
+{
+    var workingDirectory = CreateTempDirectory();
+    WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
+    WriteSkill(workingDirectory, "verification-before-completion");
+    WriteSkill(workingDirectory, "systematic-debugging");
+    var kernel = new AgentOrchestratorKernel();
+    var task = new TaskSpec(TaskId.New(), "Repair the parser defect.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Repair parser behavior", [task]);
+
+    var initial = new WorkerSkillSelector().SelectSkillRequirements(goal, task, workingDirectory);
+    Assert.Contains(initial, skill => skill.Name == "verification-before-completion" && skill.Available);
+    Assert.DoesNotContain(initial, skill => skill.Name == "systematic-debugging");
+
+    var snapshot = kernel.ExportSnapshot();
+    var goalSnapshot = snapshot.Goals.Single();
+    var transientRetryKernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+    {
+        Goals =
+        [
+            goalSnapshot with
+            {
+                Tasks = goalSnapshot.Tasks
+                    .Select(item => item.Id == task.Id.Value ? item with { EmptyOutputRetryCount = 3 } : item)
+                    .ToArray()
+            }
+        ]
+    });
+    var transientRetryGoal = transientRetryKernel.GetGoal(goal.Id);
+    var transientRetryTask = transientRetryGoal.Tasks.Single(item => item.Id == task.Id);
+    Assert.DoesNotContain(
+        new WorkerSkillSelector().SelectSkillRequirements(transientRetryGoal, transientRetryTask, workingDirectory),
+        skill => skill.Name == "systematic-debugging");
+
+    kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["First criterion miss."]);
+    var firstRetry = new WorkerSkillSelector().SelectSkillRequirements(goal, task, workingDirectory);
+    Assert.DoesNotContain(firstRetry, skill => skill.Name == "systematic-debugging");
+
+    kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["Second criterion miss."]);
+    var secondRetry = new WorkerSkillSelector().SelectSkillRequirements(goal, task, workingDirectory);
+    Assert.Contains(secondRetry, skill => skill.Name == "systematic-debugging" && skill.Available);
+
+    var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+    var selectedSkills = File.ReadAllText(Path.Combine(contextDirectory, "selected-skills.md"));
+    var packagedSkills = File.ReadAllText(Path.Combine(contextDirectory, "packages", task.Id.Value, "selected-skills.md"));
+    Assert.Contains("systematic-debugging", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("Status: available", selectedSkills, StringComparison.Ordinal);
+    Assert.Equal(selectedSkills, packagedSkills);
+}
+
+    [Xunit.Fact(DisplayName = "WorkerSkillSelector_routes_only_task_specific_current_acceptance_failure_retries")]
+    public void WorkerSkillSelectorRoutesOnlyTaskSpecificCurrentAcceptanceFailureRetries()
+{
+    var workingDirectory = CreateTempDirectory();
+    WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
+    WriteSkill(workingDirectory, "verification-before-completion");
+    WriteSkill(workingDirectory, "systematic-debugging");
+    var clock = new MutableClock(DateTimeOffset.Parse("2026-08-10T12:00:00Z"));
+    var kernel = new AgentOrchestratorKernel(clock);
+    var target = new TaskSpec(TaskId.New(), "Repair the target defect.", AgentRole.Developer);
+    var other = new TaskSpec(TaskId.New(), "Repair another defect.", AgentRole.Developer);
+    var goal = kernel.CreateGoal("Repair parser behavior", [target, other]);
+
+    kernel.RetryTask(goal.Id, target.Id, "Retry before acceptance failure.", invalidateDownstream: false);
+    clock.Advance();
+    kernel.RecordAcceptanceFailure(goal.Id, ["ParserTests.Target"]);
+    Assert.DoesNotContain(
+        new WorkerSkillSelector().SelectSkillRequirements(goal, target, workingDirectory),
+        skill => skill.Name == "systematic-debugging");
+
+    clock.Advance();
+    kernel.RetryTask(goal.Id, other.Id, "Retry unrelated task.", invalidateDownstream: false);
+    Assert.DoesNotContain(
+        new WorkerSkillSelector().SelectSkillRequirements(goal, target, workingDirectory),
+        skill => skill.Name == "systematic-debugging");
+
+    clock.Advance();
+    kernel.RecordAcceptanceFailure(goal.Id, ["ParserTests.NewTarget"]);
+    clock.Advance();
+    kernel.RetryTask(goal.Id, target.Id, "Retry target after latest failure.", invalidateDownstream: false);
+    Assert.Contains(
+        new WorkerSkillSelector().SelectSkillRequirements(goal, target, workingDirectory),
+        skill => skill.Name == "systematic-debugging" && skill.Available);
+    Assert.DoesNotContain(
+        new WorkerSkillSelector().SelectSkillRequirements(goal, other, workingDirectory),
+        skill => skill.Name == "systematic-debugging");
+}
+
+    [Xunit.Theory(DisplayName = "WorkerSkillSelector_omits_new_developer_procedures_for_other_roles")]
+    [Xunit.InlineData(AgentRole.Planner)]
+    [Xunit.InlineData(AgentRole.Researcher)]
+    [Xunit.InlineData(AgentRole.Tester)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void WorkerSkillSelectorOmitsNewDeveloperProceduresForOtherRoles(AgentRole role)
+{
+    var workingDirectory = CreateTempDirectory();
+    var task = new TaskSpec(TaskId.New(), "Inspect parser behavior.", role);
+    var goal = new AgentOrchestratorKernel().CreateGoal("Inspect parser behavior", [task]);
+
+    var selected = new WorkerSkillSelector().SelectSkillRequirements(goal, task, workingDirectory);
+
+    Assert.DoesNotContain(selected, skill => skill.Name == "verification-before-completion");
+    Assert.DoesNotContain(selected, skill => skill.Name == "systematic-debugging");
 }
 
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_selects_different_skill_manifests_for_tasks_in_same_goal")]
@@ -1172,6 +1301,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     WriteSkill(workingDirectory, "orchestrator-worker-verification");
     WriteSkill(workingDirectory, "aspnet-core");
     WriteSkill(workingDirectory, "playwright");
+    WriteSkill(workingDirectory, "verification-before-completion");
     var kernel = new AgentOrchestratorKernel();
     var implementation = new TaskSpec(
         TaskId.New(),

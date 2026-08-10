@@ -491,7 +491,7 @@ public sealed class CliHelpTests
         Xunit.Assert.Equal(1, result.ExitCode);
         Xunit.Assert.True(string.IsNullOrWhiteSpace(result.StandardOutput), result.StandardOutput);
         Xunit.Assert.Contains("Error: Unknown option '--frobnitz'.", result.StandardError);
-        Xunit.Assert.Contains("Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]", result.StandardError);
+        Xunit.Assert.Contains("Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>]", result.StandardError);
     }
 
     [Xunit.Fact(DisplayName = "Cli_backlog_list_valid_flags_still_execute")]
@@ -520,6 +520,45 @@ public sealed class CliHelpTests
         });
 
         Xunit.Assert.Contains("Backlog list: 0 item(s) from backlog store", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_explicit_leading_dash_text_value_executes")]
+    public void CliBacklogListExplicitLeadingDashTextValueExecutes()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = new BacklogStore(workspace.BacklogStorePath)
+            .AddAsync("Investigate --goal parsing", "Parser safety")
+            .GetAwaiter()
+            .GetResult();
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var args = CliArgumentParser.NormalizeArgs(["backlog-list", "--text=--goal"]);
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Contains("Investigate --goal parsing", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Backlog list: 1 item(s)", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_backlog_list_ambiguous_leading_dash_text_value_fails_with_escape_guidance")]
+    public void CliBacklogListAmbiguousLeadingDashTextValueFailsWithEscapeGuidance()
+    {
+        var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliCommandHelp.ThrowIfInvalidFlags(["backlog-list", "--text", "--goal"]));
+
+        Xunit.Assert.Contains("Unknown option '--goal'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("--text=--goal", exception.Message, StringComparison.Ordinal);
     }
 
     private static string CreateTempDirectory()

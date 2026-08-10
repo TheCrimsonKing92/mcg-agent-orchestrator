@@ -11,7 +11,8 @@ public static class WorkerSandboxCapabilityPlanner
         TaskSpec task,
         WorkerProfile profile,
         string workingDirectory,
-        bool allowGitReference = false)
+        bool allowGitReference = false,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester))
         {
@@ -24,7 +25,13 @@ public static class WorkerSandboxCapabilityPlanner
         }
 
         var provider = WorkerProviderCatalog.Default().ResolveProfile(profile.Name);
-        var targetRisk = DetectTargetRisk(goal, task, profile, provider, allowGitReference);
+        var targetRisk = DetectTargetRisk(
+            goal,
+            task,
+            profile,
+            provider,
+            allowGitReference,
+            sandboxOptions ?? WorkerSandboxOptions.FromEnvironment());
         if (targetRisk is not null)
         {
             return targetRisk;
@@ -41,24 +48,25 @@ public static class WorkerSandboxCapabilityPlanner
         TaskSpec task,
         WorkerProfile profile,
         IWorkerProvider provider,
-        bool allowGitReference)
+        bool allowGitReference,
+        WorkerSandboxOptions sandboxOptions)
     {
         var text = $"{goal.Objective}\n{task.Description}\n{task.VerificationPlan}".ToLowerInvariant();
         if (text.Contains(".agents/skills", StringComparison.Ordinal) ||
             text.Contains(".agents\\skills", StringComparison.Ordinal))
         {
-            if (CanWriteRepoScopedSkillTarget(profile.CommandTemplate, provider))
+            if (CanWriteRepoScopedSkillTarget(profile, provider, sandboxOptions, out var detail))
             {
                 return new WorkerSandboxCapabilityResult(
                     true,
                     "repo-skill-write",
-                    "Task targets repo-scoped .agents/skills files; profile uses a full-permission worker mode that can write the worktree and common git object database.");
+                    detail);
             }
 
             return new WorkerSandboxCapabilityResult(
                 false,
                 "blocked",
-                "Task appears to target repo-scoped .agents/skills files, but this profile cannot write/commit the worktree common git object database safely.");
+                "Task appears to target repo-scoped .agents/skills files, but this profile lacks an authorized patch-capable, OS-confined worktree mode; Git metadata and commit authority remain with the orchestrator.");
         }
 
         if (text.Contains("skill.md", StringComparison.Ordinal))
@@ -99,16 +107,20 @@ public static class WorkerSandboxCapabilityPlanner
         return false;
     }
 
-    private static bool CanWriteRepoScopedSkillTarget(string commandTemplate, IWorkerProvider provider)
+    private static bool CanWriteRepoScopedSkillTarget(
+        WorkerProfile profile,
+        IWorkerProvider provider,
+        WorkerSandboxOptions sandboxOptions,
+        out string detail)
     {
-        if (provider.Identity.Kind != ProviderKind.Unknown &&
-            provider.Identity.Kind != ProviderKind.AnthropicClaudeCli)
-        {
-            return false;
-        }
-
-        return commandTemplate.Contains("--permission-mode bypassPermissions", StringComparison.OrdinalIgnoreCase) ||
-            commandTemplate.Contains("--permission-mode {permissionMode}", StringComparison.OrdinalIgnoreCase) ||
-            commandTemplate.Contains("--dangerously-skip-permissions", StringComparison.OrdinalIgnoreCase);
+        var commandTemplate = profile.CommandTemplate;
+        var claudeCompatible = (provider.Identity.Kind is ProviderKind.Unknown or ProviderKind.AnthropicClaudeCli) &&
+            (commandTemplate.Contains("--permission-mode bypassPermissions", StringComparison.OrdinalIgnoreCase) ||
+             commandTemplate.Contains("--permission-mode {permissionMode}", StringComparison.OrdinalIgnoreCase) ||
+             commandTemplate.Contains("--dangerously-skip-permissions", StringComparison.OrdinalIgnoreCase));
+        detail = claudeCompatible
+            ? "Task targets repo-scoped .agents/skills files; profile uses the existing full-permission Claude-compatible worker mode."
+            : string.Empty;
+        return claudeCompatible;
     }
 }

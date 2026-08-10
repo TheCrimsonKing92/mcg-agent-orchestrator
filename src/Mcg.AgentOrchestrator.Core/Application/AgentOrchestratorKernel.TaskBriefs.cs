@@ -773,13 +773,7 @@ public sealed partial class AgentOrchestratorKernel
             return [];
         }
 
-        var retryEvent = goal.Timeline
-            .Where(evt =>
-                evt.TaskId == task.Id &&
-                evt.Kind == ProgressKind.TaskRetried &&
-                evt.OccurredAt >= failure.OccurredAt)
-            .OrderByDescending(evt => evt.OccurredAt)
-            .FirstOrDefault();
+        var retryEvent = goal.LatestTaskRetryAfterAcceptanceFailure(task.Id);
         if (retryEvent is null)
         {
             return [];

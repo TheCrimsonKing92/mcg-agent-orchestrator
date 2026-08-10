@@ -87,6 +87,22 @@ public sealed class Goal
 
     public IReadOnlyList<ProgressEvent> Timeline => _timeline;
 
+    public ProgressEvent? LatestTaskRetryAfterAcceptanceFailure(TaskId taskId)
+    {
+        if (LatestAcceptanceFailure is not { } failure)
+        {
+            return null;
+        }
+
+        return _timeline
+            .Where(evt =>
+                evt.TaskId == taskId &&
+                evt.Kind == ProgressKind.TaskRetried &&
+                evt.OccurredAt >= failure.OccurredAt)
+            .OrderByDescending(evt => evt.OccurredAt)
+            .FirstOrDefault();
+    }
+
     public IReadOnlyList<EffectiveAcceptanceCriteriaCorrection> EffectiveAcceptanceCriteriaCorrections => _effectiveAcceptanceCriteriaCorrections;
 
     public IReadOnlyCollection<GoalId> DependsOn => _dependsOn;

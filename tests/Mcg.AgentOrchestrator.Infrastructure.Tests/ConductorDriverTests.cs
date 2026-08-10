@@ -727,6 +727,7 @@ public sealed class ConductorDriverTests
     public void ConductorDriverRealDispatchCheckpointRollsBackThenNotifiesOnSuccess()
     {
         var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
         RunGit(root, "init");
         RunGit(root, "checkout", "-b", "main");
         RunGit(root, "config", "user.email", "test@example.com");
@@ -6148,6 +6149,7 @@ public sealed class ConductorDriverTests
     public void SubscriptionDispatchPathsUseWorkspaceConfiguredReviewStopRound()
     {
         var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
         RunGit(root, "init");
         RunGit(root, "checkout", "-b", "main");
         RunGit(root, "config", "user.email", "test@example.com");

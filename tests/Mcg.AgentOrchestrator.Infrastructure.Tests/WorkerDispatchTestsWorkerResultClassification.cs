@@ -2290,6 +2290,65 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     AssertExitCode(process.ExitCodePath, 0);
 }
 
+    [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_native_exit_zero_noisy_stderr_passing_result_completes")]
+    public void BackgroundDispatchRunnerTesterNativeExitZero_NoisyStderr_PassingResultCompletes()
+    {
+        const string passingTests =
+            "pass — build 0 errors; DispatchExecutionTests, TaskVerificationTests, WorkerResultBlockersTests 163/163; " +
+            "AutoReviewRetryConvergenceBriefBuilderTests, ConductorDriverTests, ProgressiveReviewSteeringTests 192/192; total 355/355";
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-10T16:28:02Z"));
+        var standardOutput =
+            "Reviewed the implementation and ran the focused suite.\r\n" +
+            WorkerResultBlock(
+                "none",
+                "dotnet build; dotnet test",
+                passingTests,
+                commit: "none",
+                blockers: "none");
+        var retainedSchemaInStandardError = WorkerResultBlock(
+            "<comma-separated changed files or none>",
+            "<commands run or none>",
+            "<pass|fail|not-run|deferred|inconclusive - token first, then current-round evidence>",
+            commit: "<commit sha or none>",
+            blockers: "<none|exact-blocker - token first>",
+            confidence: "<high|medium|low>");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Tester,
+            standardOutput,
+            retainedSchemaInStandardError,
+            clock,
+            taskDescription: "Verify behavior with automated and manual checks",
+            verificationPlan: "Run the focused tests and confirm the acceptance criteria.",
+            childExitCode: 0);
+        WriteHeartbeat(
+            process,
+            clock.UtcNow,
+            clock.UtcNow,
+            "completed",
+            standardOutput.Length,
+            retainedSchemaInStandardError.Length,
+            childPid: null,
+            exitFileExists: true);
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.Equal(0, task.LastVerification.ObservedRootExitCode);
+        Assert.Equal(0, task.LastVerification.ChildExitCode);
+        Assert.False(task.LastVerification.ReconciledToSuccess);
+        AssertExitCode(process.ExitCodePath, 0);
+        Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        var classified = DispatchFailureClassifier.Classify(task, task.LastVerification);
+        Assert.Equal(DispatchOutcomeKind.VerifiedSuccess, classified.Kind);
+        Assert.DoesNotContain("rule=required-file-change-evidence-missing", classified.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_verification_only_exit_zero_blocker_fails")]
     public void BackgroundDispatchRunnerTesterVerificationOnlyExitZeroBlockerFails()
     {

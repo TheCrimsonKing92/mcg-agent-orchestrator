@@ -16,19 +16,22 @@ public static IReadOnlyList<string> SplitCommand(string line)
     if (command.Equals("progress", StringComparison.OrdinalIgnoreCase))
     {
         var (commandRemainder, metadataFlags) = ExtractOperatorIntentMetadataFlags(remainder);
-        return [.. SplitTaskTargetCommandWithTextFileFlag(command, commandRemainder, 2), .. metadataFlags];
+        string[] commandArgs = [command, .. TokenizeQuotedArguments(commandRemainder)];
+        return [.. NormalizeTaskTargetArgs(commandArgs, trailingArgumentCount: 2, allowTextFile: true), .. metadataFlags];
     }
 
     if (command.Equals("retry", StringComparison.OrdinalIgnoreCase))
     {
         var (commandRemainder, metadataFlags) = ExtractOperatorIntentMetadataFlags(remainder);
-        return [.. SplitRetryCommand(command, commandRemainder), .. metadataFlags];
+        string[] commandArgs = [command, .. TokenizeQuotedArguments(commandRemainder)];
+        return [.. NormalizeRetryTaskTargetArgs(commandArgs), .. metadataFlags];
     }
 
     if (command.Equals("note", StringComparison.OrdinalIgnoreCase))
     {
         var (noteRemainder, gateFlags) = ExtractRepeatedValueFlag(remainder, "--gate-deliverable");
-        return [.. SplitTaskTargetCommandWithTextFileFlag(command, noteRemainder, 1), .. gateFlags];
+        string[] commandArgs = [command, .. TokenizeQuotedArguments(noteRemainder)];
+        return [.. NormalizeTaskTargetArgs(commandArgs, trailingArgumentCount: 1, allowTextFile: true), .. gateFlags];
     }
 
     if (command.Equals("abandon-goal", StringComparison.OrdinalIgnoreCase) ||
@@ -133,7 +136,8 @@ public static IReadOnlyList<string> SplitCommand(string line)
     if (command.Equals("verify-manual", StringComparison.OrdinalIgnoreCase))
     {
         var (commandRemainder, metadataFlags) = ExtractOperatorIntentMetadataFlags(remainder);
-        return [.. SplitTaskTargetCommandWithTextFileFlag(command, commandRemainder, 2), .. metadataFlags];
+        string[] commandArgs = [command, .. TokenizeQuotedArguments(commandRemainder)];
+        return [.. NormalizeTaskTargetArgs(commandArgs, trailingArgumentCount: 2, allowTextFile: true), .. metadataFlags];
     }
 
     if (command.Equals("dispatch", StringComparison.OrdinalIgnoreCase) ||

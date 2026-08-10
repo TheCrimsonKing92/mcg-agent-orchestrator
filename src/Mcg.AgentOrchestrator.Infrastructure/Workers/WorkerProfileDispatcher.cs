@@ -577,7 +577,13 @@ public static class WorkerProfileDispatcher
                 $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
                 $"worker profile '{profile.Name}' pins selected reasoning when required");
 
-            var capability = WorkerSandboxCapabilityPlanner.Evaluate(goal, task, profile, workingDirectory, allowGitReference);
+            var capability = WorkerSandboxCapabilityPlanner.Evaluate(
+                goal,
+                task,
+                profile,
+                workingDirectory,
+                allowGitReference,
+                sandbox);
             findings.Add($"capability: {capability.Status} - {capability.Detail}");
             if (!capability.Allowed)
             {
@@ -937,13 +943,6 @@ public static class WorkerProfileDispatcher
         if (selectedSkills.Count == 0)
         {
             findings.Add("skills: no deterministic skill rule matched this task");
-            return;
-        }
-
-        var skillRoot = Path.Combine(workingDirectory, ".agents", "skills");
-        if (!Directory.Exists(skillRoot))
-        {
-            findings.Add("skills: local skill catalog not present; selected skills will be listed as missing in context artifacts");
             return;
         }
 

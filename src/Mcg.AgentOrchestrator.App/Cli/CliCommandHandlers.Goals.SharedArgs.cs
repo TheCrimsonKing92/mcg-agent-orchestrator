@@ -36,11 +36,17 @@ private static string? GetOptionalArgument(IReadOnlyList<string> parts, params s
 
 private static string? GetFlagValue(IReadOnlyList<string> parts, string flag)
 {
-    for (var i = 1; i < parts.Count - 1; i++)
+    for (var i = 1; i < parts.Count; i++)
     {
+        var inlinePrefix = flag + "=";
+        if (parts[i].StartsWith(inlinePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return parts[i][inlinePrefix.Length..];
+        }
+
         if (parts[i].Equals(flag, StringComparison.OrdinalIgnoreCase))
         {
-            return parts[i + 1];
+            return i + 1 < parts.Count ? parts[i + 1] : null;
         }
     }
 

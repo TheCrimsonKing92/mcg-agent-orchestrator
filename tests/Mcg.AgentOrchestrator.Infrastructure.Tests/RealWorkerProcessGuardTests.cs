@@ -149,13 +149,14 @@ public sealed class RealWorkerProcessGuardTests
 
     private static string EnsureGoalWorktree(string root, GoalId goalId)
     {
+        SeedLocalSkillCatalog(root);
         if (!Directory.Exists(Path.Combine(root, ".git")))
         {
             AssertGit(root, "init", "-b", "main");
             AssertGit(root, "config", "user.email", "tests@example.com");
             AssertGit(root, "config", "user.name", "Real Worker Process Guard Tests");
             File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
-            AssertGit(root, "add", "seed.txt");
+            AssertGit(root, "add", "-A");
             AssertGit(root, "commit", "-m", "Seed");
         }
 

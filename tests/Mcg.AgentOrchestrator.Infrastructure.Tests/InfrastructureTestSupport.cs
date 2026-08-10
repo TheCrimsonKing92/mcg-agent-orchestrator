@@ -48,10 +48,23 @@ public static IDisposable ClearProtectedPidEnvironment()
 
 public static OrchestratorWorkspace CreateRefinedWorkspace(string root)
 {
+    SeedLocalSkillCatalog(root);
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
     SeedSpecRefinerBinding(workspace);
     return workspace;
+}
+
+public static void SeedLocalSkillCatalog(string workingDirectory)
+{
+    var sourceRoot = Path.Combine(FindRepositoryRoot(), ".agents", "skills");
+    foreach (var sourcePath in Directory.EnumerateFiles(sourceRoot, "SKILL.md", SearchOption.AllDirectories))
+    {
+        var relativePath = Path.GetRelativePath(sourceRoot, sourcePath);
+        var targetPath = Path.Combine(workingDirectory, ".agents", "skills", relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+        File.Copy(sourcePath, targetPath, overwrite: true);
+    }
 }
 
 public static SqliteOrchestratorStateRepository CreateMigratedStateRepository(

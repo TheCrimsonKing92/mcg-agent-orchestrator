@@ -617,6 +617,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         var worktreePath = GoalWorktrees.WorktreePath(projectRootA, goal.Id);
         Directory.CreateDirectory(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+        SeedLocalSkillCatalog(worktreePath);
         CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
             ["subscription-dispatch", "1"],
             kernel,

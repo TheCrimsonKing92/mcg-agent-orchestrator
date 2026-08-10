@@ -3017,7 +3017,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.Contains("Verification: `dotnet test`", summaries, StringComparison.Ordinal);
     Assert.Contains("Model fit: Not reported.", summaries, StringComparison.Ordinal);
     Assert.Contains("dotnet-windows-build-hygiene", selectedSkills, StringComparison.Ordinal);
-    Assert.Contains("Status: missing", selectedSkills, StringComparison.Ordinal);
+    Assert.Contains("Status: available", selectedSkills, StringComparison.Ordinal);
     Assert.Contains("Source files indexed:", sourceSurvey, StringComparison.Ordinal);
     Assert.Contains("Git Status", diffSummary, StringComparison.Ordinal);
     var currentTaskText = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
