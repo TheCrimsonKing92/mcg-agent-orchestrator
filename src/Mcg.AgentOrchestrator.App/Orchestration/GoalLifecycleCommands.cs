@@ -56,6 +56,22 @@ internal static class GoalLifecycleCommands
         return goal;
     }
 
+    public static Goal CreateDormantGoal(
+        AgentOrchestratorKernel kernel,
+        string objective,
+        GoalIntakePipeline pipeline,
+        OrchestratorWorkspace workspace,
+        IModelProviderRegistry providers,
+        IGoalLifecycleEventWriter? eventWriter = null,
+        GoalId? sliceBatchParentId = null)
+    {
+        var plan = GoalObjectivePlanner.Build(objective, pipeline, kernel.BuildTaskDurationStats());
+        GoalObjectivePlanner.ThrowIfBlocked(plan);
+        var goal = CreateGoalFromPlan(kernel, plan, sliceBatchParentId);
+        GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal, eventWriter: eventWriter);
+        return goal;
+    }
+
     public static Goal CreateActivateAndHandoffGoal(
         AgentOrchestratorKernel kernel,
         IReadOnlyList<AgentDefinition> agents,
@@ -90,7 +106,10 @@ internal static class GoalLifecycleCommands
         return goal;
     }
 
-    private static Goal CreateGoalFromPlan(AgentOrchestratorKernel kernel, GoalObjectivePlan plan)
+    private static Goal CreateGoalFromPlan(
+        AgentOrchestratorKernel kernel,
+        GoalObjectivePlan plan,
+        GoalId? sliceBatchParentId = null)
     {
         var goal = kernel.CreateGoal(
             plan.Objective,
@@ -100,7 +119,8 @@ internal static class GoalLifecycleCommands
                     boundary.Purpose,
                     boundary.Role,
                     boundary.Verification))
-                .ToList());
+                .ToList(),
+            sliceBatchParentId);
         kernel.RecordGoalPolicyDecision(goal.Id, BuildPipelineDecisionMessage(plan));
         RecordCapabilityWarnings(kernel, goal.Id, plan.CapabilityWarnings);
         return goal;

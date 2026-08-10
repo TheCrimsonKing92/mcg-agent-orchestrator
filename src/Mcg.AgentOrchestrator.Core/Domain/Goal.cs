@@ -14,18 +14,30 @@ public sealed class Goal
     private readonly HashSet<GoalId> _dependsOn = [];
 
     public Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks)
-        : this(id, objective, tasks, isMetadataOnly: false, DateTimeOffset.MinValue)
+        : this(id, objective, tasks, isMetadataOnly: false, DateTimeOffset.MinValue, sliceBatchParentId: null)
     {
     }
 
-    internal Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks, DateTimeOffset createdAt)
-        : this(id, objective, tasks, isMetadataOnly: false, createdAt)
+    internal Goal(
+        GoalId id,
+        string objective,
+        IReadOnlyList<TaskSpec> tasks,
+        DateTimeOffset createdAt,
+        GoalId? sliceBatchParentId = null)
+        : this(id, objective, tasks, isMetadataOnly: false, createdAt, sliceBatchParentId)
     {
     }
 
-    private Goal(GoalId id, string objective, IReadOnlyList<TaskSpec> tasks, bool isMetadataOnly, DateTimeOffset createdAt)
+    private Goal(
+        GoalId id,
+        string objective,
+        IReadOnlyList<TaskSpec> tasks,
+        bool isMetadataOnly,
+        DateTimeOffset createdAt,
+        GoalId? sliceBatchParentId)
     {
         Id = id;
+        SliceBatchParentId = sliceBatchParentId;
         var initialBrief = RequireText(objective, nameof(objective));
         _briefVersions.Add(new GoalBriefVersion(1, initialBrief, createdAt));
         if (!isMetadataOnly && tasks.Count == 0)
@@ -40,6 +52,8 @@ public sealed class Goal
     }
 
     public GoalId Id { get; }
+
+    public GoalId? SliceBatchParentId { get; }
 
     public string Objective => AuthoritativeBrief.Text;
 
@@ -101,7 +115,8 @@ public sealed class Goal
             BuildMetadataTitle(metadata.Title),
             [],
             isMetadataOnly: true,
-            metadata.CreatedAt ?? DateTimeOffset.MinValue);
+            metadata.CreatedAt ?? DateTimeOffset.MinValue,
+            sliceBatchParentId: null);
         goal.SetStatus(metadata.Status);
         goal.MetadataResultCommit = NormalizeSha(metadata.ResultCommit);
         goal.MetadataCreatedAt = metadata.CreatedAt;
@@ -458,7 +473,8 @@ public sealed class Goal
                     version.BriefVersion,
                     version.SupersededByVersion))
                 .ToArray(),
-            SourceBacklogCoverage: SourceBacklogCoverage);
+            SourceBacklogCoverage: SourceBacklogCoverage,
+            SliceBatchParentId: SliceBatchParentId?.Value);
     }
 
     internal static Goal FromSnapshot(GoalSnapshot snapshot)
@@ -481,7 +497,8 @@ public sealed class Goal
             new GoalId(snapshot.Id),
             snapshot.Objective,
             snapshot.Tasks.Select(TaskSpec.FromSnapshot).ToList(),
-            initialRecordedAt);
+            initialRecordedAt,
+            snapshot.SliceBatchParentId is null ? null : new GoalId(snapshot.SliceBatchParentId));
         goal.RestoreBriefVersions(snapshot.BriefVersions);
         goal.SetStatus(snapshot.Status);
         goal.RestoreClarificationRoundCount(snapshot.ClarificationRoundCount);

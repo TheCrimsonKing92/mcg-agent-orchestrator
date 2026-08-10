@@ -4,10 +4,12 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class ConsoleViews
 {
-    public static void PrintGoalDagPlan(GoalDagPlan plan)
+    public static void PrintGoalDagPlan(GoalDagPlan plan, bool sliceBatch = false)
     {
         Console.WriteLine();
-        Console.WriteLine($"DAG plan: {plan.Nodes.Count} node(s) for direction: {plan.Direction}");
+        Console.WriteLine(sliceBatch
+            ? $"Dormant slice-batch intake preview: {plan.Nodes.Count} child node(s) for direction: {plan.Direction}"
+            : $"DAG plan: {plan.Nodes.Count} node(s) for direction: {plan.Direction}");
         foreach (var node in plan.Nodes)
         {
             Console.WriteLine();
@@ -36,7 +38,9 @@ internal static partial class ConsoleViews
 
         Console.WriteLine();
         if (plan.IsValid)
-            Console.WriteLine("Confirm: plan <direction> --confirm-plan");
+            Console.WriteLine(sliceBatch
+                ? "Confirm dormant intake: plan <direction> --slice-batch --confirm-plan"
+                : "Confirm: plan <direction> --confirm-plan");
         else
             Console.WriteLine("Fix the direction and re-run to preview before confirming.");
     }

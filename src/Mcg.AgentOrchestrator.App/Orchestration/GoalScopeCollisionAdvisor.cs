@@ -37,6 +37,15 @@ internal sealed record ScopeCollision(
 
 internal sealed record ScopeEvidenceGapNote(string? GoalId, ScopeEvidenceGap Gap, string Message);
 
+internal sealed record SliceBatchScope(string NodeId, IReadOnlyList<string> Paths);
+
+internal sealed record SliceBatchScopeCollision(
+    string LeftNodeId,
+    string LeftPath,
+    string RightNodeId,
+    string RightPath,
+    ScopeCollisionKind Kind);
+
 internal sealed record GoalScopeCollisionReport(
     IReadOnlyList<DeclaredFileScope> ProposedScopes,
     int ComparedGoalCount,
@@ -165,6 +174,42 @@ internal static class GoalScopeCollisionAdvisor
             verdict,
             orderedCollisions,
             gaps.ToArray());
+    }
+
+    public static IReadOnlyList<SliceBatchScopeCollision> FindPairwiseOverlaps(
+        IReadOnlyList<SliceBatchScope> scopes)
+    {
+        var collisions = new List<SliceBatchScopeCollision>();
+        for (var leftIndex = 0; leftIndex < scopes.Count; leftIndex++)
+        {
+            var left = scopes[leftIndex];
+            for (var rightIndex = leftIndex + 1; rightIndex < scopes.Count; rightIndex++)
+            {
+                var right = scopes[rightIndex];
+                foreach (var leftPath in left.Paths)
+                {
+                    foreach (var rightPath in right.Paths)
+                    {
+                        var overlap = RepositoryPathOverlap.Classify(leftPath, rightPath);
+                        if (overlap == PathOverlapKind.None)
+                        {
+                            continue;
+                        }
+
+                        collisions.Add(new SliceBatchScopeCollision(
+                            left.NodeId,
+                            leftPath,
+                            right.NodeId,
+                            rightPath,
+                            overlap == PathOverlapKind.Exact
+                                ? ScopeCollisionKind.ExactFile
+                                : ScopeCollisionKind.DirectoryPrefix));
+                    }
+                }
+            }
+        }
+
+        return collisions;
     }
 
     private static void AddProposedEvidenceGap(

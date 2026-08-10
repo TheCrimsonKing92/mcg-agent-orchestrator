@@ -160,6 +160,148 @@ public sealed class GoalDagPlanTests
         Assert.True(ex.Message.Contains("validation error", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_Confirm_CreatesDormantParentAndConcurrentChildren")]
+    public void CliPlanSliceBatchConfirmCreatesDormantParentAndConcurrentChildren()
+    {
+        var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["plan", "Implement three disjoint feature slices", "--slice-batch", "--confirm-plan"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Assert.Equal(4, kernel.Goals.Count);
+        var parent = Assert.Single(kernel.Goals.Where(goal => goal.SliceBatchParentId is null));
+        Assert.Equal(parent.Id, currentGoal!.Id);
+        Assert.Equal([AgentRole.Developer, AgentRole.Reviewer], parent.Tasks.Select(task => task.RequiredRole));
+
+        var children = kernel.Goals.Where(goal => goal.SliceBatchParentId == parent.Id).ToArray();
+        Assert.Equal(3, children.Length);
+        Assert.All(kernel.Goals, goal =>
+        {
+            Assert.Equal(GoalStatus.Draft, goal.Status);
+            Assert.Empty(goal.DependsOn);
+            Assert.All(goal.Tasks, task => Assert.Null(task.AssignedAgentId));
+        });
+        Assert.All(children, child => Assert.Equal(AgentRole.Developer, Assert.Single(child.Tasks).RequiredRole));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        Assert.All(
+            restored.Goals.Where(goal => goal.Id != parent.Id),
+            child => Assert.Equal(parent.Id, child.SliceBatchParentId));
+
+        var intents = children.Select(child =>
+        {
+            var task = Assert.Single(child.Tasks);
+            var scope = GoalFileScopeInference.ForScheduling(child, task);
+            Assert.Equal(RepositoryScopeConfidence.Precise, scope.Confidence);
+            return new ParallelExecutionIntent(
+                task.Id.Value,
+                child.Id.Value,
+                scope.Includes,
+                ScopeConfidence: scope.Confidence);
+        }).ToArray();
+        var executionPlan = ParallelExecutionPlanner.Build(intents);
+        Assert.Equal(3, Assert.Single(executionPlan.Batches).IntentIds.Count);
+        Assert.All(executionPlan.Decisions, decision =>
+        {
+            Assert.Equal(1, decision.BatchNumber);
+            Assert.Equal(ParallelExecutionDisposition.Concurrent, decision.Disposition);
+        });
+
+        Assert.Contains($"parent {parent.Id.Value}", output, StringComparison.Ordinal);
+        Assert.All(children, child => Assert.Contains(child.Id.Value, output, StringComparison.Ordinal));
+        Assert.Contains("not enabled until the later wiring increment", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_Preview_IsDormantAndDoesNotMutate")]
+    public void CliPlanSliceBatchPreviewIsDormantAndDoesNotMutate()
+    {
+        var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(ThreeSliceBatchJson);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["plan", "Implement three disjoint feature slices", "--slice-batch"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        Assert.Empty(kernel.Goals);
+        Assert.Contains("Dormant slice-batch intake preview", output, StringComparison.Ordinal);
+        Assert.Contains("--slice-batch --confirm-plan", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_InvalidNodeCount_RejectedAtomically")]
+    public void CliPlanSliceBatchInvalidNodeCountRejectedAtomically()
+    {
+        var (exception, kernel) = ConfirmInvalidSliceBatch(
+            SliceBatchJson(SliceObjective("only", "src/FeatureA/A.cs")));
+
+        Assert.Empty(kernel.Goals);
+        Assert.Contains("found 1", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_DependencyEdge_RejectedAtomically")]
+    public void CliPlanSliceBatchDependencyEdgeRejectedAtomically()
+    {
+        var json = SliceBatchJson(
+            SliceObjective("g1", "src/FeatureA/A.cs"),
+            SliceObjective("g2", "src/FeatureB/B.cs", "g1"));
+        var (exception, kernel) = ConfirmInvalidSliceBatch(json);
+
+        Assert.Empty(kernel.Goals);
+        Assert.Contains("g2 -> g1", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_MissingScope_RejectedAtomically")]
+    public void CliPlanSliceBatchMissingScopeRejectedAtomically()
+    {
+        var json = SliceBatchJson(
+            "{\"id\":\"missing\",\"objective\":\"Implement the missing slice\",\"dependsOn\":[]}",
+            SliceObjective("precise", "src/FeatureB/B.cs"));
+        var (exception, kernel) = ConfirmInvalidSliceBatch(json);
+
+        Assert.Empty(kernel.Goals);
+        Assert.Contains("missing", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Target files/scopes:", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_NonPreciseScope_RejectedAtomically")]
+    public void CliPlanSliceBatchNonPreciseScopeRejectedAtomically()
+    {
+        var nonPrecise = "{\"id\":\"unknown\",\"objective\":\"Implement uncertain scope.\\n\\nTarget files/scopes:\\nScope confidence: unknown\\nIncludes:\\n- src/FeatureA/A.cs\",\"dependsOn\":[]}";
+        var json = SliceBatchJson(nonPrecise, SliceObjective("precise", "src/FeatureB/B.cs"));
+        var (exception, kernel) = ConfirmInvalidSliceBatch(json);
+
+        Assert.Empty(kernel.Goals);
+        Assert.Contains("unknown", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Scope confidence: precise", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_Plan_SliceBatch_OverlappingScopes_RejectedAtomically")]
+    public void CliPlanSliceBatchOverlappingScopesRejectedAtomically()
+    {
+        var json = SliceBatchJson(
+            SliceObjective("directory", "src/FeatureA"),
+            SliceObjective("file", "src/FeatureA/A.cs"));
+        var (exception, kernel) = ConfirmInvalidSliceBatch(json);
+
+        Assert.Empty(kernel.Goals);
+        Assert.Contains("directory", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("file", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("src/FeatureA/A.cs", exception.Message, StringComparison.Ordinal);
+    }
+
     // ── Best-of-N selection ──────────────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "BestOfN_AllValid_PicksFewestNodes")]
@@ -218,6 +360,38 @@ public sealed class GoalDagPlanTests
         ```
         """;
 
+    private const string ThreeSliceBatchJson = """
+        ```json
+        [{"id":"g1","objective":"Implement feature A.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureA/A.cs","dependsOn":[]},{"id":"g2","objective":"Implement feature B.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureB/B.cs","dependsOn":[]},{"id":"g3","objective":"Implement feature C.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureC/C.cs","dependsOn":[]}]
+        ```
+        """;
+
+    private static (InvalidOperationException exception, AgentOrchestratorKernel kernel) ConfirmInvalidSliceBatch(string plannerOutput)
+    {
+        var (kernel, workspace, agents, providers) = BuildSliceBatchTestContext(plannerOutput);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["plan", "Implement file-disjoint slices", "--slice-batch", "--confirm-plan"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal)));
+        return (exception, kernel);
+    }
+
+    private static string SliceBatchJson(params string[] nodes) =>
+        $"```json\n[{string.Join(',', nodes)}]\n```";
+
+    private static string SliceObjective(string id, string path, string? dependency = null)
+    {
+        var dependencies = dependency is null ? "[]" : $"[\"{dependency}\"]";
+        return $"{{\"id\":\"{id}\",\"objective\":\"Implement {id}.\\n\\nTarget files/scopes:\\nScope confidence: precise\\nIncludes:\\n- {path}\",\"dependsOn\":{dependencies}}}";
+    }
+
     private static (AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
         IReadOnlyList<AgentDefinition> agents, IModelProviderRegistry providers)
         BuildTestContext(string plannerOutput)
@@ -245,6 +419,20 @@ public sealed class GoalDagPlanTests
         IModelProviderRegistry providers = new InMemoryModelProviderRegistry([provider]);
 
         return (kernel, workspace, agents, providers);
+    }
+
+    private static (AgentOrchestratorKernel kernel, OrchestratorWorkspace workspace,
+        IReadOnlyList<AgentDefinition> agents, IModelProviderRegistry providers)
+        BuildSliceBatchTestContext(string plannerOutput)
+    {
+        var context = BuildTestContext(plannerOutput);
+        ModelFunctionCatalogStore.Save(context.workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("missing-provider", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey))
+        ]));
+        return context;
     }
 
 }

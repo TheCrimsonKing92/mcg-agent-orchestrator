@@ -6,19 +6,57 @@ public sealed partial class AgentOrchestratorKernel
     public const int DuplicateHumanInputDistinctTaskThreshold = 2;
 
     public Goal CreateGoal(string objective, IReadOnlyList<TaskSpec>? tasks = null)
+        => CreateGoal(GoalId.New(), objective, tasks, sliceBatchParentId: null);
+
+    public Goal CreateGoal(
+        string objective,
+        IReadOnlyList<TaskSpec>? tasks,
+        GoalId? sliceBatchParentId)
+        => CreateGoal(GoalId.New(), objective, tasks, sliceBatchParentId);
+
+    public Goal CreateGoal(GoalId id, string objective, IReadOnlyList<TaskSpec>? tasks = null)
+        => CreateGoal(id, objective, tasks, sliceBatchParentId: null);
+
+    public Goal CreateGoal(
+        GoalId id,
+        string objective,
+        IReadOnlyList<TaskSpec>? tasks,
+        GoalId? sliceBatchParentId)
     {
-        var goal = new Goal(GoalId.New(), objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks(), _clock.UtcNow);
+        ValidateSliceBatchParent(id, sliceBatchParentId);
+        var goal = new Goal(
+            id,
+            objective,
+            tasks ?? CreateDefaultSoftwareDevelopmentTasks(),
+            _clock.UtcNow,
+            sliceBatchParentId);
         _goals.Add(goal.Id, goal);
         Append(goal, null, ProgressKind.GoalCreated, "Goal created.");
         return goal;
     }
 
-    public Goal CreateGoal(GoalId id, string objective, IReadOnlyList<TaskSpec>? tasks = null)
+    private void ValidateSliceBatchParent(GoalId childId, GoalId? sliceBatchParentId)
     {
-        var goal = new Goal(id, objective, tasks ?? CreateDefaultSoftwareDevelopmentTasks(), _clock.UtcNow);
-        _goals.Add(goal.Id, goal);
-        Append(goal, null, ProgressKind.GoalCreated, "Goal created.");
-        return goal;
+        if (sliceBatchParentId is null)
+        {
+            return;
+        }
+
+        if (sliceBatchParentId == childId)
+        {
+            throw new InvalidOperationException("A slice-batch goal cannot be its own parent.");
+        }
+
+        if (!_goals.TryGetValue(sliceBatchParentId, out var parent))
+        {
+            throw new InvalidOperationException($"Slice-batch parent '{sliceBatchParentId.Value}' was not found.");
+        }
+
+        if (parent.SliceBatchParentId is not null)
+        {
+            throw new InvalidOperationException(
+                $"Slice-batch parent '{sliceBatchParentId.Value}' is already a child; nested slice batches are not supported.");
+        }
     }
 
     public DelegationPlan ActivateGoal(GoalId goalId, IReadOnlyList<AgentDefinition> availableAgents)
