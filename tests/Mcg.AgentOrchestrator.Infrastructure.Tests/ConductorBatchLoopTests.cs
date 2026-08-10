@@ -1529,6 +1529,7 @@ public sealed class ConductorBatchLoopTests
         var kernel = new AgentOrchestratorKernel();
         var first = CreateVerifiedSimpleGoal(kernel, "Update first advisory source");
         var second = CreateVerifiedSimpleGoal(kernel, "Update second advisory source");
+        var statusesBefore = new[] { first.Status, second.Status };
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
             [first.Id] = ["src/Mcg.AgentOrchestrator.App/Cli/FirstAdvisory.cs"],
@@ -1586,8 +1587,7 @@ public sealed class ConductorBatchLoopTests
             Assert.Equal(2, summary.Advanced);
             Assert.Equal(2, acceptanceCalls.Count);
             Assert.Equal(2, landed.Count);
-            Assert.Equal(GoalStatus.Completed, first.Status);
-            Assert.Equal(GoalStatus.Completed, second.Status);
+            Assert.Equal(statusesBefore, new[] { first.Status, second.Status });
             var receipt = Assert.Single(cohortEvents);
             Assert.Null(receipt.GoalId);
             Assert.Contains("advisory=true", receipt.Detail, StringComparison.Ordinal);

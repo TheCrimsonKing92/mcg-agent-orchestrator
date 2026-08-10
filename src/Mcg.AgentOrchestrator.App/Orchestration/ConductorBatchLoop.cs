@@ -2435,7 +2435,7 @@ internal sealed class ConductorBatchLoop
                 driver.ProjectGateReadyCandidate(goal, policy)))
             .ToArray();
         var speculativePlan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(speculativeCandidates);
-        RecordParallelAcceptanceProgress(speculativePlan.FormatReceipt(tick), changedGoalLines);
+        EmitProgress(speculativePlan.FormatReceipt(tick));
         var liveAttemptGoalIds = driver.ParallelAcceptanceAttemptCoordinator.GetLiveAttemptGoalIds(
             orderedEligible.Select(goal => goal.Id.Value));
         var oldestWaiter = SelectOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
