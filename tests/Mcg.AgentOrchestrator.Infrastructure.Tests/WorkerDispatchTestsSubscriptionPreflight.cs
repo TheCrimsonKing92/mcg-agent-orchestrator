@@ -324,6 +324,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_skips_preflight_blocked_tasks")]
     public void WorkerProfileDispatcherReadyBatchSkipsPreflightBlockedTasks()
 {
+    using var _sandboxEnv = ClearWorkerSandboxEnv();
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
