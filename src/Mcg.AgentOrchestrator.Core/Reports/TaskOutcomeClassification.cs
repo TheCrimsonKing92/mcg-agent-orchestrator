@@ -3,6 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public enum TaskOutcomeClass
 {
     Success,
+    ReconciledToSuccess,
     RealFailure,
     Environmental,
     ManufacturedFixed,
@@ -220,6 +221,7 @@ public static class TaskOutcomeClassifier
         outcomeClass switch
         {
             TaskOutcomeClass.Success => "success",
+            TaskOutcomeClass.ReconciledToSuccess => "reconciled-to-success",
             TaskOutcomeClass.RealFailure => "real-failure",
             TaskOutcomeClass.Environmental => "environmental",
             TaskOutcomeClass.ManufacturedFixed => "manufactured-fixed",
@@ -232,6 +234,7 @@ public static class TaskOutcomeClassifier
         return value?.Trim().ToLowerInvariant() switch
         {
             "success" => TaskOutcomeClass.Success,
+            "reconciled-to-success" => TaskOutcomeClass.ReconciledToSuccess,
             "real-failure" => TaskOutcomeClass.RealFailure,
             "environmental" => TaskOutcomeClass.Environmental,
             "manufactured-fixed" => TaskOutcomeClass.ManufacturedFixed,

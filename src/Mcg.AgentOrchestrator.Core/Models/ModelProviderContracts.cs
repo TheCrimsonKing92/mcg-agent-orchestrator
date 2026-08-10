@@ -68,7 +68,10 @@ public sealed record TaskVerificationRecord(
     string? OrchestratorFailureReason = null,
     string? ReviewFindingTouchProofDiagnostic = null,
     string? HumanInputQuestionFingerprint = null,
-    string? HumanInputBlockerFingerprint = null)
+    string? HumanInputBlockerFingerprint = null,
+    int? ObservedRootExitCode = null,
+    bool ReconciledToSuccess = false,
+    string? ReconciliationOriginRule = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
