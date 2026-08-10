@@ -885,6 +885,104 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         }
     }
 
+    [Xunit.Fact(DisplayName = "Natural_Planner_criterion_mappings_complete_without_formatting_retry")]
+    public void NaturalPlannerCriterionMappingsCompleteWithoutFormattingRetry()
+    {
+        var root = CreateSeededDispatchRepository();
+        File.Copy(FindRepositoryFile(".gitignore"), Path.Combine(root, ".gitignore"));
+        RunGit(root, ["add", ".gitignore"], DateTimeOffset.Parse("2026-08-10T12:00:00Z"));
+        RunGit(root, ["commit", "-m", "Track repository ignore rules"], DateTimeOffset.Parse("2026-08-10T12:00:00Z"));
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-10T12:05:00Z"));
+        var kernel = new AgentOrchestratorKernel(clock);
+        var researchSpec = new TaskSpec(TaskId.New(), "Research the parser seam.", AgentRole.Researcher);
+        var plannerSpec = new TaskSpec(TaskId.New(), "Map the acceptance criterion.", AgentRole.Planner);
+        var developerSpec = new TaskSpec(TaskId.New(), "Implement the accepted plan.", AgentRole.Developer);
+        var goal = kernel.CreateGoal(
+            "Accept natural Planner criterion mappings.",
+            [researchSpec, plannerSpec, developerSpec]);
+        kernel.SetGoalRefinedSpec(
+            goal.Id,
+            new RefinedSpec(
+                "Accept semantically complete natural criterion mappings.",
+                ["Implement the natural mapping behavior."],
+                VerificationClass.TestVerifiable,
+                [],
+                []));
+        var researcherAgent = TestSubscriptionAgent("researcher", "Researcher", AgentRole.Researcher);
+        var plannerAgent = SubscriptionPlannerAgent("planner", "Planner");
+        var developerAgent = SubscriptionDeveloperAgent();
+        kernel.ActivateGoal(goal.Id, [researcherAgent, plannerAgent, developerAgent]);
+        CompleteResearcherArtifact(kernel, goal);
+        var planner = kernel.GetTask(goal.Id, plannerSpec.Id);
+        var developer = kernel.GetTask(goal.Id, developerSpec.Id);
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        var naturalPlan = PlannerContractPlanFixture().Replace(
+            PlannerContractAcceptanceMappingBody,
+            "Criterion 1 covers disposition=planned; plan=Implement the natural mapping behavior through the existing parser seam.",
+            StringComparison.Ordinal);
+        var logs = Path.Combine(root, "logs");
+        Directory.CreateDirectory(logs);
+        var stdoutPath = Path.Combine(logs, "planner-natural.out.log");
+        var stderrPath = Path.Combine(logs, "planner-natural.err.log");
+        var exitPath = Path.Combine(logs, "planner-natural.exit.txt");
+        File.WriteAllText(
+            stdoutPath,
+            naturalPlan + Environment.NewLine + WorkerResultBlock("none", "focused inspection", "pass - natural mapping complete"));
+        File.WriteAllText(stderrPath, string.Empty);
+        File.WriteAllText(exitPath, "0");
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            planner.Id,
+            new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, clock.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            planner.Id,
+            new TaskProcessRecord(
+                999999,
+                "codex exec prompt",
+                worktree,
+                stdoutPath,
+                stderrPath,
+                exitPath,
+                clock.UtcNow,
+                null,
+                null));
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false)
+            .RefreshLatestProcess(kernel, goal.Id, planner.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, planner.Status);
+        Assert.Equal(0, planner.LastVerification!.ExitCode);
+        Assert.Single(planner.VerificationHistory);
+        Assert.Equal(0, planner.CriterionRetryCount);
+        Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.PlannerOutputContractRejected),
+            File.ReadAllText(stderrPath),
+            StringComparison.Ordinal);
+        var developerPreflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+            goal,
+            developer,
+            [developerAgent],
+            DispatchTestProfiles(),
+            worktree,
+            clock.UtcNow,
+            commandExists: _ => true);
+        Assert.True(developerPreflight.Allowed, string.Join(Environment.NewLine, developerPreflight.Findings));
+        var preparedDeveloper = WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            developer,
+            new WorkerProfile("test-profile", "echo {promptPath}"),
+            Path.Combine(root, "prompts"),
+            worktree,
+            clock.UtcNow);
+        Assert.Contains(
+            "Criterion 1 covers disposition=planned",
+            File.ReadAllText(preparedDeveloper.PromptPath!),
+            StringComparison.Ordinal);
+        Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
+    }
+
     [Xunit.Fact(DisplayName = "Developer_context_receives_complete_ingested_Planner_plan_without_paid_start")]
     public void DeveloperContextReceivesCompleteIngestedPlannerPlanWithoutPaidStart()
     {

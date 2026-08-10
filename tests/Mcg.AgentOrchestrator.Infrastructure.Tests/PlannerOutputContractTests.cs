@@ -479,6 +479,88 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("Criterion 1 covers disposition=planned; plan=Implement the mapped behavior.")]
+    [Xunit.InlineData("1 - maps to disposition=planned; plan=Implement the mapped behavior.")]
+    [Xunit.InlineData("- Criterion 1 : maps disposition=planned; plan=Implement the mapped behavior.")]
+    public void PlannerContract_AcceptsNaturalCriterionMappingForms(string mapping)
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Acceptance criteria mapping", mapping);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement the mapped behavior."]);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_DuplicateCriterionMappingsRemainFirstWins()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping",
+            """
+            Criterion 1 covers disposition=planned
+            1 - maps to disposition=planned; plan=This duplicate must not replace the first mapping.
+            """);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement the mapped behavior."]);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("must include a non-empty plan", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_CriterionNumberUsesCompleteIntegerBoundary()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Acceptance criteria mapping",
+            "Criterion 10 covers disposition=planned; plan=This maps criterion ten, not criterion one.");
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement criterion one."]);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("criterion 1 is unmapped", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_MappingOutsideAcceptanceSectionDoesNotSatisfyMissingCriterion()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(
+            PlannerContractPlanFixture(),
+            "## Target seams and symbols",
+            "Criterion 2 covers the second criterion through `seed.txt`.");
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement criterion one.", "Implement criterion two."]);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("criterion 2 is unmapped", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData("1. disposition=undecidable; required-source=wrapper; unavailable-because=never recorded", "would-settle")]
     [Xunit.InlineData("1. disposition=undecidable; would-settle=diagnostic; unavailable-because=never recorded", "required-source")]
     [Xunit.InlineData("1. disposition=planned", "plan")]
