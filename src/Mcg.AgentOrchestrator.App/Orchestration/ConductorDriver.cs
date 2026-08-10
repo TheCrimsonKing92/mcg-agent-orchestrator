@@ -400,6 +400,19 @@ internal sealed class ConductorDriver
                     stableSlotLease,
                     cancellationToken).GetAwaiter().GetResult();
             }
+            catch (AcceptanceInfrastructureDeferredException ex)
+            {
+                GoalOperationJournal.AcceptanceBlocked(
+                    dir,
+                    goal,
+                    "conductor:acceptance",
+                    $"INFRASTRUCTURE_DEFERRED:{ex.ReasonCode}",
+                    branchHeadSha,
+                    mainHeadSha,
+                    $"Acceptance blocked:INFRASTRUCTURE_DEFERRED:{ex.ReasonCode} for candidate {FormatAcceptanceCandidate(branchHeadSha, mainHeadSha)}: {ex.Message}",
+                    acceptanceAttemptStartedAt);
+                throw;
+            }
             catch (DotnetBuildSlotsBusyException ex)
             {
                 GoalOperationJournal.AcceptanceBlocked(
@@ -3546,6 +3559,13 @@ internal sealed class ConductorDriver
         try
         {
             acceptance = _runAcceptanceVerification(goal, null, null, CancellationToken.None);
+        }
+        catch (AcceptanceInfrastructureDeferredException ex)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(
+                    GoalLifecycleState.Verified,
+                    $"Acceptance infrastructure deferred ({ex.ReasonCode}); retry on next conduct tick. {ex.Message}"));
         }
         catch (DotnetBuildSlotsBusyException ex)
         {

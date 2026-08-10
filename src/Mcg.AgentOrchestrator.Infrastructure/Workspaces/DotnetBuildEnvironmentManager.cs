@@ -16,7 +16,31 @@ public sealed record DotnetBuildEnvironment(
     string? LeaseMetadataPath = null,
     bool ReusedGoalLease = false,
     bool StaleLockCleared = false,
-    int? BuildPermitIndex = null);
+    int? BuildPermitIndex = null)
+{
+    internal DotnetBuildEnvironment DeriveArtifactsPath(string artifactsPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(artifactsPath);
+        var arguments = Arguments.ToArray();
+        var artifactSwitches = arguments
+            .Select((argument, index) => (argument, index))
+            .Where(item => item.argument.Equals("--artifacts-path", StringComparison.OrdinalIgnoreCase))
+            .Select(item => item.index)
+            .ToArray();
+        if (artifactSwitches.Length != 1 || artifactSwitches[0] + 1 >= arguments.Length)
+        {
+            throw new InvalidOperationException(
+                "A dotnet build environment must contain exactly one --artifacts-path argument with a value.");
+        }
+
+        arguments[artifactSwitches[0] + 1] = artifactsPath;
+        return this with
+        {
+            ArtifactsPath = artifactsPath,
+            Arguments = arguments
+        };
+    }
+}
 
 public sealed record DotnetBuildLeaseStatus(
     string LeaseId,

@@ -2514,6 +2514,71 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "BatchLoop_persistent_acceptance_infrastructure_deferral_retries_then_escalates_without_worker_round")]
+    public void BatchLoopPersistentAcceptanceInfrastructureDeferralRetriesThenEscalatesWithoutWorkerRound()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/BaselineDeferral.cs");
+        var task = goal.Tasks.Single();
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var escalations = new List<string>();
+        var acceptanceAttempts = 0;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (_, _) =>
+            {
+                acceptanceAttempts++;
+                throw new AcceptanceInfrastructureDeferredException(
+                    "trusted-main-build-failed",
+                    1,
+                    "baseline assembly unavailable");
+            },
+            writeEscalation: (_, _, reason) => escalations.Add(reason),
+            getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/BaselineDeferral.cs"],
+            parallelAcceptanceAttemptCoordinator: coordinator);
+
+        try
+        {
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: ConductorBatchLoop.ParallelAcceptanceTransientFailureCap,
+                watchInterval: TimeSpan.FromMilliseconds(1),
+                sleepFunc: _ => false);
+            var latest = ReadLatestAttempt(attemptRoot, goal);
+
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap - 1, summary.Held);
+            Assert.Equal(1, summary.Escalated);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, acceptanceAttempts);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, latest.TransientFailureCount);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred, latest.Outcome);
+            Assert.Single(escalations);
+            Assert.Contains("infrastructure-deferred", escalations.Single(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(GoalStatus.Verifying, goal.Status);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
+
+            var restartSummary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+
+            Assert.Equal(1, restartSummary.Escalated);
+            Assert.Equal(ConductorBatchLoop.ParallelAcceptanceTransientFailureCap, acceptanceAttempts);
+            Assert.Equal(WorkTaskStatus.Completed, task.Status);
+            Assert.Null(goal.LatestAcceptanceFailure);
+        }
+        finally
+        {
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "BatchLoop_verified_goal_with_running_task_does_not_start_acceptance_attempt")]
     public void BatchLoopVerifiedGoalWithRunningTaskDoesNotStartAcceptanceAttempt()
     {
@@ -2743,6 +2808,13 @@ public sealed class ConductorBatchLoopTests
                 "acceptance-output",
                 "classify-build-lock")),
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock);
+        AssertBackgroundOutcome(
+            "InfrastructureDeferredTyped.cs",
+            (_, _) => throw new AcceptanceInfrastructureDeferredException(
+                "trusted-main-build-failed",
+                1,
+                "baseline assembly unavailable"),
+            ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_parallel_acceptance_serves_oldest_verified_goal_first")]
@@ -4082,6 +4154,10 @@ public sealed class ConductorBatchLoopTests
 
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, started.Kind);
             Assert.Equal(expected, terminal.Attempt.Outcome);
+            if (ConductorParallelAcceptanceAttemptCoordinator.IsBoundedInfrastructureOutcome(expected))
+            {
+                Assert.Equal(1, terminal.Attempt.TransientFailureCount);
+            }
         }
         finally
         {

@@ -3577,6 +3577,63 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.False(string.IsNullOrWhiteSpace(blockedOutcome.MainHeadSha));
     }
 
+    [Xunit.Fact(DisplayName = "Cli_acceptance_infrastructure_deferral_stays_ready_without_failure_or_worker_retry")]
+    public void CliAcceptanceInfrastructureDeferralStaysReadyWithoutFailureOrWorkerRetry()
+    {
+        var root = CreateShortAcceptanceRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement something", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Trusted baseline infrastructure deferral", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            ManualVerificationRecorder.Create(true, "Passed.", root, DateTimeOffset.Parse("2026-08-10T12:00:00Z")));
+        CommitGoalWork(root, goal.Id, "feature.txt", "goal work");
+        var verifier = new ProbeAcceptanceVerifier(_ => throw new AcceptanceInfrastructureDeferredException(
+            "trusted-main-build-failed",
+            1,
+            "baseline could not produce a usable assembly"));
+        var workspace = CreateRefinedWorkspace(root);
+
+        var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["acceptance", "--keep-workspace"],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal,
+            acceptanceVerifier: verifier,
+            phaseTimings: new CliPhaseTimingRecorder("acceptance"),
+            stableSlotAcquisitionTimeout: TimeSpan.FromSeconds(1)));
+
+        Xunit.Assert.Contains("ACCEPTANCE_INFRASTRUCTURE_DEFERRED", output);
+        Xunit.Assert.Contains("trusted-main-build-failed", output);
+        Xunit.Assert.Contains("goal remains ready", output);
+        Xunit.Assert.Equal(1, verifier.RunCount);
+        var held = kernel.GetGoal(goal.Id)!;
+        Xunit.Assert.Equal(GoalStatus.Verified, held.Status);
+        Xunit.Assert.Equal(WorkTaskStatus.Completed, held.Tasks.Single().Status);
+        Xunit.Assert.Null(held.LatestAcceptanceFailure);
+
+        var conductEvent = File.ReadAllLines(workspace.ConductEventsLogPath)
+            .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+            .Single(record => record.EventKind == "infrastructure-deferral");
+        Xunit.Assert.Equal(goal.Id.Value[..8], conductEvent.GoalId);
+        Xunit.Assert.Contains("trusted-main-build-failed", conductEvent.Detail, StringComparison.Ordinal);
+
+        var journal = GoalOperationJournal.Read(root, goal.Id);
+        var blockedOutcome = journal.Entries.LastOrDefault(entry =>
+            entry.AcceptanceOutcome == "blocked:INFRASTRUCTURE_DEFERRED:trusted-main-build-failed");
+        Xunit.Assert.NotNull(blockedOutcome);
+        Xunit.Assert.Equal(GoalOperationStatus.Failed, blockedOutcome.Status);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_slots_busy_journals_blocked_outcome")]
     public void CliAcceptanceSlotsBusyJournalsBlockedOutcome()
     {

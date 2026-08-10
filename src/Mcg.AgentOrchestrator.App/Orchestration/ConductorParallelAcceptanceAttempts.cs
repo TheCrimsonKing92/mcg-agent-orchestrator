@@ -20,6 +20,7 @@ internal enum ConductorParallelAcceptanceAttemptOutcome
     Cancelled,
     BlockedBuildSlot,
     BlockedBuildLock,
+    InfrastructureDeferred,
     LaunchFailed,
     Faulted,
     Reconciled
@@ -35,6 +36,7 @@ internal enum ConductorEvidenceAttemptOutcome
     LaunchFailed,
     BlockedBuildSlot,
     BlockedBuildLock,
+    InfrastructureDeferred,
     CorruptArtifacts,
     Unknown
 }
@@ -970,7 +972,10 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 CompletedAt = _utcNow(),
                 LastHeartbeatAt = _utcNow(),
                 Detail = AcceptanceRunDetail(run),
-                TestResultPaths = ResultTestPaths(run)
+                TestResultPaths = ResultTestPaths(run),
+                TransientFailureCount = IsBoundedInfrastructureOutcome(outcome)
+                    ? CountConsecutiveTransientFailures(current) + 1
+                    : current.TransientFailureCount
             });
             if (!string.IsNullOrWhiteSpace(stderrDetail))
             {
@@ -1329,17 +1334,23 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 return current;
             }
 
+            var outcome = current.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running
+                ? OutcomeFor(run, current.Kind)
+                : current.Outcome;
             var updated = current with
             {
                 BranchHeadSha = run.Candidate.BranchHeadSha,
                 MainHeadSha = run.Candidate.MainHeadSha,
-                Outcome = current.Outcome == ConductorParallelAcceptanceAttemptOutcome.Running
-                    ? OutcomeFor(run, current.Kind)
-                    : current.Outcome,
+                Outcome = outcome,
                 CompletedAt = current.CompletedAt ?? _utcNow(),
                 LastHeartbeatAt = _utcNow(),
                 Detail = current.Detail ?? AcceptanceRunDetail(run),
-                TestResultPaths = ResultTestPaths(run) ?? current.TestResultPaths
+                TestResultPaths = ResultTestPaths(run) ?? current.TestResultPaths,
+                TransientFailureCount = IsBoundedInfrastructureOutcome(outcome)
+                    ? current.TransientFailureCount > 0
+                        ? current.TransientFailureCount
+                        : CountConsecutiveTransientFailures(current) + 1
+                    : current.TransientFailureCount
             };
             WriteAttemptFile(updated);
             return updated;
@@ -1644,6 +1655,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             ConductorParallelAcceptanceAttemptOutcome.LaunchFailed => ConductorEvidenceAttemptOutcome.LaunchFailed,
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot => ConductorEvidenceAttemptOutcome.BlockedBuildSlot,
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock => ConductorEvidenceAttemptOutcome.BlockedBuildLock,
+            ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred => ConductorEvidenceAttemptOutcome.InfrastructureDeferred,
             ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts => ConductorEvidenceAttemptOutcome.CorruptArtifacts,
             ConductorParallelAcceptanceAttemptOutcome.ProcessDied => ConductorEvidenceAttemptOutcome.Unknown,
             _ => ConductorEvidenceAttemptOutcome.Unknown
@@ -1829,6 +1841,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 {
                     DotnetBuildSlotsBusyException => "blocked-build-slot",
                     BuildLockBlockedException => "blocked-build-lock",
+                    AcceptanceInfrastructureDeferredException => "infrastructure-deferred",
                     OperationCanceledException => "cancelled",
                     _ => "exception"
                 },
@@ -1839,7 +1852,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 run.Candidate.BranchHeadSha,
                 run.Candidate.MainHeadSha,
                 null,
-                null);
+                null,
+                InfrastructureReasonCode: (run.Exception as AcceptanceInfrastructureDeferredException)?.ReasonCode,
+                InfrastructureExitCode: (run.Exception as AcceptanceInfrastructureDeferredException)?.ExitCode,
+                InfrastructureOutputTail: (run.Exception as AcceptanceInfrastructureDeferredException)?.OutputTail,
+                InfrastructureBuildLockAttribution: (run.Exception as AcceptanceInfrastructureDeferredException)?.BuildLockAttribution);
         }
 
         if (run.EarlyResult is { Outcome: var outcome })
@@ -1970,6 +1987,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 new DotnetBuildLeaseAcquisition.SlotsBusy("background-acceptance", [])),
             "blocked-build-lock" => new BuildLockBlockedException(
                 new BuildLockAttribution("unknown", [], "background-acceptance", "acceptance", "background-acceptance")),
+            "infrastructure-deferred" => new AcceptanceInfrastructureDeferredException(
+                artifact.InfrastructureReasonCode ?? "background-acceptance-infrastructure-unavailable",
+                artifact.InfrastructureExitCode,
+                artifact.InfrastructureOutputTail ?? artifact.FaultMessage,
+                artifact.InfrastructureBuildLockAttribution),
             "cancelled" => new OperationCanceledException(artifact.FaultMessage),
             _ => new InvalidOperationException(artifact.FaultMessage ?? "background acceptance failed")
         };
@@ -1989,6 +2011,11 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         if (run.Exception is BuildLockBlockedException)
         {
             return ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock;
+        }
+
+        if (run.Exception is AcceptanceInfrastructureDeferredException)
+        {
+            return ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred;
         }
 
         if (run.Exception is OperationCanceledException)
@@ -2032,6 +2059,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             or ConductorParallelAcceptanceAttemptOutcome.Cancelled
             or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot
             or ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock
+            or ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred
             or ConductorParallelAcceptanceAttemptOutcome.LaunchFailed;
 
     private static bool IsReconciled(ConductorParallelAcceptanceAttempt attempt) =>
@@ -2233,7 +2261,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         attempt.TransientFailureCount > 0 &&
         (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.LaunchFailed ||
             attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.CorruptArtifacts ||
-            attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.ProcessDied);
+            attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.ProcessDied ||
+            IsBoundedInfrastructureOutcome(attempt.Outcome));
+
+    internal static bool IsBoundedInfrastructureOutcome(ConductorParallelAcceptanceAttemptOutcome outcome) =>
+        outcome is ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock or
+            ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred;
 
     private bool IsHeartbeatStale(ConductorParallelAcceptanceAttempt attempt)
     {
@@ -2314,4 +2347,8 @@ internal sealed record ConductorParallelAcceptanceRunArtifact(
     string? EarlyOutcomeKind,
     string? EarlyOutcomeDetail,
     string DispatchKind = ConductorParallelAcceptanceAttemptCoordinator.GateDispatchKind,
-    FocusedEvidenceRunResult? FocusedEvidence = null);
+    FocusedEvidenceRunResult? FocusedEvidence = null,
+    string? InfrastructureReasonCode = null,
+    int? InfrastructureExitCode = null,
+    string? InfrastructureOutputTail = null,
+    BuildLockAttribution? InfrastructureBuildLockAttribution = null);

@@ -96,6 +96,7 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
     [InlineData(nameof(ConductorEvidenceAttemptOutcome.LaunchFailed), "launch_failed")]
     [InlineData(nameof(ConductorEvidenceAttemptOutcome.BlockedBuildSlot), "blocked_build_slot")]
     [InlineData(nameof(ConductorEvidenceAttemptOutcome.BlockedBuildLock), "blocked_build_lock")]
+    [InlineData(nameof(ConductorEvidenceAttemptOutcome.InfrastructureDeferred), "infrastructure_deferred")]
     [InlineData(nameof(ConductorEvidenceAttemptOutcome.CorruptArtifacts), "corrupt_artifacts")]
     public void TerminalOutcome_EmitsExactTypedTaxonomyValue(
         string expectedOutcomeName,
@@ -446,6 +447,12 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             ConductorEvidenceAttemptOutcome.BlockedBuildLock => ConductorParallelAcceptanceRunResult.Fault(
                 candidate,
                 new BuildLockBlockedException(new BuildLockAttribution("locked.dll", [], "test"))),
+            ConductorEvidenceAttemptOutcome.InfrastructureDeferred => ConductorParallelAcceptanceRunResult.Fault(
+                candidate,
+                new AcceptanceInfrastructureDeferredException(
+                    "trusted-main-build-failed",
+                    1,
+                    "baseline assembly unavailable")),
             ConductorEvidenceAttemptOutcome.CorruptArtifacts => ConductorParallelAcceptanceRunResult.Focused(
                 candidate,
                 new FocusedEvidenceRunResult("run focused tests", Accepted: true, Passed: true, "unused", [])),
