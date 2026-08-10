@@ -2625,7 +2625,11 @@ internal sealed class ConductorBatchLoop
                                 candidate,
                                 new InvalidOperationException("Completed acceptance attempt had no run result."));
                             ReconcileParallelAcceptanceTerminalState(kernel, goal, terminalRun, terminalDecision.Attempt);
-                            var terminalResult = CompleteParallelAcceptanceRun(driver, policy, terminalRun);
+                            var terminalResult = CompleteParallelAcceptanceRun(
+                                driver,
+                                policy,
+                                terminalRun,
+                                terminalDecision.Attempt);
                             driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(terminalDecision.Attempt);
                             oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                             RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
@@ -2690,7 +2694,7 @@ internal sealed class ConductorBatchLoop
                         candidate,
                         new InvalidOperationException("Completed acceptance attempt had no run result."));
                     ReconcileParallelAcceptanceTerminalState(kernel, goal, run, decision.Attempt);
-                    var result = CompleteParallelAcceptanceRun(driver, policy, run);
+                    var result = CompleteParallelAcceptanceRun(driver, policy, run, decision.Attempt);
                     driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
                     oldestServedThisTick |= goal.Id == oldestWaiter?.Id;
                     RecordParallelAcceptanceFairnessGrant(goal.Id.Value, oldestWaiter?.Id.Value);
@@ -2824,7 +2828,10 @@ internal sealed class ConductorBatchLoop
 
     private static bool IsRetryableAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
         run.EarlyResult is not null ||
-        run.Exception is DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException;
+        run.Exception is AcceptanceInfrastructureDeferredException or
+            DotnetBuildSlotsBusyException or
+            BuildLockBlockedException or
+            OperationCanceledException;
 
     private static bool IsEnvironmentInterferenceAcceptanceRun(ConductorParallelAcceptanceRunResult run) =>
         run.Acceptance?.RequiredUnmetCriteria.Any(check =>
@@ -3180,13 +3187,15 @@ internal sealed class ConductorBatchLoop
             candidate,
             new InvalidOperationException("Completed acceptance attempt had no run result."));
         ReconcileParallelAcceptanceTerminalState(kernel, goal, run, decision.Attempt);
-        var completion = CompleteParallelAcceptanceRun(driver, policy, run);
+        var completion = CompleteParallelAcceptanceRun(driver, policy, run, decision.Attempt);
         driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(decision.Attempt);
         var capturedOutput =
             $"attempt={decision.Attempt.AttemptId} outcome={AcceptanceRunDisposition(run)} " +
             $"detail={decision.Attempt.Detail ?? "no attempt detail was recorded"} completion={completion.Outcome}";
 
-        if (run.Exception is DotnetBuildSlotsBusyException or BuildLockBlockedException or OperationCanceledException ||
+        if (run.Exception is DotnetBuildSlotsBusyException or OperationCanceledException ||
+            (run.Exception is (AcceptanceInfrastructureDeferredException or BuildLockBlockedException) &&
+                decision.Attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap) ||
             IsEnvironmentInterferenceAcceptanceRun(run) ||
             completion.IsHeld && run.EarlyResult is null)
         {
@@ -3201,10 +3210,29 @@ internal sealed class ConductorBatchLoop
     private static ConductorAdvanceResult CompleteParallelAcceptanceRun(
         ConductorDriver driver,
         ConductorAutonomyPolicy policy,
-        ConductorParallelAcceptanceRunResult run)
+        ConductorParallelAcceptanceRunResult run,
+        ConductorParallelAcceptanceAttempt attempt)
     {
         if (run.Exception is not null)
         {
+            if (run.Exception is AcceptanceInfrastructureDeferredException infrastructureDeferred)
+            {
+                if (attempt.TransientFailureCount >= ParallelAcceptanceTransientFailureCap)
+                {
+                    return driver.EscalateParallelLandingAcceptance(
+                        run.Candidate,
+                        policy,
+                        $"background acceptance infrastructure-deferred: {Sanitize(infrastructureDeferred.Message)}");
+                }
+
+                return ParallelAcceptanceHeld(
+                    run.Candidate,
+                    policy,
+                    $"Acceptance infrastructure deferred ({infrastructureDeferred.ReasonCode}) " +
+                    $"({attempt.TransientFailureCount}/{ParallelAcceptanceTransientFailureCap}); retry on next conduct tick. " +
+                    infrastructureDeferred.Message);
+            }
+
             if (run.Exception is DotnetBuildSlotsBusyException slotsBusy)
             {
                 return new ConductorAdvanceResult(
@@ -3226,6 +3254,14 @@ internal sealed class ConductorBatchLoop
 
             if (run.Exception is BuildLockBlockedException buildLock)
             {
+                if (attempt.TransientFailureCount >= ParallelAcceptanceTransientFailureCap)
+                {
+                    return driver.EscalateParallelLandingAcceptance(
+                        run.Candidate,
+                        policy,
+                        $"background acceptance blocked-build-lock: {FormatBuildLockBlocked(buildLock.Attribution)}");
+                }
+
                 return new ConductorAdvanceResult(
                     run.Candidate.Goal.Id.Value,
                     run.Candidate.GoalPrefix,
@@ -3312,7 +3348,8 @@ internal sealed class ConductorBatchLoop
                 $"Stable dotnet build slots busy in background acceptance attempt; retry on next conduct tick. attempt={attempt.AttemptId}");
         }
 
-        if (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock)
+        if (attempt.Outcome == ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock &&
+            attempt.TransientFailureCount < ParallelAcceptanceTransientFailureCap)
         {
             return ParallelAcceptanceHeld(
                 candidate,
@@ -3362,6 +3399,7 @@ internal sealed class ConductorBatchLoop
                 DotnetBuildSlotsBusyException => "slots-busy",
                 OperationCanceledException => "cancelled",
                 BuildLockBlockedException => "build-lock-blocked",
+                AcceptanceInfrastructureDeferredException => "infrastructure-deferred",
                 _ => "fault"
             };
         }
@@ -3386,6 +3424,7 @@ internal sealed class ConductorBatchLoop
             ConductorParallelAcceptanceAttemptOutcome.Cancelled => "cancelled",
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot => "blocked-build-slot",
             ConductorParallelAcceptanceAttemptOutcome.BlockedBuildLock => "blocked-build-lock",
+            ConductorParallelAcceptanceAttemptOutcome.InfrastructureDeferred => "infrastructure-deferred",
             ConductorParallelAcceptanceAttemptOutcome.LaunchFailed => "launch-failed",
             ConductorParallelAcceptanceAttemptOutcome.Faulted => "faulted",
             ConductorParallelAcceptanceAttemptOutcome.Reconciled => "reconciled",
