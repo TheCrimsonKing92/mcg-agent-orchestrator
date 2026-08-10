@@ -829,12 +829,16 @@ public sealed class LauncherScriptTests
         Assert.True(errorLines[0].Length < 1024, errorLines[0]);
         using var document = JsonDocument.Parse(errorLines[0]);
         var properties = document.RootElement.EnumerateObject().ToArray();
-        Assert.Single(properties);
+        Assert.Equal(2, properties.Length);
         Assert.Equal("reason", properties[0].Name);
         Assert.Equal(
             $"Conduct loop launch refused because active stop authority exists at '{stopFilePath}'. " +
             "Deliberately remove the stop file before retrying.",
             properties[0].Value.GetString());
+        Assert.Equal("args", properties[1].Name);
+        Assert.Equal(
+            new[] { launcherPath, "CoNdUcT", "--LoOp" },
+            properties[1].Value.EnumerateArray().Select(argument => argument.GetString()).ToArray());
 
         Assert.False(Directory.Exists(Path.Combine(sandbox.RepositoryRoot, ".orchestrator")));
         Assert.False(File.Exists(sandbox.InvocationPath), "The child process host must not be invoked.");
@@ -863,7 +867,11 @@ public sealed class LauncherScriptTests
             "--loop");
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Contains(stopFilePath, result.Stderr, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(result.Stderr);
+        Assert.Contains(
+            stopFilePath,
+            document.RootElement.GetProperty("reason").GetString(),
+            StringComparison.Ordinal);
         Assert.True(Directory.Exists(stopFilePath), "Stop authority directory must remain present.");
         Assert.False(Directory.Exists(Path.Combine(sandbox.RepositoryRoot, ".orchestrator")));
         Assert.False(File.Exists(sandbox.InvocationPath), "The child process host must not be invoked.");
@@ -921,7 +929,11 @@ public sealed class LauncherScriptTests
             "--loop");
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Contains(stopFilePath, result.Stderr, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(result.Stderr);
+        Assert.Contains(
+            stopFilePath,
+            document.RootElement.GetProperty("reason").GetString(),
+            StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(sandbox.RepositoryRoot, ".conduct-stop")));
         Assert.False(Directory.Exists(Path.Combine(sandbox.RepositoryRoot, ".orchestrator")));
         Assert.False(File.Exists(sandbox.InvocationPath), "The child process host must not be invoked.");

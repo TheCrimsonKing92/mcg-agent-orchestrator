@@ -199,6 +199,7 @@ try {
     } else {
         [System.IO.Path]::GetFullPath($AppDll)
     }
+    $processArguments = @($targetExecutable) + $Arguments
 
     if (Test-IsConductLoop -Values $Arguments) {
         $configuredRepositoryRoot = [Environment]::GetEnvironmentVariable(
@@ -222,7 +223,6 @@ try {
     $safeName = ConvertTo-SafeName $Name
     $stdoutPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.out.log"))
     $stderrPath = [System.IO.Path]::GetFullPath((Join-Path $logsRoot "operator-$safeName-$stamp.err.log"))
-    $processArguments = @($targetExecutable) + $Arguments
 
     if (-not (Test-Path -LiteralPath $targetExecutable -PathType Leaf)) {
         throw "Launcher or App DLL not found: $targetExecutable"
