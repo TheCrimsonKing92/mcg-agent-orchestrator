@@ -14,6 +14,86 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
 {
+    [Xunit.Theory]
+    [Xunit.InlineData("Completed", "passed", DogfoodAcceptanceDisposition.Passed)]
+    [Xunit.InlineData("Completed", "gate-passed", DogfoodAcceptanceDisposition.Passed)]
+    [Xunit.InlineData("Failed", "failed", DogfoodAcceptanceDisposition.Failed)]
+    [Xunit.InlineData("Failed", "blocked:timeout", DogfoodAcceptanceDisposition.Inconclusive)]
+    [Xunit.InlineData("Aborted", "aborted:state-guard", DogfoodAcceptanceDisposition.Inconclusive)]
+    [Xunit.InlineData("Completed", "failed", DogfoodAcceptanceDisposition.Inconclusive)]
+    public void AcceptanceProjectionMapsTypedOutcome(
+        string statusName,
+        string outcome,
+        DogfoodAcceptanceDisposition expected)
+    {
+        var goalId = GoalId.New();
+        var status = Enum.Parse<GoalOperationStatus>(statusName);
+        var entry = new GoalOperationJournalEntry(
+            "receipt",
+            goalId,
+            "acceptance",
+            status,
+            DateTimeOffset.Parse("2026-08-09T12:00:00Z", CultureInfo.InvariantCulture),
+            "detail is not classified",
+            AcceptanceOutcome: outcome);
+        var journal = new GoalOperationJournalSummary("unused", [entry], [entry], []);
+
+        var evidence = GoalLandingPostActions.ResolveDogfoodLandingEvidence(journal);
+
+        Assert.Equal(expected, evidence.AcceptanceDisposition);
+        Assert.Equal(outcome, evidence.AcceptanceOutcome);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceProjectionUsesNewestTypedReceipt()
+    {
+        var goalId = GoalId.New();
+        var older = new GoalOperationJournalEntry(
+            "older",
+            goalId,
+            "acceptance",
+            GoalOperationStatus.Completed,
+            DateTimeOffset.Parse("2026-08-09T12:00:00Z", CultureInfo.InvariantCulture),
+            null,
+            AcceptanceOutcome: "passed");
+        var newer = new GoalOperationJournalEntry(
+            "newer",
+            goalId,
+            "acceptance",
+            GoalOperationStatus.Failed,
+            older.At.AddMinutes(1),
+            null,
+            AcceptanceOutcome: "failed");
+        var journal = new GoalOperationJournalSummary("unused", [older, newer], [older, newer], []);
+
+        var evidence = GoalLandingPostActions.ResolveDogfoodLandingEvidence(journal);
+
+        Assert.Equal(DogfoodAcceptanceDisposition.Failed, evidence.AcceptanceDisposition);
+        Assert.Equal("failed", evidence.AcceptanceOutcome);
+    }
+
+    [Xunit.Fact]
+    public void AcceptanceProjectionDoesNotTreatAutomaticMergeEvidenceAsManualLanding()
+    {
+        var goalId = GoalId.New();
+        var terminalDisposition = new GoalTerminalDisposition(
+            GoalTerminalDispositionKind.Landed,
+            "Goal terminalized from merge evidence.",
+            GoalTerminalDispositionSource.MergeEvidence);
+        var entry = new GoalOperationJournalEntry(
+            "terminal-disposition",
+            goalId,
+            GoalOperationJournal.TerminalDispositionOperation,
+            GoalOperationStatus.Completed,
+            DateTimeOffset.Parse("2026-08-09T12:00:00Z", CultureInfo.InvariantCulture),
+            JsonSerializer.Serialize(terminalDisposition));
+        var journal = new GoalOperationJournalSummary("unused", [entry], [entry], []);
+
+        var evidence = GoalLandingPostActions.ResolveDogfoodLandingEvidence(journal);
+
+        Assert.False(evidence.WasManuallyLanded);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_retry_treats_landed_cleaned_missing_worktree_as_accepted")]
     public void CliAcceptanceRetryTreatsLandedCleanedMissingWorktreeAsAccepted()
     {
@@ -359,6 +439,7 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
                 .GetByGoalIdAsync(goal.Id.Value);
             Assert.NotNull(record);
             Assert.Contains("Autorecord distinctive objective", record!.RenderedMarkdown);
+            Assert.Contains("Acceptance passed.", record.RenderedMarkdown);
             var log = File.ReadAllText(Path.Combine(repo, "DOGFOOD_LOG.md"));
             Assert.Equal("# Dogfood Log" + Environment.NewLine, log);
         }

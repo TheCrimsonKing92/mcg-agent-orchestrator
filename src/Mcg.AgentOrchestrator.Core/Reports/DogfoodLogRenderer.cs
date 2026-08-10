@@ -4,7 +4,8 @@ public sealed record DogfoodLogEntry(
     string Header,
     string Summary,
     string OperatorGate,
-    string ModelFit)
+    string ModelFit,
+    DogfoodLandingEvidence LandingEvidence)
 {
     public string Render()
     {
@@ -19,19 +20,37 @@ public sealed record DogfoodLogEntry(
     }
 }
 
+public enum DogfoodAcceptanceDisposition
+{
+    Unknown,
+    Passed,
+    Failed,
+    Inconclusive
+}
+
+public sealed record DogfoodLandingEvidence(
+    DogfoodAcceptanceDisposition AcceptanceDisposition,
+    string? AcceptanceOutcome = null,
+    bool WasManuallyLanded = false)
+{
+    public static DogfoodLandingEvidence Unknown { get; } =
+        new(DogfoodAcceptanceDisposition.Unknown);
+}
+
 public static class DogfoodLogRenderer
 {
     private const string NoReceipt = "(no receipt)";
 
-    public static DogfoodLogEntry Render(Goal goal)
+    public static DogfoodLogEntry Render(Goal goal, DogfoodLandingEvidence landingEvidence)
     {
+        ArgumentNullException.ThrowIfNull(landingEvidence);
         var date = GetGoalDate(goal);
         var title = BuildTitle(goal.Objective);
         var header = $"## {date:yyyy-MM-dd} - {title}";
-        var summary = BuildSummary(goal);
+        var summary = BuildSummary(goal, landingEvidence);
         var operatorGate = BuildOperatorGate(goal);
         var modelFit = BuildModelFit(goal);
-        return new DogfoodLogEntry(header, summary, operatorGate, modelFit);
+        return new DogfoodLogEntry(header, summary, operatorGate, modelFit, landingEvidence);
     }
 
     private static DateTimeOffset GetGoalDate(Goal goal)
@@ -47,7 +66,7 @@ public static class DogfoodLogRenderer
         return sentence.Length <= 80 ? sentence : sentence[..77] + "...";
     }
 
-    private static string BuildSummary(Goal goal)
+    private static string BuildSummary(Goal goal, DogfoodLandingEvidence landingEvidence)
     {
         var prefix = goal.Id.Value[..8];
         var objectiveOneLine = goal.Objective
@@ -59,11 +78,48 @@ public static class DogfoodLogRenderer
         }
 
         var taskLines = goal.Tasks.Select(BuildTaskLine).ToList();
-        var acceptanceStatus = goal.Status == GoalStatus.Completed ? "Acceptance passed."
-            : goal.Status == GoalStatus.Failed ? "Acceptance failed."
-            : $"Goal status: {goal.Status}.";
+        var goalStatus = goal.Status == GoalStatus.Failed ? " Goal status: Failed." : string.Empty;
+        var acceptanceStatus = BuildAcceptanceStatus(landingEvidence);
 
-        return $"Goal {prefix}: {objectiveOneLine}. {string.Join(" ", taskLines)} {acceptanceStatus}";
+        return $"Goal {prefix}: {objectiveOneLine}. {string.Join(" ", taskLines)}{goalStatus} {acceptanceStatus}";
+    }
+
+    private static string BuildAcceptanceStatus(DogfoodLandingEvidence evidence)
+    {
+        if (evidence.WasManuallyLanded)
+        {
+            if (evidence.AcceptanceDisposition == DogfoodAcceptanceDisposition.Passed)
+            {
+                return "Manual landing recorded; acceptance passed earlier.";
+            }
+
+            var manual = "Manual landing recorded; acceptance not recorded as passed.";
+            return evidence.AcceptanceDisposition switch
+            {
+                DogfoodAcceptanceDisposition.Failed => $"{manual} Acceptance failed.",
+                DogfoodAcceptanceDisposition.Inconclusive =>
+                    $"{manual} Acceptance inconclusive: {BoundOutcome(evidence.AcceptanceOutcome)}.",
+                _ => manual
+            };
+        }
+
+        return evidence.AcceptanceDisposition switch
+        {
+            DogfoodAcceptanceDisposition.Passed => "Acceptance passed.",
+            DogfoodAcceptanceDisposition.Failed => "Acceptance failed.",
+            DogfoodAcceptanceDisposition.Inconclusive =>
+                $"Acceptance inconclusive: {BoundOutcome(evidence.AcceptanceOutcome)}.",
+            _ => "Acceptance status unknown (no durable acceptance receipt)."
+        };
+    }
+
+    private static string BoundOutcome(string? outcome)
+    {
+        const int maxLength = 80;
+        var normalized = string.IsNullOrWhiteSpace(outcome)
+            ? "unspecified"
+            : string.Concat(outcome.Trim().Where(ch => !char.IsControl(ch)));
+        return normalized.Length <= maxLength ? normalized : normalized[..(maxLength - 3)] + "...";
     }
 
     private static string BuildTaskLine(TaskSpec task)

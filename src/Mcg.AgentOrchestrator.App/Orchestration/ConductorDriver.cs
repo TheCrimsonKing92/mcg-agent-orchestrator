@@ -670,7 +670,7 @@ internal sealed class ConductorDriver
         _record = goal =>
         {
             GoalOperationJournal.Begin(dir, goal, "conductor:record", "Recording to SQLite dogfood log.");
-            GoalLandingPostActions.RecordDogfoodEntry(goal, workspace.DogfoodLogStorePath);
+            GoalLandingPostActions.RecordDogfoodEntry(goal, dir, workspace.DogfoodLogStorePath, Console.WriteLine);
             GoalOperationJournal.Completed(dir, goal, "conductor:record", workspace.DogfoodLogStorePath);
             RefreshJournal(goal.Id);
         };

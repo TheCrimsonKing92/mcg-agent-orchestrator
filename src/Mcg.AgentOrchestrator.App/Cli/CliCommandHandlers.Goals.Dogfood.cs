@@ -23,17 +23,11 @@ private static void AutoRecordDogfoodEntry(CliExecutionContext context)
 
 private static DogfoodLogRecord RecordDogfoodEntry(OrchestratorWorkspace workspace, Goal goal)
 {
-    var entry = DogfoodLogRenderer.Render(goal);
-    return new DogfoodLogStore(workspace.DogfoodLogStorePath)
-        .UpsertAsync(new DogfoodLogAppend(
-            goal.Id.Value,
-            entry.Header,
-            entry.Summary,
-            entry.OperatorGate,
-            entry.ModelFit,
-            entry.Render()))
-        .GetAwaiter()
-        .GetResult();
+    return GoalLandingPostActions.RecordDogfoodEntry(
+        goal,
+        workspace.ExecutionDirectory,
+        workspace.DogfoodLogStorePath,
+        Console.WriteLine);
 }
 
 private static void HandleRecordGoal(CliExecutionContext context)

@@ -3321,6 +3321,14 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             "dotnet test", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
         Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
         var goalPrefix = goal.Id.Value[..8];
+        GoalOperationJournal.AcceptanceBlocked(
+            root,
+            goal,
+            "acceptance",
+            "timeout",
+            "branch-head",
+            "main-head",
+            "A task was canceled");
 
         var output = CaptureConsole(() =>
         {
@@ -3345,6 +3353,16 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             e.Operation == "conductor:cleanup" && e.Status == GoalOperationStatus.Failed);
         Xunit.Assert.NotNull(cleanupEntry);
         Xunit.Assert.Contains("Deferred cleanup after goal-mark-landed", cleanupEntry.Detail, StringComparison.Ordinal);
+        var dogfoodRecord = new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            .GetByGoalIdAsync(goal.Id.Value)
+            .GetAwaiter()
+            .GetResult();
+        Xunit.Assert.NotNull(dogfoodRecord);
+        Xunit.Assert.Contains(
+            "Manual landing recorded; acceptance not recorded as passed.",
+            dogfoodRecord!.RenderedMarkdown);
+        Xunit.Assert.Contains("Acceptance inconclusive: blocked:timeout.", dogfoodRecord.RenderedMarkdown);
+        Xunit.Assert.DoesNotContain("Acceptance passed", dogfoodRecord.RenderedMarkdown, StringComparison.Ordinal);
         var facts = new GoalLifecycleFacts(WorkspaceExists: true, IsMerged: true, IsRecorded: true, IsCleanedUp: false);
         Xunit.Assert.Equal(GoalLifecycleState.Recorded, GoalLifecycle.ResolveState(kernel.GetGoal(goal.Id), facts));
         var sweep = TerminalGoalSweep.Run(kernel, root, goal.Id);
