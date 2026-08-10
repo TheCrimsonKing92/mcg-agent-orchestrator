@@ -52,46 +52,30 @@ internal sealed record ConductorParallelAcceptanceCandidate(
         string? branchHeadSha = null,
         string? mainHeadSha = null)
     {
-        var paths = fileScopes
-            .Where(scope => !string.IsNullOrWhiteSpace(scope))
-            .Select(RepositoryPathOverlap.Normalize)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var conflictPaths = paths
-            .Where(path => !IsDocumentationExcludedFromConflict(path))
-            .ToArray();
-        var excludedConflictPaths = paths
-            .Where(IsDocumentationExcludedFromConflict)
-            .ToArray();
-
-        var resources = BuildResourceKeys(
-            conflictPaths,
-            reserveUnknownScope: paths.Length == 0);
+        var scope = RepositoryLandingScopeNormalization.Normalize(
+            fileScopes,
+            reserveUnknownScope: true);
 
         return new ConductorParallelAcceptanceCandidate(
             goal,
             slotIndex,
-            paths,
-            resources,
-            conflictPaths,
-            excludedConflictPaths,
+            scope.Paths,
+            scope.ResourceKeys,
+            scope.ConflictPaths,
+            scope.ExcludedConflictPaths,
             branchHeadSha,
             mainHeadSha);
     }
 
     internal static bool IsDocumentationExcludedFromConflict(string path)
-    {
-        var normalized = RepositoryPathOverlap.Normalize(path);
-        return normalized.Equals("docs", StringComparison.OrdinalIgnoreCase) ||
-            normalized.StartsWith("docs/", StringComparison.OrdinalIgnoreCase) ||
-            Path.GetExtension(normalized).Equals(".md", StringComparison.OrdinalIgnoreCase);
-    }
+        => RepositoryLandingScopeNormalization.IsDocumentationExcludedFromConflict(path);
 
     private bool OverlapsWithoutDocumentationExclusion(ConductorParallelAcceptanceCandidate other)
     {
-        var resources = BuildResourceKeys(ScopePaths, reserveUnknownScope: ScopePaths.Count == 0);
-        var otherResources = BuildResourceKeys(
+        var resources = RepositoryLandingScopeNormalization.BuildResourceKeys(
+            ScopePaths,
+            reserveUnknownScope: ScopePaths.Count == 0);
+        var otherResources = RepositoryLandingScopeNormalization.BuildResourceKeys(
             other.ScopePaths,
             reserveUnknownScope: other.ScopePaths.Count == 0);
         if (resources.Intersect(otherResources, StringComparer.OrdinalIgnoreCase).Any())
@@ -103,23 +87,6 @@ internal sealed record ConductorParallelAcceptanceCandidate(
             other.ScopePaths.Any(right => RepositoryPathOverlap.Overlaps(left, right)));
     }
 
-    private static string[] BuildResourceKeys(
-        IReadOnlyList<string> paths,
-        bool reserveUnknownScope)
-    {
-        if (paths.Count == 0)
-        {
-            return reserveUnknownScope ? ["ownership:unknown-acceptance-scope"] : [];
-        }
-
-        return paths
-            .Select(RepositoryOwnershipMap.Classify)
-            .Where(path => path.RequiresSerialization)
-            .Select(path => $"ownership:{path.ReservationKey}")
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
 }
 
 internal sealed record ConductorParallelAcceptanceRunResult(
