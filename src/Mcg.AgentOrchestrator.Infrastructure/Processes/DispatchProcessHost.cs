@@ -145,7 +145,8 @@ public static class DispatchProcessHost
     // MIC-restricted) — but it can only WRITE Low-labeled objects (the worktree + a Low CODEX_HOME/TEMP),
     // never the medium-integrity profile or main repo. The host runs at medium and cannot launch a Low
     // child without privilege, so we prepend a self-drop wrapper to the worker command (a process may
-    // lower its own integrity freely). Validated by scripts/Test-LowIntegrity.ps1.
+    // lower its own integrity freely). Validated by
+    // DispatchProcessHostTests.LowIntegritySetupKeepsLinkedWorktreeGitFileMedium.
     internal static WorkerSandboxPreparationResult ApplyWorkerSandbox(ProcessStartInfo startInfo, DispatchRunParameters parameters)
         => ApplyWorkerSandbox(startInfo, parameters, WorkerSandboxPreparer.CreateDefault());
 
