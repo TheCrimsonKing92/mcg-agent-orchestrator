@@ -7,10 +7,10 @@ internal static class CliCommandHelp
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
     public const string GoalUsage = "Usage: goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] | goal --text-file <path> | goal --brief-file <path>";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
-    public const string RetryUsage = "Usage: retry <task-number> <message> [--mechanical] | retry <goal-prefix> <task-number> <message> [--mechanical] | retry --goal <goal-prefix> <task-number> <message> [--mechanical] | retry <task-number> --text-file <path> [--mechanical]";
+    public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--goal <goal-prefix>] [--mechanical] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--goal <goal-prefix>] [--mechanical]";
     public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
-    public const string ProgressUsage = "Usage: progress <task-number> <status> <message> | progress <task-number> <status> --text-file <path>";
-    public const string VerifyManualUsage = "Usage: verify-manual <task-number> <passed|failed> <note> | verify-manual <task-number> <passed|failed> --text-file <path>";
+    public const string ProgressUsage = "Usage: progress [--goal <goal-prefix>] <task-number> <status> <message> [--goal <goal-prefix>] | progress [--goal <goal-prefix>] <task-number> <status> --text-file <path> [--goal <goal-prefix>]";
+    public const string VerifyManualUsage = "Usage: verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> <note> [--goal <goal-prefix>] | verify-manual [--goal <goal-prefix>] <task-number> <passed|failed> --text-file <path> [--goal <goal-prefix>]";
     public const string RecoverUsage = "Usage: recover <goal-prefix> <note> | recover <goal-prefix> --text-file <path>";
     public const string AcceptanceRetryUsage = "Usage: acceptance-retry <goal-prefix> <reason> --confirm-acceptance-retry";
     public const string GoalAmendUsage = "Usage: goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason <reason> [--actor <name>] | goal-amend <goal-prefix> --waive <criterion-number|exact-text> --reason-file <path> [--actor <name>]";
@@ -34,7 +34,7 @@ internal static class CliCommandHelp
     public const string WorkspaceUsage = "Usage: workspace [create|merge|rebase|remove] [goal-id-prefix] [--force-terminal-cleanup]";
     public const string WorkspaceCreateUsage = "Usage: workspace create [goal-id-prefix]";
     public const string ReassignAgentUsage = "Usage: reassign-agent <task-number> <agent-id>|<goal-prefix> <task-number> <agent-id>|--goal <goal-prefix> <task-number> <agent-id>";
-    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>]";
+    public const string BacklogListUsage = "Usage: backlog-list [--all] [--limit <n>] [--status <value>] [--text <pattern>|--text=<leading-dash-pattern>]";
     public const string BacklogTriageUsage = "Usage: backlog-triage [--limit <n>] [--stale-days <n>]";
     public const string BacklogAddUsage = "Usage: backlog-add <title> [body] [--depends-on <id-prefix>] | backlog-add --title <title> [--text-file <path>|--body-file <path>] [--depends-on <id-prefix>] | backlog-add <title> --text-file <path> [--depends-on <id-prefix>] | backlog-add <title> --body-file <path> [--depends-on <id-prefix>]";
     public const string BacklogUpdateUsage = "Usage: backlog-update <id-prefix> [--title <text>] [--description <text>] [--priority <value>] [--tags <csv>] [--status <open|done|superseded>]";
@@ -103,7 +103,7 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Retry = new(
         RetryUsage,
         "Retry a task with operator feedback.",
-        ["--goal", "--text-file", "--mechanical", "--autonomy", "--autonomy-policy", "--help", "-h"]);
+        ["--goal", "--text-file", "--mechanical", "--autonomy", "--autonomy-policy", "--idempotency-key", "--operator-actor", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Note = new(
         NoteUsage,
@@ -113,12 +113,12 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Progress = new(
         ProgressUsage,
         "Record task progress.",
-        ["--goal", "--text-file", "--help", "-h"]);
+        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--help", "-h"]);
 
     private static readonly CommandHelpEntry VerifyManual = new(
         VerifyManualUsage,
         "Record manual verification evidence for a task.",
-        ["--goal", "--text-file", "--help", "-h"]);
+        ["--goal", "--text-file", "--idempotency-key", "--operator-actor", "--help", "-h"]);
 
     private static readonly CommandHelpEntry Recover = new(
         RecoverUsage,
@@ -431,13 +431,38 @@ internal static class CliCommandHelp
             return;
         }
 
-        foreach (var arg in args.Skip(1).Where(IsFlag))
+        for (var index = 1; index < args.Count; index++)
         {
-            if (!entry.Flags.Contains(arg))
+            var arg = args[index];
+            if (!IsFlag(arg))
             {
-                throw new ArgumentException($"Unknown option '{arg}'.{Environment.NewLine}{entry.Usage}");
+                continue;
+            }
+
+            var option = GetOptionName(arg);
+            if (!entry.Flags.Contains(option))
+            {
+                var escapeHint = index > 1 &&
+                    args[index - 1].Equals("--text", StringComparison.OrdinalIgnoreCase)
+                    ? $" To pass a leading-dash text value, use --text={arg}."
+                    : string.Empty;
+                throw new ArgumentException($"Unknown option '{arg}'.{escapeHint}{Environment.NewLine}{entry.Usage}");
             }
         }
+    }
+
+    private static string GetOptionName(string arg)
+    {
+        var separatorIndex = arg.StartsWith("--", StringComparison.Ordinal)
+            ? arg.IndexOf('=')
+            : -1;
+        if (separatorIndex <= 2)
+        {
+            return arg;
+        }
+
+        var option = arg[..separatorIndex];
+        return option.Equals("--text", StringComparison.OrdinalIgnoreCase) ? option : arg;
     }
 
     private static bool TryResolveEntry(IReadOnlyList<string> args, out CommandHelpEntry entry)

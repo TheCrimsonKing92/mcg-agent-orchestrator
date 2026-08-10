@@ -748,6 +748,205 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(0, repository.LoadWhileInTransactionCount);
     }
 
+    public static IEnumerable<object[]> ExplicitGoalMutationCases()
+    {
+        foreach (var command in new[] { "progress", "retry", "verify-manual" })
+        {
+            foreach (var goalAfterPositionals in new[] { false, true })
+            {
+                foreach (var useFullGoalId in new[] { false, true })
+                {
+                    yield return [command, goalAfterPositionals, useFullGoalId, goalAfterPositionals == useFullGoalId];
+                }
+            }
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_explicit_goal_mutations_never_bind_same_number_task_in_current_goal")]
+    [Xunit.MemberData(nameof(ExplicitGoalMutationCases))]
+    public async Task PersistentRunnerExplicitGoalMutationsNeverBindSameNumberTaskInCurrentGoal(
+        string command,
+        bool goalAfterPositionals,
+        bool useFullGoalId,
+        bool useTextFile)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(
+            new GoalId("38d0e2e9000000000000000000000001"),
+            "Explicit target",
+            [new TaskSpec(TaskId.New(), "Target task one", AgentRole.Developer)]);
+        var current = kernel.CreateGoal(
+            new GoalId("b4ae70ef000000000000000000000002"),
+            "Current wrong goal",
+            [new TaskSpec(TaskId.New(), "Wrong task one", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(target.Id, agents);
+        kernel.ActivateGoal(current.Id, agents);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = current;
+        var selector = useFullGoalId ? target.Id.Value : target.Id.Value[..8];
+        var notePath = Path.Combine(root, "operator-note.md");
+        File.WriteAllText(notePath, "explicit target evidence");
+        var payload = useTextFile ? new[] { "--text-file", notePath } : new[] { "explicit target evidence" };
+        string[] positionals = command switch
+        {
+            "progress" => ["1", "failed"],
+            "retry" => ["1"],
+            "verify-manual" => ["1", "passed"],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null)
+        };
+        string[] args = goalAfterPositionals
+            ? [command, .. positionals, "--goal", selector, .. payload]
+            : [command, "--goal", selector, .. positionals, .. payload];
+        if (command == "progress" && goalAfterPositionals && useFullGoalId && useTextFile)
+        {
+            Xunit.Assert.Equal(
+                new[] { "progress", "1", "failed", "--goal", target.Id.Value, "--text-file", notePath },
+                args);
+        }
+
+        var output = CaptureConsole(() =>
+        {
+            var changed = CliPersistentStateRunner.ExecuteCommand(
+                args,
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
+            Xunit.Assert.False(changed);
+        });
+
+        var intentStore = SqliteOperatorIntentStore.OpenExisting(
+            workspace.OrchestratorDirectory,
+            workspace.LogDirectory);
+        var targetIntent = Xunit.Assert.Single(await intentStore.ListForGoalAsync(target.Id.Value));
+        var wrongGoalIntents = await intentStore.ListForGoalAsync(current.Id.Value);
+        Xunit.Assert.Equal(target.Tasks.Single().Id.Value, targetIntent.TaskId);
+        Xunit.Assert.Empty(wrongGoalIntents);
+        Xunit.Assert.Equal(target.Id.Value, currentGoal!.Id.Value);
+        Xunit.Assert.Contains($"selector={selector}", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"goal={target.Id.Value}", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"task={target.Tasks.Single().Id.Value}", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_rejects_ambiguous_explicit_goal_before_intent_write")]
+    public async Task PersistentRunnerRejectsAmbiguousExplicitGoalBeforeIntentWrite()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var first = kernel.CreateGoal(
+            new GoalId("38d0e2e9aaaaaaaaaaaaaaaaaaaaaaa1"),
+            "First collision",
+            [new TaskSpec(TaskId.New(), "Task one", AgentRole.Developer)]);
+        var second = kernel.CreateGoal(
+            new GoalId("38d0e2e9bbbbbbbbbbbbbbbbbbbbbbb2"),
+            "Second collision",
+            [new TaskSpec(TaskId.New(), "Task one", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(first.Id, agents);
+        kernel.ActivateGoal(second.Id, agents);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = second;
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["progress", "1", "failed", "--goal", "38d0e2e9", "must not enqueue"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.Contains("ambiguous", exception.Message, StringComparison.OrdinalIgnoreCase);
+        var intentStore = SqliteOperatorIntentStore.ForDirectories(
+            workspace.OrchestratorDirectory,
+            workspace.LogDirectory);
+        Xunit.Assert.Empty(await intentStore.ListForGoalAsync(first.Id.Value));
+        Xunit.Assert.Empty(await intentStore.ListForGoalAsync(second.Id.Value));
+    }
+
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_rejects_malformed_explicit_goal_before_intent_write")]
+    [Xunit.InlineData(new[] { "progress", "1", "failed", "must not enqueue", "--goal" }, "requires")]
+    [Xunit.InlineData(new[] { "retry", "--goal", "38d0e2e9", "1", "must not enqueue", "--goal", "b4ae70ef" }, "only once")]
+    public async Task PersistentRunnerRejectsMalformedExplicitGoalBeforeIntentWrite(
+        string[] args,
+        string expectedError)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            new GoalId("38d0e2e9000000000000000000000001"),
+            "No malformed writes",
+            [new TaskSpec(TaskId.New(), "Task one", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                args,
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.Contains(expectedError, exception.Message, StringComparison.OrdinalIgnoreCase);
+        var intentStore = SqliteOperatorIntentStore.ForDirectories(
+            workspace.OrchestratorDirectory,
+            workspace.LogDirectory);
+        Xunit.Assert.Empty(await intentStore.ListForGoalAsync(goal.Id.Value));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_rejects_task_absent_from_explicit_goal_before_intent_write")]
+    public async Task PersistentRunnerRejectsTaskAbsentFromExplicitGoalBeforeIntentWrite()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            new GoalId("38d0e2e9000000000000000000000001"),
+            "No absent task writes",
+            [new TaskSpec(TaskId.New(), "Only task", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(goal.Id, agents);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+
+        var exception = Xunit.Assert.Throws<KeyNotFoundException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["progress", "2", "failed", "--goal", goal.Id.Value, "must not enqueue"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.Contains("Task number '2' was not found", exception.Message, StringComparison.Ordinal);
+        var intentStore = SqliteOperatorIntentStore.ForDirectories(
+            workspace.OrchestratorDirectory,
+            workspace.LogDirectory);
+        Xunit.Assert.Empty(await intentStore.ListForGoalAsync(goal.Id.Value));
+    }
+
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_concurrent_disjoint_goal_progress_appends_without_state_writes")]
     public async Task PersistentRunnerConcurrentDisjointGoalProgressAppendsWithoutStateWrites()

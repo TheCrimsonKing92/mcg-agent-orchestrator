@@ -2,6 +2,10 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 
 internal static partial class CliArgumentParser
 {
+internal sealed record GoalScopedTaskTargetArgs(
+    IReadOnlyList<string> Parts,
+    string? ExplicitGoalSelector);
+
 public static IReadOnlyList<string> NormalizeArgs(string[] args)
 {
     var command = args[0];
@@ -502,15 +506,70 @@ private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int 
         return args;
     }
 
-    if (allowTextFile && args.Any(arg => arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase)))
+    var target = ParseGoalScopedTaskTargetArgs(args);
+    if (allowTextFile && target.Parts.Any(arg => arg.Equals("--text-file", StringComparison.OrdinalIgnoreCase)))
     {
-        return args;
+        return target.Parts;
     }
 
-    var remainder = string.Join(' ', args.Skip(1));
+    var remainder = string.Join(' ', target.Parts.Skip(1));
     return allowTextFile
-        ? SplitTaskTargetCommandWithTextFileFlag(args[0], remainder, trailingArgumentCount)
-        : SplitTaskTargetCommand(args[0], remainder, trailingArgumentCount);
+        ? SplitTaskTargetCommandWithTextFileFlag(target.Parts[0], remainder, trailingArgumentCount)
+        : SplitTaskTargetCommand(target.Parts[0], remainder, trailingArgumentCount);
+}
+
+internal static GoalScopedTaskTargetArgs ParseGoalScopedTaskTargetArgs(IReadOnlyList<string> args)
+{
+    if (args.Count == 0)
+    {
+        return new GoalScopedTaskTargetArgs(args, ExplicitGoalSelector: null);
+    }
+
+    if (args.Skip(1).Any(arg => arg.StartsWith("--goal=", StringComparison.OrdinalIgnoreCase)))
+    {
+        throw new ArgumentException("Use --goal <goal-id-or-prefix>; inline --goal=<value> is not supported.");
+    }
+
+    var goalOptionIndices = Enumerable.Range(1, args.Count - 1)
+        .Where(index => args[index].Equals("--goal", StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+    if (goalOptionIndices.Length == 0)
+    {
+        return new GoalScopedTaskTargetArgs(args, ExplicitGoalSelector: null);
+    }
+
+    if (goalOptionIndices.Length > 1)
+    {
+        throw new ArgumentException("Provide --goal only once.");
+    }
+
+    var goalOptionIndex = goalOptionIndices[0];
+    if (goalOptionIndex + 1 >= args.Count ||
+        string.IsNullOrWhiteSpace(args[goalOptionIndex + 1]) ||
+        args[goalOptionIndex + 1].StartsWith("--", StringComparison.Ordinal))
+    {
+        throw new ArgumentException("--goal requires a goal id or unique prefix.");
+    }
+
+    var selector = args[goalOptionIndex + 1];
+    var canonical = new List<string>(args.Count)
+    {
+        args[0],
+        "--goal",
+        selector
+    };
+    for (var index = 1; index < args.Count; index++)
+    {
+        if (index == goalOptionIndex)
+        {
+            index++;
+            continue;
+        }
+
+        canonical.Add(args[index]);
+    }
+
+    return new GoalScopedTaskTargetArgs(canonical, selector);
 }
 
 private static IReadOnlyList<string> NormalizeObjectiveCommandWithFlags(string[] args)
