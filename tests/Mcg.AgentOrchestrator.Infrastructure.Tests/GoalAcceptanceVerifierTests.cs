@@ -2288,11 +2288,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         const string providerProject =
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/" +
             "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
+        const string secondProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondModule/" +
+            "Mcg.AgentOrchestrator.Infrastructure.SecondModule.Tests.csproj";
         var settings = new AcceptanceGateEngineSettings
         {
             MtpInvocations =
             [
-                new AcceptanceMtpInvocation { Project = providerProject }
+                new AcceptanceMtpInvocation { Project = providerProject },
+                new AcceptanceMtpInvocation { Project = secondProject }
             ]
         };
 
@@ -2302,6 +2306,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             out var resolved));
         Assert.Equal(providerProject, resolved);
         Assert.Equal("Infrastructure.ProviderEnvironment.Tests", GoalAcceptanceVerifier.ProjectLabel(resolved));
+        Assert.True(GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+            "Infrastructure.SecondModule.Tests",
+            settings,
+            out resolved));
+        Assert.Equal(secondProject, resolved);
     }
 
     [Xunit.Fact]
@@ -2372,6 +2381,82 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var check = Assert.Single(result.Checks);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests", check.Name, StringComparison.Ordinal);
             Assert.DoesNotContain(calls, call => IsMtpExecutableCall(
+                call,
+                "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+            Assert.Single(calls, call => IsMtpExecutableCall(
+                call,
+                "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goalId);
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_UmbrellaAliasSplitsParentAndMovedClassesByOwningProject()
+    {
+        var calls = new List<string[]>();
+        var root = CreateManifestWorkspace("""
+            {
+              "version": 1,
+              "engine": {
+                "mtpInvocations": [
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [ "{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests", "1" ]
+                  },
+                  {
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "arguments": [ "{executable}", "--results-directory", "{resultsDirectory}", "--report-trx-filename", "{trxFileName}", "--minimum-expected-tests", "1" ]
+                  }
+                ]
+              },
+              "checks": [],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+        var providerDirectory = Path.Combine(
+            root,
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "ProviderEnvironment");
+        Directory.CreateDirectory(providerDirectory);
+        File.WriteAllText(
+            Path.Combine(providerDirectory, "ProviderDefaultTests.cs"),
+            "sealed class ProviderDefaultTests { }");
+        var goalId = new GoalId(Guid.NewGuid().ToString("N"));
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests") ||
+                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunFocusedEvidenceAsync(
+                root,
+                goalId,
+                "Infrastructure.Tests: GoalAcceptanceVerifierTests,ProviderDefaultTests");
+
+            Assert.True(result.Accepted);
+            Assert.True(result.Passed);
+            Assert.Equal(2, result.Checks.Count);
+            var target = Assert.Single(result.Coverage?.TargetToChecks ?? []);
+            Assert.Equal(2, target.CheckNames.Count);
+            Assert.Single(calls, call => IsMtpExecutableCall(
                 call,
                 "Mcg.AgentOrchestrator.Infrastructure.Tests"));
             Assert.Single(calls, call => IsMtpExecutableCall(

@@ -61,6 +61,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, string, DotnetBuildEnvironmentLease?, CancellationToken, FocusedEvidenceRunResult> _runDualArmFocusedEvidence;
     private readonly bool _focusedEvidenceRunnerConfigured;
     private readonly Func<Goal, PreReviewEvidenceContext> _getPreReviewEvidenceContext;
+    private readonly Func<Goal, AcceptanceGateEngineSettings> _getFindingEvidenceEngineSettings;
     private readonly Action<GoalId, TaskId, PreReviewEvidenceReceipt> _recordPreReviewEvidence;
     private readonly Action<GoalId, TaskId, string, int> _recordPreReviewMappingEscalationSuppressed;
     private readonly Func<GoalId, TaskId, string, RetryRoundKind?, TaskSpec> _retryTask;
@@ -740,6 +741,8 @@ internal sealed class ConductorDriver
             BuildPreReviewEvidenceContext(
                 TryResolveAcceptanceBranchHead(goal),
                 _getLandingFileScopes(goal));
+        _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
+            GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
     }
 
     internal static LandingEscalationRecheckResult ClassifyPreLandingRebaseConflict(
@@ -830,7 +833,8 @@ internal sealed class ConductorDriver
         Func<Goal, LandingEscalationRecheckResult>? recheckPreLandingRebaseConflict = null,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
-        Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null)
+        Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
+        Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -866,6 +870,8 @@ internal sealed class ConductorDriver
                 MappingReason: "test constructor supplied no changed-file mapping",
                 NoApplicableTests: true,
                 MappingNeedsInput: false));
+        _getFindingEvidenceEngineSettings = getFindingEvidenceEngineSettings ??
+            (_ => new AcceptanceGateEngineSettings());
         _recordPreReviewEvidence = recordPreReviewEvidence ?? ((_, _, _) => { });
         _recordPreReviewMappingEscalationSuppressed = recordPreReviewMappingEscalationSuppressed ?? ((_, _, _, _) => { });
         _retryTask = retryTaskWithRoundKind
@@ -1633,7 +1639,8 @@ internal sealed class ConductorDriver
         foreach (var finding in requestingFindings)
         {
             if (!TryNormalizeFindingEvidenceRequest(
-                    finding.EvidenceRequest!, out var typedRequest, out var request,
+                    finding.EvidenceRequest!, _getFindingEvidenceEngineSettings(goal),
+                    out var typedRequest, out var request,
                     out var refusalReason, out var refusalDetail))
             {
                 RecordNotHonoured(
@@ -1808,6 +1815,7 @@ internal sealed class ConductorDriver
 
     private static bool TryNormalizeFindingEvidenceRequest(
         FindingEvidenceRequest request,
+        AcceptanceGateEngineSettings engineSettings,
         out FindingEvidenceRequest normalized,
         out string executorRequest,
         out FindingEvidenceNotHonouredReason refusalReason,
@@ -1840,7 +1848,10 @@ internal sealed class ConductorDriver
                 return false;
             }
 
-            if (!GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(project, out var resolvedProject))
+            if (!GoalAcceptanceVerifier.TryResolveFocusedEvidenceProject(
+                    project,
+                    engineSettings,
+                    out var resolvedProject))
             {
                 refusalReason = FindingEvidenceNotHonouredReason.UnsupportedProject;
                 refusalDetail =

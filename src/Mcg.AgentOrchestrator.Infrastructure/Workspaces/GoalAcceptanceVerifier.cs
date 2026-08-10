@@ -1454,16 +1454,26 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 return false;
             }
 
+            totalTargets += targetCount;
             if (filter is not null && IsInfrastructureTestProject(project))
             {
-                project = ResolveExtractedFocusedEvidenceProject(
-                    worktreePath,
-                    engineSettings,
-                    filter) ?? project;
-            }
+                if (!TryExpandExtractedFocusedEvidenceProjects(
+                        worktreePath,
+                        engineSettings,
+                        project,
+                        filter,
+                        out var projectArms,
+                        out rejection))
+                {
+                    return false;
+                }
 
-            totalTargets += targetCount;
-            validated.Add((item, project, filter));
+                validated.AddRange(projectArms.Select(arm => (item, arm.Project, arm.Filter)));
+            }
+            else
+            {
+                validated.Add((item, project, filter));
+            }
         }
 
         // Historical rule: more than four focused targets collapsed to one whole-project check per
@@ -1483,7 +1493,6 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // four-lane concurrency. The operator receipt must replace these predictions with measured
         // wall-clock and tests_executed for both exact target sets.
         var built = new List<AcceptanceManifestCheck>();
-        var targetToChecks = new List<FocusedEvidenceTargetCoverage>();
         foreach (var item in validated)
         {
             var check = new AcceptanceManifestCheck
@@ -1503,8 +1512,15 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 TimeoutMinutes = totalTargets <= FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
             };
             built.Add(check);
-            targetToChecks.Add(new FocusedEvidenceTargetCoverage(item.Target, [check.Name]));
         }
+
+        var targetToChecks = validated
+            .Select((item, index) => (item.Target, CheckName: built[index].Name))
+            .GroupBy(item => item.Target, StringComparer.Ordinal)
+            .Select(group => new FocusedEvidenceTargetCoverage(
+                group.Key,
+                group.Select(item => item.CheckName).ToArray()))
+            .ToArray();
 
         var hasFocusedFilters = validated.Any(item => item.Filter is not null);
         var hasMappedProjects = validated.Any(item => item.Filter is null);
@@ -1560,6 +1576,81 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return matchingProjects.Length == 1 ? matchingProjects[0] : null;
     }
 
+    private static bool TryExpandExtractedFocusedEvidenceProjects(
+        string worktreePath,
+        AcceptanceGateEngineSettings engineSettings,
+        string umbrellaProject,
+        string filter,
+        out IReadOnlyList<(string Project, string Filter)> arms,
+        out string rejection)
+    {
+        arms = [];
+        rejection = string.Empty;
+        var tokens = filter.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var classTokens = tokens
+            .Select(token => (Token: token, Match: Regex.Match(
+                token,
+                @"^FullyQualifiedName~(?<value>[A-Za-z_][A-Za-z0-9_.]*)$",
+                RegexOptions.IgnoreCase)))
+            .ToArray();
+        if (classTokens.Length == 0 || classTokens.Any(item => !item.Match.Success))
+        {
+            var extractedProject = ResolveExtractedFocusedEvidenceProject(
+                worktreePath,
+                engineSettings,
+                filter);
+            arms = [(extractedProject ?? umbrellaProject, filter)];
+            return true;
+        }
+
+        var extractedProjects = engineSettings.MtpInvocations
+            .Select(invocation => NormalizePath(invocation.Project))
+            .Where(project => IsExtractedInfrastructureTestProject(project!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var grouped = new List<(string Project, List<string> Filters)>();
+        foreach (var item in classTokens)
+        {
+            var classFileName = item.Match.Groups["value"].Value.Split('.').Last() + ".cs";
+            var matchingProjects = extractedProjects
+                .Where(project =>
+                {
+                    var projectDirectory = Path.GetDirectoryName(Path.Combine(
+                        worktreePath,
+                        project!.Replace('/', Path.DirectorySeparatorChar)));
+                    return !string.IsNullOrWhiteSpace(projectDirectory) &&
+                        Directory.Exists(projectDirectory) &&
+                        Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
+                            .Any(path => Path.GetFileName(path).Equals(
+                                classFileName,
+                                StringComparison.OrdinalIgnoreCase));
+                })
+                .ToArray();
+            if (matchingProjects.Length > 1)
+            {
+                rejection =
+                    $"focused evidence class '{item.Match.Groups["value"].Value}' is present in multiple registered extracted projects";
+                return false;
+            }
+
+            var owningProject = matchingProjects.SingleOrDefault() ?? umbrellaProject;
+            var group = grouped.FirstOrDefault(candidate => candidate.Project.Equals(
+                owningProject,
+                StringComparison.OrdinalIgnoreCase));
+            if (group.Filters is null)
+            {
+                group = (owningProject, []);
+                grouped.Add(group);
+            }
+            group.Filters.Add(item.Token);
+        }
+
+        arms = grouped
+            .Select(group => (group.Project, string.Join("|", group.Filters)))
+            .ToArray();
+        return true;
+    }
+
     internal static bool TryResolveFocusedEvidenceProject(
         string alias,
         out string project) =>
@@ -1575,10 +1666,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             "Core.Tests" or "Core" or "Mcg.AgentOrchestrator.Core.Tests" => CoreTestsProject,
             "Infrastructure.Tests" or "Infrastructure" or "Mcg.AgentOrchestrator.Infrastructure.Tests" => InfrastructureTestsProject,
-            "Infrastructure.ProviderEnvironment.Tests" or "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests" => ProviderEnvironmentTestsProject,
             _ when normalized.EndsWith(CoreTestsProject, StringComparison.OrdinalIgnoreCase) => CoreTestsProject,
             _ when normalized.EndsWith(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase) => InfrastructureTestsProject,
-            _ when normalized.EndsWith(ProviderEnvironmentTestsProject, StringComparison.OrdinalIgnoreCase) => ProviderEnvironmentTestsProject,
             _ => string.Empty
         };
         if (project.Length > 0)

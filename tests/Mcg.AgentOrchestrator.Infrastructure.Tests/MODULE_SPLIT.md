@@ -24,8 +24,10 @@ The 3,367-test figure in the goal text is stale for this HEAD. A temporary pre-s
 the same source set discovered 3,375 unattended cases through the 18 original manifest filters after the
 gate's HostIntegration and AcceptanceOptIn exclusions. After extraction, the 17 parent lanes discover
 3,357 cases and the new broad project discovers 18, for the same 3,375 aggregate. The temporary baseline
-project was removed after the comparison. Executed-count evidence is recorded below; discovery alone is
-not treated as proof that the move preserved execution.
+project was removed after the comparison, so 3,375 is a historical receipt rather than a reproducible
+checked-in baseline artifact; the post-split 3,357+18 side remains reproducible from the manifest and two
+checked-in projects. Executed-count evidence is recorded below; discovery alone is not treated as proof
+that the move preserved execution.
 
 | Executed slice | Command shape | Total | Passed | Failed | Skipped |
 | --- | --- | ---: | ---: | ---: | ---: |
@@ -52,7 +54,10 @@ The exact second command was
 it exited 0 with zero errors. Both the hash and timestamp remained unchanged, demonstrating that the
 unrelated parent test-module build did not rewrite the extracted output. The policy regression
 `GoalAcceptanceVerifier_skips_extracted_project_for_unrelated_parent_test_change` separately requires the
-gate to emit a dependency-closure skip receipt without invoking the extracted executable.
+gate to emit a dependency-closure skip receipt without invoking the extracted executable. With the live
+manifest's `enforceStructuralCoverage: true`, structural coverage later re-adds a broad execution check for
+every trusted project, so that policy-level skip is not a production gate-run avoidance receipt; the
+unchanged extracted output hash above is the independent build-graph-skipping evidence for this criterion.
 
 ## Proposed projects after the first slice
 
@@ -71,9 +76,15 @@ gate to emit a dependency-closure skip receipt without invoking the extracted ex
 | Remainder balance B | Split by ownership, never copied as a lane | `RunGoalService`, monitoring, and operator-channel cases join GoalLifecycle; verification/dispatch-recovery cases join WorkerRuntime; toolchain, isolated-dotnet, alias, and egress-proxy cases join ProcessAndToolchain; state/performance joins Persistence; Discord joins Integrations; progressive-review glance joins ReviewWorkflow. |
 | Remainder | Split into `Infrastructure.Planning.Tests`, `Infrastructure.Persistence.Tests`, `Infrastructure.Integrations.Tests`, `Infrastructure.ReviewWorkflow.Tests`, and `Infrastructure.TestHarness.Tests` | Assign by production namespace and fixture: goal/DAG/refinement/portfolio classes to Planning; stores and decision spine to Persistence; Discord/provider integrations to Integrations; pre-review/steward/provenance/model-outcome classes to ReviewWorkflow; source guards, baseline, test-coverage, and runner contract classes to TestHarness. Generate positive class filters during each extraction; do not preserve the negative catch-all. |
 
-Each later extraction follows the same gate: one project, one positive manifest check, an explicit MTP
-invocation, unchanged aggregate TRX count, and a cached-output receipt showing an unrelated module change
-does not rewrite the extracted assembly.
+Each later extraction follows the same gate: nest the project below
+`tests/Mcg.AgentOrchestrator.Infrastructure.Tests/` and name it
+`Mcg.AgentOrchestrator.Infrastructure.<Module>.Tests.csproj`, add one positive manifest check and an
+explicit MTP invocation, prove the reviewer evidence alias resolves from that invocation (including through
+the Conductor request contract), record an unchanged aggregate TRX count, and retain a cached-output receipt
+showing an unrelated module change does not rewrite the extracted assembly. The nesting/name convention is
+required by `IsExtractedInfrastructureTestProject`; a sibling project is trusted discovery input but is not
+treated as an extracted Infrastructure module. Add the project to the explicit dependency graph until that
+graph becomes manifest-driven.
 
 The two first-slice helpers are intentionally module-local while only one extracted project exists. Before
 the next extraction copies either helper again, create a non-test `Infrastructure.Testing` support project,
