@@ -1490,7 +1490,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         CreateVersion7StateOutboxFixture(workspace.SqliteStatePath);
         Xunit.Assert.False(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
-        var missingColumn = Xunit.Assert.Throws<Microsoft.Data.Sqlite.SqliteException>(() => CaptureConsole(() =>
+        var deliveryError = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
             CliPersistentStateRunner.ExecuteCommand(
                 ["goal-delivery-retry", created.Id.Value],
                 repository,
@@ -1499,6 +1499,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 providers,
                 ref profiles,
                 ref currentGoal)));
+        var missingColumn = Xunit.Assert.IsType<Microsoft.Data.Sqlite.SqliteException>(deliveryError.InnerException);
         Xunit.Assert.Contains("no such column: quarantined_at", missingColumn.Message, StringComparison.Ordinal);
         ProgramStartupLifecycle.EnsureStateDbInitialized(["conduct", "--loop"], workspace);
         Xunit.Assert.True(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
