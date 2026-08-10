@@ -37,6 +37,45 @@ public static class AcceptanceFailureClassifications
     public const string StructuralCoverageFailed = "structural-coverage-failed";
 }
 
+public sealed class AcceptanceInfrastructureDeferredException : Exception
+{
+    public AcceptanceInfrastructureDeferredException(
+        string reasonCode,
+        int? exitCode,
+        string? outputTail,
+        BuildLockAttribution? buildLockAttribution = null)
+        : base(BuildMessage(reasonCode, exitCode, outputTail, buildLockAttribution))
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reasonCode);
+        ReasonCode = reasonCode;
+        ExitCode = exitCode;
+        OutputTail = outputTail;
+        BuildLockAttribution = buildLockAttribution;
+    }
+
+    public string ReasonCode { get; }
+
+    public int? ExitCode { get; }
+
+    public string? OutputTail { get; }
+
+    public BuildLockAttribution? BuildLockAttribution { get; }
+
+    private static string BuildMessage(
+        string reasonCode,
+        int? exitCode,
+        string? outputTail,
+        BuildLockAttribution? buildLockAttribution)
+    {
+        var detail = buildLockAttribution is null
+            ? outputTail
+            : $"path={buildLockAttribution.Path}; source={buildLockAttribution.Source}";
+        return $"Acceptance infrastructure deferred: reason={reasonCode}; " +
+            $"exit-code={exitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}" +
+            (string.IsNullOrWhiteSpace(detail) ? string.Empty : $"; detail={detail}");
+    }
+}
+
 public sealed record AcceptanceVerificationResult(
     bool Passed,
     bool Skipped,
@@ -535,15 +574,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         if (checks.All(check => check.Passed) && structuralCoverageApplies)
         {
-            checks.Add(await RunStructuralCoverageCheckAsync(
+            var structuralCoverage = await RunStructuralCoverageCheckAsync(
                 effectiveChecks,
                 checks,
                 worktreePath,
                 changedFiles,
+                goalId,
                 stableSlotIndex,
                 stableSlotLease,
                 partitionVerdictCache?.AttemptId,
-                cancellationToken).ConfigureAwait(false));
+                cancellationToken).ConfigureAwait(false);
+            checks.Add(structuralCoverage);
+            retried |= structuralCoverage.LockRemediationApplied;
         }
 
         if (checks.All(check => check.Passed) && ProposalValidationApplies(worktreePath, changedFiles))
@@ -4633,11 +4675,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         cached.TestResultPaths is { Count: > 0 } &&
         cached.TestResultPaths.All(path => TryGetFileLength(path) > 0);
 
-    private async Task<AcceptanceCheckResult> RunStructuralCoverageCheckAsync(
+    internal async Task<AcceptanceCheckResult> RunStructuralCoverageCheckAsync(
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks,
         IReadOnlyList<AcceptanceCheckResult> completedChecks,
         string worktreePath,
         IReadOnlyList<string>? changedFiles,
+        GoalId? goalId,
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         string? currentAttemptId,
@@ -4646,12 +4689,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
         if (string.IsNullOrWhiteSpace(mainWorktreePath))
         {
-            return new AcceptanceCheckResult(
-                "structural test coverage",
-                false,
-                1,
-                "Trusted main worktree could not be resolved for cross-generation discovery.",
-                ResultSummary: "main discovery unavailable");
+            throw new AcceptanceInfrastructureDeferredException(
+                "trusted-main-worktree-unavailable",
+                exitCode: null,
+                outputTail: "Trusted main worktree could not be resolved for cross-generation discovery.");
         }
 
         var broadChecks = DiscoverTrustedTestProjects(worktreePath, mainWorktreePath)
@@ -4668,11 +4709,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var environment = ResolveExecutionEnvironment(
-            null,
+            goalId,
             "acceptance-coverage-discovery",
             stableSlotIndex,
             stableSlotLease);
         var allSummaries = new List<string>();
+        var baselineLockRemediationApplied = false;
         foreach (var broadCheck in broadChecks)
         {
             var deletedTestFiles = ResolveDeletedTestFiles(worktreePath, broadCheck.Project!);
@@ -4703,65 +4745,89 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             if (File.Exists(mainProjectPath))
             {
                 var mainArtifactsPath = Path.Combine(environment.ArtifactsPath, "main-coverage-baseline");
+                var mainEnvironment = environment.DeriveArtifactsPath(mainArtifactsPath);
                 var mainBuildArguments = new[]
                 {
                     "dotnet",
                     "build",
                     broadCheck.Project,
-                    "--artifacts-path",
-                    mainArtifactsPath,
                     "--verbosity",
                     "minimal"
                 };
-                var mainBuildPermit = stableSlotLease?.IsExecutionLockHeld == true
-                    ? null
-                    : DotnetBuildEnvironmentManager.AcquireLeaseExecutionPermit(
-                        environment,
-                        cancellationToken,
-                        _timeProvider,
-                        _leaseSleep);
-                CommandResult mainBuild;
+                AcceptanceCheckResult mainBuild;
                 try
                 {
-                    mainBuild = await _runner(
+                    var managedBuild = await RunManagedDotnetCheckAsync(
+                        broadCheck,
                         mainBuildArguments,
                         mainWorktreePath,
-                        EngineSettings.ResolveCheckTimeout(broadCheck.TimeoutMinutes),
-                        cancellationToken)
+                        goalId,
+                        stableSlotIndex,
+                        stableSlotLease,
+                        "acceptance-main-coverage-baseline",
+                        cancellationToken,
+                        executionEnvironment: mainEnvironment)
                         .ConfigureAwait(false);
+                    mainBuild = managedBuild.Result;
+                    baselineLockRemediationApplied |= managedBuild.Retried;
                 }
-                finally
+                catch (BuildLockBlockedException ex)
                 {
-                    mainBuildPermit?.Dispose();
+                    throw new AcceptanceInfrastructureDeferredException(
+                        "trusted-main-build-lock",
+                        exitCode: null,
+                        outputTail: null,
+                        buildLockAttribution: ex.Attribution);
+                }
+                catch (Exception ex) when (
+                    IsBuildArtifactIoException(ex) &&
+                    ex is not DotnetBuildSlotsBusyException)
+                {
+                    throw new AcceptanceInfrastructureDeferredException(
+                        "trusted-main-build-io",
+                        exitCode: null,
+                        outputTail: ex.Message);
                 }
 
-                if (mainBuild.ExitCode != 0)
+                if (!mainBuild.Passed)
                 {
-                    return new AcceptanceCheckResult(
-                        $"structural test coverage: {broadCheck.Name}",
-                        false,
+                    throw new AcceptanceInfrastructureDeferredException(
+                        mainBuild.ResultSummary?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true
+                            ? "trusted-main-build-timeout"
+                            : "trusted-main-build-failed",
                         mainBuild.ExitCode,
-                        TailOutput(mainBuild.Output),
-                        ResultSummary: "trusted main baseline build failed");
+                        mainBuild.OutputTail);
                 }
 
                 var mainDiscoveryArguments = BuildUnattendedDiscoveryArguments(
                     broadCheck,
                     EngineSettings,
-                    environment with { ArtifactsPath = mainArtifactsPath });
-                var mainDiscovery = await _runner(
-                    mainDiscoveryArguments,
-                    mainWorktreePath,
-                    EngineSettings.ResolveDiscoveryTimeout(),
-                    cancellationToken).ConfigureAwait(false);
-                if (mainDiscovery.ExitCode != 0)
+                    mainEnvironment);
+                CommandResult mainDiscovery;
+                try
                 {
-                    return new AcceptanceCheckResult(
-                        $"structural test coverage: {broadCheck.Name}",
-                        false,
+                    mainDiscovery = await _runner(
+                        mainDiscoveryArguments,
+                        mainWorktreePath,
+                        EngineSettings.ResolveDiscoveryTimeout(),
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (IsBuildArtifactIoException(ex))
+                {
+                    throw new AcceptanceInfrastructureDeferredException(
+                        "trusted-main-discovery-io",
+                        exitCode: null,
+                        outputTail: ex.Message);
+                }
+
+                if (mainDiscovery.TimedOut || mainDiscovery.ExitCode != 0)
+                {
+                    throw new AcceptanceInfrastructureDeferredException(
+                        mainDiscovery.TimedOut
+                            ? "trusted-main-discovery-timeout"
+                            : "trusted-main-discovery-failed",
                         mainDiscovery.ExitCode,
-                        TailOutput(mainDiscovery.Output),
-                        ResultSummary: "trusted main discovery failed");
+                        TailOutput(mainDiscovery.Output));
                 }
 
                 discoveryDecodeFault |= mainDiscovery.Output.Contains('\uFFFD', StringComparison.Ordinal);
@@ -4818,6 +4884,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     false,
                     1,
                     string.Join(Environment.NewLine, details),
+                    LockRemediationApplied: baselineLockRemediationApplied,
                     ResultSummary: coverage.Summary,
                     FailureClassification: coverage.FailureClassification);
             }
@@ -4830,6 +4897,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             true,
             0,
             null,
+            LockRemediationApplied: baselineLockRemediationApplied,
             ResultSummary: string.Join("; ", allSummaries));
     }
 

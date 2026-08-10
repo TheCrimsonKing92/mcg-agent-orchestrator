@@ -233,6 +233,25 @@ internal static bool RunAcceptanceWorkspaceMergeCore(CliExecutionContext context
                         AppendConductEvent(context, "gate-progress", goal.Id, FormatGateProgressConductEvent(progress)));
                     verification = context.AcceptanceVerifier.RunAsync(worktreePath, goal.Id, changedFiles, stableSlotIndex, stableSlotLease).GetAwaiter().GetResult();
                 }
+                catch (AcceptanceInfrastructureDeferredException ex)
+                {
+                    var deferredLine =
+                        $"ACCEPTANCE_INFRASTRUCTURE_DEFERRED goal={goal.Id.Value[..8]} " +
+                        $"reason={ex.ReasonCode} detail=\"{EscapeBlockerDetail(ex.Message)}\"";
+                    Console.WriteLine(deferredLine);
+                    AppendConductEvent(context, "infrastructure-deferral", goal.Id, deferredLine);
+                    Console.WriteLine("Acceptance verification: trusted baseline infrastructure unavailable; goal remains ready and will retry on a later conduct tick.");
+                    GoalOperationJournal.AcceptanceBlocked(
+                        context.Workspace.ExecutionDirectory,
+                        goal,
+                        "acceptance",
+                        $"INFRASTRUCTURE_DEFERRED:{ex.ReasonCode}",
+                        testedWorktreeHead,
+                        testedMainHead,
+                        $"Acceptance blocked:INFRASTRUCTURE_DEFERRED:{ex.ReasonCode} for candidate {FormatAcceptanceCandidate(testedWorktreeHead, testedMainHead)}: {ex.Message}",
+                        acceptanceAttemptStartedAt);
+                    return false;
+                }
                 catch (BuildLockBlockedException ex)
                 {
                     var blockedLine = $"BUILD_LOCK_BLOCKED goal={goal.Id.Value[..8]} {FormatBuildLockBlocked(ex.Attribution)}";
