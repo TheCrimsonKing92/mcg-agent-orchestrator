@@ -191,11 +191,17 @@ private const int PlanSampleCount = 3;
 
 private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string> parts)
 {
-    CliArgumentParser.RequirePartCount(parts, 2, "plan <direction> [--confirm-plan]");
+    CliArgumentParser.RequirePartCount(parts, 2, "plan <direction> [--slice-batch] [--confirm-plan]");
     var direction = parts[1];
     var confirmPlan = HasCliConfirmation(parts, "--confirm-plan");
+    var sliceBatch = HasCliConfirmation(parts, "--slice-batch");
 
-    var objPlan = BuildGoalObjectivePlan(context, direction, simple: true);
+    var objPlan = sliceBatch
+        ? GoalObjectivePlanner.Build(
+            direction,
+            GoalIntakePipeline.DeveloperReviewer,
+            context.Kernel.BuildTaskDurationStats())
+        : BuildGoalObjectivePlan(context, direction, simple: true);
     GoalObjectivePlanner.ThrowIfBlocked(objPlan);
     ConsoleViews.PrintGoalObjectivePlan(objPlan);
 
@@ -205,28 +211,66 @@ private static bool HandlePlan(CliExecutionContext context, IReadOnlyList<string
         var sampleKernel = new AgentOrchestratorKernel();
         var sampleTaskSpec = new TaskSpec(
             TaskId.New(),
-            GoalDagDecompositionPlanner.BuildPrompt(direction),
+            GoalDagDecompositionPlanner.BuildPrompt(direction, sliceBatch),
             AgentRole.Planner,
             "Output only a fenced JSON array of nodes with id, objective, and dependsOn fields.");
         var sampleGoal = sampleKernel.CreateGoal(direction, [sampleTaskSpec]);
         sampleKernel.ActivateGoal(sampleGoal.Id, context.Agents);
         var sampleRunner = new AgentTaskRunner(sampleKernel, context.Agents, context.Providers);
         return sampleRunner.RunAsync(sampleGoal.Id, sampleTaskSpec.Id)
-            .ContinueWith(__ => GoalDagDecompositionPlanner.Parse(
-                direction, sampleTaskSpec.LastExecution?.Output ?? string.Empty),
+            .ContinueWith(__ =>
+                {
+                    var candidate = GoalDagDecompositionPlanner.Parse(
+                        direction,
+                        sampleTaskSpec.LastExecution?.Output ?? string.Empty);
+                    return sliceBatch
+                        ? GoalDagDecompositionPlanner.ValidateSliceBatch(candidate)
+                        : candidate;
+                },
                 TaskScheduler.Default);
     }).ToArray();
 
     var candidates = Task.WhenAll(sampleTasks).GetAwaiter().GetResult();
     var dagPlan = GoalDagDecompositionPlanner.SelectBestOfN(candidates);
-    ConsoleViews.PrintGoalDagPlan(dagPlan);
+    ConsoleViews.PrintGoalDagPlan(dagPlan, sliceBatch);
 
     if (!confirmPlan)
         return false;
 
     if (!dagPlan.IsValid)
-        throw new InvalidOperationException(
-            $"Plan has {dagPlan.ValidationErrors.Count} validation error(s); inspect the preview and fix the direction before confirming.");
+        throw new InvalidOperationException(sliceBatch
+            ? $"Slice-batch plan rejected before goal creation: {string.Join(" | ", dagPlan.ValidationErrors)}"
+            : $"Plan has {dagPlan.ValidationErrors.Count} validation error(s); inspect the preview and fix the direction before confirming.");
+
+    if (sliceBatch)
+    {
+        var parent = GoalLifecycleCommands.CreateDormantGoal(
+            context.Kernel,
+            direction,
+            GoalIntakePipeline.DeveloperReviewer,
+            context.Workspace,
+            context.Providers,
+            context.EventWriter);
+        context.CurrentGoal = parent;
+        Console.WriteLine($"Created dormant slice-batch parent {parent.Id.Value}.");
+
+        foreach (var node in dagPlan.Nodes)
+        {
+            var child = GoalLifecycleCommands.CreateDormantGoal(
+                context.Kernel,
+                node.Objective,
+                GoalIntakePipeline.DeveloperOnly,
+                context.Workspace,
+                context.Providers,
+                context.EventWriter,
+                parent.Id);
+            Console.WriteLine($"Created dormant slice-batch child {child.Id.Value} for plan node {node.Id}.");
+        }
+
+        Console.WriteLine(
+            "Execution, child merging, and shared-gate consolidation are not enabled until the later wiring increment.");
+        return true;
+    }
 
     var goalIds = new Dictionary<string, GoalId>(StringComparer.OrdinalIgnoreCase);
     foreach (var node in dagPlan.Nodes)

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -30,6 +31,27 @@ internal static class GoalDagDecompositionPlanner
         Example:
         ```json
         [{"id":"g1","objective":"Set up data model","dependsOn":[]},{"id":"g2","objective":"Implement service","dependsOn":["g1"]}]
+        ```
+        """;
+
+    public static string BuildPrompt(string direction, bool sliceBatch) =>
+        sliceBatch ? BuildSliceBatchPrompt(direction) : BuildPrompt(direction);
+
+    private static string BuildSliceBatchPrompt(string direction) => $$"""
+        Decompose the following direction into 2-4 file-disjoint Developer slice goals.
+        Output ONLY a fenced JSON array (```json ... ```) where each element has:
+        - "id": short unique label (e.g. "g1", "g2")
+        - "objective": clear, actionable single-goal description containing this exact scope block:
+          Target files/scopes:
+          Scope confidence: precise
+          Includes:
+          - <repository-relative path>
+        - "dependsOn": an empty array
+        Rules: use 2-4 nodes, no dependency edges, and precise repository paths that do not overlap between nodes.
+        Direction: {{direction}}
+        Example:
+        ```json
+        [{"id":"g1","objective":"Implement model changes.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/Product/Model.cs","dependsOn":[]},{"id":"g2","objective":"Implement CLI changes.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/Product/Cli.cs","dependsOn":[]}]
         ```
         """;
 
@@ -65,6 +87,81 @@ internal static class GoalDagDecompositionPlanner
         }
         return best ?? candidates[0];
     }
+
+    public static GoalDagPlan ValidateSliceBatch(GoalDagPlan plan)
+    {
+        var errors = plan.ValidationErrors.ToList();
+        if (plan.Nodes.Count is < 2 or > 4)
+        {
+            errors.Add($"Slice-batch plan must contain 2-4 nodes; found {plan.Nodes.Count}.");
+        }
+
+        foreach (var duplicateId in plan.Nodes
+                     .GroupBy(node => node.Id, StringComparer.OrdinalIgnoreCase)
+                     .Where(group => group.Count() > 1)
+                     .Select(group => group.Key))
+        {
+            errors.Add($"Slice-batch node id '{duplicateId}' is duplicated.");
+        }
+
+        foreach (var node in plan.Nodes)
+        {
+            foreach (var dependency in node.DependsOn)
+            {
+                errors.Add($"Slice-batch node '{node.Id}' has forbidden dependency edge '{node.Id} -> {dependency}'.");
+            }
+        }
+
+        var scopes = new List<SliceBatchScope>();
+        foreach (var node in plan.Nodes)
+        {
+            if (!ContainsDeclarationLine(node.Objective, BacklogIntakePlanner.TargetScopeHeadingLine))
+            {
+                errors.Add($"Slice-batch node '{node.Id}' is missing '{BacklogIntakePlanner.TargetScopeHeadingLine}'.");
+                continue;
+            }
+
+            if (!ContainsDeclarationLine(node.Objective, BacklogIntakePlanner.PreciseScopeMarkerLine))
+            {
+                errors.Add($"Slice-batch node '{node.Id}' has non-precise scope: missing '{BacklogIntakePlanner.PreciseScopeMarkerLine}'.");
+                continue;
+            }
+
+            if (!ContainsDeclarationLine(node.Objective, BacklogIntakePlanner.ScopeIncludesHeadingLine))
+            {
+                errors.Add($"Slice-batch node '{node.Id}' scope declaration is missing '{BacklogIntakePlanner.ScopeIncludesHeadingLine}'.");
+                continue;
+            }
+
+            var stagedTask = new TaskSpec(TaskId.New(), "Implement the declared slice.", AgentRole.Developer);
+            var stagedGoal = new Goal(GoalId.New(), node.Objective, [stagedTask]);
+            var derivation = GoalFileScopeInference.ForScheduling(stagedGoal, stagedTask);
+            if (derivation.Confidence != RepositoryScopeConfidence.Precise || derivation.Includes.Count == 0)
+            {
+                var reason = derivation.Warnings.Count == 0
+                    ? "no included repository scope resolved"
+                    : string.Join("; ", derivation.Warnings);
+                errors.Add($"Slice-batch node '{node.Id}' scope is {derivation.Confidence}: {reason}.");
+                continue;
+            }
+
+            scopes.Add(new SliceBatchScope(node.Id, derivation.Includes));
+        }
+
+        foreach (var collision in GoalScopeCollisionAdvisor.FindPairwiseOverlaps(scopes))
+        {
+            errors.Add(
+                $"Slice-batch nodes '{collision.LeftNodeId}' ({collision.LeftPath}) and " +
+                $"'{collision.RightNodeId}' ({collision.RightPath}) overlap ({collision.Kind}).");
+        }
+
+        return plan with { ValidationErrors = errors };
+    }
+
+    private static bool ContainsDeclarationLine(string objective, string declaration) =>
+        objective.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n')
+            .Any(line => line.Trim().Equals(declaration, StringComparison.Ordinal));
 
     private static IReadOnlyList<GoalDagNode> ParseNodes(string json)
     {

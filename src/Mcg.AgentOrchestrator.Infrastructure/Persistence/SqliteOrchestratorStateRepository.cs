@@ -1350,6 +1350,12 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             Tasks = mergedTasks,
             Timeline = MergeTimeline(baseline.Timeline, stored.Timeline, current.Timeline),
             DependsOn = PickStoreOwnedList(baseline.DependsOn, stored.DependsOn, current.DependsOn),
+            // Slice-batch ownership is immutable aggregate intake metadata. Operator/store changes win
+            // over a stale conductor tick exactly like the other store-owned snapshot fields.
+            SliceBatchParentId = PickStoreOwned(
+                baseline.SliceBatchParentId,
+                stored.SliceBatchParentId,
+                current.SliceBatchParentId),
             SourceBacklogItemId = mergedSourceBacklogLink.SourceBacklogItemId,
             SourceBacklogCoverage = mergedSourceBacklogLink.SourceBacklogCoverage,
             RefinedSpec = PickStoreOwned(baseline.RefinedSpec, stored.RefinedSpec, current.RefinedSpec),

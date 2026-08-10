@@ -230,6 +230,24 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(TaskComplexity.Simple, restored.GetTask(goal.Id, task.Id).LastExecution!.TaskComplexity);
     }
 
+    [Xunit.Fact(DisplayName = "GoalSliceBatchParent_SnapshotRoundTrip")]
+    public async Task GoalSliceBatchParentSnapshotRoundTrip()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var parent = kernel.CreateGoal("Slice-batch parent");
+        var child = kernel.CreateGoal(
+            "Slice-batch child",
+            [new TaskSpec(TaskId.New(), "Implement child", AgentRole.Developer)],
+            parent.Id);
+
+        await repo.SaveAsync(kernel);
+        var restored = await repo.LoadAsync();
+
+        Assert.Equal(parent.Id, restored.GetGoal(child.Id).SliceBatchParentId);
+        Assert.Null(restored.GetGoal(parent.Id).SliceBatchParentId);
+    }
+
     [Xunit.Fact]
     public async Task SnapshotAggregateViolationRoundTripsThroughSqlite()
     {
@@ -2157,6 +2175,34 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(1, restoredTask.CriterionRetryCount);
         var feedback = Assert.Single(restoredTask.CriterionRetryFeedback);
         Assert.Equal("operator-authored retry feedback", feedback);
+    }
+
+    [Xunit.Fact(DisplayName = "TickMergeSliceBatchParentUsesStoreOwnedPrecedence")]
+    public async Task TickMergeSliceBatchParentUsesStoreOwnedPrecedence()
+    {
+        var repo = new SqliteOrchestratorStateRepository(TempDb());
+        var kernel = new AgentOrchestratorKernel();
+        var baselineParent = kernel.CreateGoal("Baseline parent");
+        var storeParent = kernel.CreateGoal("Store parent");
+        var tickParent = kernel.CreateGoal("Tick parent");
+        var child = kernel.CreateGoal("Child", tasks: null, sliceBatchParentId: baselineParent.Id);
+        await repo.SaveAsync(kernel);
+
+        var baseline = kernel.ExportGoalSnapshot(child.Id);
+        var tickSnapshot = baseline with { SliceBatchParentId = tickParent.Id.Value };
+        await repo.TransactGoalAsync<bool>(
+            child.Id,
+            (stored, _) => Task.FromResult((
+                true,
+                stored! with { SliceBatchParentId = storeParent.Id.Value },
+                true)));
+
+        var results = await repo.SaveGoalSnapshotsWithMergeAsync(
+            [new GoalSnapshotSaveRequest(baseline, tickSnapshot)]);
+
+        Assert.Equal(GoalSnapshotSaveDisposition.Merged, Assert.Single(results).Disposition);
+        var restored = await repo.LoadAsync();
+        Assert.Equal(storeParent.Id, restored.GetGoal(child.Id).SliceBatchParentId);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_tick_merge_keeps_source_link_id_and_coverage_atomic")]
