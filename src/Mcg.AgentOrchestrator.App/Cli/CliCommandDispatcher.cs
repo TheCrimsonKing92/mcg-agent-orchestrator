@@ -33,7 +33,8 @@ public static bool ExecuteCommand(
     TextReader? standardInput = null,
     bool? isStandardInputRedirected = null,
     Action? registerAcceptanceGuardAbort = null,
-    Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null)
+    Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null,
+    Action<Goal>? finalizeGoalCreation = null)
 {
     var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
@@ -60,7 +61,8 @@ public static bool ExecuteCommand(
         standardInput: standardInput,
         isStandardInputRedirected: isStandardInputRedirected,
         registerAcceptanceGuardAbort: registerAcceptanceGuardAbort,
-        prepareAcceptanceMergeGuard: prepareAcceptanceMergeGuard)
+        prepareAcceptanceMergeGuard: prepareAcceptanceMergeGuard,
+        finalizeGoalCreation: finalizeGoalCreation)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),

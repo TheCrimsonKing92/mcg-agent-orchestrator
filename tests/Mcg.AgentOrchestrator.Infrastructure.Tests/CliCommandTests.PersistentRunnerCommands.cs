@@ -865,6 +865,114 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.False(CliPersistentStateRunner.IsAcceptanceCommand([]));
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_routes_all_goal_create_forms_outside_command_transaction")]
+    public void RunnerRoutesAllGoalCreateFormsOutsideCommandTransaction()
+    {
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "Create an inline goal"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "--brief-file", "brief.md"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "--text-file", "brief.md"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "Create a linked goal", "--backlog-item", "abc", "--backlog-coverage", "slice"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "Create and run", "--run"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "Create simply", "--simple"]));
+
+        Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "--from-backlog"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsBacklogIntakeCommand(["goal", "--from-backlog"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal-mark-landed", "abc"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand([]));
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_refinement_allows_concurrent_sqlite_writer")]
+    public async Task PersistentRunnerGoalRefinementAllowsConcurrentSqliteWriter()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("blocking-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var concurrentRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var refiner = new BlockingGoalRefinerProvider();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([refiner]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var createTask = Task.Run(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal", "Implement deterministic unlocked goal refinement"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal)));
+
+        try
+        {
+            Xunit.Assert.True(refiner.Entered.Wait(TimeSpan.FromSeconds(15)), "Goal refinement did not reach the blocking provider.");
+            await concurrentRepository.TransactAsync(
+                (kernel, _) =>
+                {
+                    kernel.CreateGoal("Concurrent conductor-style state writer");
+                    return Task.FromResult((true, true));
+                }).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            refiner.Release.Set();
+        }
+
+        await createTask.WaitAsync(TimeSpan.FromSeconds(15));
+
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Equal(2, restored.Goals.Count);
+        Xunit.Assert.Contains(restored.Goals, goal => goal.Objective == "Concurrent conductor-style state writer");
+        var created = Xunit.Assert.Single(restored.Goals, goal => goal.Objective == "Implement deterministic unlocked goal refinement");
+        Xunit.Assert.NotNull(created.RefinedSpec);
+        Xunit.Assert.Equal(GoalStatus.Active, created.Status);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_rejects_competing_backlog_link_atomically")]
+    public async Task PersistentRunnerGoalCreateRejectsCompetingBacklogLinkAtomically()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Single-consumer backlog source");
+        var repository = new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel());
+        repository.BeforeNextTransaction = stored =>
+        {
+            var competing = stored.CreateGoal("Competing intake winner");
+            stored.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Slice);
+        };
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["goal", "Create one linked goal", "--backlog-item", item.Id, "--backlog-coverage", "slice"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal)));
+
+        Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed", error.Message);
+        Xunit.Assert.Null(currentGoal);
+        var restored = await repository.LoadAsync();
+        var winner = Xunit.Assert.Single(restored.Goals);
+        Xunit.Assert.Equal("Competing intake winner", winner.Objective);
+        Xunit.Assert.Equal(item.Id, winner.SourceBacklogItemId);
+    }
+
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_routes_single_goal_conduct_outside_command_transaction")]
     public void RunnerRoutesSingleGoalConductOutsideCommandTransaction()
@@ -3573,6 +3681,33 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         finally
         {
             CleanupAcceptanceRepository(root, cleanupGoalId);
+        }
+    }
+
+    private sealed class BlockingGoalRefinerProvider : IModelProvider
+    {
+        public string ProviderName => "blocking-refiner";
+
+        public ManualResetEventSlim Entered { get; } = new(initialState: false);
+
+        public ManualResetEventSlim Release { get; } = new(initialState: false);
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            Entered.Set();
+            Release.Wait(cancellationToken);
+            const string response = """
+                ```json
+                {
+                  "behavioralContract": "Create the goal after unlocked refinement.",
+                  "acceptanceCriteria": ["The goal is committed atomically."],
+                  "verificationClass": "TestVerifiable",
+                  "decisions": [],
+                  "forks": []
+                }
+                ```
+                """;
+            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
         }
     }
 

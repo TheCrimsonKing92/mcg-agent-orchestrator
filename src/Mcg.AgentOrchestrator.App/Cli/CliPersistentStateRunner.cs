@@ -156,6 +156,11 @@ internal static class CliPersistentStateRunner
             return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsGoalCreateCommand(args))
+        {
+            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (IsGoalMarkLandedCommand(args))
         {
             return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -571,8 +576,16 @@ internal static class CliPersistentStateRunner
 
     internal static bool IsBacklogIntakeCommand(IReadOnlyList<string> args)
     {
-        return args.Count > 0 && args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase);
+        return args.Count > 0 &&
+            (args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase) ||
+             (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
+              args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))));
     }
+
+    internal static bool IsGoalCreateCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 &&
+        args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
+        !args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase));
 
     internal static bool HasStateDbMigrationAuthority(IReadOnlyList<string> args)
     {
@@ -1578,6 +1591,166 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    private static bool ExecuteGoalCreateOutsideTransaction(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
+    {
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+        GoalSnapshot? committedSnapshot = null;
+
+        void FinalizeGoalCreation(Goal goal)
+        {
+            var preparedSnapshot = kernel.ExportGoalSnapshot(goal.Id);
+            stateRepository.TransactAsync(
+                    (currentKernel, _) =>
+                    {
+                        ValidateGoalCreationPreconditions(currentKernel, preparedSnapshot, workspace);
+                        currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
+                        return Task.FromResult((true, true));
+                    })
+                .GetAwaiter()
+                .GetResult();
+            committedSnapshot = preparedSnapshot;
+        }
+
+        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            ref currentGoal,
+            channel,
+            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+            finalizeGoalCreation: FinalizeGoalCreation);
+
+        if (committedSnapshot is null)
+        {
+            throw new InvalidOperationException("GOAL_CREATE_COMMIT_MISSING reason=finalizer-not-invoked");
+        }
+
+        if (currentGoal is not null)
+        {
+            var finalSnapshot = kernel.ExportGoalSnapshot(currentGoal.Id);
+            if (!string.Equals(
+                    JsonSerializer.Serialize(committedSnapshot),
+                    JsonSerializer.Serialize(finalSnapshot),
+                    StringComparison.Ordinal))
+            {
+                PersistPostCreationGoalChanges(stateRepository, committedSnapshot, finalSnapshot);
+            }
+        }
+
+        return shouldSave;
+    }
+
+    private static void ValidateGoalCreationPreconditions(
+        AgentOrchestratorKernel currentKernel,
+        GoalSnapshot preparedSnapshot,
+        OrchestratorWorkspace workspace)
+    {
+        if (currentKernel.Goals.Any(goal => goal.Id.Value == preparedSnapshot.Id))
+        {
+            throw GoalCreatePreconditionChanged("prepared-goal-id-exists", ("goal", preparedSnapshot.Id));
+        }
+
+        var preparedDependencies = (preparedSnapshot.DependsOn ?? [])
+            .ToHashSet(StringComparer.Ordinal);
+        if (preparedDependencies.Any(id => currentKernel.Goals.All(goal => goal.Id.Value != id)))
+        {
+            throw GoalCreatePreconditionChanged("dependency-target-missing", ("goal", preparedSnapshot.Id));
+        }
+
+        if (preparedSnapshot.SourceBacklogItemId is not { } backlogItemId)
+        {
+            return;
+        }
+
+        var backlogItem = new BacklogStore(workspace.BacklogStorePath)
+            .GetByIdPrefixAsync(backlogItemId)
+            .GetAwaiter()
+            .GetResult();
+        if (backlogItem is null || !string.Equals(backlogItem.Id, backlogItemId, StringComparison.Ordinal))
+        {
+            throw GoalCreatePreconditionChanged("source-backlog-missing", ("backlogItem", backlogItemId));
+        }
+
+        if (currentKernel.FindGoalBySourceBacklogItemId(backlogItemId) is { } competingGoal)
+        {
+            throw GoalCreatePreconditionChanged(
+                "source-backlog-consumed",
+                ("backlogItem", backlogItemId),
+                ("competingGoal", competingGoal.Id.Value));
+        }
+
+        var currentDependencies = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var dependency in backlogItem.Dependencies)
+        {
+            var dependencyGoal = dependency.TargetKind == BacklogDependencyTargetKind.Goal
+                ? currentKernel.Goals.FirstOrDefault(goal => goal.Id.Value == dependency.PrerequisiteId)
+                : currentKernel.FindGoalBySourceBacklogItemId(dependency.PrerequisiteId);
+            if (dependencyGoal is null)
+            {
+                throw GoalCreatePreconditionChanged(
+                    "dependency-target-missing",
+                    ("backlogItem", backlogItemId),
+                    ("dependency", dependency.PrerequisiteId));
+            }
+
+            currentDependencies.Add(dependencyGoal.Id.Value);
+        }
+
+        if (!currentDependencies.SetEquals(preparedDependencies))
+        {
+            throw GoalCreatePreconditionChanged(
+                "source-backlog-dependencies-changed",
+                ("backlogItem", backlogItemId));
+        }
+    }
+
+    private static void PersistPostCreationGoalChanges(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        GoalSnapshot committedSnapshot,
+        GoalSnapshot finalSnapshot)
+    {
+        var committedJson = JsonSerializer.Serialize(committedSnapshot);
+        stateRepository.TransactGoalAsync(
+                new GoalId(committedSnapshot.Id),
+                (currentSnapshot, _) =>
+                {
+                    if (currentSnapshot is null ||
+                        !string.Equals(JsonSerializer.Serialize(currentSnapshot), committedJson, StringComparison.Ordinal))
+                    {
+                        throw GoalCreatePreconditionChanged(
+                            "created-goal-concurrently-modified",
+                            ("goal", committedSnapshot.Id));
+                    }
+
+                    return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, bool Result)>(
+                        (true, finalSnapshot, true));
+                })
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static InvalidOperationException GoalCreatePreconditionChanged(
+        string reason,
+        params (string Key, string Value)[] context)
+    {
+        var suffix = context.Length == 0
+            ? string.Empty
+            : " " + string.Join(' ', context.Select(item => $"{item.Key}={item.Value}"));
+        return new InvalidOperationException($"GOAL_CREATE_PRECONDITION_CHANGED reason={reason}{suffix}");
     }
 
     private static bool ExecuteProcessRefreshOutsideTransaction(

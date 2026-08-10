@@ -29,7 +29,8 @@ internal sealed class CliExecutionContext(
     TextReader? standardInput = null,
     bool? isStandardInputRedirected = null,
     Action? registerAcceptanceGuardAbort = null,
-    Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null)
+    Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null,
+    Action<Goal>? finalizeGoalCreation = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -143,6 +144,8 @@ public AcceptanceMergeGuardPreflightResult PrepareAcceptanceMergeGuard(Acceptanc
 }
 
 public void RegisterAcceptanceGuardAbort() => registerAcceptanceGuardAbort?.Invoke();
+
+public void FinalizeGoalCreation(Goal goal) => finalizeGoalCreation?.Invoke(goal);
 
 public AcceptanceHostStopResult StopAcceptanceHosts(AcceptanceHostStopRequest request) =>
     stopAcceptanceHosts?.Invoke(request) ?? AcceptanceHostStopper.Stop(request);

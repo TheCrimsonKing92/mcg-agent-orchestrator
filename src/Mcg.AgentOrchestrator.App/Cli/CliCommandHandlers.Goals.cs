@@ -186,6 +186,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             // --run: create 5-role goal then delegate to run-goal
             if (HasCliConfirmation(parts, "--run"))
             {
+                EnsureCliConfirmation(
+                    parts,
+                    "--confirm-batch-start",
+                    "run-goal requires --confirm-batch-start because it starts worker processes.");
                 var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run | goal --text-file <path> --run");
                 var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
@@ -196,6 +200,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, runAgents, runObjective, context.Workspace, context.Providers, context.EventWriter);
                 ApplySourceBacklogItemLink(context, context.CurrentGoal, runSourceBacklogLink);
+                context.FinalizeGoalCreation(context.CurrentGoal);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
                 var runParts = new List<string> { "run-goal", context.CurrentGoal.Id.Value[..8] };
                 AppendGoalAliasFlags(parts, runParts, includeRoleAgentFlags: false, "--run", "--brief-file", "--text-file");
@@ -211,6 +216,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, goalAgents, goalObjective, context.Workspace, context.Providers, context.EventWriter);
             ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
+            context.FinalizeGoalCreation(context.CurrentGoal);
             ConsoleViews.PrintGoal(context.CurrentGoal);
             return true;
 
@@ -225,13 +231,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, simpleAgents, simpleObjective, context.Workspace, context.Providers, context.EventWriter);
             ApplySourceBacklogItemLink(context, context.CurrentGoal, simpleSourceBacklogLink);
-            ConsoleViews.PrintGoal(context.CurrentGoal);
             if (HasCliConfirmation(parts, "--dispatch"))
             {
                 EnsureCliConfirmation(
                     parts,
                     "--confirm-dispatch-start",
                     "simple-goal --dispatch requires --confirm-dispatch-start as the certainty signal.");
+            }
+            context.FinalizeGoalCreation(context.CurrentGoal);
+            ConsoleViews.PrintGoal(context.CurrentGoal);
+            if (HasCliConfirmation(parts, "--dispatch"))
+            {
                 var dispatchParts = new List<string> { "subscription-dispatch", "1", "--confirm-dispatch-start" };
                 TryExecuteWorkerCommand("subscription-dispatch", dispatchParts, context);
             }
