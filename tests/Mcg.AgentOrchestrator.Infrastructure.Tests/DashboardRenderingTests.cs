@@ -1511,6 +1511,7 @@ public sealed class DashboardRenderingTests
     var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
     Directory.CreateDirectory(worktreePath);
     File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
+    SeedLocalSkillCatalog(worktreePath);
     var task = goal.Tasks.Single();
 
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec attempt 1", root, DateTimeOffset.UtcNow, WorkerProviderKind: ProviderKind.OpenAICodexCli));

@@ -330,6 +330,7 @@ public sealed class RunGoalServiceTests
     public async Task RunGoalServiceAutoFailoverUsageLimitRedelegatesAndContinues()
     {
         var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with recoverable usage limit", AgentRole.Planner);
@@ -374,6 +375,7 @@ public sealed class RunGoalServiceTests
     public async Task RunGoalServiceAutoFailoverUsesAddedSameRoleCatalogAlternate()
     {
         var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var alternate = new AgentDefinition(
@@ -421,6 +423,7 @@ public sealed class RunGoalServiceTests
     public async Task RunGoalServiceAutoFailoverHeartbeatStallRedelegates()
     {
         var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with heartbeat stall", AgentRole.Planner);
@@ -565,6 +568,7 @@ public sealed class RunGoalServiceTests
     public async Task RunGoalServiceAutoFailoverProviderConnectivityRedelegatesSameRoleAlternateAndContinues()
     {
         var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with provider connectivity failover", AgentRole.Planner);
@@ -612,6 +616,7 @@ public sealed class RunGoalServiceTests
     public async Task RunGoalServiceAutoFailoverProviderModelRejectionRedelegates()
     {
         var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with provider model rejection", AgentRole.Planner);
@@ -734,6 +739,7 @@ public sealed class RunGoalServiceTests
     public async Task RunGoalServiceAutoFailoverDoesNotLoopBackToFailedAgent()
     {
         var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Task with two failed agents", AgentRole.Planner);
