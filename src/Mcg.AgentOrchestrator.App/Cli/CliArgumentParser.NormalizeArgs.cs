@@ -22,7 +22,7 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
 
     if (command.Equals("retry", StringComparison.OrdinalIgnoreCase))
     {
-        return NormalizeTaskTargetArgs(args, trailingArgumentCount: 1, allowTextFile: true);
+        return NormalizeRetryTaskTargetArgs(args);
     }
 
     if (command.Equals("note", StringComparison.OrdinalIgnoreCase) ||
@@ -516,6 +516,16 @@ private static IReadOnlyList<string> NormalizeTaskTargetArgs(string[] args, int 
     return allowTextFile
         ? SplitTaskTargetCommandWithTextFileFlag(target.Parts[0], remainder, trailingArgumentCount)
         : SplitTaskTargetCommand(target.Parts[0], remainder, trailingArgumentCount);
+}
+
+private static IReadOnlyList<string> NormalizeRetryTaskTargetArgs(IReadOnlyList<string> args)
+{
+    var mechanical = args.Any(arg => arg.Equals("--mechanical", StringComparison.OrdinalIgnoreCase));
+    var targetArgs = args
+        .Where(arg => !arg.Equals("--mechanical", StringComparison.OrdinalIgnoreCase))
+        .ToArray();
+    var normalized = NormalizeTaskTargetArgs(targetArgs, trailingArgumentCount: 1, allowTextFile: true);
+    return mechanical ? [.. normalized, "--mechanical"] : normalized;
 }
 
 internal static GoalScopedTaskTargetArgs ParseGoalScopedTaskTargetArgs(IReadOnlyList<string> args)

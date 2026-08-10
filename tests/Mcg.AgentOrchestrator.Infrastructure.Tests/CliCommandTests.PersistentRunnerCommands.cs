@@ -756,7 +756,10 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             {
                 foreach (var useFullGoalId in new[] { false, true })
                 {
-                    yield return [command, goalAfterPositionals, useFullGoalId, goalAfterPositionals == useFullGoalId];
+                    foreach (var commandSurface in new[] { "direct", "one-shot", "interactive" })
+                    {
+                        yield return [command, goalAfterPositionals, useFullGoalId, goalAfterPositionals == useFullGoalId, commandSurface];
+                    }
                 }
             }
         }
@@ -768,7 +771,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         string command,
         bool goalAfterPositionals,
         bool useFullGoalId,
-        bool useTextFile)
+        bool useTextFile,
+        string commandSurface)
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -799,14 +803,23 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             "verify-manual" => ["1", "passed"],
             _ => throw new ArgumentOutOfRangeException(nameof(command), command, null)
         };
-        string[] args = goalAfterPositionals
-            ? [command, .. positionals, "--goal", selector, .. payload]
+        string[] rawArgs = goalAfterPositionals && !useTextFile
+            ? [command, .. positionals, .. payload, "--goal", selector]
+            : goalAfterPositionals
+                ? [command, .. positionals, "--goal", selector, .. payload]
             : [command, "--goal", selector, .. positionals, .. payload];
+        var args = commandSurface switch
+        {
+            "direct" => rawArgs,
+            "one-shot" => CliArgumentParser.NormalizeArgs(rawArgs),
+            "interactive" => CliArgumentParser.SplitCommand(string.Join(' ', rawArgs)),
+            _ => throw new ArgumentOutOfRangeException(nameof(commandSurface), commandSurface, null)
+        };
         if (command == "progress" && goalAfterPositionals && useFullGoalId && useTextFile)
         {
             Xunit.Assert.Equal(
                 new[] { "progress", "1", "failed", "--goal", target.Id.Value, "--text-file", notePath },
-                args);
+                rawArgs);
         }
 
         var output = CaptureConsole(() =>
@@ -833,6 +846,132 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains($"selector={selector}", output, StringComparison.Ordinal);
         Xunit.Assert.Contains($"goal={target.Id.Value}", output, StringComparison.Ordinal);
         Xunit.Assert.Contains($"task={target.Tasks.Single().Id.Value}", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_note_trailing_explicit_goal_never_mutates_current_goal")]
+    [Xunit.InlineData("direct")]
+    [Xunit.InlineData("one-shot")]
+    [Xunit.InlineData("interactive")]
+    public async Task PersistentRunnerNoteTrailingExplicitGoalNeverMutatesCurrentGoal(string commandSurface)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var target = kernel.CreateGoal(
+            new GoalId("38d0e2e9000000000000000000000001"),
+            "Explicit note target",
+            [new TaskSpec(TaskId.New(), "Target task one", AgentRole.Developer)]);
+        var fallback = kernel.CreateGoal(
+            new GoalId("b4ae70ef000000000000000000000002"),
+            "Current fallback goal",
+            [new TaskSpec(TaskId.New(), "Fallback task one", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(target.Id, agents);
+        kernel.ActivateGoal(fallback.Id, agents);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = fallback;
+        var rawArgs = new[] { "note", "1", "explicit", "target", "note", "--goal", target.Id.Value[..8] };
+        var args = commandSurface switch
+        {
+            "direct" => rawArgs,
+            "one-shot" => CliArgumentParser.NormalizeArgs(rawArgs),
+            "interactive" => CliArgumentParser.SplitCommand(string.Join(' ', rawArgs)),
+            _ => throw new ArgumentOutOfRangeException(nameof(commandSurface), commandSurface, null)
+        };
+
+        var changed = CliPersistentStateRunner.ExecuteCommand(
+            args,
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal);
+
+        var storedTarget = await repository.LoadGoalAsync(target.Id);
+        var storedFallback = await repository.LoadGoalAsync(fallback.Id);
+        Xunit.Assert.True(changed);
+        Xunit.Assert.Equal(target.Id, currentGoal!.Id);
+        Xunit.Assert.Contains(storedTarget!.Timeline, entry =>
+            entry.Kind == ProgressKind.OperatorTaskNote && entry.Message == "explicit target note");
+        Xunit.Assert.DoesNotContain(storedFallback!.Timeline, entry => entry.Kind == ProgressKind.OperatorTaskNote);
+    }
+
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_ambiguous_trailing_goal_fails_closed_on_normalized_surfaces")]
+    [Xunit.InlineData("progress", "one-shot")]
+    [Xunit.InlineData("progress", "interactive")]
+    [Xunit.InlineData("retry", "one-shot")]
+    [Xunit.InlineData("retry", "interactive")]
+    [Xunit.InlineData("verify-manual", "one-shot")]
+    [Xunit.InlineData("verify-manual", "interactive")]
+    [Xunit.InlineData("note", "one-shot")]
+    [Xunit.InlineData("note", "interactive")]
+    public async Task PersistentRunnerAmbiguousTrailingGoalFailsClosedOnNormalizedSurfaces(
+        string command,
+        string commandSurface)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var first = kernel.CreateGoal(
+            new GoalId("38d0e2e9aaaaaaaaaaaaaaaaaaaaaaa1"),
+            "First ambiguous target",
+            [new TaskSpec(TaskId.New(), "First task one", AgentRole.Developer)]);
+        var second = kernel.CreateGoal(
+            new GoalId("38d0e2e9bbbbbbbbbbbbbbbbbbbbbbb2"),
+            "Second ambiguous target",
+            [new TaskSpec(TaskId.New(), "Second task one", AgentRole.Developer)]);
+        var fallback = kernel.CreateGoal(
+            new GoalId("b4ae70ef000000000000000000000003"),
+            "Current fallback goal",
+            [new TaskSpec(TaskId.New(), "Fallback task one", AgentRole.Developer)]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        kernel.ActivateGoal(first.Id, agents);
+        kernel.ActivateGoal(second.Id, agents);
+        kernel.ActivateGoal(fallback.Id, agents);
+        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = fallback;
+        string[] rawArgs = command switch
+        {
+            "progress" => [command, "1", "failed", "must", "not", "mutate", "--goal", "38d0e2e9"],
+            "retry" => [command, "1", "must", "not", "mutate", "--goal", "38d0e2e9"],
+            "verify-manual" => [command, "1", "passed", "must", "not", "mutate", "--goal", "38d0e2e9"],
+            "note" => [command, "1", "must", "not", "mutate", "--goal", "38d0e2e9"],
+            _ => throw new ArgumentOutOfRangeException(nameof(command), command, null)
+        };
+        var args = commandSurface switch
+        {
+            "one-shot" => CliArgumentParser.NormalizeArgs(rawArgs),
+            "interactive" => CliArgumentParser.SplitCommand(string.Join(' ', rawArgs)),
+            _ => throw new ArgumentOutOfRangeException(nameof(commandSurface), commandSurface, null)
+        };
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                args,
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.Contains("ambiguous", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Equal(fallback.Id, currentGoal!.Id);
+        Xunit.Assert.Equal(0, repository.TransactGoalCount);
+        Xunit.Assert.False(File.Exists(Path.Combine(
+            workspace.OrchestratorDirectory,
+            SqliteOperatorIntentStore.DatabaseFileName)));
+        foreach (var goal in new[] { first, second, fallback })
+        {
+            var stored = await repository.LoadGoalAsync(goal.Id);
+            Xunit.Assert.Equal(goal.Tasks.Single().Status, stored!.Tasks.Single().Status);
+            Xunit.Assert.DoesNotContain(stored.Timeline, entry => entry.Kind == ProgressKind.OperatorTaskNote);
+        }
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_rejects_ambiguous_explicit_goal_before_intent_write")]

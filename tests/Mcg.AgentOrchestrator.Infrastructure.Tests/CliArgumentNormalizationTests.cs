@@ -66,6 +66,26 @@ public sealed class CliArgumentNormalizationTests
     }
 
     [Xunit.Theory]
+    [Xunit.InlineData("progress 1 failed operator note --goal 38d0e2e9", new[] { "progress", "--goal", "38d0e2e9", "1", "failed", "operator note" })]
+    [Xunit.InlineData("retry 1 operator note --goal 38d0e2e9", new[] { "retry", "--goal", "38d0e2e9", "1", "operator note" })]
+    [Xunit.InlineData("verify-manual 1 passed operator note --goal 38d0e2e9", new[] { "verify-manual", "--goal", "38d0e2e9", "1", "passed", "operator note" })]
+    [Xunit.InlineData("note 1 operator note --goal 38d0e2e9", new[] { "note", "--goal", "38d0e2e9", "1", "operator note" })]
+    public void InteractiveGoalScopedMutations_FreeTextBeforeTrailingGoal_IsCanonicalized(
+        string input,
+        string[] expected)
+    {
+        Xunit.Assert.Equal(expected, CliArgumentParser.SplitCommand(input));
+    }
+
+    [Xunit.Fact]
+    public void OneShotNote_FreeTextBeforeTrailingGoal_IsCanonicalized()
+    {
+        Xunit.Assert.Equal(
+            ["note", "--goal", "38d0e2e9", "1", "operator note"],
+            CliArgumentParser.NormalizeArgs(["note", "1", "operator", "note", "--goal", "38d0e2e9"]));
+    }
+
+    [Xunit.Theory]
     [Xunit.InlineData(new[] { "progress", "1", "failed", "--goal" }, "--goal requires")]
     [Xunit.InlineData(new[] { "progress", "--goal", "abc12345", "1", "failed", "note", "--goal", "def67890" }, "only once")]
     [Xunit.InlineData(new[] { "progress", "--goal=abc12345", "1", "failed", "note" }, "not supported")]
