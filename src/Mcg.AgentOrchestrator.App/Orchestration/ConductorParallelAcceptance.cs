@@ -241,20 +241,20 @@ internal static class ConductorSpeculativeAcceptanceCohortPlanner
                     $"Speculative acceptance candidate identity {candidate.GoalId.Value} does not match projection {projection.GoalId.Value}.");
             }
 
-            if (selected.Count >= MaximumCohortSize)
-            {
-                dispositions.Add(new ConductorSpeculativeAcceptanceDisposition.Deferred(
-                    candidate.GoalId,
-                    ConductorSpeculativeAcceptanceDeferralReason.CohortCapacity));
-                continue;
-            }
-
             var exclusion = FindExclusion(projection, selected);
             if (exclusion is not null)
             {
                 dispositions.Add(new ConductorSpeculativeAcceptanceDisposition.Excluded(
                     candidate.GoalId,
                     exclusion));
+                continue;
+            }
+
+            if (selected.Count >= MaximumCohortSize)
+            {
+                dispositions.Add(new ConductorSpeculativeAcceptanceDisposition.Deferred(
+                    candidate.GoalId,
+                    ConductorSpeculativeAcceptanceDeferralReason.CohortCapacity));
                 continue;
             }
 

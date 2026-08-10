@@ -130,6 +130,42 @@ public sealed class ConductorSpeculativeAcceptanceCohortPlannerTests
     }
 
     [Fact]
+    public void IncompatibleCandidateBeyondCapacity_PreservesExactTypedExclusion()
+    {
+        var selected = new[]
+        {
+            Ready("11111111111111111111111111111111", "scripts/first.ps1"),
+            Ready("22222222222222222222222222222222", "src/App/Second.cs"),
+            Ready("33333333333333333333333333333333", "src/Cli/Third.cs"),
+            Ready("44444444444444444444444444444444", "tests/Fourth.cs")
+        };
+        var pathPlan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(
+            [.. selected, Ready("55555555555555555555555555555555", "src/App/Second.cs")]);
+        var resourcePlan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(
+            [.. selected, Ready("66666666666666666666666666666666", "scripts/fifth.ps1")]);
+        var revisionPlan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(
+            [.. selected, Ready(
+                "77777777777777777777777777777777",
+                "docs/fifth.md",
+                mainRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")]);
+
+        var pathEvidence = Assert.IsType<ConductorSpeculativeAcceptanceExclusionEvidence.LandingPathOverlap>(
+            Assert.IsType<ConductorSpeculativeAcceptanceDisposition.Excluded>(pathPlan.Dispositions[4]).Evidence);
+        var resourceEvidence = Assert.IsType<ConductorSpeculativeAcceptanceExclusionEvidence.SerializedResourceOverlap>(
+            Assert.IsType<ConductorSpeculativeAcceptanceDisposition.Excluded>(resourcePlan.Dispositions[4]).Evidence);
+        var revisionEvidence = Assert.IsType<ConductorSpeculativeAcceptanceExclusionEvidence.MainRevisionMismatch>(
+            Assert.IsType<ConductorSpeculativeAcceptanceDisposition.Excluded>(revisionPlan.Dispositions[4]).Evidence);
+
+        Assert.Equal(selected[1].GoalId, pathEvidence.ConflictingGoalId);
+        Assert.Equal("src/App/Second.cs", pathEvidence.Path);
+        Assert.Equal(selected[0].GoalId, resourceEvidence.ConflictingGoalId);
+        Assert.Equal("ownership:scripts", resourceEvidence.ResourceKey);
+        Assert.Equal(selected[0].GoalId, revisionEvidence.ConflictingGoalId);
+        Assert.Equal(MainRevision, revisionEvidence.ExpectedMainRevision);
+        Assert.Equal("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", revisionEvidence.ActualMainRevision);
+    }
+
+    [Fact]
     public void Receipt_IsSingleLineBoundedAndReportsOmittedOutcomes()
     {
         var candidates = Enumerable.Range(1, 20)
