@@ -1,17 +1,13 @@
 using System.Runtime.CompilerServices;
+using Mcg.AgentOrchestrator.Infrastructure;
 
-// The Infrastructure.Tests project builds a self-contained Microsoft.Testing.Platform
-// executable. When that exe is run directly (the MTP runner path used by the acceptance
-// gate and by local validation), it inherits the repository tree's Low mandatory integrity
-// label, so the process runs at Low integrity. A Low-integrity process cannot write to the
-// Medium-integrity system temp directory that Path.GetTempPath() returns by default, which
-// fails every test that builds a scratch workspace under the temp path.
-//
-// Redirect the process TMP/TEMP to a Low-integrity-writable location once, at module load,
-// before any test (or child process it spawns) resolves Path.GetTempPath(). This is a no-op
-// on non-Windows platforms, which have no integrity levels.
+// Infrastructure.Tests builds a self-contained Microsoft.Testing.Platform executable.
+// Select a process-local temp root before tests create scratch files, but commit it only
+// after its Low label (where required), child-directory write, and cleanup are verified.
 internal static class AssemblyTempRedirect
 {
+    internal const string LowInheritableLevel = "(OI)(CI)L";
+
     [ModuleInitializer]
     internal static void Install()
     {
@@ -20,38 +16,165 @@ internal static class AssemblyTempRedirect
             return;
         }
 
-        foreach (var candidate in EnumerateCandidateRoots())
+        var fileSystem = new PhysicalTempRootFileSystem();
+        var labeler = new IcaclsIntegrityLabeler();
+        var selection = SelectWritableRoot(
+            EnumerateCandidateRoots(),
+            candidate => TryPrepareRoot(
+                candidate,
+                isWindows: true,
+                fileSystem,
+                labeler,
+                $".write-probe-{Guid.NewGuid():N}"));
+
+        Console.Error.WriteLine(FormatDiagnostic(selection));
+        if (selection.SelectedRoot is null)
         {
-            try
+            return;
+        }
+
+        Environment.SetEnvironmentVariable("TMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable("TEMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
+    }
+
+    internal static TempRootSelectionResult SelectWritableRoot(
+        IEnumerable<TempRootCandidate> candidates,
+        Func<TempRootCandidate, TempRootPreparationResult> tryPrepareRoot)
+    {
+        var rejections = new List<TempRootRejection>();
+        foreach (var candidate in candidates)
+        {
+            var preparation = tryPrepareRoot(candidate);
+            if (preparation.Succeeded)
             {
-                Directory.CreateDirectory(candidate);
-            }
-            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
-            {
-                continue;
+                return new TempRootSelectionResult(candidate.Path, rejections);
             }
 
-            Environment.SetEnvironmentVariable("TMP", candidate, EnvironmentVariableTarget.Process);
-            Environment.SetEnvironmentVariable("TEMP", candidate, EnvironmentVariableTarget.Process);
-            return;
+            rejections.Add(new TempRootRejection(candidate.Path, preparation.Reasons));
+        }
+
+        return new TempRootSelectionResult(null, rejections);
+    }
+
+    internal static TempRootPreparationResult TryPrepareRoot(
+        TempRootCandidate candidate,
+        bool isWindows,
+        ITempRootFileSystem fileSystem,
+        IWorkerIntegrityLabeler labeler,
+        string probeDirectoryName)
+    {
+        try
+        {
+            fileSystem.CreateDirectory(candidate.Path);
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            return TempRootPreparationResult.Rejected(TempRootRejectionReason.Create);
+        }
+
+        if (isWindows && candidate.RequiresLowLabel && !EnsureLowLabel(candidate.Path, labeler))
+        {
+            return TempRootPreparationResult.Rejected(TempRootRejectionReason.Label);
+        }
+
+        var reasons = new List<TempRootRejectionReason>();
+        var probeDirectory = Path.Combine(candidate.Path, probeDirectoryName);
+        var probeFile = Path.Combine(probeDirectory, "probe.tmp");
+        try
+        {
+            fileSystem.CreateDirectory(probeDirectory);
+            fileSystem.CreateProbeFile(probeFile);
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            reasons.Add(TempRootRejectionReason.Write);
+        }
+        finally
+        {
+            var cleanupFailed = false;
+            try
+            {
+                fileSystem.DeleteFile(probeFile);
+            }
+            catch (Exception ex) when (IsFileSystemFailure(ex))
+            {
+                cleanupFailed = true;
+            }
+
+            try
+            {
+                fileSystem.DeleteDirectory(probeDirectory);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                // No probe directory remains to poison a later lane.
+            }
+            catch (Exception ex) when (IsFileSystemFailure(ex))
+            {
+                cleanupFailed = true;
+            }
+
+            if (cleanupFailed)
+            {
+                reasons.Add(TempRootRejectionReason.Cleanup);
+            }
+        }
+
+        return reasons.Count == 0
+            ? TempRootPreparationResult.Success
+            : new TempRootPreparationResult(false, reasons);
+    }
+
+    internal static string FormatDiagnostic(TempRootSelectionResult selection)
+    {
+        var selected = selection.SelectedRoot ?? "<none>";
+        var rejected = selection.Rejections.Count == 0
+            ? "<none>"
+            : string.Join(
+                "|",
+                selection.Rejections.Select(rejection =>
+                    $"{rejection.Path}:{string.Join('+', rejection.Reasons.Select(ReasonToken))}"));
+        return $"assembly-temp-redirect selected={selected} rejected={rejected}";
+    }
+
+    private static bool EnsureLowLabel(string path, IWorkerIntegrityLabeler labeler)
+    {
+        try
+        {
+            var state = labeler.Query(path);
+            if (state.Exists && state.Low && state.Inheritable)
+            {
+                return true;
+            }
+
+            if (!labeler.SetIntegrity(path, LowInheritableLevel, recursive: false))
+            {
+                return false;
+            }
+
+            state = labeler.Query(path);
+            return state.Exists && state.Low && state.Inheritable;
+        }
+        catch
+        {
+            return false;
         }
     }
 
-    private static IEnumerable<string> EnumerateCandidateRoots()
+    private static bool IsFileSystemFailure(Exception exception) =>
+        exception is UnauthorizedAccessException or IOException;
+
+    private static string ReasonToken(TempRootRejectionReason reason) => reason switch
     {
-        // %LOCALAPPDATA%\Temp\Low is the canonical Windows Low-integrity temp area; it carries
-        // a Low mandatory label so both Low- and Medium-integrity processes can write it, and
-        // its path is short enough for the deeply nested workspaces these tests create.
-        //
-        // Read the LOCALAPPDATA VARIABLE before the known-folder API. GetFolderPath expands the
-        // REG_EXPAND_SZ literal "%USERPROFILE%\AppData\Local" against THIS PROCESS'S environment
-        // block, and the acceptance gate spawns us with USERPROFILE repointed at an empty hermetic
-        // profile root. A freshly spawned child therefore resolves the known folder to
-        // <profile-root>\AppData\Local - a directory that does not exist and is not writable - so
-        // every workspace-building test failed with UnauthorizedAccessException on a path like
-        // ...\mcg-hvp\AppData\Local\Temp\Low\mcg-tests. The gate sets the LOCALAPPDATA variable to
-        // the REAL per-user location precisely so derived paths keep working; consult it first.
-        // (Same trap, same fix, as WorkerShell.WindowsPowerShellCandidates.)
+        TempRootRejectionReason.Create => "create",
+        TempRootRejectionReason.Label => "label",
+        TempRootRejectionReason.Write => "write",
+        TempRootRejectionReason.Cleanup => "cleanup",
+        _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, null)
+    };
+
+    private static IEnumerable<TempRootCandidate> EnumerateCandidateRoots()
+    {
         foreach (var localAppData in new[]
                  {
                      Environment.GetEnvironmentVariable("LOCALAPPDATA"),
@@ -60,12 +183,75 @@ internal static class AssemblyTempRedirect
         {
             if (!string.IsNullOrEmpty(localAppData))
             {
-                yield return Path.Combine(localAppData, "Temp", "Low", "mcg-tests");
+                yield return new TempRootCandidate(
+                    Path.Combine(localAppData, "Temp", "Low", "mcg-tests"),
+                    RequiresLowLabel: true);
             }
         }
 
-        // Fallback: a directory inside the build output, which lives in the Low-labeled repo
-        // tree and is therefore always writable at the process integrity level.
-        yield return Path.Combine(AppContext.BaseDirectory, ".test-tmp");
+        yield return new TempRootCandidate(
+            Path.Combine(AppContext.BaseDirectory, ".test-tmp"),
+            RequiresLowLabel: false);
     }
+}
+
+internal sealed record TempRootCandidate(string Path, bool RequiresLowLabel);
+
+internal enum TempRootRejectionReason
+{
+    Create,
+    Label,
+    Write,
+    Cleanup
+}
+
+internal sealed record TempRootPreparationResult(
+    bool Succeeded,
+    IReadOnlyList<TempRootRejectionReason> Reasons)
+{
+    internal static TempRootPreparationResult Success { get; } = new(true, []);
+
+    internal static TempRootPreparationResult Rejected(TempRootRejectionReason reason) =>
+        new(false, [reason]);
+}
+
+internal sealed record TempRootRejection(
+    string Path,
+    IReadOnlyList<TempRootRejectionReason> Reasons);
+
+internal sealed record TempRootSelectionResult(
+    string? SelectedRoot,
+    IReadOnlyList<TempRootRejection> Rejections);
+
+internal interface ITempRootFileSystem
+{
+    void CreateDirectory(string path);
+
+    void CreateProbeFile(string path);
+
+    void DeleteFile(string path);
+
+    void DeleteDirectory(string path);
+}
+
+internal sealed class PhysicalTempRootFileSystem : ITempRootFileSystem
+{
+    public void CreateDirectory(string path) => Directory.CreateDirectory(path);
+
+    public void CreateProbeFile(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 1,
+            FileOptions.WriteThrough);
+        stream.WriteByte(0);
+        stream.Flush(flushToDisk: true);
+    }
+
+    public void DeleteFile(string path) => File.Delete(path);
+
+    public void DeleteDirectory(string path) => Directory.Delete(path, recursive: false);
 }

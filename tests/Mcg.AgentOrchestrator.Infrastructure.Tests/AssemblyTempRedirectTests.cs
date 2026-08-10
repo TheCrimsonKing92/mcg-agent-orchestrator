@@ -1,3 +1,5 @@
+using Mcg.AgentOrchestrator.Infrastructure;
+
 public sealed class AssemblyTempRedirectTests
 {
     [Fact]
@@ -283,18 +285,18 @@ public sealed class AssemblyTempRedirectTests
         ICollection<string>? events = null,
         IEnumerable<string>? alreadyLow = null,
         bool throwOnQuery = false,
-        bool throwOnSet = false) : ITempRootIntegrityLabeler
+        bool throwOnSet = false) : IWorkerIntegrityLabeler
     {
-        private readonly Dictionary<string, TempRootIntegrityLabelState> states =
+        private readonly Dictionary<string, IntegrityLabelState> states =
             (alreadyLow ?? []).ToDictionary(
                 path => path,
-                _ => new TempRootIntegrityLabelState(Exists: true, Low: true, Inheritable: true));
+                _ => new IntegrityLabelState(Exists: true, Low: true, Inheritable: true));
 
         internal List<string> QueryCalls { get; } = [];
 
         internal List<(string Path, string Level, bool Recursive)> SetCalls { get; } = [];
 
-        public TempRootIntegrityLabelState Query(string path)
+        public IntegrityLabelState Query(string path)
         {
             events?.Add($"label-query:{path}");
             QueryCalls.Add(path);
@@ -305,7 +307,7 @@ public sealed class AssemblyTempRedirectTests
 
             return states.GetValueOrDefault(
                 path,
-                new TempRootIntegrityLabelState(Exists: true, Low: false, Inheritable: false));
+                new IntegrityLabelState(Exists: true, Low: false, Inheritable: false));
         }
 
         public bool SetIntegrity(string path, string level, bool recursive)
@@ -319,7 +321,7 @@ public sealed class AssemblyTempRedirectTests
 
             if (setResult && verifyAfterSet)
             {
-                states[path] = new TempRootIntegrityLabelState(Exists: true, Low: true, Inheritable: true);
+                states[path] = new IntegrityLabelState(Exists: true, Low: true, Inheritable: true);
             }
 
             return setResult;
