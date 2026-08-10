@@ -1193,6 +1193,11 @@ public sealed class BackgroundDispatchRunner
             hasChildExitRecord &&
             childExitRecord.ExitCode == 0 &&
             completeNonBlockedWorkerResult;
+        var successfulChildWithoutUsableWorkerResult =
+            observedExitCode != 0 &&
+            hasChildExitRecord &&
+            childExitRecord.ExitCode == 0 &&
+            !completeNonBlockedWorkerResult;
         var completionContractSucceeded = true;
 
         if (task.RequiredRole == AgentRole.Researcher &&
@@ -1347,7 +1352,12 @@ public sealed class BackgroundDispatchRunner
                 processRecord,
                 decisionStandardError,
                 sandboxCommitOnBehalfEvidence);
-            var successfulWorkerResult = completeNonBlockedWorkerResult;
+            // Blockers remain advisory on the ordinary exit-0 commit path. The stricter
+            // completeNonBlockedWorkerResult is reserved for overriding a failed wrapper exit.
+            var successfulWorkerResult = HasSuccessfulWorkerResult(
+                processRecord.WorkingDirectory,
+                decisionStandardOutput,
+                decisionStandardError);
             if (TryFindFailedWorkerBuildCheck(
                     processRecord.WorkingDirectory,
                     decisionStandardOutput,
@@ -1446,12 +1456,13 @@ public sealed class BackgroundDispatchRunner
             }
             else if (!orchestratorCommitted && worktreeEvidence.IsClean)
             {
-                var reconciledRoleStillRequiresChangeEvidence =
-                    reconcileWrapperExit &&
+                var successfulChildStillRequiresChangeEvidence =
+                    successfulChildResultAvailable &&
                     dispatchRoleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
                 var requiresCommitEvidence =
+                    !successfulChildWithoutUsableWorkerResult &&
                     RequiresPostDispatchCommitEvidence(task, decisionStandardOutput, decisionStandardError, workerResultPresent) &&
-                    (reconciledRoleStillRequiresChangeEvidence ||
+                    (successfulChildStillRequiresChangeEvidence ||
                      (!HasCompletedVerification(decisionStandardOutput, decisionStandardError) &&
                       !AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError))) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
@@ -1508,10 +1519,7 @@ public sealed class BackgroundDispatchRunner
                 "Reconciled non-zero wrapper completion because the selected child and its complete, non-blocked WORKER_RESULT succeeded; " +
                 $"{exitCodeEvidenceName}={observedExitCode}; child_exit_code=0; logical_exit_code=0.");
         }
-        else if (observedExitCode != 0 &&
-                 hasChildExitRecord &&
-                 childExitRecord.ExitCode == 0 &&
-                 !completeNonBlockedWorkerResult)
+        else if (successfulChildWithoutUsableWorkerResult)
         {
             var exitCodeEvidenceName = exitArtifactAlreadyExisted
                 ? "observed_wrapper_exit_code"
@@ -1622,7 +1630,7 @@ public sealed class BackgroundDispatchRunner
         return outcome;
     }
 
-    private static bool ShouldReconcileWrapperExit(WrapperExitReconciliationEvidence evidence) =>
+    internal static bool ShouldReconcileWrapperExit(WrapperExitReconciliationEvidence evidence) =>
         evidence.ObservedRootExitCode != 0 &&
         evidence.ChildExitCode == 0 &&
         evidence.HasCompleteNonBlockedWorkerResult &&
@@ -4458,7 +4466,7 @@ public sealed class BackgroundDispatchRunner
         public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, [], []);
     }
 
-    private readonly record struct WrapperExitReconciliationEvidence(
+    internal readonly record struct WrapperExitReconciliationEvidence(
         int ObservedRootExitCode,
         int? ChildExitCode,
         bool HasCompleteNonBlockedWorkerResult,

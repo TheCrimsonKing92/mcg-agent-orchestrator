@@ -2804,6 +2804,25 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         AssertExitCode(process.ExitCodePath, 1);
     }
 
+    [Xunit.Fact]
+    public void WrapperFailureWithFatalOrchestratorFailure_DoesNotReconcileWhenEveryOtherGatePasses()
+    {
+        var otherwiseSuccessfulEvidence = new BackgroundDispatchRunner.WrapperExitReconciliationEvidence(
+            ObservedRootExitCode: 1,
+            ChildExitCode: 0,
+            HasCompleteNonBlockedWorkerResult: true,
+            CompletionContractSucceeded: true,
+            HasKnownRoleCapability: true,
+            RoleCapability: DispatchRoleOutputCapability.RequiresChangeEvidence,
+            HasRelevantChangeEvidence: true,
+            HasTerminalHumanInputDirective: false,
+            HasFatalOrchestratorFailure: false);
+
+        Assert.True(BackgroundDispatchRunner.ShouldReconcileWrapperExit(otherwiseSuccessfulEvidence));
+        Assert.False(BackgroundDispatchRunner.ShouldReconcileWrapperExit(
+            otherwiseSuccessfulEvidence with { HasFatalOrchestratorFailure = true }));
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_reconciled_developer_without_change_still_fails_change_evidence")]
     public void BackgroundDispatchRunnerReconciledDeveloperWithoutChangeStillFailsChangeEvidence()
 {
