@@ -52,7 +52,11 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             line.Contains($"sqlite_code={sqliteErrorCode}", StringComparison.Ordinal) &&
             line.Contains("attempt=3", StringComparison.Ordinal) &&
             line.Contains("elapsed_ms=250", StringComparison.Ordinal));
-        Assert.Contains(events, line => line.Contains("LOOP_LOAD_RECOVERED", StringComparison.Ordinal));
+        var recovered = Assert.Single(events, line => line.Contains("LOOP_LOAD_RECOVERED", StringComparison.Ordinal));
+        Assert.Contains($"sqlite_code={sqliteErrorCode}", recovered, StringComparison.Ordinal);
+        Assert.Contains("sqlite_extended_code=", recovered, StringComparison.Ordinal);
+        Assert.Contains("elapsed_ms=250", recovered, StringComparison.Ordinal);
+        Assert.Contains("disposition=recovered", recovered, StringComparison.Ordinal);
     }
 
     [Xunit.Theory(DisplayName = "TransientSqliteCheckpoint_startup_load_non_transient_failures_remain_fail_closed")]

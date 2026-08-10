@@ -168,7 +168,7 @@ internal sealed class ConductorBatchLoop
         var blockedRecheckCycles = 0;
         var totalBlockedRechecks = 0;
         var dispatchRecordWriteSkips = new Dictionary<string, int>(StringComparer.Ordinal);
-        var checkpointHeldGoals = new HashSet<string>(StringComparer.Ordinal);
+        var checkpointHeldGoals = new Dictionary<string, GoalSnapshotCheckpointResult>(StringComparer.Ordinal);
         var blockedRecheckRecurrences = new Dictionary<string, BlockedRecheckRecurrence>(StringComparer.Ordinal);
         DateTimeOffset? lastBlockedRecheckHeartbeatAt = null;
         string? stopReason = null;
@@ -408,7 +408,7 @@ internal sealed class ConductorBatchLoop
             if (checkpointGoalTick is not null && checkpointHeldGoals.Count > 0)
             {
                 var recoveryGoalIds = kernel.Goals
-                    .Where(goal => checkpointHeldGoals.Contains(goal.Id.Value))
+                    .Where(goal => checkpointHeldGoals.ContainsKey(goal.Id.Value))
                     .Select(goal => goal.Id)
                     .ToArray();
                 if (recoveryGoalIds.Length > 0)
@@ -586,7 +586,7 @@ internal sealed class ConductorBatchLoop
 
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
-                    && !checkpointHeldGoals.Contains(g.Id.Value)
+                    && !checkpointHeldGoals.ContainsKey(g.Id.Value)
                     && (!excludedGoals.Contains(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!setAsideGoals.ContainsKey(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value)))
                 .ToArray();
@@ -782,7 +782,7 @@ internal sealed class ConductorBatchLoop
                     kernel,
                     onlyGoalId,
                     setAsideGoals,
-                    transientRecheckableGoalIds: checkpointHeldGoals);
+                    transientRecheckableGoalIds: checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal));
                 if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0)
                 {
                     if (recheckableBlockedGoals > 0)
@@ -1398,7 +1398,7 @@ internal sealed class ConductorBatchLoop
                             kernel,
                             onlyGoalId,
                             setAsideGoals,
-                            transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals).ToHashSet(StringComparer.Ordinal)) > 0)
+                            transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals.Keys).ToHashSet(StringComparer.Ordinal)) > 0)
                     {
                         onTick?.Invoke(tickSummary);
                         continue;
@@ -1418,14 +1418,14 @@ internal sealed class ConductorBatchLoop
                     kernel,
                     onlyGoalId,
                     setAsideGoals,
-                        transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals).ToHashSet(StringComparer.Ordinal));
+                        transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals.Keys).ToHashSet(StringComparer.Ordinal));
                 var fallbackInterval = ConsumeWatchInterval(watchInterval.Value, recheckableBlockedGoals);
                 var sleepSeconds = (int)fallbackInterval.TotalSeconds;
                 if (CountRecheckableNonTerminalGoals(
                         kernel,
                         onlyGoalId,
                         setAsideGoals,
-                        transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals).ToHashSet(StringComparer.Ordinal)) > 0)
+                        transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals.Keys).ToHashSet(StringComparer.Ordinal)) > 0)
                 {
                     totalBlockedRechecks++;
                     UpdateBlockedRecheckRecurrences(sweepResult, blockedRecheckRecurrences);
@@ -2010,7 +2010,7 @@ internal sealed class ConductorBatchLoop
     private static IReadOnlyCollection<GoalId> ApplyCheckpointOutcomes(
         IReadOnlyList<GoalSnapshotCheckpointResult> outcomes,
         IReadOnlyCollection<GoalId> requestedGoalIds,
-        HashSet<string> heldGoalIds,
+        Dictionary<string, GoalSnapshotCheckpointResult> heldGoals,
         int tick,
         string kind,
         List<string> tickLines,
@@ -2030,12 +2030,14 @@ internal sealed class ConductorBatchLoop
             if (outcome.IsDurable)
             {
                 durable.Add(goalId);
-                if (heldGoalIds.Remove(goalId.Value))
+                if (heldGoals.Remove(goalId.Value, out var heldOutcome))
                 {
                     var line =
-                        $"TICK_CHECKPOINT_RECOVERED tick={tick} kind={kind} goal={goal} store={Sanitize(outcome.Store)} " +
-                        $"database={Sanitize(outcome.DatabasePath)} operation={Sanitize(outcome.Operation)} " +
-                        $"attempt={outcome.AttemptCount} elapsed_ms={outcome.ElapsedMilliseconds.ToString("0.###", CultureInfo.InvariantCulture)} disposition=recovered";
+                        $"TICK_CHECKPOINT_RECOVERED tick={tick} kind={kind} goal={goal} store={Sanitize(heldOutcome.Store)} " +
+                        $"database={Sanitize(heldOutcome.DatabasePath)} operation={Sanitize(heldOutcome.Operation)} " +
+                        $"sqlite_code={heldOutcome.SqliteErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
+                        $"sqlite_extended_code={heldOutcome.SqliteExtendedErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
+                        $"attempt={outcome.AttemptCount} elapsed_ms={heldOutcome.ElapsedMilliseconds.ToString("0.###", CultureInfo.InvariantCulture)} disposition=recovered";
                     if (deferEmission)
                         tickLines.Add(line);
                     else
@@ -2044,7 +2046,8 @@ internal sealed class ConductorBatchLoop
                 continue;
             }
 
-            var firstHoldReceipt = heldGoalIds.Add(goalId.Value);
+            var firstHoldReceipt = !heldGoals.ContainsKey(goalId.Value);
+            heldGoals[goalId.Value] = outcome;
             var eventName = firstHoldReceipt ? "TICK_CHECKPOINT_HOLD" : "TICK_CHECKPOINT_RETRY";
             var disposition = firstHoldReceipt ? "exhausted-held" : "still-held";
             var holdLine =
@@ -2145,7 +2148,7 @@ internal sealed class ConductorBatchLoop
         Action<TimeSpan>? busyWriteDelay,
         int? diagnosticAttempt = null,
         Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick = null,
-        HashSet<string>? checkpointHeldGoalIds = null)
+        Dictionary<string, GoalSnapshotCheckpointResult>? checkpointHeldGoalIds = null)
     {
         if (checkpointGoalTick is null && persistGoalTick is null)
         {
@@ -2199,7 +2202,7 @@ internal sealed class ConductorBatchLoop
         List<string>? tickLines,
         Action<TimeSpan>? busyWriteDelay,
         Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick,
-        HashSet<string> checkpointHeldGoalIds)
+        Dictionary<string, GoalSnapshotCheckpointResult> checkpointHeldGoalIds)
     {
         if (checkpointGoalTick is not null)
         {

@@ -1031,6 +1031,10 @@ internal static class CliPersistentStateRunner
             throw new ArgumentOutOfRangeException(nameof(holdInterval));
 
         var eventWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        int? lastSqliteErrorCode = null;
+        int? lastSqliteExtendedErrorCode = null;
+        string? lastAttempt = null;
+        string? lastElapsedMilliseconds = null;
         for (var holdCycle = 1; ; holdCycle++)
         {
             try
@@ -1040,7 +1044,9 @@ internal static class CliPersistentStateRunner
                 {
                     var recovered =
                         $"LOOP_LOAD_RECOVERED store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
-                        $"operation=loop:startup/load attempt={holdCycle} disposition=recovered";
+                        $"operation=loop:startup/load sqlite_code={lastSqliteErrorCode} " +
+                        $"sqlite_extended_code={lastSqliteExtendedErrorCode} attempt={lastAttempt} hold_cycle={holdCycle - 1} " +
+                        $"elapsed_ms={lastElapsedMilliseconds} disposition=recovered";
                     Console.WriteLine(recovered);
                     eventWriter.Append("loop-load-recovered", null, recovered);
                 }
@@ -1050,6 +1056,10 @@ internal static class CliPersistentStateRunner
             {
                 var attempt = ex.Data["Mcg.AttemptCount"]?.ToString() ?? "unknown";
                 var elapsed = ex.Data["Mcg.ElapsedMilliseconds"]?.ToString() ?? "unknown";
+                lastSqliteErrorCode = ex.SqliteErrorCode;
+                lastSqliteExtendedErrorCode = ex.SqliteExtendedErrorCode;
+                lastAttempt = attempt;
+                lastElapsedMilliseconds = elapsed;
                 var held =
                     $"LOOP_LOAD_HOLD store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
                     $"operation=loop:startup/load sqlite_code={ex.SqliteErrorCode} sqlite_extended_code={ex.SqliteExtendedErrorCode} " +
