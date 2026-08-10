@@ -9,7 +9,6 @@ public static class TestCollections
     public const string GoalWorktreeCleanupHooks = "GoalWorktreeCleanupHooks";
     public const string JobAccounting = "JobAccounting";
     public const string ProcessSpawning = "ProcessSpawning";
-    public const string ProviderEnvironment = "ProviderEnvironment";
 }
 
 // Pins MCG_DOTNET_ISOLATED_ROOT to an ephemeral per-run temp root for the dotnet

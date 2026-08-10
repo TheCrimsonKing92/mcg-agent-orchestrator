@@ -391,7 +391,8 @@ public sealed class ConductorDriverTests
         ConductorParallelAcceptanceAttemptCoordinator? focusedEvidenceAttemptCoordinator = null,
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
-        Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null)
+        Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
+        Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -437,7 +438,8 @@ public sealed class ConductorDriverTests
             focusedEvidenceAttemptCoordinator: focusedEvidenceAttemptCoordinator,
             recordFindingEvidenceOutcome: recordFindingEvidenceOutcome,
             recordFindingEvidenceRequest: recordFindingEvidenceRequest,
-            recordFindingEvidenceRun: recordFindingEvidenceRun);
+            recordFindingEvidenceRun: recordFindingEvidenceRun,
+            getFindingEvidenceEngineSettings: getFindingEvidenceEngineSettings);
     }
 
     private static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>
@@ -3757,6 +3759,49 @@ public sealed class ConductorDriverTests
         var retryBrief = kernel.BuildTaskBrief(goal.Id, reviewer.Id).Content;
         Assert.Contains("reason=unsupported-project", retryBrief, StringComparison.Ordinal);
         Assert.Contains("valid evidence passed", retryBrief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FindingEvidenceRequestAcceptsAnyRegisteredExtractedInfrastructureProject()
+    {
+        const string secondProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondModule/" +
+            "Mcg.AgentOrchestrator.Infrastructure.SecondModule.Tests.csproj";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "A future extracted project needs focused evidence.",
+            id: "second-extracted-project",
+            project: "Infrastructure.SecondModule.Tests",
+            classes: ["SecondModuleTests"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "registered extracted project", findings: [finding]);
+        string? request = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            getFindingEvidenceEngineSettings: _ => new AcceptanceGateEngineSettings
+            {
+                MtpInvocations = [new AcceptanceMtpInvocation { Project = secondProject }]
+            },
+            runFocusedEvidence: (_, value) =>
+            {
+                request = value;
+                return new FocusedEvidenceRunResult(value, true, true, "registered project passed", []);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal("Infrastructure.SecondModule.Tests: SecondModuleTests", request);
+        var recorded = reviewer.VerificationHistory.Last().MergedReviewFindings!;
+        Assert.True(recorded.Single(item => item.StableId == "second-extracted-project").EvidenceOutcome?.Honoured);
     }
 
     [Xunit.Fact]
