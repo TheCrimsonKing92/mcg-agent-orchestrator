@@ -89,6 +89,248 @@ internal sealed record ConductorParallelAcceptanceCandidate(
 
 }
 
+internal sealed record ConductorSpeculativeAcceptanceCandidate(
+    GoalId GoalId,
+    GateReadyCandidateProjectionResult ProjectionResult);
+
+internal sealed record ConductorSpeculativeAcceptanceCohort(
+    IReadOnlyList<GateReadyCandidateProjection> Members);
+
+internal abstract record ConductorSpeculativeAcceptanceExclusionEvidence
+{
+    private ConductorSpeculativeAcceptanceExclusionEvidence()
+    {
+    }
+
+    internal sealed record Upstream(GateReadyCandidateExclusionReason Reason)
+        : ConductorSpeculativeAcceptanceExclusionEvidence;
+
+    internal sealed record MainRevisionMismatch(
+        GoalId ConflictingGoalId,
+        string ExpectedMainRevision,
+        string ActualMainRevision)
+        : ConductorSpeculativeAcceptanceExclusionEvidence;
+
+    internal sealed record LandingPathOverlap(
+        GoalId ConflictingGoalId,
+        string Path,
+        string ConflictingPath)
+        : ConductorSpeculativeAcceptanceExclusionEvidence;
+
+    internal sealed record SerializedResourceOverlap(
+        GoalId ConflictingGoalId,
+        string ResourceKey)
+        : ConductorSpeculativeAcceptanceExclusionEvidence;
+}
+
+internal enum ConductorSpeculativeAcceptanceDeferralReason
+{
+    CohortCapacity,
+    InsufficientCompatiblePeers
+}
+
+internal abstract record ConductorSpeculativeAcceptanceDisposition(GoalId GoalId)
+{
+    internal sealed record Proposed(GoalId GoalId, int CohortIndex)
+        : ConductorSpeculativeAcceptanceDisposition(GoalId);
+
+    internal sealed record Excluded(
+        GoalId GoalId,
+        ConductorSpeculativeAcceptanceExclusionEvidence Evidence)
+        : ConductorSpeculativeAcceptanceDisposition(GoalId);
+
+    internal sealed record Deferred(
+        GoalId GoalId,
+        ConductorSpeculativeAcceptanceDeferralReason Reason)
+        : ConductorSpeculativeAcceptanceDisposition(GoalId);
+}
+
+internal sealed record ConductorSpeculativeAcceptancePlan(
+    IReadOnlyList<ConductorSpeculativeAcceptanceCohort> Cohorts,
+    IReadOnlyList<ConductorSpeculativeAcceptanceDisposition> Dispositions)
+{
+    internal string FormatReceipt(int tick)
+    {
+        const int maxRenderedOutcomes = 8;
+        const int maxReceiptLength = 1024;
+
+        var members = Cohorts.Count == 0
+            ? "none"
+            : string.Join(',', Cohorts[0].Members.Select(member => Prefix(member.GoalId)));
+        var nonProposed = Dispositions
+            .Where(disposition => disposition is not ConductorSpeculativeAcceptanceDisposition.Proposed)
+            .ToArray();
+        var rendered = nonProposed.Take(maxRenderedOutcomes).ToArray();
+        var exclusions = rendered
+            .OfType<ConductorSpeculativeAcceptanceDisposition.Excluded>()
+            .Select(exclusion => $"{Prefix(exclusion.GoalId)}:{Render(exclusion.Evidence)}")
+            .ToArray();
+        var deferrals = rendered
+            .OfType<ConductorSpeculativeAcceptanceDisposition.Deferred>()
+            .Select(deferral => $"{Prefix(deferral.GoalId)}:{deferral.Reason}")
+            .ToArray();
+        var receipt =
+            $"SPECULATIVE_COHORT_PLAN tick={tick} advisory=true members={members} " +
+            $"exclusions={(exclusions.Length == 0 ? "none" : string.Join(',', exclusions))} " +
+            $"deferred={(deferrals.Length == 0 ? "none" : string.Join(',', deferrals))} " +
+            $"omitted={nonProposed.Length - rendered.Length}";
+        if (receipt.Length <= maxReceiptLength)
+        {
+            return receipt;
+        }
+
+        const string suffix = " truncated=true";
+        return receipt[..(maxReceiptLength - suffix.Length)] + suffix;
+    }
+
+    private static string Prefix(GoalId goalId) => goalId.Value[..Math.Min(8, goalId.Value.Length)];
+
+    private static string Render(ConductorSpeculativeAcceptanceExclusionEvidence evidence) => evidence switch
+    {
+        ConductorSpeculativeAcceptanceExclusionEvidence.Upstream upstream => upstream.Reason.ToString(),
+        ConductorSpeculativeAcceptanceExclusionEvidence.MainRevisionMismatch mismatch =>
+            $"MainRevisionMismatch(conflict={Prefix(mismatch.ConflictingGoalId)},expected={Bound(mismatch.ExpectedMainRevision)},actual={Bound(mismatch.ActualMainRevision)})",
+        ConductorSpeculativeAcceptanceExclusionEvidence.LandingPathOverlap overlap =>
+            $"LandingPathOverlap(conflict={Prefix(overlap.ConflictingGoalId)},path={Bound(overlap.Path)},other={Bound(overlap.ConflictingPath)})",
+        ConductorSpeculativeAcceptanceExclusionEvidence.SerializedResourceOverlap overlap =>
+            $"SerializedResourceOverlap(conflict={Prefix(overlap.ConflictingGoalId)},resource={Bound(overlap.ResourceKey)})",
+        _ => throw new InvalidOperationException($"Unknown speculative acceptance exclusion evidence {evidence.GetType().Name}.")
+    };
+
+    private static string Bound(string value)
+    {
+        const int maxLength = 96;
+        var singleToken = value
+            .Replace(' ', '_')
+            .Replace('\t', '_')
+            .Replace('\r', '_')
+            .Replace('\n', '_');
+        return singleToken.Length <= maxLength ? singleToken : singleToken[..maxLength];
+    }
+}
+
+internal static class ConductorSpeculativeAcceptanceCohortPlanner
+{
+    internal const int MaximumCohortSize = 4;
+    private const int MinimumCohortSize = 2;
+
+    internal static ConductorSpeculativeAcceptancePlan Plan(
+        IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> orderedCandidates)
+    {
+        ArgumentNullException.ThrowIfNull(orderedCandidates);
+
+        var selected = new List<GateReadyCandidateProjection>(MaximumCohortSize);
+        var dispositions = new List<ConductorSpeculativeAcceptanceDisposition>(orderedCandidates.Count);
+        foreach (var candidate in orderedCandidates)
+        {
+            ArgumentNullException.ThrowIfNull(candidate);
+            ArgumentNullException.ThrowIfNull(candidate.ProjectionResult);
+
+            if (candidate.ProjectionResult is GateReadyCandidateProjectionResult.Excluded upstream)
+            {
+                dispositions.Add(new ConductorSpeculativeAcceptanceDisposition.Excluded(
+                    candidate.GoalId,
+                    new ConductorSpeculativeAcceptanceExclusionEvidence.Upstream(upstream.Reason)));
+                continue;
+            }
+
+            var projection = ((GateReadyCandidateProjectionResult.Ready)candidate.ProjectionResult).Projection;
+            if (projection.GoalId != candidate.GoalId)
+            {
+                throw new InvalidOperationException(
+                    $"Speculative acceptance candidate identity {candidate.GoalId.Value} does not match projection {projection.GoalId.Value}.");
+            }
+
+            if (selected.Count >= MaximumCohortSize)
+            {
+                dispositions.Add(new ConductorSpeculativeAcceptanceDisposition.Deferred(
+                    candidate.GoalId,
+                    ConductorSpeculativeAcceptanceDeferralReason.CohortCapacity));
+                continue;
+            }
+
+            var exclusion = FindExclusion(projection, selected);
+            if (exclusion is not null)
+            {
+                dispositions.Add(new ConductorSpeculativeAcceptanceDisposition.Excluded(
+                    candidate.GoalId,
+                    exclusion));
+                continue;
+            }
+
+            dispositions.Add(new ConductorSpeculativeAcceptanceDisposition.Proposed(candidate.GoalId, 0));
+            selected.Add(projection);
+        }
+
+        if (selected.Count < MinimumCohortSize)
+        {
+            var proposedIds = selected.Select(candidate => candidate.GoalId).ToHashSet();
+            for (var index = 0; index < dispositions.Count; index++)
+            {
+                if (dispositions[index] is ConductorSpeculativeAcceptanceDisposition.Proposed proposed &&
+                    proposedIds.Contains(proposed.GoalId))
+                {
+                    dispositions[index] = new ConductorSpeculativeAcceptanceDisposition.Deferred(
+                        proposed.GoalId,
+                        ConductorSpeculativeAcceptanceDeferralReason.InsufficientCompatiblePeers);
+                }
+            }
+
+            return new ConductorSpeculativeAcceptancePlan(
+                Array.Empty<ConductorSpeculativeAcceptanceCohort>(),
+                Array.AsReadOnly(dispositions.ToArray()));
+        }
+
+        return new ConductorSpeculativeAcceptancePlan(
+            Array.AsReadOnly(
+            [
+                new ConductorSpeculativeAcceptanceCohort(Array.AsReadOnly(selected.ToArray()))
+            ]),
+            Array.AsReadOnly(dispositions.ToArray()));
+    }
+
+    private static ConductorSpeculativeAcceptanceExclusionEvidence? FindExclusion(
+        GateReadyCandidateProjection candidate,
+        IReadOnlyList<GateReadyCandidateProjection> selected)
+    {
+        foreach (var existing in selected)
+        {
+            if (!candidate.MainRevision.Equals(existing.MainRevision, StringComparison.Ordinal))
+            {
+                return new ConductorSpeculativeAcceptanceExclusionEvidence.MainRevisionMismatch(
+                    existing.GoalId,
+                    existing.MainRevision,
+                    candidate.MainRevision);
+            }
+
+            foreach (var path in candidate.LandingPaths)
+            {
+                foreach (var existingPath in existing.LandingPaths)
+                {
+                    if (RepositoryPathOverlap.Overlaps(path, existingPath))
+                    {
+                        return new ConductorSpeculativeAcceptanceExclusionEvidence.LandingPathOverlap(
+                            existing.GoalId,
+                            path,
+                            existingPath);
+                    }
+                }
+            }
+
+            var sharedResource = candidate.ResourceKeys.FirstOrDefault(resource =>
+                existing.ResourceKeys.Contains(resource, StringComparer.OrdinalIgnoreCase));
+            if (sharedResource is not null)
+            {
+                return new ConductorSpeculativeAcceptanceExclusionEvidence.SerializedResourceOverlap(
+                    existing.GoalId,
+                    sharedResource);
+            }
+        }
+
+        return null;
+    }
+}
+
 internal sealed record ConductorParallelAcceptanceRunResult(
     ConductorParallelAcceptanceCandidate Candidate,
     AcceptanceVerificationSummary? Acceptance,
