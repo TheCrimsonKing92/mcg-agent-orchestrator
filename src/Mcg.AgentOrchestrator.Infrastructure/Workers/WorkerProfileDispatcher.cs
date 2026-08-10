@@ -577,7 +577,13 @@ public static class WorkerProfileDispatcher
                 $"worker profile '{profile.Name}' does not include {{subscriptionReasoningEffort}}",
                 $"worker profile '{profile.Name}' pins selected reasoning when required");
 
-            var capability = WorkerSandboxCapabilityPlanner.Evaluate(goal, task, profile, workingDirectory, allowGitReference);
+            var capability = WorkerSandboxCapabilityPlanner.Evaluate(
+                goal,
+                task,
+                profile,
+                workingDirectory,
+                allowGitReference,
+                sandbox);
             findings.Add($"capability: {capability.Status} - {capability.Detail}");
             if (!capability.Allowed)
             {

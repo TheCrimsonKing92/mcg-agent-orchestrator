@@ -1165,6 +1165,24 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("skill selection", skillArtifact.GetProperty("summary").GetString()!, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerSkillSelector_routes_hyphenated_worker_skill_signal_in_isolation")]
+    public void WorkerSkillSelectorRoutesHyphenatedWorkerSkillSignalInIsolation()
+    {
+        var workingDirectory = CreateTempDirectory();
+        WriteSkill(workingDirectory, "skill-authoring");
+        var task = new TaskSpec(
+            TaskId.New(),
+            "Document hyphenated worker-skill behavior.",
+            AgentRole.Researcher);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Maintain procedural catalog", [task]);
+
+        var selected = new WorkerSkillSelector().SelectSkillRequirements(goal, task, workingDirectory);
+
+        var skill = Assert.Single(selected);
+        Assert.Equal("skill-authoring", skill.Name);
+        Assert.True(skill.Available);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerSkillSelector_routes_systematic_debugging_at_criterion_retry_two_only")]
     public void WorkerSkillSelectorRoutesSystematicDebuggingAtCriterionRetryTwoOnly()
 {

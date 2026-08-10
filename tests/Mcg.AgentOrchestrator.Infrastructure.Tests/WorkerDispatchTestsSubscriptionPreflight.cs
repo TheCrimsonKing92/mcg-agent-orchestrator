@@ -265,6 +265,62 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.True(task.LastDispatch is null);
 }
 
+    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_honors_explicit_sandbox_for_repo_skills_over_ambient_state")]
+    [Xunit.InlineData(false, "1", "blocked")]
+    [Xunit.InlineData(true, "0", "repo-skill-write")]
+    public void WorkerProfileDispatcherPreflightHonorsExplicitSandboxForRepoSkillsOverAmbientState(
+        bool explicitSandboxEnabled,
+        string ambientSandboxValue,
+        string expectedCapabilityStatus)
+    {
+        var previousSandbox = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, ambientSandboxValue);
+            var workingDirectory = CreateTempDirectory();
+            File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+            WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
+            WriteSkill(workingDirectory, "skill-authoring");
+            WriteSkill(workingDirectory, "verification-before-completion");
+            var kernel = new AgentOrchestratorKernel();
+            var task = new TaskSpec(
+                TaskId.New(),
+                "Update .agents/skills/example/SKILL.md.",
+                AgentRole.Developer);
+            var goal = kernel.CreateGoal("Maintain repo-scoped procedures", [task]);
+            var agent = new AgentDefinition(
+                new AgentId("developer"),
+                "Developer",
+                AgentRole.Developer,
+                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+            kernel.ActivateGoal(goal.Id, [agent]);
+            var sandbox = new WorkerSandboxOptions(
+                explicitSandboxEnabled,
+                WorkerSandboxOptions.DefaultAccount,
+                WorkerSandboxOptions.DefaultCredentialTarget);
+
+            var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+                goal,
+                task,
+                [agent],
+                WorkerProfileCatalog.Default(),
+                workingDirectory,
+                DateTimeOffset.Parse("2026-08-10T12:00:00Z"),
+                sandboxOptions: sandbox);
+
+            Assert.Equal(expectedCapabilityStatus, preflight.CapabilityStatus);
+            Assert.Contains(
+                preflight.Findings,
+                finding => finding.Contains($"capability: {expectedCapabilityStatus}", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previousSandbox);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_skips_preflight_blocked_tasks")]
     public void WorkerProfileDispatcherReadyBatchSkipsPreflightBlockedTasks()
 {
