@@ -461,7 +461,7 @@ internal static partial class PlannerOutputContract
         return fields;
     }
 
-    [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?:criterion[ \t]+)?(?<criterion>\d+)(?:[.)\]:-]|[ \t]+(?:maps?|→|=>))[ \t]*(?<mapping>.*)$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^[ \t]*(?:[-*][ \t]+)?(?:criterion[ \t]+)?(?<criterion>\d+)\b(?:[ \t]*[.)\]:-][ \t]*(?:(?:maps?(?:[ \t]+to)?|covers)[ \t]+)?|[ \t]+(?:maps?(?:[ \t]+to)?|covers|→|=>)[ \t]*)(?<mapping>.*)$", RegexOptions.IgnoreCase)]
     private static partial Regex CriterionMappingLine();
 
     [GeneratedRegex(@"(?i)(?<name>disposition|plan|would-settle|required-source|unavailable-because)\s*=\s*(?<value>[^;]+)")]
