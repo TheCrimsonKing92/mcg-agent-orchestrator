@@ -161,7 +161,9 @@ public sealed class ConductorBatchLoopTests
         ConductorParallelAcceptanceAttemptCoordinator? parallelAcceptanceAttemptCoordinator = null,
         Func<Goal, int>? getAcceptanceSlotCount = null,
         Func<bool>? hasGateReadyGoal = null,
-        Func<int>? getWorkerAdmissionCapacity = null) =>
+        Func<int>? getWorkerAdmissionCapacity = null,
+        Func<Goal, bool>? isVerificationGateSatisfied = null,
+        GateReadyCandidateProjector? gateReadyCandidateProjector = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -193,7 +195,9 @@ public sealed class ConductorBatchLoopTests
             getAcceptanceSlotCount: getAcceptanceSlotCount,
             hasGateReadyGoal: hasGateReadyGoal,
             getWorkerAdmissionCapacity: getWorkerAdmissionCapacity,
-            recheckPreLandingRebaseConflict: recheckPreLandingRebaseConflict);
+            recheckPreLandingRebaseConflict: recheckPreLandingRebaseConflict,
+            isVerificationGateSatisfied: isVerificationGateSatisfied,
+            gateReadyCandidateProjector: gateReadyCandidateProjector);
 
     // Returns a path to a stop file that does NOT exist yet.
     private static string NoStopPath() =>
@@ -1515,6 +1519,85 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, summary.Advanced);
         Assert.Equal(1, summary.Escalated);
         Assert.Equal([passing.Id.Value], landed);
+    }
+
+    [Xunit.Fact(DisplayName = "SpeculativeCohort_advisory_receipt_does_not_change_ordinary_acceptance")]
+    public void SpeculativeCohortAdvisoryReceiptDoesNotChangeOrdinaryAcceptance()
+    {
+        var root = CreateTempDirectory("mcg-speculative-cohort-advisory");
+        var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateVerifiedSimpleGoal(kernel, "Update first advisory source");
+        var second = CreateVerifiedSimpleGoal(kernel, "Update second advisory source");
+        var statusesBefore = new[] { first.Status, second.Status };
+        var paths = new Dictionary<GoalId, IReadOnlyList<string>>
+        {
+            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Cli/FirstAdvisory.cs"],
+            [second.Id] = ["src/Mcg.AgentOrchestrator.App/Orchestration/SecondAdvisory.cs"]
+        };
+        var acceptanceCalls = new List<string>();
+        var landed = new List<string>();
+        var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(
+                goalId.Value.PadRight(40, 'b')[..40],
+                mainRevision),
+            goalId => new GateReadyLandingScopeObservation(true, paths[goalId]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+
+        try
+        {
+            var driver = MakeDriver(
+                getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+                runAcceptanceWithSlot: (goal, _) =>
+                {
+                    acceptanceCalls.Add(goal.Id.Value);
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
+                land: goal =>
+                {
+                    landed.Add(goal.Id.Value);
+                    return new LandingResult(
+                        goal.Id.Value,
+                        goal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        "integration",
+                        true,
+                        "ok");
+                },
+                classifyRisk: _ => ChangeRiskTier.DocsOnly,
+                getLandingFileScopes: goal => paths[goal.Id],
+                isVerificationGateSatisfied: _ => true,
+                gateReadyCandidateProjector: projector);
+
+            var summary = new ConductorBatchLoop(
+                conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 1);
+            var cohortEvents = File.ReadAllLines(logPath)
+                .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(
+                    line,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
+                .Where(record => record.EventKind == "speculative-cohort-plan")
+                .ToArray();
+
+            Assert.Equal(2, summary.Advanced);
+            Assert.Equal(2, acceptanceCalls.Count);
+            Assert.Equal(2, landed.Count);
+            Assert.Equal(statusesBefore, new[] { first.Status, second.Status });
+            var receipt = Assert.Single(cohortEvents);
+            Assert.Null(receipt.GoalId);
+            Assert.Contains("advisory=true", receipt.Detail, StringComparison.Ordinal);
+            Assert.Contains(first.Id.Value[..8], receipt.Detail, StringComparison.Ordinal);
+            Assert.Contains(second.Id.Value[..8], receipt.Detail, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_slot_path_unmet_acceptance_retries_with_concrete_feedback")]

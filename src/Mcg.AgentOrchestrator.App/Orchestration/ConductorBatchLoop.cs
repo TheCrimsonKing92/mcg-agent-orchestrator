@@ -1749,6 +1749,7 @@ internal sealed class ConductorBatchLoop
             "POLICY_RELOAD" => "policy-reload",
             "POLICY_RELOAD_FAILED" => "policy-reload-failed",
             "POLICY_WARNING" => "policy-warning",
+            "SPECULATIVE_COHORT_PLAN" => "speculative-cohort-plan",
             "SWEEP_BLOCKER" => "sweep-blocker",
             "SWEEP_ESCALATION" => "sweep-escalation",
             "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",
@@ -2428,6 +2429,13 @@ internal sealed class ConductorBatchLoop
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
+        var speculativeCandidates = orderedEligible
+            .Select(goal => new ConductorSpeculativeAcceptanceCandidate(
+                goal.Id,
+                driver.ProjectGateReadyCandidate(goal, policy)))
+            .ToArray();
+        var speculativePlan = ConductorSpeculativeAcceptanceCohortPlanner.Plan(speculativeCandidates);
+        EmitProgress(speculativePlan.FormatReceipt(tick));
         var liveAttemptGoalIds = driver.ParallelAcceptanceAttemptCoordinator.GetLiveAttemptGoalIds(
             orderedEligible.Select(goal => goal.Id.Value));
         var oldestWaiter = SelectOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
