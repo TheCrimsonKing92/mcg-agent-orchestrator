@@ -72,6 +72,28 @@ public sealed class GoalWorktreeTestsAcceptanceLanding : GoalWorktreeTestBase
         Assert.Equal("failed", evidence.AcceptanceOutcome);
     }
 
+    [Xunit.Fact]
+    public void AcceptanceProjectionDoesNotTreatAutomaticMergeEvidenceAsManualLanding()
+    {
+        var goalId = GoalId.New();
+        var terminalDisposition = new GoalTerminalDisposition(
+            GoalTerminalDispositionKind.Landed,
+            "Goal terminalized from merge evidence.",
+            GoalTerminalDispositionSource.MergeEvidence);
+        var entry = new GoalOperationJournalEntry(
+            "terminal-disposition",
+            goalId,
+            GoalOperationJournal.TerminalDispositionOperation,
+            GoalOperationStatus.Completed,
+            DateTimeOffset.Parse("2026-08-09T12:00:00Z", CultureInfo.InvariantCulture),
+            JsonSerializer.Serialize(terminalDisposition));
+        var journal = new GoalOperationJournalSummary("unused", [entry], [entry], []);
+
+        var evidence = GoalLandingPostActions.ResolveDogfoodLandingEvidence(journal);
+
+        Assert.False(evidence.WasManuallyLanded);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_acceptance_retry_treats_landed_cleaned_missing_worktree_as_accepted")]
     public void CliAcceptanceRetryTreatsLandedCleanedMissingWorktreeAsAccepted()
     {

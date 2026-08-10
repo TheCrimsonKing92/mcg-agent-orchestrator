@@ -45,8 +45,7 @@ internal static class GoalLandingPostActions
             string.Equals(
                 GoalOperationJournal.TryGetLatestLandingIntent(journal)?.Source,
                 "goal-mark-landed",
-                StringComparison.OrdinalIgnoreCase) ||
-            GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal);
+                StringComparison.OrdinalIgnoreCase);
 
         var acceptance = journal.Entries
             .Select((entry, index) => (Entry: entry, Index: index))
