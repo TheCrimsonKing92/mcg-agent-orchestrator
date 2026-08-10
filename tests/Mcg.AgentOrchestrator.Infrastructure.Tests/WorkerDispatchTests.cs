@@ -464,7 +464,7 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
     [
         new WorkerProfile(
             "codex-cli",
-            "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} {promptPath}"),
+            "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"),
         new WorkerProfile(
             "claude-cli",
             "claude --model {subscriptionModelName} --permission-mode {permissionMode}")
