@@ -199,7 +199,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             ["id:TEXT:0", "status:TEXT:1", "objective:TEXT:1", "source_backlog_item_id:TEXT:0", "updated_at:TEXT:1", "snapshot_json:TEXT:1", "version:INTEGER:1"],
             QueryStrings(conn, "SELECT name || ':' || type || ':' || [notnull] FROM pragma_table_info('goals') ORDER BY cid"));
         Xunit.Assert.Equal(
-            ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason"],
+            ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason", "processing_token", "processing_started_at"],
             QueryStrings(conn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
     }
 
@@ -1189,6 +1189,8 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var outboxColumns = QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid");
         Assert.Contains("quarantined_at", outboxColumns);
         Assert.Contains("quarantine_reason", outboxColumns);
+        Assert.Contains("processing_token", outboxColumns);
+        Assert.Contains("processing_started_at", outboxColumns);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_successor_preflight_allows_outbox_quarantine_column_migration")]
@@ -1216,7 +1218,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         using var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;");
         checkConn.Open();
         Assert.Equal(
-            ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason"],
+            ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason", "processing_token", "processing_started_at"],
             QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
 
         static void Exec(SqliteConnection connection, string sql)
@@ -1250,7 +1252,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         {
             checkConn.Open();
             Assert.Equal(
-                ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason"],
+                ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason", "processing_token", "processing_started_at"],
                 QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
             Assert.Equal(
                 ["ix_state_outbox_kind"],

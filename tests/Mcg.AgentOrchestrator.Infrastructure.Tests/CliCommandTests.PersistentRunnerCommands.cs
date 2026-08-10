@@ -1200,6 +1200,132 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Single((await repository.LoadAsync()).Goals);
     }
 
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_goal_create_delivery_releases_state_writer_during_external_io")]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task PersistentRunnerGoalCreateDeliveryReleasesStateWriterDuringExternalIo(bool retry)
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var concurrentRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        if (retry)
+        {
+            GoalCreationSideEffectDelivery.BeforeEffectDelivery = _ =>
+                throw new IOException("Injected initial delivery failure.");
+            try
+            {
+                var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+                    CliPersistentStateRunner.ExecuteCommand(
+                        ["goal", "Create a goal whose delivery will be retried outside the state transaction"],
+                        repository,
+                        workspace,
+                        ref agents,
+                        providers,
+                        ref profiles,
+                        ref currentGoal)));
+                Xunit.Assert.Contains("GOAL_CREATE_DELIVERY_INCOMPLETE", error.Message, StringComparison.Ordinal);
+            }
+            finally
+            {
+                GoalCreationSideEffectDelivery.BeforeEffectDelivery = null;
+            }
+
+            Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+        }
+
+        using var deliveryEntered = new ManualResetEventSlim();
+        using var releaseDelivery = new ManualResetEventSlim();
+        var deliveryCalls = 0;
+        GoalCreationSideEffectDelivery.BeforeEffectDelivery = _ =>
+        {
+            if (Interlocked.Increment(ref deliveryCalls) != 1)
+                return;
+
+            deliveryEntered.Set();
+            Xunit.Assert.True(
+                releaseDelivery.Wait(TimeSpan.FromSeconds(15)),
+                "Timed out waiting to release the external goal-creation delivery.");
+        };
+
+        var deliveryTask = Task.Run(() => CaptureConsole(() =>
+        {
+            if (retry)
+            {
+                var created = Xunit.Assert.Single(repository.LoadAsync().GetAwaiter().GetResult().Goals);
+                _ = CliPersistentStateRunner.ExecuteCommand(
+                    ["goal-delivery-retry", created.Id.Value],
+                    repository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            }
+            else
+            {
+                _ = CliPersistentStateRunner.ExecuteCommand(
+                    ["goal", "Create a goal whose initial delivery runs outside the state transaction"],
+                    repository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+            }
+        }));
+
+        try
+        {
+            Xunit.Assert.True(
+                deliveryEntered.Wait(TimeSpan.FromSeconds(15)),
+                "Goal-creation delivery did not reach the blocking external effect.");
+            await concurrentRepository.TransactAsync(
+                (kernel, _) =>
+                {
+                    kernel.CreateGoal("Concurrent writer during goal-creation delivery");
+                    return Task.FromResult((true, true));
+                }).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            releaseDelivery.Set();
+            GoalCreationSideEffectDelivery.BeforeEffectDelivery = null;
+        }
+
+        await deliveryTask.WaitAsync(TimeSpan.FromSeconds(15));
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Equal(2, restored.Goals.Count);
+        Xunit.Assert.Contains(restored.Goals, goal => goal.Objective == "Concurrent writer during goal-creation delivery");
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+
+        var createdGoal = Xunit.Assert.Single(restored.Goals, goal =>
+            goal.Objective != "Concurrent writer during goal-creation delivery");
+        var collaborationItems = await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+            .ListAsync(createdGoal.Id.Value);
+        Xunit.Assert.Equal(
+            collaborationItems.Count,
+            collaborationItems.Select(item => item.CorrelationKey).Distinct(StringComparer.Ordinal).Count());
+        var eventPath = Path.Combine(workspace.GoalLifecycleEventsDirectory, $"{createdGoal.Id.Value}.jsonl");
+        var deliveryIds = File.ReadLines(eventPath)
+            .Select(line => JsonNode.Parse(line)!["deliveryId"]?.GetValue<string>())
+            .Where(id => id is not null)
+            .ToArray();
+        Xunit.Assert.Equal(deliveryIds.Length, deliveryIds.Distinct(StringComparer.Ordinal).Count());
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_analysis_failure_leaves_no_state_or_delivery_trace")]
     public async Task PersistentRunnerGoalCreateAnalysisFailureLeavesNoStateOrDeliveryTrace()
     {

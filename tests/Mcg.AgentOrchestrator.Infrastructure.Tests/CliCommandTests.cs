@@ -539,6 +539,7 @@ public abstract class CliCommandTestBase
     {
         private AgentOrchestratorKernel _kernel;
         private readonly Dictionary<string, OrchestratorStateOutboxMessage> _outbox = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _outboxClaims = new(StringComparer.Ordinal);
 
         public InMemoryTransactionalStateRepository(AgentOrchestratorKernel kernel)
         {
@@ -819,15 +820,39 @@ public abstract class CliCommandTestBase
         {
             TransactionCount++;
             TransactAsyncCount++;
-            if (!_outbox.TryGetValue(id, out var message))
-                return false;
-
             IsInTransaction = true;
+            OrchestratorStateOutboxMessage? message;
             try
             {
-                var result = await processor(message, cancellationToken);
-                _outbox.Remove(id);
+                lock (_outbox)
+                {
+                    if (!_outbox.TryGetValue(id, out message) || !_outboxClaims.Add(id))
+                        return false;
+                }
+            }
+            finally
+            {
+                IsInTransaction = false;
+            }
+
+            try
+            {
+                _ = await processor(message, cancellationToken);
+                TransactionCount++;
+                TransactAsyncCount++;
+                IsInTransaction = true;
+                lock (_outbox)
+                {
+                    if (!_outboxClaims.Remove(id) || !_outbox.Remove(id))
+                        throw new InvalidOperationException($"Outbox message '{id}' lost its processing claim before finalization.");
+                }
                 return true;
+            }
+            catch
+            {
+                lock (_outbox)
+                    _outboxClaims.Remove(id);
+                throw;
             }
             finally
             {
