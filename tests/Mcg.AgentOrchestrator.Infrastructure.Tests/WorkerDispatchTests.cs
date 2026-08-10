@@ -15,6 +15,14 @@ using System.Text.Json;
 
 public abstract class WorkerDispatchTestSupport
 {
+    protected static string CreateTempDirectory()
+    {
+        var path = InfrastructureTestSupport.CreateTempDirectory();
+        SeedLocalSkillCatalog(path);
+        SeedLocalSkillCatalog(Path.Combine(path, "repo"));
+        return path;
+    }
+
 protected static AgentDefinition TestSubscriptionAgent(string id, string name, AgentRole role) =>
     new(
         new AgentId(id),
@@ -487,6 +495,7 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
     protected static string CreateSeededDispatchRepository()
 {
     var root = CreateTempDirectory();
+    Directory.Delete(Path.Combine(root, "repo"), recursive: true);
     RunGit(root, ["init", "-b", "main"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["config", "user.email", "tests@example.com"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["config", "user.name", "Dispatch Tests"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));

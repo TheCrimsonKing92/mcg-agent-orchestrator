@@ -639,6 +639,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(latestGoal.Id, agents);
         var olderWorktreePath = GoalWorktrees.WorktreePath(root, olderGoal.Id);
         Directory.CreateDirectory(olderWorktreePath);
+        SeedLocalSkillCatalog(olderWorktreePath);
         File.WriteAllText(Path.Combine(olderWorktreePath, ".git"), "gitdir: ..");
         var olderGoalPrefix = olderGoal.Id.Value[..8];
 
@@ -685,6 +686,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(latestGoal.Id, agents);
         var olderWorktreePath = GoalWorktrees.WorktreePath(root, olderGoal.Id);
         Directory.CreateDirectory(olderWorktreePath);
+        SeedLocalSkillCatalog(olderWorktreePath);
         File.WriteAllText(Path.Combine(olderWorktreePath, ".git"), "gitdir: ..");
         var olderGoalPrefix = olderGoal.Id.Value[..8];
 
@@ -727,6 +729,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, agents);
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
+        SeedLocalSkillCatalog(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         kernel.RecordTaskVerification(goal.Id, goal.Tasks.Single().Id,
             new TaskVerificationRecord("check", root, 0, "passed", "", DateTimeOffset.UtcNow));
@@ -2316,6 +2319,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, agents);
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
+        SeedLocalSkillCatalog(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 
@@ -2585,6 +2589,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         agents = [newAgent];
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
+        SeedLocalSkillCatalog(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
 
         var redelegated = CliCommandDispatcher.ExecuteCommand(
@@ -2678,6 +2683,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, agents);
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
+        SeedLocalSkillCatalog(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 
@@ -2772,6 +2778,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, agents);
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
+        SeedLocalSkillCatalog(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
@@ -3222,6 +3229,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, agents);
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
+        SeedLocalSkillCatalog(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 
@@ -3268,6 +3276,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, agents);
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
+        SeedLocalSkillCatalog(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 
@@ -3389,6 +3398,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, agents);
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
+        SeedLocalSkillCatalog(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 
@@ -3435,6 +3445,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         kernel.ActivateGoal(goal.Id, agents);
         var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
         Directory.CreateDirectory(worktreePath);
+        SeedLocalSkillCatalog(worktreePath);
         File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: ..");
         var task = goal.Tasks.Single();
 

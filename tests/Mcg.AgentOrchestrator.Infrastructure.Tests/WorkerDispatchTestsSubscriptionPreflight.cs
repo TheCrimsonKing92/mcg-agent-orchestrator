@@ -218,7 +218,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
 {
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
-    var workingDirectory = Path.Combine(root, "repo");
+    var workingDirectory = Path.Combine(root, "missing-repo");
     if (createCatalogRoot)
     {
         Directory.CreateDirectory(Path.Combine(workingDirectory, ".agents", "skills"));

@@ -8,6 +8,13 @@ using Microsoft.Extensions.Hosting;
 [Xunit.Collection("EnvMutation")]
 public sealed class AdvanceLoopTests
 {
+    private static string CreateTempDirectory()
+    {
+        var path = InfrastructureTestSupport.CreateTempDirectory();
+        SeedLocalSkillCatalog(path);
+        return path;
+    }
+
     private const string BlockingCodexProfileCommand =
         "Start-Sleep -Seconds 30; Write-Output {subscriptionModelName}; Write-Output {subscriptionReasoningEffort}; Write-Output '--sandbox {sandboxMode} --cd {workingDirectory}'";
     private const string BlockingClaudeProfileCommand =
@@ -430,6 +437,7 @@ public sealed class AdvanceLoopTests
     var stateRoot = Path.Combine(root, "state");
     var executionRoot = Path.Combine(root, "repo");
     Directory.CreateDirectory(executionRoot);
+    SeedLocalSkillCatalog(executionRoot);
     var workspace = OrchestratorWorkspace.ForDirectory(stateRoot, executionRoot);
     var kernel = new AgentOrchestratorKernel();
     var goal = CreateRefinedGoal(kernel,
@@ -1557,7 +1565,7 @@ private static string EnsureGoalWorktree(string root, GoalId goalId)
         AssertGit(root, "config", "user.email", "tests@example.com");
         AssertGit(root, "config", "user.name", "Advance Loop Tests");
         File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
-        AssertGit(root, "add", "seed.txt");
+        AssertGit(root, "add", "-A");
         AssertGit(root, "commit", "-m", "Seed");
     }
 

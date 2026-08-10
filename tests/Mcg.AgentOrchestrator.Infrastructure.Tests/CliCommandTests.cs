@@ -13,6 +13,7 @@ public abstract class CliCommandTestBase
 {
     private protected static OrchestratorWorkspace CreateRefinedWorkspace(string root)
     {
+        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
