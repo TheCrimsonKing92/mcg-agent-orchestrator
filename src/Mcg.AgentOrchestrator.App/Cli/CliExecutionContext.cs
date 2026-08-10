@@ -31,7 +31,8 @@ internal sealed class CliExecutionContext(
     Action? registerAcceptanceGuardAbort = null,
     Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null,
     Action<Goal>? finalizeGoalCreation = null,
-    CollaborationItemRaise? refinementCollaborationItemRaise = null)
+    CollaborationItemRaise? refinementCollaborationItemRaise = null,
+    Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -55,6 +56,23 @@ public void PersistCheckpoint(AgentOrchestratorKernel checkpointKernel) => persi
 
 public void PersistGoalCheckpoint(AgentOrchestratorKernel checkpointKernel, IReadOnlyCollection<GoalId> changedGoalIds) =>
     persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
+
+public IReadOnlyList<GoalSnapshotCheckpointResult> CheckpointGoals(
+    AgentOrchestratorKernel checkpointKernel,
+    IReadOnlyCollection<GoalId> changedGoalIds)
+{
+    if (checkpointGoalKernel is not null)
+        return checkpointGoalKernel(checkpointKernel, changedGoalIds);
+
+    persistGoalKernel?.Invoke(checkpointKernel, changedGoalIds);
+    return changedGoalIds.Select(goalId => new GoalSnapshotCheckpointResult(
+        goalId.Value,
+        GoalSnapshotCheckpointDisposition.Durable,
+        SaveResult: null,
+        Store: "state",
+        DatabasePath: "unknown",
+        Operation: "legacy-checkpoint")).ToArray();
+}
 
 public void CommitWithState(
     OrchestratorStateOutboxMessage message,

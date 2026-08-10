@@ -3,6 +3,7 @@ using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -826,7 +827,11 @@ internal static class CliPersistentStateRunner
                     .Distinct(StringComparer.Ordinal)
                     .ToArray(),
                 workspace.ExecutionDirectory);
-        var kernel = LoadLoopKernel();
+        var startupStopPath = Path.Combine(workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+        var kernel = LoadInitialConductLoopKernelWithTransientHold(
+            LoadLoopKernel,
+            workspace,
+            stopRequested: () => File.Exists(startupStopPath));
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         TerminalGoalSweepResult? sweep = null;
         try
@@ -868,7 +873,50 @@ internal static class CliPersistentStateRunner
 
         void PersistGoals(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
         {
-            if (changedGoalIds.Count == 0) return;
+            var requests = BuildCheckpointRequests(checkpoint, changedGoalIds);
+            if (requests.Length == 0) return;
+
+            var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
+            ApplyDurableResults(checkpoint, results);
+        }
+
+        IReadOnlyList<GoalSnapshotCheckpointResult> CheckpointGoals(
+            AgentOrchestratorKernel checkpoint,
+            IReadOnlyCollection<GoalId> changedGoalIds)
+        {
+            var requests = BuildCheckpointRequests(checkpoint, changedGoalIds);
+            if (requests.Length == 0)
+                return [];
+
+            if (!stateRepository.SupportsGoalCheckpointContainment)
+            {
+                var legacyResults = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                ApplyDurableResults(checkpoint, legacyResults);
+                return legacyResults.Select(result => new GoalSnapshotCheckpointResult(
+                    result.GoalId,
+                    GoalSnapshotCheckpointDisposition.Durable,
+                    result,
+                    "state",
+                    "unknown",
+                    "legacy-checkpoint")).ToArray();
+            }
+
+            var results = stateRepository.CheckpointGoalSnapshotsAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
+            ApplyDurableResults(
+                checkpoint,
+                results.Where(result => result.IsDurable && result.SaveResult is not null)
+                    .Select(result => result.SaveResult!)
+                    .ToArray());
+            return results;
+        }
+
+        GoalSnapshotSaveRequest[] BuildCheckpointRequests(
+            AgentOrchestratorKernel checkpoint,
+            IReadOnlyCollection<GoalId> changedGoalIds)
+        {
+            if (changedGoalIds.Count == 0) return [];
 
             var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
             var checkpointSnapshot = checkpoint.ExportSnapshot();
@@ -876,7 +924,7 @@ internal static class CliPersistentStateRunner
                 .Where(request => changed.Contains(request.GoalId))
                 .GroupBy(request => request.GoalId, StringComparer.Ordinal)
                 .ToDictionary(group => group.Key, group => (IReadOnlyList<HumanInputRequestSnapshot>)group.ToArray(), StringComparer.Ordinal);
-            var requests = checkpointSnapshot.Goals
+            return checkpointSnapshot.Goals
                 .Where(goal => changed.Contains(goal.Id))
                 .Select(goal =>
                 {
@@ -891,10 +939,10 @@ internal static class CliPersistentStateRunner
                         humanInputByGoal.GetValueOrDefault(goal.Id, []));
                 })
                 .ToArray();
+        }
 
-            if (requests.Length == 0) return;
-
-            var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
+        void ApplyDurableResults(AgentOrchestratorKernel checkpoint, IReadOnlyList<GoalSnapshotSaveResult> results)
+        {
             var persistedTerminalGoalIds = new List<GoalId>();
             var persistedTerminalGoalIdValues = new HashSet<string>(StringComparer.Ordinal);
             foreach (var result in results)
@@ -942,12 +990,13 @@ internal static class CliPersistentStateRunner
             reacquireConductLoopLease: conductLoopLease.Reacquire,
             reloadResolvedParkedHumanWaitKernel: () => LoadConductLoopResolvedParkedHumanWaitKernel(stateRepository),
             reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository),
-            reloadKernelForGoals: LoadLoopKernelForGoals);
+            reloadKernelForGoals: LoadLoopKernelForGoals,
+            checkpointGoalKernel: CheckpointGoals);
 
         // A successful handoff has transferred the lease and authority to the successor. All incumbent
         // tick state was persisted before handoff; do not write once the successor owns the loop.
         if (conductLoopLease.IsHeld)
-            Persist(kernel);
+            _ = CheckpointGoals(kernel, kernel.Goals.Select(goal => goal.Id).ToArray());
         currentGoal = loopCurrentGoal;
         return shouldSave;
     }
@@ -965,6 +1014,56 @@ internal static class CliPersistentStateRunner
         catch
         {
             // Shared event streaming is advisory; stdout remains the primary conduct log.
+        }
+    }
+
+    internal static AgentOrchestratorKernel LoadInitialConductLoopKernelWithTransientHold(
+        Func<AgentOrchestratorKernel> load,
+        OrchestratorWorkspace workspace,
+        Func<bool>? stopRequested = null,
+        Action<TimeSpan>? holdDelay = null,
+        TimeSpan? holdInterval = null)
+    {
+        ArgumentNullException.ThrowIfNull(load);
+        ArgumentNullException.ThrowIfNull(workspace);
+        var delay = holdInterval ?? TimeSpan.FromSeconds(1);
+        if (delay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(holdInterval));
+
+        var eventWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        for (var holdCycle = 1; ; holdCycle++)
+        {
+            try
+            {
+                var kernel = load();
+                if (holdCycle > 1)
+                {
+                    var recovered =
+                        $"LOOP_LOAD_RECOVERED store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
+                        $"operation=loop:startup/load attempt={holdCycle} disposition=recovered";
+                    Console.WriteLine(recovered);
+                    eventWriter.Append("loop-load-recovered", null, recovered);
+                }
+                return kernel;
+            }
+            catch (SqliteException ex) when (SqliteOrchestratorStateRepository.IsTransientLock(ex))
+            {
+                var attempt = ex.Data["Mcg.AttemptCount"]?.ToString() ?? "unknown";
+                var elapsed = ex.Data["Mcg.ElapsedMilliseconds"]?.ToString() ?? "unknown";
+                var held =
+                    $"LOOP_LOAD_HOLD store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
+                    $"operation=loop:startup/load sqlite_code={ex.SqliteErrorCode} sqlite_extended_code={ex.SqliteExtendedErrorCode} " +
+                    $"attempt={attempt} hold_cycle={holdCycle} elapsed_ms={elapsed} disposition=exhausted-held holder=unknown";
+                Console.WriteLine(held);
+                eventWriter.Append("loop-load-hold", null, held);
+                if (stopRequested?.Invoke() == true)
+                    return new AgentOrchestratorKernel();
+
+                if (holdDelay is null)
+                    Thread.Sleep(delay);
+                else
+                    holdDelay(delay);
+            }
         }
     }
 

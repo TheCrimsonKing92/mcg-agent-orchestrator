@@ -37,7 +37,8 @@ public static bool ExecuteCommand(
     Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null,
     Action<Goal>? finalizeGoalCreation = null,
     IGoalLifecycleEventWriter? eventWriter = null,
-    CollaborationItemRaise? refinementCollaborationItemRaise = null)
+    CollaborationItemRaise? refinementCollaborationItemRaise = null,
+    Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null)
 {
     eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
@@ -66,7 +67,8 @@ public static bool ExecuteCommand(
         registerAcceptanceGuardAbort: registerAcceptanceGuardAbort,
         prepareAcceptanceMergeGuard: prepareAcceptanceMergeGuard,
         finalizeGoalCreation: finalizeGoalCreation,
-        refinementCollaborationItemRaise: refinementCollaborationItemRaise)
+        refinementCollaborationItemRaise: refinementCollaborationItemRaise,
+        checkpointGoalKernel: checkpointGoalKernel)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),

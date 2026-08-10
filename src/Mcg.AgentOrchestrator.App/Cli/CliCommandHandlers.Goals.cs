@@ -7,6 +7,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -1324,6 +1325,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // finishes but its result is never recorded — and a stop/restart re-dispatches the same
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 var terminalSweepCache = new TerminalGoalSweepCache();
+                var conductEventLogWriter = new ConductEventLogWriter(context.Workspace.ConductEventsLogPath);
                 var reconcileSweepOptions = ReconcileSweepConfiguration.Load(AppContext.BaseDirectory);
                 var reconcileSweepCoordinator = new ReconcileSweepRemediationCoordinator(
                     new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath),
@@ -1377,7 +1379,18 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                                     : "scheduled-reload");
                         }
                     }
-                    catch { /* dynamic pickup is best-effort */ }
+                    catch (SqliteException ex) when (SqliteOrchestratorStateRepository.IsTransientLock(ex))
+                    {
+                        var attempt = ex.Data["Mcg.AttemptCount"]?.ToString() ?? "unknown";
+                        var elapsed = ex.Data["Mcg.ElapsedMilliseconds"]?.ToString() ?? "unknown";
+                        var line =
+                            $"TICK_LOAD_HOLD store=state database={context.Workspace.SqliteStatePath.Replace(' ', '_')} " +
+                            $"operation=loop:tick/reload sqlite_code={ex.SqliteErrorCode} sqlite_extended_code={ex.SqliteExtendedErrorCode} " +
+                            $"attempt={attempt} elapsed_ms={elapsed} disposition=exhausted-held holder=unknown";
+                        Console.WriteLine(line);
+                        conductEventLogWriter.Append("tick-load-hold", null, line);
+                    }
+                    catch { /* non-transient dynamic pickup remains best-effort under the existing policy */ }
 
                     AgentOrchestratorKernel? resolvedParkedHumanWaitKernel = null;
                     try
@@ -1467,7 +1480,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper);
                     },
                     handoffOnMaxDuration: supervisedChild ? null : handoff,
-                    conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
+                    conductEventLogWriter: conductEventLogWriter,
                     operatorIntents: operatorIntents,
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
@@ -1491,7 +1504,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     policySource: loopPolicyResolution.Source,
                     reloadPolicy: loopPolicyName is null
                         ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
-                        : null);
+                        : null,
+                    checkpointGoalTick: context.CheckpointGoals);
                 if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
                 {
                     ConductorContinuityExitArtifact.Write(
@@ -1589,7 +1603,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     policySource: conductPolicyResolution.Source,
                     reloadPolicy: conductPolicyName is null
                         ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
-                        : null);
+                        : null,
+                    checkpointGoalTick: context.CheckpointGoals);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
             }

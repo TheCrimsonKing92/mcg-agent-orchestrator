@@ -11545,6 +11545,111 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, attempts);
     }
 
+    [Xunit.Theory(DisplayName = "TransientSqliteCheckpoint_BUSY_or_LOCKED_holds_one_goal_and_recovers_without_replaying_workspace_creation")]
+    [Xunit.InlineData(5)]
+    [Xunit.InlineData(6)]
+    public void TransientSqliteCheckpointBusyOrLockedHoldsOneGoalAndRecoversWithoutReplayingWorkspaceCreation(
+        int sqliteErrorCode)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goalA = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "held goal");
+        var goalB = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, DefaultAgents(), "unrelated goal");
+        var workspaceExists = new HashSet<string>(StringComparer.Ordinal);
+        var workspaceCreates = new Dictionary<string, int>(StringComparer.Ordinal);
+        var checkpointCalls = new List<string[]>();
+        var ticks = new List<BatchTickSummary>();
+        var firstBatch = true;
+        var leaseDirectory = Path.Combine(Path.GetTempPath(), $"mcg-checkpoint-lease-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(leaseDirectory);
+        using var lease = ConductorLoopLeaseController.Acquire(leaseDirectory);
+        var driver = MakeDriver(
+            getFacts: goal => new GoalLifecycleFacts(WorkspaceExists: workspaceExists.Contains(goal.Id.Value)),
+            createWorkspace: goal =>
+            {
+                workspaceExists.Add(goal.Id.Value);
+                workspaceCreates[goal.Id.Value] = workspaceCreates.GetValueOrDefault(goal.Id.Value) + 1;
+                return $"/tmp/{goal.Id.Value}";
+            });
+
+        IReadOnlyList<GoalSnapshotCheckpointResult> Checkpoint(
+            AgentOrchestratorKernel _,
+            IReadOnlyCollection<GoalId> requested)
+        {
+            Assert.True(lease.IsHeld);
+            checkpointCalls.Add(requested.Select(goalId => goalId.Value).ToArray());
+            var holdA = firstBatch && requested.Any(goalId => goalId == goalA.Id);
+            firstBatch = false;
+            return requested.Select(goalId => holdA && goalId == goalA.Id
+                ? new GoalSnapshotCheckpointResult(
+                    goalId.Value,
+                    GoalSnapshotCheckpointDisposition.Held,
+                    null,
+                    "state",
+                    "C:/fixture/state.db",
+                    $"loop:tick/TransactGoalStateAsync({goalId.Value[..8]})",
+                    sqliteErrorCode,
+                    sqliteErrorCode,
+                    AttemptCount: 3,
+                    ElapsedMilliseconds: 250)
+                : new GoalSnapshotCheckpointResult(
+                    goalId.Value,
+                    GoalSnapshotCheckpointDisposition.Durable,
+                    null,
+                    "state",
+                    "C:/fixture/state.db",
+                    $"loop:tick/TransactGoalStateAsync({goalId.Value[..8]})"))
+                .ToArray();
+        }
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 2,
+            onTick: ticks.Add,
+            checkpointGoalTick: Checkpoint);
+
+        Assert.Equal(2, summary.Ticks);
+        Assert.True(lease.IsHeld);
+        Assert.Equal(1, workspaceCreates[goalA.Id.Value]);
+        Assert.Equal(1, workspaceCreates[goalB.Id.Value]);
+        Assert.Contains(checkpointCalls, batch => batch.Contains(goalB.Id.Value));
+        Assert.Contains(checkpointCalls, batch => batch.Length == 1 && batch[0] == goalA.Id.Value);
+        var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
+        var hold = Assert.Single(lines, line => line.StartsWith("TICK_CHECKPOINT_HOLD ", StringComparison.Ordinal));
+        Assert.Contains($"sqlite_code={sqliteErrorCode}", hold, StringComparison.Ordinal);
+        Assert.Contains("store=state", hold, StringComparison.Ordinal);
+        Assert.Contains("database=C:/fixture/state.db", hold, StringComparison.Ordinal);
+        Assert.Contains("operation=loop:tick/TransactGoalStateAsync", hold, StringComparison.Ordinal);
+        Assert.Contains("attempt=3", hold, StringComparison.Ordinal);
+        Assert.Contains("elapsed_ms=250", hold, StringComparison.Ordinal);
+        Assert.Contains("disposition=exhausted-held", hold, StringComparison.Ordinal);
+        Assert.Contains("holder=unknown", hold, StringComparison.Ordinal);
+        Assert.Single(lines, line => line.StartsWith("TICK_CHECKPOINT_RECOVERED ", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory(DisplayName = "TransientSqliteCheckpoint_non_transient_failures_remain_fail_closed")]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void TransientSqliteCheckpointNonTransientFailuresRemainFailClosed(bool sqliteCodeEight)
+    {
+        var (kernel, _) = SimpleGoal("permanent checkpoint failure");
+        var exception = sqliteCodeEight
+            ? (Exception)new SqliteException("readonly", 8)
+            : new InvalidOperationException("non-SQLite persistence failure");
+
+        var actual = Assert.Throws(exception.GetType(), () => new ConductorBatchLoop().Run(
+            kernel,
+            MakeDriver(),
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1,
+            checkpointGoalTick: (_, _) => throw exception));
+
+        Assert.Same(exception, actual);
+    }
+
     [Xunit.Fact(DisplayName = "PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition")]
     public void PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition()
     {

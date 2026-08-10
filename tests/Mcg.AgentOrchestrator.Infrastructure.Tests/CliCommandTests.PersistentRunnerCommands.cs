@@ -8,10 +8,72 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Data.Sqlite;
 
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 {
+    [Xunit.Theory(DisplayName = "TransientSqliteCheckpoint_startup_load_holds_under_lease_and_recovers")]
+    [Xunit.InlineData(5)]
+    [Xunit.InlineData(6)]
+    public void TransientSqliteCheckpointStartupLoadHoldsUnderLeaseAndRecovers(int sqliteErrorCode)
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var loadAttempts = 0;
+        var delays = new List<TimeSpan>();
+        using var lease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
+
+        var loaded = CliPersistentStateRunner.LoadInitialConductLoopKernelWithTransientHold(
+            () =>
+            {
+                Assert.True(lease.IsHeld);
+                loadAttempts++;
+                if (loadAttempts == 1)
+                {
+                    var exception = new SqliteException("startup database locked", sqliteErrorCode);
+                    exception.Data["Mcg.AttemptCount"] = 3;
+                    exception.Data["Mcg.ElapsedMilliseconds"] = 250d;
+                    throw exception;
+                }
+                return new AgentOrchestratorKernel();
+            },
+            workspace,
+            stopRequested: () => false,
+            holdDelay: delays.Add,
+            holdInterval: TimeSpan.FromMilliseconds(25));
+
+        Assert.True(lease.IsHeld);
+        Assert.Empty(loaded.Goals);
+        Assert.Equal(2, loadAttempts);
+        Assert.Equal([TimeSpan.FromMilliseconds(25)], delays);
+        var events = File.ReadAllLines(workspace.ConductEventsLogPath);
+        Assert.Contains(events, line => line.Contains("LOOP_LOAD_HOLD", StringComparison.Ordinal) &&
+            line.Contains($"sqlite_code={sqliteErrorCode}", StringComparison.Ordinal) &&
+            line.Contains("attempt=3", StringComparison.Ordinal) &&
+            line.Contains("elapsed_ms=250", StringComparison.Ordinal));
+        Assert.Contains(events, line => line.Contains("LOOP_LOAD_RECOVERED", StringComparison.Ordinal));
+    }
+
+    [Xunit.Theory(DisplayName = "TransientSqliteCheckpoint_startup_load_non_transient_failures_remain_fail_closed")]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void TransientSqliteCheckpointStartupLoadNonTransientFailuresRemainFailClosed(bool sqliteCodeEight)
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var exception = sqliteCodeEight
+            ? (Exception)new SqliteException("readonly", 8)
+            : new InvalidOperationException("non-SQLite load failure");
+
+        var actual = Assert.Throws(exception.GetType(), () =>
+            CliPersistentStateRunner.LoadInitialConductLoopKernelWithTransientHold(
+                () => throw exception,
+                workspace,
+                holdDelay: _ => throw new Xunit.Sdk.XunitException("delay must not run")));
+
+        Assert.Same(exception, actual);
+    }
+
     [Xunit.Fact]
     public async Task OperatorDecisionRepositoryBootstrapsFreshStateStoreBeforeUse()
     {

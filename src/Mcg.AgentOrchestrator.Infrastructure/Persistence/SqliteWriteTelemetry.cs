@@ -15,6 +15,8 @@ internal sealed class SqliteWriteTelemetryOptions
     public string? DiagnosticsPath { get; init; }
     public bool? MirrorToConductEventStream { get; init; }
     public Func<DateTimeOffset> UtcNow { get; init; } = () => DateTimeOffset.UtcNow;
+    public Func<long> MonotonicMilliseconds { get; init; } = () => Environment.TickCount64;
+    public Func<int, TimeSpan, CancellationToken, Task>? RetryDelay { get; init; }
 
     public static SqliteWriteTelemetryOptions FromEnvironment() =>
         new()
@@ -66,7 +68,8 @@ internal sealed class SqliteWriteTelemetry
     public void EmitBusyFailure(
         string operation,
         TimeSpan acquisitionWait,
-        Exception exception)
+        Exception exception,
+        int attemptCount)
     {
         var receipt = BuildReceipt(
             eventType: "sqlite-state-write-busy-failure",
@@ -78,8 +81,55 @@ internal sealed class SqliteWriteTelemetry
             rowsWritten: 0,
             serializedBytes: 0,
             exception,
-            includeStack: true);
+            includeStack: true,
+            sqliteException: exception as Microsoft.Data.Sqlite.SqliteException,
+            attemptCount,
+            maxAttempts: _options.MaxBusyRetries);
         AppendReceipt(receipt);
+    }
+
+    public void EmitBusyRetry(
+        string operation,
+        TimeSpan elapsed,
+        Microsoft.Data.Sqlite.SqliteException exception,
+        int attemptCount)
+    {
+        AppendReceipt(BuildReceipt(
+            eventType: "sqlite-state-write-lock",
+            severity: "warning",
+            operation,
+            disposition: "retrying",
+            acquisitionWait: elapsed,
+            holdDuration: null,
+            rowsWritten: 0,
+            serializedBytes: 0,
+            exception,
+            includeStack: false,
+            sqliteException: exception,
+            attemptCount,
+            maxAttempts: _options.MaxBusyRetries));
+    }
+
+    public void EmitBusyRecovered(
+        string operation,
+        TimeSpan elapsed,
+        Microsoft.Data.Sqlite.SqliteException exception,
+        int attemptCount)
+    {
+        AppendReceipt(BuildReceipt(
+            eventType: "sqlite-state-write-lock",
+            severity: "warning",
+            operation,
+            disposition: "recovered",
+            acquisitionWait: elapsed,
+            holdDuration: null,
+            rowsWritten: 0,
+            serializedBytes: 0,
+            exception,
+            includeStack: false,
+            sqliteException: exception,
+            attemptCount,
+            maxAttempts: _options.MaxBusyRetries));
     }
 
     private void EmitCompletedScope(
@@ -105,7 +155,10 @@ internal sealed class SqliteWriteTelemetry
             rowsWritten,
             serializedBytes,
             exception,
-            includeStack: string.Equals(severity, "critical", StringComparison.Ordinal));
+            includeStack: string.Equals(severity, "critical", StringComparison.Ordinal),
+            sqliteException: exception as Microsoft.Data.Sqlite.SqliteException,
+            attemptCount: 1,
+            maxAttempts: _options.MaxBusyRetries);
         AppendReceipt(receipt);
     }
 
@@ -128,7 +181,10 @@ internal sealed class SqliteWriteTelemetry
         long rowsWritten,
         long serializedBytes,
         Exception? exception,
-        bool includeStack)
+        bool includeStack,
+        Microsoft.Data.Sqlite.SqliteException? sqliteException,
+        int attemptCount,
+        int maxAttempts)
     {
         return new SqliteWriteTelemetryReceipt(
             Timestamp: _options.UtcNow(),
@@ -138,7 +194,12 @@ internal sealed class SqliteWriteTelemetry
             Operation: operation,
             ProcessId: Environment.ProcessId,
             ProcessRole: ResolveProcessRole(),
+            Store: "state",
             Disposition: disposition,
+            SqliteErrorCode: sqliteException?.SqliteErrorCode,
+            SqliteExtendedErrorCode: sqliteException?.SqliteExtendedErrorCode,
+            AttemptCount: attemptCount,
+            MaxAttempts: maxAttempts,
             AcquisitionWaitMs: RoundMilliseconds(acquisitionWait),
             HoldMs: holdDuration is null ? null : RoundMilliseconds(holdDuration.Value),
             RowsWritten: rowsWritten,
@@ -176,7 +237,10 @@ internal sealed class SqliteWriteTelemetry
     {
         var detail =
             $"SQLITE_WRITE_TELEMETRY severity={receipt.Severity} event={receipt.EventType} operation=\"{receipt.Operation}\" " +
-            $"disposition={receipt.Disposition} acquisition_wait_ms={receipt.AcquisitionWaitMs.ToString(CultureInfo.InvariantCulture)} " +
+            $"store={receipt.Store} database=\"{receipt.StateDbPath}\" disposition={receipt.Disposition} " +
+            $"sqlite_code={(receipt.SqliteErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none")} " +
+            $"sqlite_extended_code={(receipt.SqliteExtendedErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none")} " +
+            $"attempt={receipt.AttemptCount} max_attempts={receipt.MaxAttempts} elapsed_ms={receipt.AcquisitionWaitMs.ToString(CultureInfo.InvariantCulture)} " +
             $"hold_ms={(receipt.HoldMs?.ToString(CultureInfo.InvariantCulture) ?? "null")} pid={receipt.ProcessId}";
         var record = new ConductEventMirrorRecord(
             receipt.Timestamp,
@@ -290,7 +354,12 @@ internal sealed record SqliteWriteTelemetryReceipt(
     string Operation,
     int ProcessId,
     string ProcessRole,
+    string Store,
     string Disposition,
+    int? SqliteErrorCode,
+    int? SqliteExtendedErrorCode,
+    int AttemptCount,
+    int MaxAttempts,
     double AcquisitionWaitMs,
     double? HoldMs,
     long RowsWritten,
