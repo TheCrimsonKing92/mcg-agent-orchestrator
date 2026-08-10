@@ -15,7 +15,10 @@ internal sealed record GoalScopedTaskMutationCommand(
     TaskVerificationRecord? ManualVerification,
     RetryRoundKind? RetryRoundKind,
     AutonomyPolicy RetryPolicy,
-    IReadOnlyList<string>? GatedDeliverableIds = null);
+    IReadOnlyList<string>? GatedDeliverableIds = null)
+{
+    internal string? SuppliedGoalSelector { get; init; }
+}
 
 internal enum GoalScopedTaskMutationRenderKind
 {
@@ -34,17 +37,18 @@ internal sealed record GoalScopedTaskMutationOutcome(
     string? Text = null);
 
 internal static GoalScopedTaskMutationCommand PrepareGoalScopedTaskMutationCommand(
-    IReadOnlyList<string> parts,
+    CliArgumentParser.GoalScopedTaskTargetArgs target,
     bool hasInlineGoalPrefix,
     OrchestratorWorkspace workspace)
 {
+    var parts = target.Parts;
     if (parts.Count == 0)
     {
         throw new ArgumentException("Missing command.");
     }
 
     var command = parts[0].ToLowerInvariant();
-    return command switch
+    var prepared = command switch
     {
         "progress" => PrepareProgressMutation(parts, hasInlineGoalPrefix),
         "verify-manual" => PrepareManualVerificationMutation(parts, hasInlineGoalPrefix, workspace),
@@ -52,6 +56,10 @@ internal static GoalScopedTaskMutationCommand PrepareGoalScopedTaskMutationComma
         "verification-plan" => PrepareVerificationPlanMutation(parts, hasInlineGoalPrefix),
         "note" => PrepareNoteMutation(parts, hasInlineGoalPrefix),
         _ => throw new ArgumentException($"Unsupported goal-scoped task mutation command: {parts[0]}")
+    };
+    return prepared with
+    {
+        SuppliedGoalSelector = target.ExplicitGoalSelector ?? (hasInlineGoalPrefix ? parts[1] : null)
     };
 }
 
