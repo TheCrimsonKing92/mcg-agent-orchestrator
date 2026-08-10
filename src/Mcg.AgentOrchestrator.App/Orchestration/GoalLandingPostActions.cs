@@ -6,9 +6,26 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal static class GoalLandingPostActions
 {
-    public static DogfoodLogRecord RecordDogfoodEntry(Goal goal, string dogfoodLogStorePath)
+    public static DogfoodLogRecord RecordDogfoodEntry(
+        Goal goal,
+        string executionDirectory,
+        string dogfoodLogStorePath,
+        Action<string>? writeLine = null)
     {
-        var entry = DogfoodLogRenderer.Render(goal);
+        DogfoodLandingEvidence evidence;
+        try
+        {
+            evidence = ResolveDogfoodLandingEvidence(
+                GoalOperationJournal.Read(executionDirectory, goal.Id));
+        }
+        catch (Exception ex)
+        {
+            evidence = DogfoodLandingEvidence.Unknown;
+            writeLine?.Invoke(
+                $"Dogfood acceptance evidence unavailable for goal {goal.Id.Value[..8]} ({ex.GetType().Name}); recording unknown status.");
+        }
+
+        var entry = DogfoodLogRenderer.Render(goal, evidence);
         return new DogfoodLogStore(dogfoodLogStorePath)
             .UpsertAsync(new DogfoodLogAppend(
                 goal.Id.Value,
@@ -19,6 +36,44 @@ internal static class GoalLandingPostActions
                 entry.Render()))
             .GetAwaiter()
             .GetResult();
+    }
+
+    internal static DogfoodLandingEvidence ResolveDogfoodLandingEvidence(
+        GoalOperationJournalSummary journal)
+    {
+        var manualLanding =
+            string.Equals(
+                GoalOperationJournal.TryGetLatestLandingIntent(journal)?.Source,
+                "goal-mark-landed",
+                StringComparison.OrdinalIgnoreCase) ||
+            GoalOperationJournal.HasMergeEvidenceTerminalDisposition(journal);
+
+        var acceptance = journal.Entries
+            .Select((entry, index) => (Entry: entry, Index: index))
+            .Where(item => !string.IsNullOrWhiteSpace(item.Entry.AcceptanceOutcome))
+            .OrderByDescending(item => item.Entry.At)
+            .ThenByDescending(item => item.Index)
+            .Select(item => item.Entry)
+            .FirstOrDefault();
+
+        if (acceptance is null)
+        {
+            return new DogfoodLandingEvidence(
+                DogfoodAcceptanceDisposition.Unknown,
+                WasManuallyLanded: manualLanding);
+        }
+
+        var outcome = acceptance.AcceptanceOutcome!.Trim();
+        var disposition = (acceptance.Status, outcome.ToLowerInvariant()) switch
+        {
+            (GoalOperationStatus.Completed, "passed" or "gate-passed") =>
+                DogfoodAcceptanceDisposition.Passed,
+            (GoalOperationStatus.Failed, "failed") =>
+                DogfoodAcceptanceDisposition.Failed,
+            _ => DogfoodAcceptanceDisposition.Inconclusive
+        };
+
+        return new DogfoodLandingEvidence(disposition, outcome, manualLanding);
     }
 
     public static void RunAdvisorySemanticAcceptance(

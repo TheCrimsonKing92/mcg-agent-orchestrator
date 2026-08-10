@@ -530,16 +530,13 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 landedMergeSha = hasResolvedLandingSha ? head.Output.Trim() : "force-unverified";
             }
 
-            if (hasResolvedLandingSha)
-            {
-                GoalOperationJournal.RecordLandingIntent(
-                    landedDir,
-                    landedGoal,
-                    landedBranch,
-                    LandingExecutor.IntegrationBranchName,
-                    landedMergeSha,
-                    "goal-mark-landed");
-            }
+            GoalOperationJournal.RecordLandingIntent(
+                landedDir,
+                landedGoal,
+                landedBranch,
+                LandingExecutor.IntegrationBranchName,
+                landedMergeSha,
+                "goal-mark-landed");
             GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:land", "Out-of-band landing recorded via goal-mark-landed.");
             GoalOperationJournal.Completed(landedDir, landedGoal, "conductor:land", $"Goal {landedGp} was already merged to main.");
             GoalOperationJournal.Begin(landedDir, landedGoal, "conductor:record", "Recording out-of-band landing to SQLite dogfood log.");

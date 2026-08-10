@@ -1440,6 +1440,31 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.NotNull(record);
         Xunit.Assert.Contains("Recorded to", addOutput);
         Xunit.Assert.Contains("Dogfood command objective", listOutput);
+        Xunit.Assert.Contains("Acceptance status unknown (no durable acceptance receipt).", record!.RenderedMarkdown);
+        Xunit.Assert.DoesNotContain("Acceptance passed", record.RenderedMarkdown, StringComparison.Ordinal);
+
+        var originalMarkdown = record.RenderedMarkdown;
+        GoalOperationJournal.AcceptancePassed(
+            root,
+            goal,
+            "acceptance",
+            "branch-head",
+            "main-head",
+            "Acceptance passed after the entry was recorded.");
+        var secondGoal = kernel.CreateGoal("Second dogfood command objective");
+        currentGoal = secondGoal;
+        CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["dogfood-log", "add", secondGoal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var unchanged = await new DogfoodLogStore(workspace.DogfoodLogStorePath)
+            .GetByGoalIdAsync(goal.Id.Value);
+        Xunit.Assert.Equal(originalMarkdown, unchanged!.RenderedMarkdown);
     }
 
 

@@ -46,7 +46,9 @@ public sealed class DogfoodLogRendererTests
             clock.UtcNow);
         kernel.RecordTaskVerification(goal.Id, task.Id, verification);
 
-        var entry = DogfoodLogRenderer.Render(goal);
+        var entry = DogfoodLogRenderer.Render(
+            goal,
+            new DogfoodLandingEvidence(DogfoodAcceptanceDisposition.Passed, "passed"));
         var text = entry.Render();
 
         Assert.True(text.Contains("## 2026-06-", StringComparison.Ordinal), "header must have date");
@@ -68,7 +70,7 @@ public sealed class DogfoodLogRendererTests
         var task = new TaskSpec(TaskId.New(), "Do some work", AgentRole.Developer);
         var goal = kernel.CreateGoal("Feature with no dispatch receipt", [task]);
 
-        var entry = DogfoodLogRenderer.Render(goal);
+        var entry = DogfoodLogRenderer.Render(goal, DogfoodLandingEvidence.Unknown);
         var text = entry.Render();
 
         Assert.True(text.Contains("## ", StringComparison.Ordinal), "must have heading");
@@ -99,7 +101,7 @@ public sealed class DogfoodLogRendererTests
             ModelFitNote: "Model fit: OpenAI/gpt-5.5 - adequate - focused test suite");
         kernel.RecordTaskVerification(goal.Id, task.Id, verification);
 
-        var entry = DogfoodLogRenderer.Render(goal);
+        var entry = DogfoodLogRenderer.Render(goal, DogfoodLandingEvidence.Unknown);
         var text = entry.Render();
 
         Assert.True(text.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused test suite", StringComparison.Ordinal),
@@ -136,5 +138,95 @@ public sealed class DogfoodLogRendererTests
             DateTimeOffset.UtcNow);
 
         Assert.Equal<string?>(null, DogfoodLogRenderer.TryParseWorkerResultField(verification, "commit"));
+    }
+
+    [Xunit.Fact]
+    public void CompletedGoalWithoutReceiptRendersUnknown()
+    {
+        var goal = CreateCompletedGoal();
+
+        var text = DogfoodLogRenderer.Render(goal, DogfoodLandingEvidence.Unknown).Render();
+
+        Assert.Contains("Acceptance status unknown (no durable acceptance receipt).", text);
+        Assert.DoesNotContain("Acceptance passed", text, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(DogfoodAcceptanceDisposition.Passed, "passed", "Acceptance passed.")]
+    [Xunit.InlineData(DogfoodAcceptanceDisposition.Failed, "failed", "Acceptance failed.")]
+    [Xunit.InlineData(DogfoodAcceptanceDisposition.Inconclusive, "blocked:timeout", "Acceptance inconclusive: blocked:timeout.")]
+    [Xunit.InlineData(DogfoodAcceptanceDisposition.Inconclusive, "aborted:state-guard", "Acceptance inconclusive: aborted:state-guard.")]
+    public void AcceptanceEvidenceRendersTypedWording(
+        DogfoodAcceptanceDisposition disposition,
+        string outcome,
+        string expected)
+    {
+        var goal = new Goal(GoalId.New(), "Evidence wording", [new TaskSpec(TaskId.New(), "Work", AgentRole.Developer)]);
+
+        var text = DogfoodLogRenderer.Render(goal, new DogfoodLandingEvidence(disposition, outcome)).Render();
+
+        Assert.Contains(expected, text);
+    }
+
+    [Xunit.Fact]
+    public void ManualLandingWithPriorPassRendersBothFacts()
+    {
+        var goal = CreateCompletedGoal();
+        var evidence = new DogfoodLandingEvidence(
+            DogfoodAcceptanceDisposition.Passed,
+            "gate-passed",
+            WasManuallyLanded: true);
+
+        var text = DogfoodLogRenderer.Render(goal, evidence).Render();
+
+        Assert.Contains("Manual landing recorded; acceptance passed earlier.", text);
+        Assert.DoesNotContain("Acceptance passed.", text, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TimedOutManualLandingNeverClaimsPass()
+    {
+        var goal = CreateCompletedGoal();
+        var evidence = new DogfoodLandingEvidence(
+            DogfoodAcceptanceDisposition.Inconclusive,
+            "blocked:timeout",
+            WasManuallyLanded: true);
+
+        var text = DogfoodLogRenderer.Render(goal, evidence).Render();
+
+        Assert.Contains("Manual landing recorded; acceptance not recorded as passed.", text);
+        Assert.Contains("Acceptance inconclusive: blocked:timeout.", text);
+        Assert.DoesNotContain("Acceptance passed", text, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void RenderedEntryKeepsSnapshottedEvidence()
+    {
+        var goal = CreateCompletedGoal();
+        var entry = DogfoodLogRenderer.Render(goal, DogfoodLandingEvidence.Unknown);
+        var original = entry.Render();
+
+        var later = DogfoodLogRenderer.Render(
+            goal,
+            new DogfoodLandingEvidence(DogfoodAcceptanceDisposition.Passed, "passed"));
+
+        Assert.Equal(original, entry.Render());
+        Assert.NotEqual(original, later.Render());
+    }
+
+    private static Goal CreateCompletedGoal()
+    {
+        var kernel = new AgentOrchestratorKernel(new FakeClock());
+        var task = new TaskSpec(TaskId.New(), "Complete work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Completed evidence scenario", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Completed, "Done.");
+        kernel.RecordTaskVerification(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord("verify", "C:\\repo", 0, "passed", "", FixedAt));
+        kernel.BeginGoalAcceptanceVerification(goal.Id, "Acceptance started.");
+        kernel.CompleteGoal(goal.Id, "Landing completed.");
+        return goal;
     }
 }
