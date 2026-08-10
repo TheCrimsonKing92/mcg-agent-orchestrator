@@ -322,6 +322,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     var workspace = OrchestratorWorkspace.ForDirectory(root);
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(workingDirectory);
+    WriteSkill(workingDirectory, "orchestrator-dogfood");
     var kernel = new AgentOrchestratorKernel(new TestClock(DateTimeOffset.Parse("2026-07-07T12:00:00Z")));
     var planner = new TaskSpec(TaskId.New(), "Plan the dispatch checkpoint.", AgentRole.Planner);
     var goal = kernel.CreateGoal("Checkpoint dispatch record before start", [planner]);

@@ -329,6 +329,9 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(workingDirectory);
     File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
+    WriteSkill(workingDirectory, "skill-authoring");
+    WriteSkill(workingDirectory, "verification-before-completion");
     var kernel = new AgentOrchestratorKernel();
     var blockedTask = new TaskSpec(TaskId.New(), "Author .agents/skills/example/SKILL.md", AgentRole.Developer);
     var allowedTask = new TaskSpec(TaskId.New(), "Update src/example.txt", AgentRole.Developer);
@@ -802,6 +805,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         _ => 5000);
     var dispatchRoot = CreateTempDirectory();
     File.WriteAllText(Path.Combine(dispatchRoot, ".git"), "gitdir: ..");
+    WriteSkill(dispatchRoot, "dotnet-windows-build-hygiene");
+    WriteSkill(dispatchRoot, "verification-before-completion");
 
     var item = plan.Items.Single(candidate => candidate.TaskId == nextTask.Id.Value);
     var summary = plan.ReadyModelUsage.Single();
@@ -969,6 +974,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(promptRoot);
     Directory.CreateDirectory(workingDirectory);
+    WriteSkill(workingDirectory, "orchestrator-dogfood");
     var failureAt = DateTimeOffset.UtcNow.AddMinutes(-5);
     var retryAttemptAt = failureAt.AddMinutes(2);
     var kernel = new AgentOrchestratorKernel(new TestClock(failureAt));
@@ -1447,6 +1453,10 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     var workingDirectory = Path.Combine(root, "repo");
     Directory.CreateDirectory(workingDirectory);
     File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+    WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
+    WriteSkill(workingDirectory, "orchestrator-dogfood");
+    WriteSkill(workingDirectory, "orchestrator-worker-verification");
+    WriteSkill(workingDirectory, "verification-before-completion");
     var firstFailureAt = DateTimeOffset.Parse("2026-06-01T12:00:00Z");
     var secondFailureAt = DateTimeOffset.Parse("2026-06-01T13:00:00Z");
     var retryWindowPassed = DateTimeOffset.Parse("2026-06-01T18:00:00Z");
@@ -1581,6 +1591,9 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
+    WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
+    WriteSkill(workingDirectory, "orchestrator-dogfood");
+    WriteSkill(workingDirectory, "orchestrator-worker-verification");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Survey the codebase without workspace");
