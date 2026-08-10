@@ -392,7 +392,9 @@ public sealed class ConductorDriverTests
         Action<GoalId, TaskId, string, FindingEvidenceOutcome, FindingEvidenceReceipt?>? recordFindingEvidenceOutcome = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRequest = null,
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
-        Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null)
+        Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
+        Func<Goal, bool>? isVerificationGateSatisfied = null,
+        GateReadyCandidateProjector? gateReadyCandidateProjector = null)
     {
         return new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
@@ -439,7 +441,9 @@ public sealed class ConductorDriverTests
             recordFindingEvidenceOutcome: recordFindingEvidenceOutcome,
             recordFindingEvidenceRequest: recordFindingEvidenceRequest,
             recordFindingEvidenceRun: recordFindingEvidenceRun,
-            getFindingEvidenceEngineSettings: getFindingEvidenceEngineSettings);
+            getFindingEvidenceEngineSettings: getFindingEvidenceEngineSettings,
+            isVerificationGateSatisfied: isVerificationGateSatisfied,
+            gateReadyCandidateProjector: gateReadyCandidateProjector);
     }
 
     private static PreReviewEvidenceContext FocusedPreReviewContext(string sha) =>
@@ -924,6 +928,130 @@ public sealed class ConductorDriverTests
                 Directory.Delete(root, recursive: true);
             }
         }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver composes gate-ready input before invoking the projector")]
+    public void ProjectGateReadyCandidateComposesSnapshotInOrder()
+    {
+        const string branchRevision = "1111111111111111111111111111111111111111";
+        const string mainRevision = "2222222222222222222222222222222222222222";
+        var (kernel, goal) = SimpleGoal("Gate-ready composition");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var calls = new List<string>();
+        var projector = new GateReadyCandidateProjector(
+            goalId =>
+            {
+                calls.Add("revisions");
+                Assert.Equal(goal.Id, goalId);
+                return new GateReadyCandidateRevisionPair(branchRevision, mainRevision);
+            },
+            goalId =>
+            {
+                calls.Add("scope");
+                Assert.Equal(goal.Id, goalId);
+                return new GateReadyLandingScopeObservation(
+                    Succeeded: true,
+                    Files: ["src/Mcg.AgentOrchestrator.App/Feature.cs"]);
+            },
+            (goalId, observedBranch, observedMain) =>
+            {
+                calls.Add("merge");
+                Assert.Equal(goal.Id, goalId);
+                Assert.Equal(branchRevision, observedBranch);
+                Assert.Equal(mainRevision, observedMain);
+                return new GateReadyMergeTreeObservation(IsClean: true);
+            });
+        var driver = MakeDriver(
+            getFacts: _ =>
+            {
+                calls.Add("lifecycle");
+                return GoalLifecycleFacts.None;
+            },
+            classifyRisk: _ =>
+            {
+                calls.Add("risk");
+                return ChangeRiskTier.DocsOnly;
+            },
+            isVerificationGateSatisfied: _ =>
+            {
+                calls.Add("gate");
+                return true;
+            },
+            gateReadyCandidateProjector: projector);
+
+        var result = driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative);
+
+        var projection = Assert.IsType<GateReadyCandidateProjectionResult.Ready>(result).Projection;
+        Assert.Equal(goal.Id, projection.GoalId);
+        Assert.Equal(GoalLifecycleState.Verified, projection.LifecycleState);
+        Assert.Equal(GateReadyVerificationState.Satisfied, projection.VerificationState);
+        Assert.Equal(ChangeRiskTier.DocsOnly, projection.ChangeRiskTier);
+        Assert.Equal(ConductorTransitionDecision.Auto, projection.AutoPromotionDisposition);
+        Assert.Equal(branchRevision, projection.BranchRevision);
+        Assert.Equal(mainRevision, projection.MainRevision);
+        Assert.Equal(
+            ["lifecycle", "gate", "risk", "revisions", "scope", "merge", "revisions"],
+            calls);
+    }
+
+    [Xunit.Theory(DisplayName = "ConductorDriver maps gate-ready snapshot delegate failures to typed exclusions")]
+    [Xunit.InlineData("lifecycle", (int)GateReadyCandidateExclusionReason.LifecycleNotReady, 0)]
+    [Xunit.InlineData("gate", (int)GateReadyCandidateExclusionReason.GateNotReady, 0)]
+    [Xunit.InlineData("risk", (int)GateReadyCandidateExclusionReason.RiskUnknown, 1)]
+    public void ProjectGateReadyCandidateMapsSnapshotDelegateFailures(
+        string failingDelegate,
+        int expectedReasonValue,
+        int expectedRevisionReads)
+    {
+        var (kernel, goal) = SimpleGoal("Gate-ready delegate failure");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var revisionReads = 0;
+        var projector = new GateReadyCandidateProjector(
+            _ =>
+            {
+                revisionReads++;
+                return new GateReadyCandidateRevisionPair(
+                    "1111111111111111111111111111111111111111",
+                    "2222222222222222222222222222222222222222");
+            },
+            _ => throw new InvalidOperationException("Scope should not be read."),
+            (_, _, _) => throw new InvalidOperationException("Merge status should not be read."));
+        var driver = MakeDriver(
+            getFacts: _ => failingDelegate == "lifecycle"
+                ? throw new InvalidOperationException("Lifecycle unavailable.")
+                : GoalLifecycleFacts.None,
+            classifyRisk: _ => failingDelegate == "risk"
+                ? throw new InvalidOperationException("Risk unavailable.")
+                : ChangeRiskTier.DocsOnly,
+            isVerificationGateSatisfied: _ => failingDelegate == "gate"
+                ? throw new InvalidOperationException("Gate unavailable.")
+                : true,
+            gateReadyCandidateProjector: projector);
+
+        var result = driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(
+            (GateReadyCandidateExclusionReason)expectedReasonValue,
+            Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(result).Reason);
+        Assert.Equal(expectedRevisionReads, revisionReads);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver fails closed when the gate-ready projector is absent")]
+    public void ProjectGateReadyCandidateWithoutProjectorReturnsRevisionUnknown()
+    {
+        var (kernel, goal) = SimpleGoal("Gate-ready projector missing");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: null);
+
+        var result = driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Equal(
+            GateReadyCandidateExclusionReason.RevisionUnknown,
+            Assert.IsType<GateReadyCandidateProjectionResult.Excluded>(result).Reason);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_acceptance_slot_path_skips_already_merged_branch_before_lease")]
