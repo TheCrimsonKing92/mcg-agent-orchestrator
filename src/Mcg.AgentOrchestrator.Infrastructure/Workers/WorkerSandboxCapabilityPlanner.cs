@@ -113,19 +113,6 @@ public static class WorkerSandboxCapabilityPlanner
         WorkerSandboxOptions sandboxOptions,
         out string detail)
     {
-        if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli)
-        {
-            var patchCapability = WorkerProfileDiagnostics.EvaluatePatchCapability(profile, provider);
-            if (sandboxOptions.Enabled && patchCapability.IsPatchCapable)
-            {
-                detail = "Task targets repo-scoped .agents/skills files; patch-capable Codex may write only the OS-confined goal worktree, while the orchestrator retains Git metadata and commit authority.";
-                return true;
-            }
-
-            detail = string.Empty;
-            return false;
-        }
-
         var commandTemplate = profile.CommandTemplate;
         var claudeCompatible = (provider.Identity.Kind is ProviderKind.Unknown or ProviderKind.AnthropicClaudeCli) &&
             (commandTemplate.Contains("--permission-mode bypassPermissions", StringComparison.OrdinalIgnoreCase) ||

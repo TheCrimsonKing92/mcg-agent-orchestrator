@@ -65,10 +65,10 @@ public sealed class WorkerSandboxCapabilityPlannerTests
         Assert.True(permittedByOverride.Allowed);
     }
 
-    [Xunit.Theory(DisplayName = "WorkerSandboxCapabilityPlanner_allows_patch_capable_Codex_file_roles_for_OS_confined_repo_skills")]
+    [Xunit.Theory(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_Codex_file_roles_for_repo_skills_even_with_OS_confinement")]
     [Xunit.InlineData(AgentRole.Developer)]
     [Xunit.InlineData(AgentRole.Tester)]
-    public void WorkerSandboxCapabilityPlannerAllowsPatchCapableCodexFileRolesForOsConfinedRepoSkills(AgentRole role)
+    public void WorkerSandboxCapabilityPlannerBlocksCodexFileRolesForRepoSkillsEvenWithOsConfinement(AgentRole role)
     {
         var (goal, task, profile, workingDirectory) = CreateEvaluateFixture(
             "Update .agents/skills/systematic-debugging/SKILL.md",
@@ -81,10 +81,9 @@ public sealed class WorkerSandboxCapabilityPlannerTests
             workingDirectory,
             sandboxOptions: new WorkerSandboxOptions(true, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget));
 
-        Assert.True(result.Allowed);
-        Assert.Equal("repo-skill-write", result.Status);
-        Assert.Contains("OS-confined goal worktree", result.Detail, StringComparison.Ordinal);
-        Assert.Contains("orchestrator retains Git metadata and commit authority", result.Detail, StringComparison.Ordinal);
+        Assert.False(result.Allowed);
+        Assert.Equal("blocked", result.Status);
+        Assert.Contains("lacks an authorized", result.Detail, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_Codex_repo_skills_without_OS_confinement")]

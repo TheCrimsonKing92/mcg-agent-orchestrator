@@ -265,10 +265,10 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.True(task.LastDispatch is null);
 }
 
-    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_honors_explicit_sandbox_for_repo_skills_over_ambient_state")]
+    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_blocks_Codex_repo_skills_regardless_of_sandbox_state")]
     [Xunit.InlineData(false, "1", "blocked")]
-    [Xunit.InlineData(true, "0", "repo-skill-write")]
-    public void WorkerProfileDispatcherPreflightHonorsExplicitSandboxForRepoSkillsOverAmbientState(
+    [Xunit.InlineData(true, "0", "blocked")]
+    public void WorkerProfileDispatcherPreflightBlocksCodexRepoSkillsRegardlessOfSandboxState(
         bool explicitSandboxEnabled,
         string ambientSandboxValue,
         string expectedCapabilityStatus)
