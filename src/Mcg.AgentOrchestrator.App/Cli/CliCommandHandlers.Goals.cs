@@ -198,7 +198,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
                 PrintClosedSourceBacklogWarning(runSourceBacklogLink);
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
-                context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, runAgents, runObjective, context.Workspace, context.Providers, context.EventWriter);
+                context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
+                    context.Kernel,
+                    runAgents,
+                    runObjective,
+                    context.Workspace,
+                    context.Providers,
+                    context.EventWriter,
+                    context.RefinementCollaborationItemRaise);
                 ApplySourceBacklogItemLink(context, context.CurrentGoal, runSourceBacklogLink);
                 context.FinalizeGoalCreation(context.CurrentGoal);
                 ConsoleViews.PrintGoal(context.CurrentGoal);
@@ -214,7 +221,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, goalAgents, goalObjective, context.Workspace, context.Providers, context.EventWriter);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
+                context.Kernel,
+                goalAgents,
+                goalObjective,
+                context.Workspace,
+                context.Providers,
+                context.EventWriter,
+                context.RefinementCollaborationItemRaise);
             ApplySourceBacklogItemLink(context, context.CurrentGoal, goalSourceBacklogLink);
             context.FinalizeGoalCreation(context.CurrentGoal);
             ConsoleViews.PrintGoal(context.CurrentGoal);
@@ -229,7 +243,14 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var simpleSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, simpleObjective);
             PrintClosedSourceBacklogWarning(simpleSourceBacklogLink);
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
-            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, simpleAgents, simpleObjective, context.Workspace, context.Providers, context.EventWriter);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+                context.Kernel,
+                simpleAgents,
+                simpleObjective,
+                context.Workspace,
+                context.Providers,
+                context.EventWriter,
+                context.RefinementCollaborationItemRaise);
             ApplySourceBacklogItemLink(context, context.CurrentGoal, simpleSourceBacklogLink);
             if (HasCliConfirmation(parts, "--dispatch"))
             {

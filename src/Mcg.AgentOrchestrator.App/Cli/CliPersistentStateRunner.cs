@@ -1606,6 +1606,9 @@ internal static class CliPersistentStateRunner
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
         GoalSnapshot? committedSnapshot = null;
+        var deferredEventWriter = new DeferredGoalLifecycleEventWriter();
+        var deferredCollaborationWriter = new DeferredGoalCreationCollaborationWriter(
+            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
 
         void FinalizeGoalCreation(Goal goal)
         {
@@ -1620,6 +1623,9 @@ internal static class CliPersistentStateRunner
                 .GetAwaiter()
                 .GetResult();
             committedSnapshot = preparedSnapshot;
+            deferredCollaborationWriter.CommitAsync().GetAwaiter().GetResult();
+            deferredEventWriter.CommitTo(
+                new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel));
         }
 
         var shouldSave = CliCommandDispatcher.ExecuteCommand(
@@ -1632,7 +1638,9 @@ internal static class CliPersistentStateRunner
             ref currentGoal,
             channel,
             () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
-            finalizeGoalCreation: FinalizeGoalCreation);
+            finalizeGoalCreation: FinalizeGoalCreation,
+            eventWriter: deferredEventWriter,
+            refinementCollaborationItemRaise: deferredCollaborationWriter.RaiseAsync);
 
         if (committedSnapshot is null)
         {

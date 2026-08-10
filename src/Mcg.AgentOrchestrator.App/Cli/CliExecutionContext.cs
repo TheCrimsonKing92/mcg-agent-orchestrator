@@ -30,7 +30,8 @@ internal sealed class CliExecutionContext(
     bool? isStandardInputRedirected = null,
     Action? registerAcceptanceGuardAbort = null,
     Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null,
-    Action<Goal>? finalizeGoalCreation = null)
+    Action<Goal>? finalizeGoalCreation = null,
+    CollaborationItemRaise? refinementCollaborationItemRaise = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -108,6 +109,8 @@ public ICliGoalWorktreeService Worktrees { get; init; } = DefaultCliGoalWorktree
 public GoalWorktreeCleanupHooks CleanupHooks { get; init; } = GoalWorktreeCleanupHooks.Default;
 
 public IGoalLifecycleEventWriter EventWriter { get; init; } = NullGoalLifecycleEventWriter.Instance;
+
+public CollaborationItemRaise? RefinementCollaborationItemRaise { get; } = refinementCollaborationItemRaise;
 
 public Func<long>? GoalMarkLandedElapsedMilliseconds { get; init; }
 

@@ -916,12 +916,16 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         try
         {
             Xunit.Assert.True(refiner.Entered.Wait(TimeSpan.FromSeconds(15)), "Goal refinement did not reach the blocking provider.");
+            var concurrentWriteElapsed = Stopwatch.StartNew();
             await concurrentRepository.TransactAsync(
                 (kernel, _) =>
                 {
                     kernel.CreateGoal("Concurrent conductor-style state writer");
                     return Task.FromResult((true, true));
                 }).WaitAsync(TimeSpan.FromSeconds(15));
+            concurrentWriteElapsed.Stop();
+            Console.WriteLine(
+                $"GOAL_CREATE_LOCK_MEASUREMENT phase=refinement concurrentWriterElapsedMs={concurrentWriteElapsed.ElapsedMilliseconds}");
         }
         finally
         {
@@ -938,11 +942,82 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(GoalStatus.Active, created.Status);
     }
 
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_concurrent_goal_creates_have_exactly_one_backlog_winner")]
+    public async Task PersistentRunnerConcurrentGoalCreatesHaveExactlyOneBacklogWinner()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("barrier-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Concurrent single-consumer source");
+        var firstRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var secondRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var refiner = new BarrierGoalRefinerProvider(expectedCalls: 2);
+
+        Exception? RunCreate(ITransactionalOrchestratorStateRepository repository, string objective)
+        {
+            IReadOnlyList<AgentDefinition> localAgents = AgentCatalog.Default().Agents;
+            var localProfiles = WorkerProfileCatalog.Default();
+            Goal? localGoal = null;
+            try
+            {
+                _ = CliPersistentStateRunner.ExecuteCommand(
+                    ["goal", objective, "--backlog-item", item.Id, "--backlog-coverage", "slice"],
+                    repository,
+                    workspace,
+                    ref localAgents,
+                    new InMemoryModelProviderRegistry([refiner]),
+                    ref localProfiles,
+                    ref localGoal);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return ex;
+            }
+        }
+
+        var firstCreate = Task.Run(() => RunCreate(firstRepository, "Concurrent intake candidate one"));
+        var secondCreate = Task.Run(() => RunCreate(secondRepository, "Concurrent intake candidate two"));
+        try
+        {
+            Xunit.Assert.True(refiner.AllEntered.WaitOne(TimeSpan.FromSeconds(15)), "Both goal creations did not reach refinement.");
+        }
+        finally
+        {
+            refiner.Release.Set();
+        }
+
+        var outcomes = await Task.WhenAll(firstCreate, secondCreate).WaitAsync(TimeSpan.FromSeconds(15));
+        Xunit.Assert.Single(outcomes, outcome => outcome is null);
+        var rejected = Xunit.Assert.Single(outcomes, outcome => outcome is not null)!;
+        Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed", rejected.Message);
+
+        var restored = await firstRepository.LoadAsync();
+        var winner = Xunit.Assert.Single(restored.Goals);
+        Xunit.Assert.Equal(item.Id, winner.SourceBacklogItemId);
+        Xunit.Assert.NotNull(winner.RefinedSpec);
+        Xunit.Assert.Equal(GoalStatus.Active, winner.Status);
+        Xunit.Assert.Single(Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl"));
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_rejects_competing_backlog_link_atomically")]
     public async Task PersistentRunnerGoalCreateRejectsCompetingBacklogLinkAtomically()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
         var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Single-consumer backlog source");
         var repository = new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel());
         repository.BeforeNextTransaction = stored =>
@@ -951,7 +1026,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             stored.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Slice);
         };
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-        var providers = new InMemoryModelProviderRegistry([]);
+        var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
@@ -971,6 +1046,100 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var winner = Xunit.Assert.Single(restored.Goals);
         Xunit.Assert.Equal("Competing intake winner", winner.Objective);
         Xunit.Assert.Equal(item.Id, winner.SourceBacklogItemId);
+        Xunit.Assert.Empty(await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ListAsync());
+        Xunit.Assert.Empty(Directory.Exists(workspace.GoalLifecycleEventsDirectory)
+            ? Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl")
+            : []);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_flushes_deferred_side_effects_after_commit")]
+    public async Task PersistentRunnerGoalCreateFlushesDeferredSideEffectsAfterCommit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var repository = new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel());
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal", "Create a goal whose ambiguous API contract needs an operator decision"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var restored = await repository.LoadAsync();
+        var created = Xunit.Assert.Single(restored.Goals);
+        Xunit.Assert.NotNull(created.RefinedSpec);
+        Xunit.Assert.True(created.RefinedSpec!.HasOpenQuestions);
+        Xunit.Assert.NotEmpty(await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+            .ListAsync(created.Id.Value));
+        Xunit.Assert.True(File.Exists(Path.Combine(
+            workspace.GoalLifecycleEventsDirectory,
+            $"{created.Id.Value}.jsonl")));
+        Xunit.Assert.Contains(created.Id.Value[..8], output);
+        var planIndex = output.IndexOf("Goal objective plan:", StringComparison.Ordinal);
+        var advisoryIndex = output.IndexOf("Scope collision advisory:", StringComparison.Ordinal);
+        var goalIndex = output.IndexOf($"Goal {created.Id.Value}", StringComparison.Ordinal);
+        Xunit.Assert.True(planIndex >= 0 && advisoryIndex > planIndex && goalIndex > advisoryIndex, output);
+        Xunit.Assert.Contains("\"historicalTimeEstimate\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"verdict\"", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_rejects_missing_backlog_source_without_side_effects")]
+    public async Task PersistentRunnerGoalCreateRejectsMissingBacklogSourceWithoutSideEffects()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Backlog source removed during refinement");
+        var repository = new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel());
+        repository.BeforeNextTransaction = _ =>
+        {
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM backlog WHERE id = $id";
+            command.Parameters.AddWithValue("$id", item.Id);
+            Xunit.Assert.Equal(1, command.ExecuteNonQuery());
+        };
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["goal", "Reject a stale missing backlog source", "--backlog-item", item.Id, "--backlog-coverage", "slice"],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
+                ref profiles,
+                ref currentGoal)));
+
+        Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-missing", error.Message);
+        Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
+        Xunit.Assert.Empty(await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).ListAsync());
+        Xunit.Assert.Empty(Directory.Exists(workspace.GoalLifecycleEventsDirectory)
+            ? Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl")
+            : []);
     }
 
 
@@ -3701,6 +3870,66 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 {
                   "behavioralContract": "Create the goal after unlocked refinement.",
                   "acceptanceCriteria": ["The goal is committed atomically."],
+                  "verificationClass": "TestVerifiable",
+                  "decisions": [],
+                  "forks": []
+                }
+                ```
+                """;
+            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
+        }
+    }
+
+    private sealed class ClarifyingGoalRefinerProvider : IModelProvider
+    {
+        public string ProviderName => "clarifying-refiner";
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            const string response = """
+                ```json
+                {
+                  "behavioralContract": "Integrate with an external API selected by the operator.",
+                  "acceptanceCriteria": ["The selected API contract is implemented."],
+                  "verificationClass": "TestVerifiable",
+                  "decisions": [],
+                  "forks": [
+                    {
+                      "kind": "external-contract",
+                      "topicKey": "goal-create-api-contract",
+                      "refinerConfidence": "low",
+                      "blastRadius": "high",
+                      "question": "Which external API contract should the goal target?",
+                      "choice": "",
+                      "rationale": "Operator decision required."
+                    }
+                  ]
+                }
+                ```
+                """;
+            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
+        }
+    }
+
+    private sealed class BarrierGoalRefinerProvider(int expectedCalls) : IModelProvider
+    {
+        private readonly CountdownEvent _entered = new(expectedCalls);
+
+        public string ProviderName => "barrier-refiner";
+
+        public WaitHandle AllEntered => _entered.WaitHandle;
+
+        public ManualResetEventSlim Release { get; } = new(initialState: false);
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            _entered.Signal();
+            Release.Wait(cancellationToken);
+            const string response = """
+                ```json
+                {
+                  "behavioralContract": "Create exactly one linked goal.",
+                  "acceptanceCriteria": ["Exactly one goal is linked to the source backlog item."],
                   "verificationClass": "TestVerifiable",
                   "decisions": [],
                   "forks": []

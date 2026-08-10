@@ -17,6 +17,14 @@ internal sealed record RefinementResult(RefinementOutcome Outcome, RefinedSpec S
         new(RefinementOutcome.AwaitingClarification, spec);
 }
 
+internal delegate Task<CollaborationItem> CollaborationItemRaise(
+    CollaborationItemType type,
+    string? goalId,
+    string subject,
+    string body,
+    string? correlationKey = null,
+    CancellationToken cancellationToken = default);
+
 // Orchestrates the goal refinement stage: calls the spec-refiner model function, classifies each
 // fork on three axes, raises Clarification items for high-stakes ambiguities the refiner can't
 // resolve, and attaches the resulting RefinedSpec to the goal. Configuration errors are surfaced
@@ -29,6 +37,7 @@ internal sealed class GoalRefinementService
     private readonly IModelProviderRegistry _providers;
     private readonly ModelFunctionCatalog _catalog;
     private readonly ICollaborationItemStore _collaboration;
+    private readonly CollaborationItemRaise _raiseCollaborationItem;
     private readonly SpecRefinerPrecedentStore _precedents;
     private readonly WorkerProfileCatalog? _workerProfiles;
     private readonly Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? _subscriptionCompleterFactory;
@@ -44,11 +53,13 @@ internal sealed class GoalRefinementService
         ICollaborationItemStore collaboration,
         SpecRefinerPrecedentStore precedents,
         WorkerProfileCatalog? workerProfiles = null,
-        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null)
+        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
+        CollaborationItemRaise? raiseCollaborationItem = null)
     {
         _providers = providers;
         _catalog = catalog;
         _collaboration = collaboration;
+        _raiseCollaborationItem = raiseCollaborationItem ?? collaboration.RaiseAsync;
         _precedents = precedents;
         _workerProfiles = workerProfiles;
         _subscriptionCompleterFactory = subscriptionCompleterFactory;
@@ -136,7 +147,7 @@ internal sealed class GoalRefinementService
             surfacedTopicKeys.Add(topicKey);
             surfacedNormalizedQuestionKeys.Add(normalizedQuestionKey);
             var correlationKey = BuildCorrelationKey(goalId, topicKey);
-            await _collaboration.RaiseAsync(
+            await _raiseCollaborationItem(
                 CollaborationItemType.Clarification,
                 goalId.Value,
                 BuildClarificationSubject(topicKey),
@@ -243,7 +254,7 @@ internal sealed class GoalRefinementService
                 else
                 {
                     var correlationKey = BuildCorrelationKey(goalId, topicKey);
-                    await _collaboration.RaiseAsync(
+                    await _raiseCollaborationItem(
                         CollaborationItemType.Clarification,
                         goalId.Value,
                         BuildClarificationSubject(topicKey),
@@ -752,7 +763,7 @@ internal sealed class GoalRefinementService
                 .FirstOrDefault();
             if (unresolvedFinding is not null)
             {
-                await _collaboration.RaiseAsync(
+                await _raiseCollaborationItem(
                     CollaborationItemType.Clarification,
                     goalId.Value,
                     BuildClarificationSubject(unresolvedFinding.TopicKey),
@@ -817,7 +828,7 @@ internal sealed class GoalRefinementService
             {
                 var questionText = AcceptanceCriterionFeasibility.BuildQuestion(replacementFinding);
                 var correlationKey = BuildCorrelationKey(goalId, replacementFinding.TopicKey);
-                await _collaboration.RaiseAsync(
+                await _raiseCollaborationItem(
                     CollaborationItemType.Clarification,
                     goalId.Value,
                     BuildClarificationSubject(replacementFinding.TopicKey),
@@ -869,7 +880,7 @@ internal sealed class GoalRefinementService
                     Criterion = replacement ?? withheld.Criterion
                 };
                 questions[questions.IndexOf(withheld)] = released;
-                await _collaboration.RaiseAsync(
+                await _raiseCollaborationItem(
                     CollaborationItemType.Clarification,
                     goalId.Value,
                     BuildClarificationSubject(ResolveQuestionTopicKey(released)),
