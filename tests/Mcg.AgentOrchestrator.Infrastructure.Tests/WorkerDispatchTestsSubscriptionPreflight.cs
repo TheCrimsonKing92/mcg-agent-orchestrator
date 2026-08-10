@@ -211,13 +211,22 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.True(task.LastDispatch is null);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_blocks_missing_required_local_skills")]
-    public void WorkerProfileDispatcherPreflightBlocksMissingRequiredLocalSkills()
+    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_blocks_missing_required_local_skills_with_or_without_catalog_root")]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void WorkerProfileDispatcherPreflightBlocksMissingRequiredLocalSkills(bool createCatalogRoot)
 {
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
-    Directory.CreateDirectory(Path.Combine(workingDirectory, ".agents", "skills"));
+    if (createCatalogRoot)
+    {
+        Directory.CreateDirectory(Path.Combine(workingDirectory, ".agents", "skills"));
+    }
+    else
+    {
+        Directory.CreateDirectory(workingDirectory);
+    }
     File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Implement .NET build verification.", [new TaskSpec(TaskId.New(), "Run dotnet test for the implementation.", AgentRole.Developer)]);

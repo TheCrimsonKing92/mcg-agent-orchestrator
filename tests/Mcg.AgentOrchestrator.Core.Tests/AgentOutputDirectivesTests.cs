@@ -113,6 +113,26 @@ public sealed class AgentOutputDirectivesTests
             StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "Developer_requirements_always_require_failure_evidence_before_editing")]
+    public void DeveloperRequirementsAlwaysRequireFailureEvidenceBeforeEditing()
+    {
+        const string requirement = "Before editing, name the failing test and quote its assertion output.";
+
+        Assert.Contains(requirement, SdlcRolePromptRequirements.BuildPlainText(AgentRole.Developer), StringComparison.Ordinal);
+        Assert.Contains(
+            requirement,
+            SdlcRolePromptRequirements.BuildPlainText(AgentRole.Developer, TaskComplexity.Simple),
+            StringComparison.Ordinal);
+        foreach (var role in new[] { AgentRole.Planner, AgentRole.Researcher, AgentRole.Tester, AgentRole.Reviewer })
+        {
+            Assert.DoesNotContain(requirement, SdlcRolePromptRequirements.BuildPlainText(role), StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                requirement,
+                SdlcRolePromptRequirements.BuildPlainText(role, TaskComplexity.Simple),
+                StringComparison.Ordinal);
+        }
+    }
+
     [Xunit.Theory(DisplayName = "TryParseHumanInputRequest_ignores_explicit_no_input_directives")]
     [Xunit.InlineData("Human input: none")]
     [Xunit.InlineData("Human input: no")]

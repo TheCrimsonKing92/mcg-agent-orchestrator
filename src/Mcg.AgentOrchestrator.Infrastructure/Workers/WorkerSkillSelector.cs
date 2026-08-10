@@ -29,7 +29,15 @@ internal sealed class WorkerSkillSelector
         new(
             "skill-authoring",
             Path.Combine(".agents", "skills", "skill-authoring", "SKILL.md"),
-            "Use for repo-scoped worker skill authoring, SKILL.md edits, skill routing rules, skill selection tests, and worker skill usage evidence.")
+            "Use for repo-scoped worker skill authoring, SKILL.md edits, skill routing rules, skill selection tests, and worker skill usage evidence."),
+        new(
+            "systematic-debugging",
+            Path.Combine(".agents", "skills", "systematic-debugging", "SKILL.md"),
+            "Use the four gated phases for repeated criterion failures or task-specific acceptance-failure retries."),
+        new(
+            "verification-before-completion",
+            Path.Combine(".agents", "skills", "verification-before-completion", "SKILL.md"),
+            "Use a fresh execution-evidence gate before claiming Developer work complete.")
     ];
 
     internal string BuildSelectedSkills(Goal goal, TaskSpec task, string workingDirectory)
@@ -79,7 +87,7 @@ internal sealed class WorkerSkillSelector
                 skill.RelativePath,
                 skill.Usage,
                 File.Exists(Path.Combine(workingDirectory, skill.RelativePath)),
-                BuildSkillReason(skill.Name, task)))
+                BuildSkillReason(skill.Name, goal, task)))
             .ToArray();
     }
 
@@ -149,6 +157,7 @@ internal sealed class WorkerSkillSelector
             "skill routing",
             "selected-skills",
             "worker skill",
+            "worker-skill",
             "skill usage");
 
         if (dotnetSignals || task.RequiredRole is AgentRole.Developer or AgentRole.Tester)
@@ -180,9 +189,20 @@ internal sealed class WorkerSkillSelector
         {
             yield return KnownSkills.Single(skill => skill.Name == "skill-authoring");
         }
+
+        if (task.RequiredRole == AgentRole.Developer)
+        {
+            yield return KnownSkills.Single(skill => skill.Name == "verification-before-completion");
+        }
+
+        if (task.RequiredRole == AgentRole.Developer &&
+            (task.CriterionRetryCount >= 2 || goal.LatestTaskRetryAfterAcceptanceFailure(task.Id) is not null))
+        {
+            yield return KnownSkills.Single(skill => skill.Name == "systematic-debugging");
+        }
     }
 
-    private string BuildSkillReason(string skillName, TaskSpec task)
+    private string BuildSkillReason(string skillName, Goal goal, TaskSpec task)
     {
         return skillName switch
         {
@@ -196,6 +216,12 @@ internal sealed class WorkerSkillSelector
             "aspnet-core" => "Task text references ASP.NET Core or .NET web application concepts.",
             "playwright" => "Task text references browser automation, dashboard UI validation, end-to-end smoke checks, screenshots, or Playwright.",
             "skill-authoring" => "Task text references repo-scoped worker skills, SKILL.md files, skill routing, selected skills, or skill usage evidence.",
+            "systematic-debugging" => task.CriterionRetryCount >= 2
+                ? $"Developer criterion retry count is {task.CriterionRetryCount}; systematic debugging begins at retry 2."
+                : goal.LatestTaskRetryAfterAcceptanceFailure(task.Id) is not null
+                    ? "Developer has a task-specific retry at or after the latest acceptance failure."
+                    : "Developer retry state requires systematic debugging.",
+            "verification-before-completion" => "Every Developer must inspect fresh execution evidence before claiming completion.",
             _ => "Selected by deterministic task metadata rule."
         };
     }

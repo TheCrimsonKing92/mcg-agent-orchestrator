@@ -491,6 +491,14 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
     RunGit(root, ["config", "user.email", "tests@example.com"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["config", "user.name", "Dispatch Tests"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     File.WriteAllText(Path.Combine(root, "seed.txt"), "seed");
+    WriteSkill(root, "dotnet-windows-build-hygiene");
+    WriteSkill(root, "orchestrator-dogfood");
+    WriteSkill(root, "orchestrator-worker-verification");
+    WriteSkill(root, "aspnet-core");
+    WriteSkill(root, "playwright");
+    WriteSkill(root, "skill-authoring");
+    WriteSkill(root, "systematic-debugging");
+    WriteSkill(root, "verification-before-completion");
     RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["commit", "-m", "Seed"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     return root;

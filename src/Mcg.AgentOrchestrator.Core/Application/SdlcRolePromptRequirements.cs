@@ -49,6 +49,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Developer Requirements",
                 "- Implement only the requested behavior and keep edits scoped.",
+                "- Before editing, name the failing test and quote its assertion output.",
                 "- Report changed files and the behavior each change enables.",
                 "- Run focused verification when practical and include exact command names.",
                 "- Leave follow-up work explicit when the dashboard or orchestrator blocks the ideal path."
@@ -188,6 +189,7 @@ internal static class SdlcRolePromptRequirements
             [
                 "## Developer Requirements",
                 "- Keep edits scoped and report changed files plus behavior enabled.",
+                "- Before editing, name the failing test and quote its assertion output.",
                 "- Run focused verification when practical and name exact commands.",
                 "- Call out blockers or follow-up work explicitly."
             ],

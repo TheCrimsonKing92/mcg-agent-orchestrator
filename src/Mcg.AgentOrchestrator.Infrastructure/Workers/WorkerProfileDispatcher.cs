@@ -940,13 +940,6 @@ public static class WorkerProfileDispatcher
             return;
         }
 
-        var skillRoot = Path.Combine(workingDirectory, ".agents", "skills");
-        if (!Directory.Exists(skillRoot))
-        {
-            findings.Add("skills: local skill catalog not present; selected skills will be listed as missing in context artifacts");
-            return;
-        }
-
         var missing = selectedSkills.Where(skill => !skill.Available).ToArray();
         if (missing.Length == 0)
         {

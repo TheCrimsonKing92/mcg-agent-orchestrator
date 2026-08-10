@@ -141,8 +141,10 @@ public sealed class WorkerContextArtifactsCharacterizationTests
         Directory.CreateDirectory(Path.Combine(root, "src", "Feature"));
         Directory.CreateDirectory(Path.Combine(root, "tests", "Feature.Tests"));
         Directory.CreateDirectory(Path.Combine(root, ".agents", "skills", "dotnet-windows-build-hygiene"));
+        Directory.CreateDirectory(Path.Combine(root, ".agents", "skills", "verification-before-completion"));
         File.WriteAllText(Path.Combine(root, "AGENTS.md"), "Repository guidance.");
         File.WriteAllText(Path.Combine(root, ".agents", "skills", "dotnet-windows-build-hygiene", "SKILL.md"), "Build hygiene.");
+        File.WriteAllText(Path.Combine(root, ".agents", "skills", "verification-before-completion", "SKILL.md"), "Completion verification.");
         File.WriteAllText(Path.Combine(root, "src", "Feature", "FeatureService.cs"), "public sealed class FeatureService { public int Version => 1; }");
         File.WriteAllText(Path.Combine(root, "tests", "Feature.Tests", "FeatureServiceTests.cs"), "public sealed class FeatureServiceTests {}");
         RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:01:00Z"));
