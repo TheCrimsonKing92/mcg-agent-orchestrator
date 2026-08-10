@@ -3,6 +3,7 @@ namespace Mcg.AgentOrchestrator.Core;
 public enum TaskOutcomeClass
 {
     Success,
+    ReconciledToSuccess,
     RealFailure,
     Environmental,
     ManufacturedFixed,
@@ -148,9 +149,11 @@ public static class TaskOutcomeClassifier
             .Select(item => item.evt.Message)
             .FirstOrDefault(message => TryExtractRule(message) is not null || TryExtractClass(message) is not null);
         var rule = TryExtractRule(receipt);
-        if (outcome == WorkTaskStatus.Failed && TryExtractClass(receipt) is { } outcomeClass)
+        var recordedClass = TryExtractClass(receipt);
+        if ((outcome == WorkTaskStatus.Failed && recordedClass is not null) ||
+            (outcome == WorkTaskStatus.Completed && recordedClass == TaskOutcomeClass.ReconciledToSuccess))
         {
-            return new TaskOutcomeClassification(rule, outcomeClass);
+            return new TaskOutcomeClassification(rule, recordedClass!.Value);
         }
 
         return Classify(outcome, rule);
@@ -220,6 +223,7 @@ public static class TaskOutcomeClassifier
         outcomeClass switch
         {
             TaskOutcomeClass.Success => "success",
+            TaskOutcomeClass.ReconciledToSuccess => "reconciled-to-success",
             TaskOutcomeClass.RealFailure => "real-failure",
             TaskOutcomeClass.Environmental => "environmental",
             TaskOutcomeClass.ManufacturedFixed => "manufactured-fixed",
@@ -232,6 +236,7 @@ public static class TaskOutcomeClassifier
         return value?.Trim().ToLowerInvariant() switch
         {
             "success" => TaskOutcomeClass.Success,
+            "reconciled-to-success" => TaskOutcomeClass.ReconciledToSuccess,
             "real-failure" => TaskOutcomeClass.RealFailure,
             "environmental" => TaskOutcomeClass.Environmental,
             "manufactured-fixed" => TaskOutcomeClass.ManufacturedFixed,

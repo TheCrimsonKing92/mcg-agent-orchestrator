@@ -876,13 +876,18 @@ public static class DispatchFailureClassifier
         TaskVerificationRecord verification,
         bool workerResultPresent,
         bool hasCommittedChanges,
-        DispatchOutcome outcome) =>
-        (outcome with { OutcomeClass = rule.Class }) with
+        DispatchOutcome outcome)
+    {
+        var outcomeClass = verification.ReconciledToSuccess
+            ? TaskOutcomeClass.ReconciledToSuccess
+            : rule.Class;
+        return (outcome with { OutcomeClass = outcomeClass }) with
         {
             ClassifierReceipt = AppendEvidenceReceipt(
-                BuildClassifierReceipt(rule, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind),
+                BuildClassifierReceipt(rule, outcomeClass, task, verification, workerResultPresent, hasCommittedChanges, outcome.Kind),
                 outcome)
         };
+    }
 
     private static DispatchOutcome WithClassifierReceipt(TaskOutcomeRule rule, DispatchOutcome outcome, int exitCode) =>
         (outcome with { OutcomeClass = rule.Class }) with
@@ -907,6 +912,7 @@ public static class DispatchFailureClassifier
 
     private static string BuildClassifierReceipt(
         TaskOutcomeRule rule,
+        TaskOutcomeClass outcomeClass,
         TaskSpec task,
         TaskVerificationRecord verification,
         bool workerResultPresent,
@@ -926,9 +932,14 @@ public static class DispatchFailureClassifier
             : "unknown";
 
         var childExitCode = verification.ChildExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+        var rootExitCode = (verification.ObservedRootExitCode ?? verification.ExitCode)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var reconciliationOrigin = string.IsNullOrWhiteSpace(verification.ReconciliationOriginRule)
+            ? string.Empty
+            : $"; origin_rule={SanitizeReceiptValue(verification.ReconciliationOriginRule)}";
 
-        return $"CLASSIFIER rule={rule.Token}; outcome_class={TaskOutcomeClassifier.FormatClass(rule.Class)}; " +
-            $"exit_code={verification.ExitCode}; root_exit_code={verification.ExitCode}; " +
+        return $"CLASSIFIER rule={rule.Token}; outcome_class={TaskOutcomeClassifier.FormatClass(outcomeClass)}{reconciliationOrigin}; " +
+            $"exit_code={verification.ExitCode}; root_exit_code={rootExitCode}; " +
             $"child_exit_code={childExitCode}; exit_artifact=verification-record; " +
             $"stdout_bytes={stdoutBytes}; stderr_bytes={stderrBytes}; heartbeat_stdout_bytes={heartbeat}; " +
             $"duration_ms={duration}; worker_result={workerResult}; commit={commitProvenance}; verdict={verdict}";

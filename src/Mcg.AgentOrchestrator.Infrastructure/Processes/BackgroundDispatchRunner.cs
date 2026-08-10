@@ -1179,52 +1179,37 @@ public sealed class BackgroundDispatchRunner
         }
         var task = kernel.GetTask(goalId, taskId);
         var goal = kernel.GetGoal(goalId);
+        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, task.RequiredRole);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
-        if (CanReconcileWrapperExit(recoveryDecision) &&
-            hasRoleCapability &&
-            exitCode != 0 &&
+        var completeNonBlockedWorkerResult = hasRoleCapability && HasSuccessfulWorkerResult(
+            processRecord.WorkingDirectory,
+            decisionStandardOutput,
+            decisionStandardError,
+            allowNoChangedFiles: true,
+            requireNoBlockers: true,
+            roleCapability: dispatchRoleCapability);
+        var successfulChildResultAvailable =
+            observedExitCode != 0 &&
             hasChildExitRecord &&
-            childExitRecord.ExitCode == 0)
-        {
-            var exitCodeEvidenceName = exitArtifactAlreadyExisted
-                ? "observed_wrapper_exit_code"
-                : "synthesized_wrapper_exit_code";
-            if (HasSuccessfulWorkerResult(
-                    processRecord.WorkingDirectory,
-                    decisionStandardOutput,
-                    decisionStandardError,
-                    allowNoChangedFiles: true,
-                    requireNoBlockers: true,
-                    roleCapability: dispatchRoleCapability))
-            {
-                exitCode = 0;
-                wrapperExitReconciled = true;
-                orchestratorFailureReason = null;
-                standardErrorDiagnostic = AppendDiagnostic(
-                    standardErrorDiagnostic ?? string.Empty,
-                    "Reconciled non-zero wrapper completion because the selected child and its complete, non-blocked WORKER_RESULT succeeded; " +
-                    $"{exitCodeEvidenceName}={observedExitCode}; child_exit_code=0; logical_exit_code=0.");
-            }
-            else
-            {
-                standardErrorDiagnostic = AppendDiagnostic(
-                    AppendDiagnostic(
-                        standardErrorDiagnostic ?? string.Empty,
-                        "Wrapper process exited nonzero after the selected child succeeded, but no complete, usable, non-blocked WORKER_RESULT was available; " +
-                        $"{exitCodeEvidenceName}={observedExitCode}; child_exit_code=0."),
-                    DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WrapperProcessExitFailure));
-            }
-        }
+            childExitRecord.ExitCode == 0 &&
+            completeNonBlockedWorkerResult;
+        var successfulChildWithoutUsableWorkerResult =
+            observedExitCode != 0 &&
+            hasChildExitRecord &&
+            childExitRecord.ExitCode == 0 &&
+            !completeNonBlockedWorkerResult;
+        var completionContractSucceeded = true;
 
         if (task.RequiredRole == AgentRole.Researcher &&
             RequiresDurableResearchArtifact(goal, task) &&
-            exitCode == 0)
+            (exitCode == 0 || successfulChildResultAvailable))
         {
             var capturedResearchOutput = ResearcherOutputContract.ReadCapturedOutputTail(processRecord.StandardOutputPath);
             var researchContract = ResearcherOutputContract.Resolve(capturedResearchOutput);
             if (!researchContract.Succeeded || researchContract.Research is null)
             {
                 exitCode = 1;
+                completionContractSucceeded = false;
                 standardErrorDiagnostic = AppendDiagnostic(
                     AppendDiagnostic(
                         standardErrorDiagnostic ?? string.Empty,
@@ -1237,6 +1222,7 @@ public sealed class BackgroundDispatchRunner
                          out var appendDiagnostic))
             {
                 exitCode = 1;
+                completionContractSucceeded = false;
                 standardErrorDiagnostic = AppendDiagnostic(
                     AppendDiagnostic(
                         standardErrorDiagnostic ?? string.Empty,
@@ -1245,7 +1231,7 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
-        if (task.RequiredRole == AgentRole.Planner && exitCode == 0)
+        if (task.RequiredRole == AgentRole.Planner && (exitCode == 0 || successfulChildResultAvailable))
         {
             var acceptanceCriteria = RequiresDurablePlanArtifact(goal, task)
                 ? goal.RefinedSpec?.AcceptanceCriteria ?? []
@@ -1262,6 +1248,7 @@ public sealed class BackgroundDispatchRunner
             if (!plannerContract.Succeeded || plannerContract.Plan is null)
             {
                 exitCode = 1;
+                completionContractSucceeded = false;
                 var rejectionDiagnostic = plannerContract.Diagnostic;
                 if (!PlannerOutputContract.TryPersistRejectionDiagnostic(
                         processRecord.StandardErrorPath,
@@ -1288,6 +1275,7 @@ public sealed class BackgroundDispatchRunner
                         out var appendDiagnostic))
                 {
                     exitCode = 1;
+                    completionContractSucceeded = false;
                     standardErrorDiagnostic = AppendDiagnostic(
                         AppendDiagnostic(
                             standardErrorDiagnostic ?? string.Empty,
@@ -1297,7 +1285,7 @@ public sealed class BackgroundDispatchRunner
             }
         }
 
-        var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, exitCode, decisionStandardOutput, decisionStandardError);
+        var providerFailureKind = ParseProviderFailureKind(task.LastDispatch, observedExitCode, decisionStandardOutput, decisionStandardError);
         var workerResultPresent = HasWorkerResultArtifact(
             processRecord.WorkingDirectory,
             decisionStandardOutput);
@@ -1310,9 +1298,43 @@ public sealed class BackgroundDispatchRunner
                 task.LastDispatch!.DispatchedAt,
                 forceRefresh: true)
             : null;
+        var worktreeEvidenceAvailable = completedWorktreeInspection is { IsAvailable: true };
+        var initialWorktreeEvidence = worktreeEvidenceAvailable
+            ? completedWorktreeInspection!.Evidence
+            : GoalWorktreeDispatchEvidence.Unknown;
+        hasCommittedChanges = initialWorktreeEvidence.HasRelevantCommitAfterDispatch;
+        var hasQualifyingDirtyChanges =
+            worktreeEvidenceAvailable &&
+            !initialWorktreeEvidence.IsClean &&
+            initialWorktreeEvidence.DirtyPaths.Count > 0;
+        var relevantChangeEvidenceAvailable =
+            worktreeEvidenceAvailable && (hasCommittedChanges || hasQualifyingDirtyChanges);
+        var reconciliationOriginRule = successfulChildResultAvailable
+            ? ClassifyReconciliationOriginRule(
+                task,
+                processRecord,
+                observedExitCode,
+                decisionStandardOutput,
+                decisionStandardError,
+                standardErrorDiagnostic,
+                workerResultPresent,
+                hasCommittedChanges,
+                providerFailureKind,
+                childExitRecord,
+                recoveryDecision)
+            : null;
+        var reconcileWrapperExit = ShouldReconcileWrapperExit(new WrapperExitReconciliationEvidence(
+            observedExitCode,
+            hasChildExitRecord ? childExitRecord.ExitCode : null,
+            completeNonBlockedWorkerResult,
+            completionContractSucceeded,
+            hasRoleCapability,
+            dispatchRoleCapability,
+            relevantChangeEvidenceAvailable,
+            humanInputDirective.Directive is not null || humanInputDirective.IsMalformed,
+            !string.IsNullOrWhiteSpace(orchestratorFailureReason)));
         if (completedWorktreeInspection is { IsAvailable: true, Evidence: var worktreeEvidence })
         {
-            hasCommittedChanges = worktreeEvidence.HasRelevantCommitAfterDispatch;
             // Default path: a Developer/Tester that edited the worktree and showed verification
             // evidence does not need to self-commit. The orchestrator stages and commits the dirty
             // diff after guards pass. Dirty-but-unverified edits are left dirty and fail.
@@ -1330,6 +1352,8 @@ public sealed class BackgroundDispatchRunner
                 processRecord,
                 decisionStandardError,
                 sandboxCommitOnBehalfEvidence);
+            // Blockers remain advisory on the ordinary exit-0 commit path. The stricter
+            // completeNonBlockedWorkerResult is reserved for overriding a failed wrapper exit.
             var successfulWorkerResult = HasSuccessfulWorkerResult(
                 processRecord.WorkingDirectory,
                 decisionStandardOutput,
@@ -1353,8 +1377,9 @@ public sealed class BackgroundDispatchRunner
                 task.LastDispatch.SandboxLowIntegrity != true &&
                 (successfulWorkerResult || worktreeEvidence.HasRelevantCommitAfterDispatch);
             var shouldCommitDirtyWorktree =
-                recoveryDecision?.Action != DispatchRecoveryAction.PreserveInterruptedWork &&
+                (recoveryDecision?.Action != DispatchRecoveryAction.PreserveInterruptedWork || reconcileWrapperExit) &&
                 ((exitCode == 0 && (normalIntegrityCommitEvidence || lowIntegrityConfinementEvidence)) ||
+                 reconcileWrapperExit ||
                  (task.LastDispatch.SandboxLowIntegrity && sandboxCommitOnBehalfEvidence) ||
                  (originalExitCode != 0 && successfulWorkerResult && !provider.Capabilities.CanSelfCommit && lowIntegrityConfinementEvidence));
 
@@ -1377,7 +1402,10 @@ public sealed class BackgroundDispatchRunner
                 {
                     orchestratorCommitted = true;
                     hasCommittedChanges = true;
-                    exitCode = 0;
+                    if (!reconcileWrapperExit)
+                    {
+                        exitCode = 0;
+                    }
                     standardErrorDiagnostic = AppendDiagnostic(
                         standardErrorDiagnostic ?? string.Empty,
                         "Orchestrator committed the worker's verified worktree edits. " +
@@ -1399,7 +1427,7 @@ public sealed class BackgroundDispatchRunner
                 }
             }
 
-            if (!orchestratorCommitted && !worktreeEvidence.IsClean && exitCode == 0)
+            if (!orchestratorCommitted && !worktreeEvidence.IsClean && (exitCode == 0 || reconcileWrapperExit))
             {
                 // Exited 0 but left uncommitted edits the orchestrator could not land (no verification
                 // evidence, or the commit failed) — not acceptable.
@@ -1428,13 +1456,13 @@ public sealed class BackgroundDispatchRunner
             }
             else if (!orchestratorCommitted && worktreeEvidence.IsClean)
             {
-                var reconciledRoleStillRequiresChangeEvidence =
-                    wrapperExitReconciled &&
-                    DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var roleCapability) &&
-                    roleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
+                var successfulChildStillRequiresChangeEvidence =
+                    successfulChildResultAvailable &&
+                    dispatchRoleCapability == DispatchRoleOutputCapability.RequiresChangeEvidence;
                 var requiresCommitEvidence =
+                    !successfulChildWithoutUsableWorkerResult &&
                     RequiresPostDispatchCommitEvidence(task, decisionStandardOutput, decisionStandardError, workerResultPresent) &&
-                    (reconciledRoleStillRequiresChangeEvidence ||
+                    (successfulChildStillRequiresChangeEvidence ||
                      (!HasCompletedVerification(decisionStandardOutput, decisionStandardError) &&
                       !AllowsNoChangeCompletion(task, decisionStandardOutput, decisionStandardError))) &&
                     !worktreeEvidence.HasRelevantCommitAfterDispatch;
@@ -1477,6 +1505,32 @@ public sealed class BackgroundDispatchRunner
                     DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WorktreeInspectionFailed));
             }
         }
+
+        if (reconcileWrapperExit &&
+            (dispatchRoleCapability != DispatchRoleOutputCapability.RequiresChangeEvidence || hasCommittedChanges))
+        {
+            var exitCodeEvidenceName = exitArtifactAlreadyExisted
+                ? "observed_wrapper_exit_code"
+                : "synthesized_wrapper_exit_code";
+            exitCode = 0;
+            wrapperExitReconciled = true;
+            standardErrorDiagnostic = AppendDiagnostic(
+                standardErrorDiagnostic ?? string.Empty,
+                "Reconciled non-zero wrapper completion because the selected child and its complete, non-blocked WORKER_RESULT succeeded; " +
+                $"{exitCodeEvidenceName}={observedExitCode}; child_exit_code=0; logical_exit_code=0.");
+        }
+        else if (successfulChildWithoutUsableWorkerResult)
+        {
+            var exitCodeEvidenceName = exitArtifactAlreadyExisted
+                ? "observed_wrapper_exit_code"
+                : "synthesized_wrapper_exit_code";
+            standardErrorDiagnostic = AppendDiagnostic(
+                AppendDiagnostic(
+                    standardErrorDiagnostic ?? string.Empty,
+                    "Wrapper process exited nonzero after the selected child succeeded, but no complete, usable, non-blocked WORKER_RESULT was available; " +
+                    $"{exitCodeEvidenceName}={observedExitCode}; child_exit_code=0."),
+                DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.WrapperProcessExitFailure));
+        }
         if (task.LastDispatch is { } completedDispatch && !IsLocalDispatch(completedDispatch))
         {
             var reapNote = ReapWorktreeBuildDaemons(processRecord.WorkingDirectory);
@@ -1500,7 +1554,6 @@ public sealed class BackgroundDispatchRunner
             exitCode = observedExitCode;
         }
 
-        var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, task.RequiredRole);
         var humanInputQuestion = humanInputDirective.Directive?.Question;
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
@@ -1560,7 +1613,10 @@ public sealed class BackgroundDispatchRunner
             ChildExitCode: completed.ChildExitCode,
             OrchestratorFailureReason: orchestratorFailureReason,
             HumanInputQuestionFingerprint: humanInputDirective.Directive?.QuestionFingerprint,
-            HumanInputBlockerFingerprint: humanInputDirective.Directive?.BlockerFingerprint);
+            HumanInputBlockerFingerprint: humanInputDirective.Directive?.BlockerFingerprint,
+            ObservedRootExitCode: observedExitCode,
+            ReconciledToSuccess: wrapperExitReconciled,
+            ReconciliationOriginRule: wrapperExitReconciled ? reconciliationOriginRule : null);
 
         var outcome = new DispatchRefreshOutcome(
             completed,
@@ -1574,10 +1630,71 @@ public sealed class BackgroundDispatchRunner
         return outcome;
     }
 
-    private static bool CanReconcileWrapperExit(DispatchRecoveryDecision? recoveryDecision) =>
-        recoveryDecision?.Action is DispatchRecoveryAction.ReconcileFromExit or
-            DispatchRecoveryAction.Reap or
-            DispatchRecoveryAction.ClassifyBlocker;
+    internal static bool ShouldReconcileWrapperExit(WrapperExitReconciliationEvidence evidence) =>
+        evidence.ObservedRootExitCode != 0 &&
+        evidence.ChildExitCode == 0 &&
+        evidence.HasCompleteNonBlockedWorkerResult &&
+        evidence.CompletionContractSucceeded &&
+        evidence.HasKnownRoleCapability &&
+        (evidence.RoleCapability != DispatchRoleOutputCapability.RequiresChangeEvidence ||
+         evidence.HasRelevantChangeEvidence) &&
+        !evidence.HasTerminalHumanInputDirective &&
+        !evidence.HasFatalOrchestratorFailure;
+
+    private string? ClassifyReconciliationOriginRule(
+        TaskSpec task,
+        TaskProcessRecord processRecord,
+        int observedRootExitCode,
+        string standardOutput,
+        string standardError,
+        string? standardErrorDiagnostic,
+        bool workerResultPresent,
+        bool hasCommittedChanges,
+        ProviderFailureKind providerFailureKind,
+        DispatchProcessHost.DispatchChildExitRecord childExitRecord,
+        DispatchRecoveryDecision? recoveryDecision)
+    {
+        var diagnosticStandardError = AppendDiagnostic(standardError, standardErrorDiagnostic ?? string.Empty);
+        var recordedOriginRule = TaskOutcomeClassifier.TryExtractRule(standardOutput) ??
+            TaskOutcomeClassifier.TryExtractRule(diagnosticStandardError);
+        if (!string.IsNullOrWhiteSpace(recordedOriginRule))
+        {
+            return recordedOriginRule;
+        }
+
+        // PreserveInterruptedWork is the typed dirty-dispatch boundary that the failure classifier
+        // reports as dirty-dispatch-recovery after a failed verification is recorded. Capture that
+        // diagnostic origin before successful reconciliation changes the logical task disposition.
+        // This metadata never participates in ShouldReconcileWrapperExit.
+        if (recoveryDecision?.Action == DispatchRecoveryAction.PreserveInterruptedWork)
+        {
+            return "dirty-dispatch-recovery";
+        }
+
+        var verification = new TaskVerificationRecord(
+            processRecord.Command,
+            processRecord.WorkingDirectory,
+            observedRootExitCode,
+            standardOutput,
+            diagnosticStandardError,
+            _clock.UtcNow,
+            StandardOutputPath: processRecord.StandardOutputPath,
+            StandardErrorPath: processRecord.StandardErrorPath,
+            WorkerResultPresent: workerResultPresent,
+            HasCommittedChanges: hasCommittedChanges,
+            ProviderFailureKind: providerFailureKind,
+            DispatchStartedAt: processRecord.StartedAt,
+            ChildProcessId: childExitRecord.ProcessId,
+            ChildExitCode: childExitRecord.ExitCode,
+            ObservedRootExitCode: observedRootExitCode);
+        var origin = DispatchFailureClassifier.Classify(
+            task,
+            verification,
+            providerFailureKind,
+            workerResultPresent,
+            hasCommittedChanges);
+        return TaskOutcomeClassifier.TryExtractRule(origin.ClassifierReceipt);
+    }
 
     private static bool RequiresDurableResearchArtifact(Goal goal, TaskSpec researcher)
     {
@@ -4348,6 +4465,17 @@ public sealed class BackgroundDispatchRunner
 
         public static GoalWorktreeDispatchEvidence Unknown { get; } = new("unknown", "unknown", false, "unknown", "unavailable", 0, [], []);
     }
+
+    internal readonly record struct WrapperExitReconciliationEvidence(
+        int ObservedRootExitCode,
+        int? ChildExitCode,
+        bool HasCompleteNonBlockedWorkerResult,
+        bool CompletionContractSucceeded,
+        bool HasKnownRoleCapability,
+        DispatchRoleOutputCapability RoleCapability,
+        bool HasRelevantChangeEvidence,
+        bool HasTerminalHumanInputDirective,
+        bool HasFatalOrchestratorFailure);
 
     private readonly record struct CommitWorktreeEditsResult(bool Succeeded, string Diagnostic)
     {
