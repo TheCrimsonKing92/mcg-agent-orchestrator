@@ -59,6 +59,7 @@ private static SourceBacklogItemLink? ResolveSourceBacklogItemLink(
     {
         var explicitItem = ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, explicitPrefix, explicitFlag: true)!;
         ValidateBacklogPromotionPrerequisites(context, explicitItem);
+        ValidateSourceBacklogItemAvailable(context, explicitItem);
         return new SourceBacklogItemLink(
             explicitItem,
             FromExplicitFlag: true,
@@ -74,7 +75,10 @@ private static SourceBacklogItemLink? ResolveSourceBacklogItemLink(
 
     var item = ResolveBacklogItemIdPrefix(context.Workspace.BacklogStorePath, match.Groups[1].Value, explicitFlag: false);
     if (item is not null)
+    {
         ValidateBacklogPromotionPrerequisites(context, item);
+        ValidateSourceBacklogItemAvailable(context, item);
+    }
     if (item is null)
     {
         ResolveSourceBacklogCoverage(parts, sourceLinkDeclared: false);
@@ -85,6 +89,15 @@ private static SourceBacklogItemLink? ResolveSourceBacklogItemLink(
         item,
         FromExplicitFlag: false,
         ResolveSourceBacklogCoverage(parts, sourceLinkDeclared: true)!.Value);
+}
+
+private static void ValidateSourceBacklogItemAvailable(CliExecutionContext context, BacklogItem item)
+{
+    if (context.Kernel.FindGoalBySourceBacklogItemId(item.Id) is { } competingGoal)
+    {
+        throw new InvalidOperationException(
+            $"GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed backlogItem={item.Id} competingGoal={competingGoal.Id.Value}");
+    }
 }
 
 private static SourceBacklogCoverage? ResolveSourceBacklogCoverage(
@@ -149,6 +162,13 @@ private static void ApplySourceBacklogItemLink(CliExecutionContext context, Goal
     if (link is null)
     {
         return;
+    }
+
+    if (context.Kernel.FindGoalBySourceBacklogItemId(link.Item.Id) is { } competingGoal &&
+        competingGoal.Id != goal.Id)
+    {
+        throw new InvalidOperationException(
+            $"GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed backlogItem={link.Item.Id} competingGoal={competingGoal.Id.Value}");
     }
 
     if (!string.IsNullOrWhiteSpace(goal.SourceBacklogItemId) &&

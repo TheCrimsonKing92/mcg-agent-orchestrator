@@ -156,6 +156,16 @@ internal static class CliPersistentStateRunner
             return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
+        if (IsGoalCreateDeliveryRetryCommand(args))
+        {
+            return ExecuteGoalCreateDeliveryRetry(args, stateRepository, workspace, ref currentGoal);
+        }
+
+        if (IsGoalCreateCommand(args))
+        {
+            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (IsGoalMarkLandedCommand(args))
         {
             return ExecuteGoalMarkLandedWithPromptBudget(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -571,8 +581,20 @@ internal static class CliPersistentStateRunner
 
     internal static bool IsBacklogIntakeCommand(IReadOnlyList<string> args)
     {
-        return args.Count > 0 && args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase);
+        return args.Count > 0 &&
+            (args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase) ||
+             (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
+              args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))));
     }
+
+    internal static bool IsGoalCreateCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 &&
+        args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
+        !args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase));
+
+    internal static bool IsGoalCreateDeliveryRetryCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 &&
+        args[0].Equals("goal-delivery-retry", StringComparison.OrdinalIgnoreCase);
 
     internal static bool HasStateDbMigrationAuthority(IReadOnlyList<string> args)
     {
@@ -1578,6 +1600,287 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    private static bool ExecuteGoalCreateOutsideTransaction(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref IReadOnlyList<AgentDefinition> agents,
+        IModelProviderRegistry providers,
+        ref WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal,
+        IOperatorChannel? channel = null)
+    {
+        if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
+        {
+            throw new InvalidOperationException(
+                "Goal creation requires a state repository with durable outbox support.");
+        }
+
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+        GoalSnapshot? committedSnapshot = null;
+        var deferredEventWriter = new DeferredGoalLifecycleEventWriter();
+        var deferredCollaborationWriter = new DeferredGoalCreationCollaborationWriter(
+            CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory));
+
+        void FinalizeGoalCreation(Goal goal)
+        {
+            var preparedSnapshot = kernel.ExportGoalSnapshot(goal.Id);
+            GoalCreationSideEffectDelivery.BeforeStateCommit?.Invoke(goal.Id);
+            var deliveryMessage = GoalCreationSideEffectDelivery.CreateMessage(
+                goal.Id,
+                deferredCollaborationWriter.SnapshotEffects(),
+                deferredEventWriter.SnapshotEffects());
+            outboxRepository.TransactWithOutboxAsync(
+                    (currentKernel, _) =>
+                    {
+                        ValidateGoalCreationPreconditions(currentKernel, preparedSnapshot, workspace);
+                        currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
+                        return Task.FromResult((
+                            ShouldSave: true,
+                            Result: true,
+                            OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage]));
+                    })
+                .GetAwaiter()
+                .GetResult();
+            committedSnapshot = preparedSnapshot;
+            try
+            {
+                _ = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, goal.Id);
+                deferredCollaborationWriter.CompleteDelivery();
+                deferredEventWriter.CompleteDeliveryTo(
+                    new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel));
+            }
+            catch (Exception ex)
+            {
+                throw GoalCreationDeliveryIncomplete(goal.Id, ex);
+            }
+        }
+
+        var shouldSave = CliCommandDispatcher.ExecuteCommand(
+            args,
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref workerProfiles,
+            ref currentGoal,
+            channel,
+            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+            finalizeGoalCreation: FinalizeGoalCreation,
+            eventWriter: deferredEventWriter,
+            refinementCollaborationItemRaise: deferredCollaborationWriter.RaiseAsync);
+
+        if (committedSnapshot is null)
+        {
+            throw new InvalidOperationException("GOAL_CREATE_COMMIT_MISSING reason=finalizer-not-invoked");
+        }
+
+        if (currentGoal is not null)
+        {
+            var finalSnapshot = kernel.ExportGoalSnapshot(currentGoal.Id);
+            if (!string.Equals(
+                    JsonSerializer.Serialize(committedSnapshot),
+                    JsonSerializer.Serialize(finalSnapshot),
+                    StringComparison.Ordinal))
+            {
+                PersistPostCreationGoalChanges(stateRepository, committedSnapshot, finalSnapshot);
+            }
+        }
+
+        return shouldSave;
+    }
+
+    private static bool ExecuteGoalCreateDeliveryRetry(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        ref Goal? currentGoal)
+    {
+        if (args.Count != 2 || string.IsNullOrWhiteSpace(args[1]))
+        {
+            throw new InvalidOperationException("Usage: goal-delivery-retry <goal-id-or-prefix>");
+        }
+
+        if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
+        {
+            throw new InvalidOperationException(
+                "goal-delivery-retry requires a state repository with durable outbox support.");
+        }
+
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        var goal = OrchestratorEntityResolver.ResolveGoal(kernel, currentGoal, args[1]);
+        try
+        {
+            var result = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, goal.Id);
+            currentGoal = goal;
+            Console.WriteLine(
+                $"GOAL_CREATE_DELIVERY_COMPLETE goal={goal.Id.Value} disposition={result.Disposition.ToString().ToLowerInvariant()}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            throw GoalCreationDeliveryIncomplete(goal.Id, ex);
+        }
+    }
+
+    private static GoalCreationDeliveryResult DeliverGoalCreationSideEffects(
+        IOrchestratorStateOutboxRepository outboxRepository,
+        OrchestratorWorkspace workspace,
+        AgentOrchestratorKernel kernel,
+        GoalId goalId)
+    {
+        OrchestratorStateOutboxProcessingResult? processingResult = null;
+        var claimed = outboxRepository.TryProcessOutboxMessageAsync(
+                GoalCreationSideEffectDelivery.MessageId(goalId.Value),
+                async (message, cancellationToken) =>
+                {
+                    try
+                    {
+                        var receipt = GoalCreationSideEffectDelivery.Deserialize(message);
+                        if (!receipt.GoalId.Equals(goalId.Value, StringComparison.Ordinal) ||
+                            kernel.Goals.All(candidate => candidate.Id != goalId))
+                        {
+                            processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                                $"Goal-creation delivery receipt targets missing or mismatched goal '{receipt.GoalId}'.");
+                            return processingResult;
+                        }
+
+                        await GoalCreationSideEffectDelivery.DeliverAsync(
+                            receipt,
+                            workspace,
+                            kernel,
+                            cancellationToken).ConfigureAwait(false);
+                        processingResult = OrchestratorStateOutboxProcessingResult.Completed;
+                        return processingResult;
+                    }
+                    catch (JsonException ex)
+                    {
+                        processingResult = OrchestratorStateOutboxProcessingResult.Quarantined(
+                            $"Invalid goal-creation delivery receipt: {ex.Message}");
+                        return processingResult;
+                    }
+                })
+            .GetAwaiter()
+            .GetResult();
+
+        if (!claimed)
+            return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.AlreadyDelivered);
+
+        if (processingResult?.Disposition == OrchestratorStateOutboxDisposition.Quarantine)
+        {
+            throw new InvalidOperationException(
+                $"GOAL_CREATE_DELIVERY_INVALID goal={goalId.Value} detail={processingResult.Detail}");
+        }
+
+        return new GoalCreationDeliveryResult(goalId.Value, GoalCreationDeliveryDisposition.Delivered);
+    }
+
+    private static InvalidOperationException GoalCreationDeliveryIncomplete(GoalId goalId, Exception exception) =>
+        new(
+            $"GOAL_CREATE_DELIVERY_INCOMPLETE goal={goalId.Value} " +
+            $"retry=\"goal-delivery-retry {goalId.Value}\" detail={exception.Message}",
+            exception);
+
+    private static void ValidateGoalCreationPreconditions(
+        AgentOrchestratorKernel currentKernel,
+        GoalSnapshot preparedSnapshot,
+        OrchestratorWorkspace workspace)
+    {
+        if (currentKernel.Goals.Any(goal => goal.Id.Value == preparedSnapshot.Id))
+        {
+            throw GoalCreatePreconditionChanged("prepared-goal-id-exists", ("goal", preparedSnapshot.Id));
+        }
+
+        var preparedDependencies = (preparedSnapshot.DependsOn ?? [])
+            .ToHashSet(StringComparer.Ordinal);
+        if (preparedDependencies.Any(id => currentKernel.Goals.All(goal => goal.Id.Value != id)))
+        {
+            throw GoalCreatePreconditionChanged("dependency-target-missing", ("goal", preparedSnapshot.Id));
+        }
+
+        if (preparedSnapshot.SourceBacklogItemId is not { } backlogItemId)
+        {
+            return;
+        }
+
+        var backlogItem = new BacklogStore(workspace.BacklogStorePath)
+            .GetByIdPrefixAsync(backlogItemId)
+            .GetAwaiter()
+            .GetResult();
+        if (backlogItem is null || !string.Equals(backlogItem.Id, backlogItemId, StringComparison.Ordinal))
+        {
+            throw GoalCreatePreconditionChanged("source-backlog-missing", ("backlogItem", backlogItemId));
+        }
+
+        if (currentKernel.FindGoalBySourceBacklogItemId(backlogItemId) is { } competingGoal)
+        {
+            throw GoalCreatePreconditionChanged(
+                "source-backlog-consumed",
+                ("backlogItem", backlogItemId),
+                ("competingGoal", competingGoal.Id.Value));
+        }
+
+        var currentDependencies = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var dependency in backlogItem.Dependencies)
+        {
+            var dependencyGoal = dependency.TargetKind == BacklogDependencyTargetKind.Goal
+                ? currentKernel.Goals.FirstOrDefault(goal => goal.Id.Value == dependency.PrerequisiteId)
+                : currentKernel.FindGoalBySourceBacklogItemId(dependency.PrerequisiteId);
+            if (dependencyGoal is null)
+            {
+                throw GoalCreatePreconditionChanged(
+                    "dependency-target-missing",
+                    ("backlogItem", backlogItemId),
+                    ("dependency", dependency.PrerequisiteId));
+            }
+
+            currentDependencies.Add(dependencyGoal.Id.Value);
+        }
+
+        if (!currentDependencies.SetEquals(preparedDependencies))
+        {
+            throw GoalCreatePreconditionChanged(
+                "source-backlog-dependencies-changed",
+                ("backlogItem", backlogItemId));
+        }
+    }
+
+    private static void PersistPostCreationGoalChanges(
+        ITransactionalOrchestratorStateRepository stateRepository,
+        GoalSnapshot committedSnapshot,
+        GoalSnapshot finalSnapshot)
+    {
+        var committedJson = JsonSerializer.Serialize(committedSnapshot);
+        stateRepository.TransactGoalAsync(
+                new GoalId(committedSnapshot.Id),
+                (currentSnapshot, _) =>
+                {
+                    if (currentSnapshot is null ||
+                        !string.Equals(JsonSerializer.Serialize(currentSnapshot), committedJson, StringComparison.Ordinal))
+                    {
+                        throw GoalCreatePreconditionChanged(
+                            "created-goal-concurrently-modified",
+                            ("goal", committedSnapshot.Id));
+                    }
+
+                    return Task.FromResult<(bool ShouldSave, GoalSnapshot? NewSnapshot, bool Result)>(
+                        (true, finalSnapshot, true));
+                })
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static InvalidOperationException GoalCreatePreconditionChanged(
+        string reason,
+        params (string Key, string Value)[] context)
+    {
+        var suffix = context.Length == 0
+            ? string.Empty
+            : " " + string.Join(' ', context.Select(item => $"{item.Key}={item.Value}"));
+        return new InvalidOperationException($"GOAL_CREATE_PRECONDITION_CHANGED reason={reason}{suffix}");
     }
 
     private static bool ExecuteProcessRefreshOutsideTransaction(

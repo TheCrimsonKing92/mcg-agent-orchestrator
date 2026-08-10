@@ -21,11 +21,12 @@ internal static class GoalRefinementGate
         Goal goal,
         ConductorAutonomyPolicy? policy = null,
         WorkerProfileCatalog? workerProfiles = null,
-        IGoalLifecycleEventWriter? eventWriter = null)
+        IGoalLifecycleEventWriter? eventWriter = null,
+        CollaborationItemRaise? collaborationItemRaise = null)
     {
         if (goal.RefinedSpec is { } existing)
         {
-            var existingService = CreateService(workspace, providers, workerProfiles);
+            var existingService = CreateService(workspace, providers, workerProfiles, collaborationItemRaise);
             // Pick up any operator answers submitted since refinement: resolved clarification items in
             // the store are written into the spec's open questions here (the listener only resolves the
             // store item), so an answered goal clears AwaitingClarification and planning resumes with the
@@ -42,7 +43,7 @@ internal static class GoalRefinementGate
             return new GoalRefinementGateResult(outcome, RanRefinement: false, existing);
         }
 
-        var service = CreateService(workspace, providers, workerProfiles);
+        var service = CreateService(workspace, providers, workerProfiles, collaborationItemRaise);
         var result = service.RefineAsync(kernel, goal.Id, policy ?? ConductorAutonomyPolicy.Conservative).GetAwaiter().GetResult();
         kernel.RecordGoalPolicyDecision(
             goal.Id,
@@ -137,13 +138,15 @@ internal static class GoalRefinementGate
     private static GoalRefinementService CreateService(
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        WorkerProfileCatalog? workerProfiles) =>
+        WorkerProfileCatalog? workerProfiles,
+        CollaborationItemRaise? collaborationItemRaise = null) =>
         new(
             providers,
             ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
-            workerProfiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath));
+            workerProfiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath),
+            raiseCollaborationItem: collaborationItemRaise);
 
     private static IReadOnlyList<CollaborationItem> ListGoalCollaborationItems(
         OrchestratorWorkspace workspace,

@@ -36,6 +36,7 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
 
     private readonly ConcurrentDictionary<string, object> _locks = new();
     private readonly ConcurrentDictionary<string, int> _nextCursors = new();
+    private readonly AsyncLocal<string?> _activeDeliveryId = new();
 
     public GoalLifecycleEventWriter(
         string eventsDirectory,
@@ -320,6 +321,36 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
             obj["totalTokens"] = totalTokens;
         });
 
+    /// <summary>
+    /// Appends one externally-journaled effect exactly once. The state outbox serializes competing
+    /// processors; the event-file lock makes the lookup and append atomic within that processor.
+    /// </summary>
+    public void AppendIdempotent(
+        GoalId goalId,
+        string deliveryId,
+        Action<IGoalLifecycleEventWriter> append)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(deliveryId);
+        ArgumentNullException.ThrowIfNull(append);
+        var fileLock = _locks.GetOrAdd(goalId.Value, _ => new object());
+        lock (fileLock)
+        {
+            if (ContainsDeliveryId(EventFilePath(goalId), deliveryId))
+                return;
+
+            var priorDeliveryId = _activeDeliveryId.Value;
+            _activeDeliveryId.Value = deliveryId;
+            try
+            {
+                append(this);
+            }
+            finally
+            {
+                _activeDeliveryId.Value = priorDeliveryId;
+            }
+        }
+    }
+
     private void Append(GoalId goalId, string eventType, Action<JsonObject> addFields)
     {
         var key = goalId.Value;
@@ -337,6 +368,8 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
                 ["eventType"] = eventType
             };
             addFields(obj);
+            if (_activeDeliveryId.Value is { } deliveryId)
+                obj["deliveryId"] = deliveryId;
 
             var line = obj.ToJsonString() + "\n";
 
@@ -367,6 +400,34 @@ public sealed class GoalLifecycleEventWriter : IGoalLifecycleEventWriter
         }
 
         return count;
+    }
+
+    private static bool ContainsDeliveryId(string path, string deliveryId)
+    {
+        if (!File.Exists(path))
+            return false;
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        while (reader.ReadLine() is { } line)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(line);
+                if (document.RootElement.TryGetProperty("deliveryId", out var value) &&
+                    value.ValueKind == JsonValueKind.String &&
+                    string.Equals(value.GetString(), deliveryId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            catch (JsonException)
+            {
+                // Legacy or torn lines are counted by the existing reader but cannot prove delivery.
+            }
+        }
+
+        return false;
     }
 
     private static string ToLifecycleEventType(ProgressKind kind) =>

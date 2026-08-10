@@ -14,6 +14,7 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     public const string CurrentSchemaVersion = "1";
     private const int GoalMetadataTitleMaxChars = 240;
     private const int MaxOptimisticConcurrencyRetries = 6;
+    private static readonly TimeSpan OutboxProcessingLease = TimeSpan.FromMinutes(15);
     private readonly string _dbPath;
     private readonly Action<string>? _statementObserver;
     private readonly SqliteWriteTelemetry _writeTelemetry;
@@ -358,7 +359,9 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 payload_json      TEXT NOT NULL,
                 created_at        TEXT NOT NULL,
                 quarantined_at    TEXT NULL,
-                quarantine_reason TEXT NULL
+                quarantine_reason TEXT NULL,
+                processing_token  TEXT NULL,
+                processing_started_at TEXT NULL
             )
             """);
         RunNonQuery(conn, "CREATE INDEX IF NOT EXISTS ix_state_outbox_kind ON state_outbox(kind)");
@@ -376,6 +379,16 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             "state_outbox",
             "quarantine_reason",
             "ALTER TABLE state_outbox ADD COLUMN quarantine_reason TEXT NULL");
+        AddColumnIfMissing(
+            conn,
+            "state_outbox",
+            "processing_token",
+            "ALTER TABLE state_outbox ADD COLUMN processing_token TEXT NULL");
+        AddColumnIfMissing(
+            conn,
+            "state_outbox",
+            "processing_started_at",
+            "ALTER TABLE state_outbox ADD COLUMN processing_started_at TEXT NULL");
     }
 
     // Idempotent migration: adds metadata columns to existing schemas that pre-date them.
@@ -894,6 +907,39 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         Func<OrchestratorStateOutboxMessage, CancellationToken, Task<OrchestratorStateOutboxProcessingResult>> processor,
         CancellationToken cancellationToken = default)
     {
+        var processingToken = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        var message = await TryClaimOutboxMessageAsync(id, processingToken, cancellationToken);
+        if (message is null)
+            return false;
+
+        try
+        {
+            // External delivery must never run while state.db has a write transaction open.
+            var result = await processor(message, cancellationToken);
+            await FinalizeOutboxMessageAsync(id, processingToken, result, cancellationToken);
+            return true;
+        }
+        catch
+        {
+            try
+            {
+                await ReleaseOutboxMessageClaimAsync(id, processingToken, CancellationToken.None);
+            }
+            catch
+            {
+                // Preserve the delivery failure. The persisted lease makes a hard-crash or
+                // release failure recoverable after its bounded expiry.
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<OrchestratorStateOutboxMessage?> TryClaimOutboxMessageAsync(
+        string id,
+        string processingToken,
+        CancellationToken cancellationToken)
+    {
         var write = await BeginWriteAsync(
             ResolveOperationTag(nameof(TryProcessOutboxMessageAsync)),
             cancellationToken);
@@ -907,9 +953,14 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 select.CommandText = """
                     SELECT id, kind, payload_json, created_at
                     FROM state_outbox
-                    WHERE id = $id AND quarantined_at IS NULL
+                    WHERE id = $id
+                      AND quarantined_at IS NULL
+                      AND (processing_token IS NULL OR processing_started_at IS NULL OR processing_started_at <= $stale_before)
                     """;
                 select.Parameters.AddWithValue("$id", id);
+                select.Parameters.AddWithValue(
+                    "$stale_before",
+                    DateTimeOffset.UtcNow.Subtract(OutboxProcessingLease).ToString("O", CultureInfo.InvariantCulture));
                 await using var reader = await select.ExecuteReaderAsync(cancellationToken);
                 message = await reader.ReadAsync(cancellationToken)
                     ? new OrchestratorStateOutboxMessage(
@@ -927,19 +978,55 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             {
                 await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
                 telemetry.Emit("commit");
-                return false;
+                return null;
             }
 
-            OrchestratorStateOutboxProcessingResult result;
-            using (StateDbWriteSession.Enter(_dbPath, conn))
-            {
-                result = await processor(message, cancellationToken);
-            }
+            await using var claim = conn.CreateCommand();
+            claim.CommandText = """
+                UPDATE state_outbox
+                SET processing_token = $processing_token,
+                    processing_started_at = $processing_started_at
+                WHERE id = $id
+                """;
+            claim.Parameters.AddWithValue("$id", id);
+            claim.Parameters.AddWithValue("$processing_token", processingToken);
+            claim.Parameters.AddWithValue(
+                "$processing_started_at",
+                DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+            if (await claim.ExecuteNonQueryAsync(cancellationToken) != 1)
+                throw new InvalidOperationException($"Outbox message '{id}' disappeared while being claimed.");
+
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
+            return message;
+        }
+        catch (Exception ex)
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
+            throw;
+        }
+    }
+
+    private async Task FinalizeOutboxMessageAsync(
+        string id,
+        string processingToken,
+        OrchestratorStateOutboxProcessingResult result,
+        CancellationToken cancellationToken)
+    {
+        var write = await BeginWriteAsync(
+            ResolveOperationTag(nameof(TryProcessOutboxMessageAsync)),
+            cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
+        try
+        {
             await using var cmd = conn.CreateCommand();
             if (result.Disposition == OrchestratorStateOutboxDisposition.Complete)
             {
-                cmd.CommandText = "DELETE FROM state_outbox WHERE id = $id";
+                cmd.CommandText = "DELETE FROM state_outbox WHERE id = $id AND processing_token = $processing_token";
                 cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue("$processing_token", processingToken);
             }
             else
             {
@@ -952,20 +1039,59 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                 cmd.CommandText = """
                     UPDATE state_outbox
                     SET quarantined_at = $quarantined_at,
-                        quarantine_reason = $quarantine_reason
-                    WHERE id = $id
+                        quarantine_reason = $quarantine_reason,
+                        processing_token = NULL,
+                        processing_started_at = NULL
+                    WHERE id = $id AND processing_token = $processing_token
                     """;
                 cmd.Parameters.AddWithValue("$id", id);
+                cmd.Parameters.AddWithValue("$processing_token", processingToken);
                 cmd.Parameters.AddWithValue(
                     "$quarantined_at",
                     DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
                 cmd.Parameters.AddWithValue("$quarantine_reason", result.Detail);
             }
 
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            if (await cmd.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Outbox message '{id}' lost its processing claim before finalization.");
+            }
             await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
             telemetry.Emit("commit");
-            return true;
+        }
+        catch (Exception ex)
+        {
+            try { await RunNonQueryAsync(conn, "ROLLBACK", cancellationToken); } catch { }
+            telemetry.Emit("rollback", ex);
+            throw;
+        }
+    }
+
+    private async Task ReleaseOutboxMessageClaimAsync(
+        string id,
+        string processingToken,
+        CancellationToken cancellationToken)
+    {
+        var write = await BeginWriteAsync(
+            ResolveOperationTag(nameof(TryProcessOutboxMessageAsync)),
+            cancellationToken);
+        await using var conn = write.Connection;
+        var telemetry = write.Telemetry;
+        try
+        {
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE state_outbox
+                SET processing_token = NULL,
+                    processing_started_at = NULL
+                WHERE id = $id AND processing_token = $processing_token
+                """;
+            cmd.Parameters.AddWithValue("$id", id);
+            cmd.Parameters.AddWithValue("$processing_token", processingToken);
+            _ = await cmd.ExecuteNonQueryAsync(cancellationToken);
+            await RunNonQueryAsync(conn, "COMMIT", cancellationToken);
+            telemetry.Emit("commit");
         }
         catch (Exception ex)
         {

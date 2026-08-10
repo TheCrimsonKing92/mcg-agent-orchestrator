@@ -1,5 +1,6 @@
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Mcg.AgentOrchestrator.App.Orchestration;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -33,9 +34,12 @@ public static bool ExecuteCommand(
     TextReader? standardInput = null,
     bool? isStandardInputRedirected = null,
     Action? registerAcceptanceGuardAbort = null,
-    Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null)
+    Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null,
+    Action<Goal>? finalizeGoalCreation = null,
+    IGoalLifecycleEventWriter? eventWriter = null,
+    CollaborationItemRaise? refinementCollaborationItemRaise = null)
 {
-    var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
+    eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
     var context = new CliExecutionContext(
         kernel,
@@ -60,7 +64,9 @@ public static bool ExecuteCommand(
         standardInput: standardInput,
         isStandardInputRedirected: isStandardInputRedirected,
         registerAcceptanceGuardAbort: registerAcceptanceGuardAbort,
-        prepareAcceptanceMergeGuard: prepareAcceptanceMergeGuard)
+        prepareAcceptanceMergeGuard: prepareAcceptanceMergeGuard,
+        finalizeGoalCreation: finalizeGoalCreation,
+        refinementCollaborationItemRaise: refinementCollaborationItemRaise)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),

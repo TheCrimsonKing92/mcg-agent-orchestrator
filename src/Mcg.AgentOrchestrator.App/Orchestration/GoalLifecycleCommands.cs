@@ -21,12 +21,19 @@ internal static class GoalLifecycleCommands
         string objective,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IGoalLifecycleEventWriter? eventWriter = null)
+        IGoalLifecycleEventWriter? eventWriter = null,
+        CollaborationItemRaise? collaborationItemRaise = null)
     {
         var plan = GoalObjectivePlanner.Build(objective, pipelineOverride: null, durationStats: kernel.BuildTaskDurationStats());
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         var goal = CreateGoalFromPlan(kernel, plan);
-        GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal, eventWriter: eventWriter);
+        GoalRefinementGate.EnsureRefined(
+            kernel,
+            workspace,
+            providers,
+            goal,
+            eventWriter: eventWriter,
+            collaborationItemRaise: collaborationItemRaise);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -46,12 +53,19 @@ internal static class GoalLifecycleCommands
         string objective,
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
-        IGoalLifecycleEventWriter? eventWriter = null)
+        IGoalLifecycleEventWriter? eventWriter = null,
+        CollaborationItemRaise? collaborationItemRaise = null)
     {
         var plan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.DeveloperOnly, kernel.BuildTaskDurationStats());
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         var goal = CreateGoalFromPlan(kernel, plan);
-        GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal, eventWriter: eventWriter);
+        GoalRefinementGate.EnsureRefined(
+            kernel,
+            workspace,
+            providers,
+            goal,
+            eventWriter: eventWriter,
+            collaborationItemRaise: collaborationItemRaise);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
