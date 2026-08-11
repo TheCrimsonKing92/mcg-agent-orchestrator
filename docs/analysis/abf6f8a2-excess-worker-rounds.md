@@ -206,16 +206,19 @@ Historical criterion ownership is unavailable, so the trace stops short of claim
 
 ## Category accounting and uncertainty
 
-The available sources do not support a mutually exclusive cohort-wide census of productive defect-catching, no-op, impossible-evidence, provider/preflight, formatting-contract, and unchanged-head rounds. Journals contain positive typed failed-dispatch provider/preflight receipts for 9/275 goals, but they do not bind each completed transition to a final semantic disposition or HEAD change. Incidental words in acceptance-test names are excluded. Treating the other 266 as zero would violate the missing-data rule.
+The available sources do not support a mutually exclusive cohort-wide census of productive defect-catching, no-op, impossible-evidence, provider/preflight, formatting-contract, and unchanged-head rounds. The analyzer emits only `provider/preflight`, whose authoritative journal producer is `WorkerProfileDispatcher.BuildReadyBlockedDiagnostic`/`ReadyBlockedDiagnostic` formatted by `ConductorDriver.DescribeEmptyBatch` and recorded as failed `conductor:dispatch` detail. Journals contain 9/275 such positive receipts, but they do not bind each completed transition to a final semantic disposition or HEAD change. Incidental words in acceptance-test names are excluded. Treating the other 266 as zero would violate the missing-data rule.
 
-| Category | Positive measured evidence | Defensible contribution to +3 median |
-|---|---|---|
-| Productive Reviewer repair | Six needs-work results with substantive findings in `c4a6fb14`; three repeated at unchanged HEAD before a later changed commit and pass | Chain-level tail mechanism supported; per-round split and cohort median points undetermined |
-| Impossible evidence | Two policy-prohibited deferrals in `c4a6fb14` | Cohort median points undetermined |
-| Provider/preflight | 9/275 journals contain a failed dispatch with a typed provider/preflight reason; provider/model mapping exists for 167/275 | Causal contribution undetermined |
-| Formatting contract | No cohort-wide transition-to-output binding | Undetermined |
-| Unchanged-head/no-op | No cohort-wide transition-to-HEAD binding | Undetermined |
-| Other no-op | No authoritative historical classification | Undetermined |
+The production contract inventory explains why the other categories are withheld. Criterion/role-capability failures are emitted as task progress (`ProgressKind.TaskFailed`, `TaskRetried`, or finding-evidence state) by `AgentOrchestratorKernel`; malformed structured outcomes are emitted as `TaskFailed` by `AgentTaskRunner`; Reviewer `needs-work` is recorded in task verification/progress and routed through `ConductorDriver.TryBuildVerifyingFindingAutoRetry`. None is a `GoalOperationJournal` producer available to the frozen journal manifest. `WATCH_TRANSITION files=` counts contain no candidate HEAD, while acceptance journal `BranchHeadSha` belongs to a separate gate and is not bound to a completed worker transition. Therefore `impossible-evidence`, `formatting-contract`, `reviewer-finding`, and `unchanged-head` are explicitly marked unavailable in `failureFindingCategoryCoverage`; similarly named `reason=`/`category=` detail text is not classified.
+
+| Category | Authoritative producer/source | Positive measured evidence | Defensible contribution to +3 median |
+|---|---|---|---|
+| Productive Reviewer repair | Bounded worker output/dispatch trace for `c4a6fb14`; not journal-classified | Six needs-work results with substantive findings; three repeated at unchanged HEAD before a later changed commit and pass | Chain-level tail mechanism supported; per-round split and cohort median points undetermined |
+| Impossible evidence | Task progress/state (`AgentOrchestratorKernel`), unavailable in frozen journal inputs | Two policy-prohibited deferrals in the bounded `c4a6fb14` trace only; analyzer withholds the cohort category | Cohort median points undetermined |
+| Provider/preflight | `ReadyBlockedDiagnostic` → `ConductorDriver.DescribeEmptyBatch` → failed `conductor:dispatch` journal detail | 9/275 journals contain a failed dispatch with a production-shaped provider/preflight reason; provider/model mapping exists for 167/275 | Causal contribution undetermined |
+| Formatting contract | Task failure/progress (`AgentTaskRunner` and `AgentOrchestratorKernel`), unavailable in frozen journal inputs | Analyzer withholds the category; no cohort-wide transition-to-output binding | Undetermined |
+| Reviewer finding | Task verification/progress and `ConductorDriver.TryBuildVerifyingFindingAutoRetry`, unavailable in frozen journal inputs | Analyzer withholds the category; bounded trace evidence remains separate | Undetermined |
+| Unchanged-head/no-op | No producer binds `WATCH_TRANSITION` to candidate HEAD | Analyzer withholds the category; no cohort-wide transition-to-HEAD binding | Undetermined |
+| Other no-op | No authoritative historical classifier | No authoritative historical classification | Undetermined |
 
 These rows overlap and must not be summed. A factor earns a causal median-point estimate only after changed exposure, matched outcome movement, an exact mechanism receipt, and a counterfactual recomputation all agree. Only composition has a bounded reweighting estimate, and its incomplete support prevents an endpoint attribution.
 

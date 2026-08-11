@@ -165,27 +165,9 @@ function Get-JournalFacts([string]$Path, [datetimeoffset]$Cutoff) {
             $detail -match '(?i)Running focused (?:finding|reviewer) evidence') { $focused++ }
         if ($operation -eq 'conductor:acceptance' -and $status -eq 'Begin') { $gates++ }
         $isFailedDispatch = $operation -in @('conductor:dispatch', 'conductor:dispatch-start') -and $status -eq 'Failed'
-        $isFailedAcceptance = $operation -in @('conductor:acceptance', 'conductor:semantic-acceptance') -and $status -eq 'Failed'
-        $isFailedFindingEvidence = $operation -eq 'conductor:finding-evidence' -and $status -eq 'Failed'
         if ($isFailedDispatch -and
             $detail -match '(?i)(?:^|[; ])(?:reason|outcome(?:_rule|Rule)?)=(?:preflight-blocked|preflight-failure|provider-(?:authentication|connectivity|model-rejection|neutral-progress-stall|rate-limit|sandbox-launch-1312)|subscription-limit|silent-launch-failure|rate-limited)(?:[; :,]|$)') {
             [void]$categories.Add('provider/preflight')
-        }
-        if ($isFailedFindingEvidence -and
-            $detail -match '(?i)(?:^|[; ])(?:reason|category)=(?:defective-criterion|impossible-evidence|role-capability-prohibited)(?:[; :,]|$)') {
-            [void]$categories.Add('impossible-evidence')
-        }
-        if ($isFailedDispatch -and
-            $detail -match '(?i)(?:^|[; ])(?:reason|outcome(?:_rule|Rule)?)=(?:formatting-contract|worker-result-(?:missing|invalid|malformed))(?:[; :,]|$)') {
-            [void]$categories.Add('formatting-contract')
-        }
-        if (($isFailedDispatch -or $isFailedAcceptance) -and
-            $detail -match '(?i)(?:^|[; ])(?:reason|outcome(?:_rule|Rule)?)=(?:unchanged-head|no-file-change|no-changes)(?:[; :,]|$)') {
-            [void]$categories.Add('unchanged-head')
-        }
-        if ($isFailedAcceptance -and
-            $detail -match '(?i)(?:^|[; ])(?:reason|category)=(?:reviewer-finding|review-needs-work)(?:[; :,]|$)') {
-            [void]$categories.Add('reviewer-finding')
         }
     }
     return [pscustomobject]@{
@@ -401,6 +383,7 @@ foreach ($prefix in @($roundsByPrefix.Keys | Sort-Object)) {
         focusedEvidenceRounds = $journal.FocusedEvidenceRounds
         gateAttempts = $journal.GateAttempts
         failureFindingCategories = ($journal.Categories -join ';')
+        failureFindingCategoryCoverage = 'provider/preflight=journal-positive-receipt;impossible-evidence=withheld-no-journal-producer;formatting-contract=withheld-no-journal-producer;reviewer-finding=withheld-no-journal-producer;unchanged-head=withheld-no-transition-head-binding'
         transitionAnchors = (@($rounds | ForEach-Object Anchor) -join ';')
         journalSource = [IO.Path]::GetFileName($journalFile)
         metadataMissingReason = if ($null -eq $meta) { 'historical-task-snapshot-not-supplied' } else { $null }

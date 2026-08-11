@@ -146,7 +146,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
 
         File.AppendAllText(
             fixture.FirstJournalPath,
-            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"provider=codex-cli reason=preflight-blocked: blocked by fixture\"}\n");
+            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"No tasks dispatched; assigned tasks were excluded from the ready batch: task 1 aaaaaaaa000000000000000000000000 provider=codex-cli reason=preflight-blocked: blocked: fixture\"}\n");
         fixture.RefreshFirstJournalDigest();
         var positive = fixture.Run("provider-positive");
         Xunit.Assert.True(positive.ExitCode == 0, positive.Stdout + positive.Stderr);
@@ -177,7 +177,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
     }
 
     [Xunit.Fact]
-    public async Task NonProviderCategories_RequireTypedFailureReceipts()
+    public async Task NonProviderCategories_AreWithheldWithoutJournalProducers()
     {
         using var fixture = await AnalysisFixture.CreateAsync(
             firstJournalDetail: "review finding; malformed worker; criterion impossible; no file change");
@@ -190,19 +190,26 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
 
         File.AppendAllText(
             fixture.FirstJournalPath,
-            "{\"operation\":\"conductor:finding-evidence\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00Z\",\"detail\":\"reason=impossible-evidence\"}\n" +
-            "{\"operation\":\"conductor:dispatch-start\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:33:00Z\",\"detail\":\"reason=worker-result-malformed\"}\n" +
-            "{\"operation\":\"conductor:acceptance\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:34:00Z\",\"detail\":\"reason=unchanged-head\"}\n" +
-            "{\"operation\":\"conductor:acceptance\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:35:00Z\",\"detail\":\"reason=reviewer-finding\"}\n");
+            // Production journal shapes: finding-evidence carries only the executor summary;
+            // acceptance carries candidate SHAs/outcome but is not bound to a worker transition.
+            "{\"operation\":\"conductor:finding-evidence\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00Z\",\"detail\":\"Focused evidence failed (exit 1).\"}\n" +
+            "{\"operation\":\"conductor:acceptance\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:33:00Z\",\"detail\":\"Acceptance failed for candidate branch=abc123 main=def456 (exit 1).\",\"branchHeadSha\":\"abc123\",\"mainHeadSha\":\"def456\",\"acceptanceOutcome\":\"failed\"}\n" +
+            // Near misses use category tokens that have no production journal emitter. They must
+            // remain unavailable rather than becoming invented positive evidence.
+            "{\"operation\":\"conductor:finding-evidence\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:34:00Z\",\"detail\":\"reason=impossible-evidence\"}\n" +
+            "{\"operation\":\"conductor:dispatch-start\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:35:00Z\",\"detail\":\"reason=worker-result-malformed\"}\n" +
+            "{\"operation\":\"conductor:acceptance\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:36:00Z\",\"detail\":\"reason=unchanged-head\"}\n" +
+            "{\"operation\":\"conductor:acceptance\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:37:00Z\",\"detail\":\"reason=reviewer-finding\"}\n");
         fixture.RefreshFirstJournalDigest();
 
         var positive = fixture.Run("category-positive");
         Xunit.Assert.True(positive.ExitCode == 0, positive.Stdout + positive.Stderr);
         var positiveRows = ReadCsv(Path.Combine(fixture.Root, "category-positive", "excess-worker-rounds.csv"));
         var positiveRow = Xunit.Assert.Single(positiveRows, row => row["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
+        Xunit.Assert.Equal(string.Empty, positiveRow["failureFindingCategories"]);
         Xunit.Assert.Equal(
-            "formatting-contract;impossible-evidence;reviewer-finding;unchanged-head",
-            positiveRow["failureFindingCategories"]);
+            "provider/preflight=journal-positive-receipt;impossible-evidence=withheld-no-journal-producer;formatting-contract=withheld-no-journal-producer;reviewer-finding=withheld-no-journal-producer;unchanged-head=withheld-no-transition-head-binding",
+            positiveRow["failureFindingCategoryCoverage"]);
     }
 
     private static List<Dictionary<string, string>> ReadCsv(string path)
