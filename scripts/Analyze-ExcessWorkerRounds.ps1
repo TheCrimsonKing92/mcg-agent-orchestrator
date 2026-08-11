@@ -142,7 +142,7 @@ function Get-OptionalPropertyValue($Object, [string]$Name) {
     return $property.Value
 }
 
-function Get-JournalFacts([string]$Path) {
+function Get-JournalFacts([string]$Path, [datetimeoffset]$Cutoff) {
     $first = $null
     $focused = 0
     $gates = 0
@@ -156,20 +156,37 @@ function Get-JournalFacts([string]$Path) {
         $operation = [string](Get-OptionalPropertyValue $entry 'operation')
         $status = [string](Get-OptionalPropertyValue $entry 'status')
         $detail = [string](Get-OptionalPropertyValue $entry 'detail')
-        if ($null -ne $atValue) {
-            $at = [datetimeoffset]$atValue
-            if ($null -eq $first -or $at -lt $first) { $first = $at }
-        }
-        if ($detail -match 'Running focused reviewer evidence') { $focused++ }
+        if ($null -eq $atValue) { continue }
+        $at = [datetimeoffset]$atValue
+        if ($at.ToUniversalTime() -gt $Cutoff.ToUniversalTime()) { continue }
+        if ($null -eq $first -or $at -lt $first) { $first = $at }
+
+        if ($operation -eq 'conductor:finding-evidence' -and $status -eq 'Begin' -and
+            $detail -match '(?i)Running focused (?:finding|reviewer) evidence') { $focused++ }
         if ($operation -eq 'conductor:acceptance' -and $status -eq 'Begin') { $gates++ }
-        if ($operation -eq 'conductor:dispatch' -and $status -eq 'Failed' -and
+        $isFailedDispatch = $operation -in @('conductor:dispatch', 'conductor:dispatch-start') -and $status -eq 'Failed'
+        $isFailedAcceptance = $operation -in @('conductor:acceptance', 'conductor:semantic-acceptance') -and $status -eq 'Failed'
+        $isFailedFindingEvidence = $operation -eq 'conductor:finding-evidence' -and $status -eq 'Failed'
+        if ($isFailedDispatch -and
             $detail -match '(?i)(?:^|[; ])(?:reason|outcome(?:_rule|Rule)?)=(?:preflight-blocked|preflight-failure|provider-(?:authentication|connectivity|model-rejection|neutral-progress-stall|rate-limit|sandbox-launch-1312)|subscription-limit|silent-launch-failure|rate-limited)(?:[; :,]|$)') {
             [void]$categories.Add('provider/preflight')
         }
-        if ($detail -match '(?i)defective criterion|criterion.{0,60}(impossible|cannot|unable)|evidence.{0,60}(impossible|prohibit)') { [void]$categories.Add('impossible-evidence') }
-        if ($detail -match '(?i)WORKER_RESULT.{0,60}(missing|invalid|malformed|contract)|formatting contract|malformed worker') { [void]$categories.Add('formatting-contract') }
-        if ($detail -match '(?i)unchanged head|no file change|no changes') { [void]$categories.Add('unchanged-head') }
-        if ($detail -match '(?i)needs-work|review finding') { [void]$categories.Add('reviewer-finding') }
+        if ($isFailedFindingEvidence -and
+            $detail -match '(?i)(?:^|[; ])(?:reason|category)=(?:defective-criterion|impossible-evidence|role-capability-prohibited)(?:[; :,]|$)') {
+            [void]$categories.Add('impossible-evidence')
+        }
+        if ($isFailedDispatch -and
+            $detail -match '(?i)(?:^|[; ])(?:reason|outcome(?:_rule|Rule)?)=(?:formatting-contract|worker-result-(?:missing|invalid|malformed))(?:[; :,]|$)') {
+            [void]$categories.Add('formatting-contract')
+        }
+        if (($isFailedDispatch -or $isFailedAcceptance) -and
+            $detail -match '(?i)(?:^|[; ])(?:reason|outcome(?:_rule|Rule)?)=(?:unchanged-head|no-file-change|no-changes)(?:[; :,]|$)') {
+            [void]$categories.Add('unchanged-head')
+        }
+        if ($isFailedAcceptance -and
+            $detail -match '(?i)(?:^|[; ])(?:reason|category)=(?:reviewer-finding|review-needs-work)(?:[; :,]|$)') {
+            [void]$categories.Add('reviewer-finding')
+        }
     }
     return [pscustomobject]@{
         Activation = $first
@@ -339,7 +356,7 @@ $excludedOutsideWeeks = 0
 foreach ($prefix in @($roundsByPrefix.Keys | Sort-Object)) {
     if (-not $journalByPrefix.ContainsKey($prefix)) { $excludedMissingJournal++; continue }
     $journalFile = $journalByPrefix[$prefix]
-    $journal = Get-JournalFacts $journalFile
+    $journal = Get-JournalFacts $journalFile $CutoffUtc
     if ($null -eq $journal.Activation) { $excludedMissingActivation++; continue }
     $week = Get-IsoWeek $journal.Activation $zone
     $ordinal = Get-WeekOrdinal $week

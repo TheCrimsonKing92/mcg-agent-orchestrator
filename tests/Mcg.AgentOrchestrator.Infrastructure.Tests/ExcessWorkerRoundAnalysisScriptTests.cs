@@ -155,6 +155,56 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         Xunit.Assert.Contains("provider/preflight", positiveRow["failureFindingCategories"], StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public async Task JournalFacts_AreCutoffBoundAndUntimestampedRowsAreIgnored()
+    {
+        using var fixture = await AnalysisFixture.CreateAsync();
+        File.AppendAllText(
+            fixture.FirstJournalPath,
+            "{\"operation\":\"conductor:finding-evidence\",\"status\":\"Begin\",\"at\":\"2026-08-08T00:00:00Z\",\"detail\":\"Running focused finding evidence\"}\n" +
+            "{\"operation\":\"conductor:acceptance\",\"status\":\"Begin\",\"at\":\"2026-08-08T00:00:00Z\",\"detail\":\"reason=reviewer-finding\"}\n" +
+            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"detail\":\"reason=worker-result-malformed\"}\n");
+        fixture.RefreshFirstJournalDigest();
+
+        var result = fixture.Run("journal-cutoff");
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        var rows = ReadCsv(Path.Combine(fixture.Root, "journal-cutoff", "excess-worker-rounds.csv"));
+        var row = Xunit.Assert.Single(rows, candidate => candidate["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
+        Xunit.Assert.Equal("0", row["focusedEvidenceRounds"]);
+        Xunit.Assert.Equal("1", row["gateAttempts"]);
+        Xunit.Assert.Equal(string.Empty, row["failureFindingCategories"]);
+    }
+
+    [Xunit.Fact]
+    public async Task NonProviderCategories_RequireTypedFailureReceipts()
+    {
+        using var fixture = await AnalysisFixture.CreateAsync(
+            firstJournalDetail: "review finding; malformed worker; criterion impossible; no file change");
+
+        var falsePositiveControl = fixture.Run("category-false-positive");
+        Xunit.Assert.True(falsePositiveControl.ExitCode == 0, falsePositiveControl.Stdout + falsePositiveControl.Stderr);
+        var falsePositiveRows = ReadCsv(Path.Combine(fixture.Root, "category-false-positive", "excess-worker-rounds.csv"));
+        var falsePositive = Xunit.Assert.Single(falsePositiveRows, row => row["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
+        Xunit.Assert.Equal(string.Empty, falsePositive["failureFindingCategories"]);
+
+        File.AppendAllText(
+            fixture.FirstJournalPath,
+            "{\"operation\":\"conductor:finding-evidence\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00Z\",\"detail\":\"reason=impossible-evidence\"}\n" +
+            "{\"operation\":\"conductor:dispatch-start\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:33:00Z\",\"detail\":\"reason=worker-result-malformed\"}\n" +
+            "{\"operation\":\"conductor:acceptance\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:34:00Z\",\"detail\":\"reason=unchanged-head\"}\n" +
+            "{\"operation\":\"conductor:acceptance\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:35:00Z\",\"detail\":\"reason=reviewer-finding\"}\n");
+        fixture.RefreshFirstJournalDigest();
+
+        var positive = fixture.Run("category-positive");
+        Xunit.Assert.True(positive.ExitCode == 0, positive.Stdout + positive.Stderr);
+        var positiveRows = ReadCsv(Path.Combine(fixture.Root, "category-positive", "excess-worker-rounds.csv"));
+        var positiveRow = Xunit.Assert.Single(positiveRows, row => row["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
+        Xunit.Assert.Equal(
+            "formatting-contract;impossible-evidence;reviewer-finding;unchanged-head",
+            positiveRow["failureFindingCategories"]);
+    }
+
     private static List<Dictionary<string, string>> ReadCsv(string path)
     {
         using var parser = new TextFieldParser(path);
