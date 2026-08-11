@@ -339,7 +339,7 @@ public sealed class GateReadyCandidateProjectorTests
             IReadOnlyList<GateReadyCandidateRevisionPair>? revisions = null,
             string? failingDelegate = null)
         {
-            _scope = scope ?? ["src/Mcg.AgentOrchestrator.App/Feature.cs"];
+            _scope = scope ?? ["src/Mcg.AgentOrchestrator.Core/Feature.cs"];
             _scopeSucceeded = scopeSucceeded;
             _mergeIsClean = mergeIsClean;
             _failingDelegate = failingDelegate;
