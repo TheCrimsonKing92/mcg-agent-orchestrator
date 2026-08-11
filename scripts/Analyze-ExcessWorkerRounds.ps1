@@ -135,6 +135,13 @@ function Assert-DogfoodWalState([string]$Path, [string]$Expected, [string]$Phase
     return Assert-ExpectedFileHash $Path $Expected 'Dogfood WAL'
 }
 
+function Get-OptionalPropertyValue($Object, [string]$Name) {
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
 function Get-JournalFacts([string]$Path) {
     $first = $null
     $focused = 0
@@ -145,14 +152,17 @@ function Get-JournalFacts([string]$Path) {
         $lineCount++
         try { $entry = $line | ConvertFrom-Json -ErrorAction Stop }
         catch { throw "Journal contains malformed JSON at ${Path}:$lineCount" }
-        if ($null -ne $entry.at) {
-            $at = [datetimeoffset]$entry.at
+        $atValue = Get-OptionalPropertyValue $entry 'at'
+        $operation = [string](Get-OptionalPropertyValue $entry 'operation')
+        $status = [string](Get-OptionalPropertyValue $entry 'status')
+        $detail = [string](Get-OptionalPropertyValue $entry 'detail')
+        if ($null -ne $atValue) {
+            $at = [datetimeoffset]$atValue
             if ($null -eq $first -or $at -lt $first) { $first = $at }
         }
-        $detail = [string]$entry.detail
         if ($detail -match 'Running focused reviewer evidence') { $focused++ }
-        if ($entry.operation -eq 'conductor:acceptance' -and $entry.status -eq 'Begin') { $gates++ }
-        if ($entry.operation -eq 'conductor:dispatch' -and $entry.status -eq 'Failed' -and
+        if ($operation -eq 'conductor:acceptance' -and $status -eq 'Begin') { $gates++ }
+        if ($operation -eq 'conductor:dispatch' -and $status -eq 'Failed' -and
             $detail -match '(?i)(?:^|[; ])(?:reason|outcome(?:_rule|Rule)?)=(?:preflight-blocked|preflight-failure|provider-(?:authentication|connectivity|model-rejection|neutral-progress-stall|rate-limit|sandbox-launch-1312)|subscription-limit|silent-launch-failure|rate-limited)(?:[; :,]|$)') {
             [void]$categories.Add('provider/preflight')
         }

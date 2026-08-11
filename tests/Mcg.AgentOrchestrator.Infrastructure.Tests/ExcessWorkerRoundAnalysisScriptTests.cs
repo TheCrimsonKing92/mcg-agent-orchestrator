@@ -100,15 +100,16 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
     public async Task DogfoodWal_DigestBindsQueriedRows()
     {
         using var fixture = await AnalysisFixture.CreateAsync();
-        await using var connection = new SqliteConnection($"Data Source={fixture.DogfoodPath};Pooling=False");
-        await connection.OpenAsync();
-        await ExecuteAsync(connection, "PRAGMA wal_autocheckpoint=0;");
-        await ExecuteAsync(connection, "INSERT INTO dogfood_log (goal_id, recorded_at, header, summary, operator_gate, model_fit, rendered_markdown) VALUES ('eeee5555000000000000000000000000', '2026-07-06T00:00:00Z', 'fixture', 'fixture', 'pass', 'fixture', 'fixture');");
-        var walPath = fixture.DogfoodPath + "-wal";
+        var frozenDatabase = Path.Combine(fixture.Root, "dogfood-with-wal.db");
+        await CreateFrozenWalInputAsync(
+            fixture.DogfoodPath,
+            frozenDatabase,
+            "eeee5555000000000000000000000000");
+        var walPath = frozenDatabase + "-wal";
         Xunit.Assert.True(new FileInfo(walPath).Length > 0, "Fixture did not materialize a non-empty SQLite WAL.");
 
-        var databaseDigest = AnalysisFixture.FileHash(fixture.DogfoodPath);
-        var unbound = fixture.Run("wal-unbound", databaseDigest);
+        var databaseDigest = AnalysisFixture.FileHash(frozenDatabase);
+        var unbound = fixture.Run("wal-unbound", databaseDigest, dogfoodPath: frozenDatabase);
         Xunit.Assert.NotEqual(0, unbound.ExitCode);
         Xunit.Assert.Contains("DogfoodWalSha256 was not supplied", unbound.Stderr, StringComparison.Ordinal);
 
@@ -116,11 +117,17 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         var bound = fixture.Run(
             "wal-bound",
             databaseDigest,
-            walDigest);
+            walDigest,
+            frozenDatabase);
         Xunit.Assert.True(bound.ExitCode == 0, bound.Stdout + bound.Stderr);
 
-        await ExecuteAsync(connection, "INSERT INTO dogfood_log (goal_id, recorded_at, header, summary, operator_gate, model_fit, rendered_markdown) VALUES ('ffff6666000000000000000000000000', '2026-07-06T00:00:00Z', 'fixture', 'fixture', 'pass', 'fixture', 'fixture');");
-        var changed = fixture.Run("wal-changed", databaseDigest, walDigest);
+        var changedDatabase = Path.Combine(fixture.Root, "dogfood-with-changed-wal.db");
+        await CreateFrozenWalInputAsync(
+            frozenDatabase,
+            changedDatabase,
+            "ffff6666000000000000000000000000");
+        Xunit.Assert.Equal(databaseDigest, AnalysisFixture.FileHash(changedDatabase));
+        var changed = fixture.Run("wal-changed", databaseDigest, walDigest, changedDatabase);
         Xunit.Assert.NotEqual(0, changed.ExitCode);
         Xunit.Assert.Contains("Dogfood WAL hash mismatch", changed.Stderr, StringComparison.Ordinal);
     }
@@ -297,9 +304,14 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
                 dogfood, FileHash(dogfood), repository, repositoryRevision, metadata, FileHash(metadata), firstLog, firstJournal);
         }
 
-        public ProcessResult Run(string outputName, string? dogfoodDigest = null, string? dogfoodWalDigest = null)
+        public ProcessResult Run(
+            string outputName,
+            string? dogfoodDigest = null,
+            string? dogfoodWalDigest = null,
+            string? dogfoodPath = null)
         {
             var output = Path.Combine(Root, outputName);
+            var selectedDogfoodPath = dogfoodPath ?? _dogfood;
             var arguments = new List<string>
             {
                 "-NoProfile", "-File", _script,
@@ -308,7 +320,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
                 "-JournalRoot", _journals,
                 "-JournalManifest", _journalManifest,
                 "-JournalManifestDigestSha256", _journalManifestDigest,
-                "-DogfoodDbPath", _dogfood,
+                "-DogfoodDbPath", selectedDogfoodPath,
                 "-DogfoodDbSha256", dogfoodDigest ?? _dogfoodDigest
             };
             if (dogfoodWalDigest is not null)
@@ -364,6 +376,36 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         await command.ExecuteNonQueryAsync();
     }
 
+    private static async Task CreateFrozenWalInputAsync(
+        string sourceDatabasePath,
+        string destinationDatabasePath,
+        string goalId)
+    {
+        await using (var connection = new SqliteConnection($"Data Source={sourceDatabasePath};Pooling=False"))
+        {
+            await connection.OpenAsync();
+            await ExecuteAsync(connection, "PRAGMA wal_autocheckpoint=0;");
+            await using var command = connection.CreateCommand();
+            command.CommandText = "INSERT INTO dogfood_log (goal_id, recorded_at, header, summary, operator_gate, model_fit, rendered_markdown) VALUES ($goalId, '2026-07-06T00:00:00Z', 'fixture', 'fixture', 'pass', 'fixture', 'fixture');";
+            command.Parameters.AddWithValue("$goalId", goalId);
+            await command.ExecuteNonQueryAsync();
+
+            await CopyOpenSqliteFileAsync(sourceDatabasePath, destinationDatabasePath);
+            await CopyOpenSqliteFileAsync(sourceDatabasePath + "-wal", destinationDatabasePath + "-wal");
+        }
+    }
+
+    private static async Task CopyOpenSqliteFileAsync(string sourcePath, string destinationPath)
+    {
+        await using var source = new FileStream(
+            sourcePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        await using var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        await source.CopyToAsync(destination);
+    }
+
     private static void RunChecked(string workingDirectory, string fileName, params string[] arguments)
     {
         var result = RunProcess(workingDirectory, fileName, arguments);
@@ -390,9 +432,17 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         };
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}.");
-        var stdout = process.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(TimeSpan.FromSeconds(60)))
+        {
+            try { process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+            process.WaitForExit(5_000);
+            throw new TimeoutException($"{fileName} did not exit within 60 seconds.");
+        }
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
         return new ProcessResult(process.ExitCode, stdout, stderr);
     }
 
