@@ -57,6 +57,20 @@ public sealed class AgentOutputDirectivesTests
             "requires `needs-work` or `fail`",
             SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer),
             StringComparison.Ordinal);
+        foreach (var role in new[]
+                 {
+                     AgentRole.Researcher,
+                     AgentRole.Planner,
+                     AgentRole.Developer,
+                     AgentRole.Tester,
+                     AgentRole.Reviewer
+                 })
+        {
+            Assert.Contains(
+                AgentOutputDirectives.WorkerResultTemplateLinesForRole(role),
+                line => line.StartsWith("skills:", StringComparison.Ordinal));
+            Assert.Contains("skills", AgentOutputDirectives.RequiredWorkerResultFieldNamesForRole(role));
+        }
     }
 
     [Xunit.Fact(DisplayName = "Reviewer_requirements_order_spec_before_quality_within_budget")]

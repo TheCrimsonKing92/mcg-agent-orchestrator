@@ -1178,9 +1178,10 @@ internal sealed class WorkerArtifactWriter
             [
                 "- 1. artifact-registry.json: confirm available artifacts, hashes, and freshness before opening content.",
                 "- 2. source-survey.md: inspect the bounded current-source inventory before broader repository reads.",
-                "- 3. context-budget.md: use retrieval handles before asking for other large evidence in prompts.",
-                "- 4. objective.md: preserve the goal, scope, and acceptance path.",
-                "- 5. digest.md: identify current role focus, blockers, and prior outcomes."
+                "- 3. selected-skills.md: read the selected planning skill before producing the criterion-owned plan.",
+                "- 4. context-budget.md: use retrieval handles before asking for other large evidence in prompts.",
+                "- 5. objective.md: preserve the goal, scope, and acceptance path.",
+                "- 6. digest.md: identify current role focus, blockers, and prior outcomes."
             ];
         }
 
@@ -1190,16 +1191,18 @@ internal sealed class WorkerArtifactWriter
             [
                 "- 1. artifact-registry.json: confirm available artifacts, hashes, and freshness before opening content.",
                 "- 2. research-notes.md: consume the complete validated Researcher artifact; do not repeat a broad source survey.",
-                "- 3. context-budget.md: use retrieval handles before asking for other large evidence in prompts.",
-                "- 4. objective.md: preserve the goal, scope, and acceptance path.",
-                "- 5. digest.md: identify current role focus, blockers, and prior outcomes."
+                "- 3. selected-skills.md: read the selected planning skill before producing the criterion-owned plan.",
+                "- 4. context-budget.md: use retrieval handles before asking for other large evidence in prompts.",
+                "- 5. objective.md: preserve the goal, scope, and acceptance path.",
+                "- 6. digest.md: identify current role focus, blockers, and prior outcomes."
             ],
             AgentRole.Researcher =>
             [
                 "- 1. artifact-registry.json: identify relevant artifacts and guidance before broad file reads.",
-                "- 2. context-budget.md: choose summaries and handles before opening larger artifacts.",
-                "- 3. digest.md: start with role focus, prior outcomes, and open risks.",
-                "- 4. prior-task-summaries.md: inspect compact prior findings before full logs."
+                "- 2. selected-skills.md: read the selected research skill before gathering evidence.",
+                "- 3. context-budget.md: choose summaries and handles before opening larger artifacts.",
+                "- 4. digest.md: start with role focus, prior outcomes, and open risks.",
+                "- 5. prior-task-summaries.md: inspect compact prior findings before full logs."
             ],
             AgentRole.Developer =>
             [

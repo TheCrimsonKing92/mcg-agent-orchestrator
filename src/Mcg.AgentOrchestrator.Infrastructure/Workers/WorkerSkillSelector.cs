@@ -31,6 +31,14 @@ internal sealed class WorkerSkillSelector
             Path.Combine(".agents", "skills", "skill-authoring", "SKILL.md"),
             "Use for repo-scoped worker skill authoring, SKILL.md edits, skill routing rules, skill selection tests, and worker skill usage evidence."),
         new(
+            "research-evidence",
+            Path.Combine(".agents", "skills", "research-evidence", "SKILL.md"),
+            "Use for evidence-question framing, exact source anchors, fact/inference/unknown classification, unknown settlement evidence, and premise-invalid stops."),
+        new(
+            "criterion-ownership-planning",
+            Path.Combine(".agents", "skills", "criterion-ownership-planning", "SKILL.md"),
+            "Use for criterion-by-criterion evidence ownership, role feasibility, owning seams, verification classes, required evidence, and stop conditions."),
+        new(
             "systematic-debugging",
             Path.Combine(".agents", "skills", "systematic-debugging", "SKILL.md"),
             "Use the four gated phases for repeated criterion failures or task-specific acceptance-failure retries."),
@@ -190,6 +198,16 @@ internal sealed class WorkerSkillSelector
             yield return KnownSkills.Single(skill => skill.Name == "skill-authoring");
         }
 
+        if (task.RequiredRole == AgentRole.Researcher)
+        {
+            yield return KnownSkills.Single(skill => skill.Name == "research-evidence");
+        }
+
+        if (task.RequiredRole == AgentRole.Planner)
+        {
+            yield return KnownSkills.Single(skill => skill.Name == "criterion-ownership-planning");
+        }
+
         if (task.RequiredRole == AgentRole.Developer)
         {
             yield return KnownSkills.Single(skill => skill.Name == "verification-before-completion");
@@ -216,6 +234,8 @@ internal sealed class WorkerSkillSelector
             "aspnet-core" => "Task text references ASP.NET Core or .NET web application concepts.",
             "playwright" => "Task text references browser automation, dashboard UI validation, end-to-end smoke checks, screenshots, or Playwright.",
             "skill-authoring" => "Task text references repo-scoped worker skills, SKILL.md files, skill routing, selected skills, or skill usage evidence.",
+            "research-evidence" => "Every Researcher must frame a named evidence question, anchor and classify material statements, and stop on an invalid premise.",
+            "criterion-ownership-planning" => "Every Planner must map each criterion to a feasible evidence owner, owning seam, verification class, and stop condition.",
             "systematic-debugging" => task.CriterionRetryCount >= 2
                 ? $"Developer criterion retry count is {task.CriterionRetryCount}; systematic debugging begins at retry 2."
                 : goal.LatestTaskRetryAfterAcceptanceFailure(task.Id) is not null

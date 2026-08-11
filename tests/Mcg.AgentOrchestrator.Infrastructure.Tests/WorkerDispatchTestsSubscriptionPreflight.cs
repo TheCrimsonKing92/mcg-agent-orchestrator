@@ -18,6 +18,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     public void WorkerProfileDispatcherPreflightAllowsSweptTerminalGoalWithoutStartingWorker()
     {
         var root = CreateTempDirectory();
+        WriteSkill(root, "criterion-ownership-planning");
         var promptRoot = Path.Combine(root, "prompts");
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Plan swept preflight.", AgentRole.Planner);
@@ -212,6 +213,41 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.False(Directory.Exists(promptRoot));
     Assert.True(task.LastDispatch is null);
 }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Researcher, "research-evidence")]
+    [Xunit.InlineData(AgentRole.Planner, "criterion-ownership-planning")]
+    public void WorkerProfileDispatcherPreflightBlocksMissingUpstreamRoleSkill(
+        AgentRole role,
+        string expectedSkill)
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "missing-repo");
+        Directory.CreateDirectory(workingDirectory);
+        File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Map bounded inputs.", role);
+        var goal = kernel.CreateGoal("Bounded inquiry", [task]);
+        var agent = role == AgentRole.Planner
+            ? SubscriptionPlannerAgent("planner", "Planner")
+            : TestSubscriptionAgent("researcher", "Researcher", AgentRole.Researcher);
+        kernel.ActivateGoal(goal.Id, [agent]);
+
+        var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+            goal,
+            task,
+            [agent],
+            DispatchTestProfiles(),
+            workingDirectory,
+            DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+            commandExists: _ => true);
+
+        Assert.False(preflight.Allowed);
+        Assert.Contains(preflight.Findings, finding =>
+            finding.Contains("missing required local skill", StringComparison.Ordinal) &&
+            finding.Contains(expectedSkill, StringComparison.Ordinal) &&
+            finding.Contains(Path.Combine(".agents", "skills", expectedSkill, "SKILL.md"), StringComparison.Ordinal));
+    }
 
     [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_blocks_missing_required_local_skills_with_or_without_catalog_root")]
     [Xunit.InlineData(true)]
@@ -984,6 +1020,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Directory.CreateDirectory(promptRoot);
     Directory.CreateDirectory(workingDirectory);
     WriteSkill(workingDirectory, "orchestrator-dogfood");
+    WriteSkill(workingDirectory, "criterion-ownership-planning");
     var failureAt = DateTimeOffset.UtcNow.AddMinutes(-5);
     var retryAttemptAt = failureAt.AddMinutes(2);
     var kernel = new AgentOrchestratorKernel(new TestClock(failureAt));
@@ -1603,6 +1640,7 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
     WriteSkill(workingDirectory, "orchestrator-dogfood");
     WriteSkill(workingDirectory, "orchestrator-worker-verification");
+    WriteSkill(workingDirectory, "research-evidence");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-12T10:00:00Z");
     var kernel = new AgentOrchestratorKernel();
     var goal = kernel.CreateGoal("Survey the codebase without workspace");
