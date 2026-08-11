@@ -17,6 +17,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$JournalManifestDigestSha256,
     [Parameter(Mandatory)][string]$DogfoodDbPath,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$DogfoodDbSha256,
+    [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$DogfoodWalSha256,
     [Parameter(Mandatory)][string]$RepositoryRoot,
     [Parameter(Mandatory)][string]$RepositoryRevision,
     [Parameter(Mandatory)][ValidatePattern('^\d{4}-W\d{2}$')][string]$StartWeek,
@@ -120,6 +121,20 @@ function Assert-ExpectedFileHash([string]$Path, [string]$Expected, [string]$Name
     return $actual
 }
 
+function Assert-DogfoodWalState([string]$Path, [string]$Expected, [string]$Phase) {
+    $hasContent = (Test-Path -LiteralPath $Path -PathType Leaf) -and (Get-Item -LiteralPath $Path).Length -gt 0
+    if ([string]::IsNullOrWhiteSpace($Expected)) {
+        if ($hasContent) {
+            throw "Dogfood WAL has content $Phase but DogfoodWalSha256 was not supplied: $Path"
+        }
+        return $null
+    }
+    if (-not $hasContent) {
+        throw "Dogfood WAL declared by DogfoodWalSha256 is missing or empty ${Phase}: $Path"
+    }
+    return Assert-ExpectedFileHash $Path $Expected 'Dogfood WAL'
+}
+
 function Get-JournalFacts([string]$Path) {
     $first = $null
     $focused = 0
@@ -128,17 +143,23 @@ function Get-JournalFacts([string]$Path) {
     $lineCount = 0
     foreach ($line in [IO.File]::ReadLines($Path)) {
         $lineCount++
-        if ($line -match '"at":"(?<at>[^"]+)"') {
-            $at = [datetimeoffset]$matches.at
+        try { $entry = $line | ConvertFrom-Json -ErrorAction Stop }
+        catch { throw "Journal contains malformed JSON at ${Path}:$lineCount" }
+        if ($null -ne $entry.at) {
+            $at = [datetimeoffset]$entry.at
             if ($null -eq $first -or $at -lt $first) { $first = $at }
         }
-        if ($line -match 'Running focused reviewer evidence') { $focused++ }
-        if ($line -match '"operation":"conductor:acceptance"' -and $line -match '"status":"Begin"') { $gates++ }
-        if ($line -match '(?i)preflight|usage limit|rate limit|authentication|provider.{0,40}(fail|block)|subscription.{0,40}(fail|block)') { [void]$categories.Add('provider/preflight') }
-        if ($line -match '(?i)defective criterion|criterion.{0,60}(impossible|cannot|unable)|evidence.{0,60}(impossible|prohibit)') { [void]$categories.Add('impossible-evidence') }
-        if ($line -match '(?i)WORKER_RESULT.{0,60}(missing|invalid|malformed|contract)|formatting contract|malformed worker') { [void]$categories.Add('formatting-contract') }
-        if ($line -match '(?i)unchanged head|no file change|no changes') { [void]$categories.Add('unchanged-head') }
-        if ($line -match '(?i)needs-work|review finding') { [void]$categories.Add('reviewer-finding') }
+        $detail = [string]$entry.detail
+        if ($detail -match 'Running focused reviewer evidence') { $focused++ }
+        if ($entry.operation -eq 'conductor:acceptance' -and $entry.status -eq 'Begin') { $gates++ }
+        if ($entry.operation -eq 'conductor:dispatch' -and $entry.status -eq 'Failed' -and
+            $detail -match '(?i)(?:^|[; ])(?:reason|outcome(?:_rule|Rule)?)=(?:preflight-blocked|preflight-failure|provider-(?:authentication|connectivity|model-rejection|neutral-progress-stall|rate-limit|sandbox-launch-1312)|subscription-limit|silent-launch-failure|rate-limited)(?:[; :,]|$)') {
+            [void]$categories.Add('provider/preflight')
+        }
+        if ($detail -match '(?i)defective criterion|criterion.{0,60}(impossible|cannot|unable)|evidence.{0,60}(impossible|prohibit)') { [void]$categories.Add('impossible-evidence') }
+        if ($detail -match '(?i)WORKER_RESULT.{0,60}(missing|invalid|malformed|contract)|formatting contract|malformed worker') { [void]$categories.Add('formatting-contract') }
+        if ($detail -match '(?i)unchanged head|no file change|no changes') { [void]$categories.Add('unchanged-head') }
+        if ($detail -match '(?i)needs-work|review finding') { [void]$categories.Add('reviewer-finding') }
     }
     return [pscustomobject]@{
         Activation = $first
@@ -233,6 +254,8 @@ foreach ($entry in $journalManifestRows) {
 }
 
 $dogfoodDigest = Assert-ExpectedFileHash $dogfoodPath $DogfoodDbSha256 'Dogfood database'
+$dogfoodWalPath = "${dogfoodPath}-wal"
+$dogfoodWalDigest = Assert-DogfoodWalState $dogfoodWalPath $DogfoodWalSha256 'before read'
 $resolvedRevision = @(& git -C $repoPath rev-parse --verify $RepositoryRevision)
 if ($LASTEXITCODE -ne 0 -or $resolvedRevision.Count -ne 1 -or $resolvedRevision[0] -notmatch '^[0-9a-f]{40}$') {
     throw "Git revision could not be resolved to one commit: $RepositoryRevision"
@@ -372,6 +395,7 @@ foreach ($entry in $journalManifestRows) {
     if ($actual -ne $entry.sha256.ToLowerInvariant()) { throw "Journal manifest hash changed while reading: $resolved" }
 }
 [void](Assert-ExpectedFileHash $dogfoodPath $DogfoodDbSha256 'Dogfood database after read')
+[void](Assert-DogfoodWalState $dogfoodWalPath $DogfoodWalSha256 'after read')
 if ($null -ne $metadataPath) {
     [void](Assert-ExpectedFileHash $metadataPath $TaskMetadataSnapshotSha256 'Task metadata snapshot after read')
 }
@@ -462,6 +486,7 @@ $summary = [ordered]@{
         journalManifestDigestSha256 = $journalManifestDigest
         journalManifest = [IO.Path]::GetFileName($journalManifestPath)
         dogfoodDbSha256 = $dogfoodDigest
+        dogfoodWalSha256 = $dogfoodWalDigest
         repositoryRevision = $resolvedRevision
         taskMetadataSnapshotSha256 = $metadataDigest
         timeZone = $TimeZoneId

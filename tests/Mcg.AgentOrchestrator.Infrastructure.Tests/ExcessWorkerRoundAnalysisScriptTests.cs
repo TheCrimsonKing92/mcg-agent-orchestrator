@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Microsoft.VisualBasic.FileIO;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
@@ -95,6 +96,58 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         Xunit.Assert.False(File.Exists(Path.Combine(fixture.Root, "changed", "excess-worker-rounds.csv")));
     }
 
+    [Xunit.Fact]
+    public async Task DogfoodWal_DigestBindsQueriedRows()
+    {
+        using var fixture = await AnalysisFixture.CreateAsync();
+        await using var connection = new SqliteConnection($"Data Source={fixture.DogfoodPath};Pooling=False");
+        await connection.OpenAsync();
+        await ExecuteAsync(connection, "PRAGMA wal_autocheckpoint=0;");
+        await ExecuteAsync(connection, "INSERT INTO dogfood_log (goal_id, recorded_at, header, summary, operator_gate, model_fit, rendered_markdown) VALUES ('eeee5555000000000000000000000000', '2026-07-06T00:00:00Z', 'fixture', 'fixture', 'pass', 'fixture', 'fixture');");
+        var walPath = fixture.DogfoodPath + "-wal";
+        Xunit.Assert.True(new FileInfo(walPath).Length > 0, "Fixture did not materialize a non-empty SQLite WAL.");
+
+        var databaseDigest = AnalysisFixture.FileHash(fixture.DogfoodPath);
+        var unbound = fixture.Run("wal-unbound", databaseDigest);
+        Xunit.Assert.NotEqual(0, unbound.ExitCode);
+        Xunit.Assert.Contains("DogfoodWalSha256 was not supplied", unbound.Stderr, StringComparison.Ordinal);
+
+        var walDigest = AnalysisFixture.FileHash(walPath);
+        var bound = fixture.Run(
+            "wal-bound",
+            databaseDigest,
+            walDigest);
+        Xunit.Assert.True(bound.ExitCode == 0, bound.Stdout + bound.Stderr);
+
+        await ExecuteAsync(connection, "INSERT INTO dogfood_log (goal_id, recorded_at, header, summary, operator_gate, model_fit, rendered_markdown) VALUES ('ffff6666000000000000000000000000', '2026-07-06T00:00:00Z', 'fixture', 'fixture', 'pass', 'fixture', 'fixture');");
+        var changed = fixture.Run("wal-changed", databaseDigest, walDigest);
+        Xunit.Assert.NotEqual(0, changed.ExitCode);
+        Xunit.Assert.Contains("Dogfood WAL hash mismatch", changed.Stderr, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task ProviderTerms_WithoutTypedDispatchFailure_AreIgnored()
+    {
+        using var fixture = await AnalysisFixture.CreateAsync(
+            firstJournalDetail: "Acceptance failed: Cli_subscription_dispatch_ready_writes_preflight_blocked_lines [FAIL]");
+
+        var falsePositiveControl = fixture.Run("provider-false-positive");
+        Xunit.Assert.True(falsePositiveControl.ExitCode == 0, falsePositiveControl.Stdout + falsePositiveControl.Stderr);
+        var falsePositiveRows = ReadCsv(Path.Combine(fixture.Root, "provider-false-positive", "excess-worker-rounds.csv"));
+        var falsePositive = Xunit.Assert.Single(falsePositiveRows, row => row["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain("provider/preflight", falsePositive["failureFindingCategories"], StringComparison.Ordinal);
+
+        File.AppendAllText(
+            fixture.FirstJournalPath,
+            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"provider=codex-cli reason=preflight-blocked: blocked by fixture\"}\n");
+        fixture.RefreshFirstJournalDigest();
+        var positive = fixture.Run("provider-positive");
+        Xunit.Assert.True(positive.ExitCode == 0, positive.Stdout + positive.Stderr);
+        var positiveRows = ReadCsv(Path.Combine(fixture.Root, "provider-positive", "excess-worker-rounds.csv"));
+        var positiveRow = Xunit.Assert.Single(positiveRows, row => row["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
+        Xunit.Assert.Contains("provider/preflight", positiveRow["failureFindingCategories"], StringComparison.Ordinal);
+    }
+
     private static List<Dictionary<string, string>> ReadCsv(string path)
     {
         using var parser = new TextFieldParser(path);
@@ -117,7 +170,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         private readonly string _manifestDigest;
         private readonly string _journals;
         private readonly string _journalManifest;
-        private readonly string _journalManifestDigest;
+        private string _journalManifestDigest;
         private readonly string _dogfood;
         private readonly string _dogfoodDigest;
         private readonly string _repository;
@@ -166,7 +219,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         public string DogfoodPath => _dogfood;
         public string RepositoryRoot => _repository;
 
-        public static async Task<AnalysisFixture> CreateAsync()
+        public static async Task<AnalysisFixture> CreateAsync(string? firstJournalDetail = null)
         {
             var root = Path.Combine(Path.GetTempPath(), "mcg-excess-round-tests", Guid.NewGuid().ToString("N"));
             var logs = Directory.CreateDirectory(Path.Combine(root, "logs")).FullName;
@@ -186,7 +239,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
             var secondJournal = Path.Combine(journals, "cccc3333000000000000000000000000.jsonl");
             File.WriteAllText(firstJournal,
                 "{\"operation\":\"conductor:dispatch\",\"status\":\"Begin\",\"at\":\"2026-07-06T04:30:00+00:00\"}\n" +
-                "{\"operation\":\"conductor:acceptance\",\"status\":\"Begin\",\"at\":\"2026-07-06T04:31:00+00:00\"}\n");
+                "{\"operation\":\"conductor:acceptance\",\"status\":\"Begin\",\"at\":\"2026-07-06T04:31:00+00:00\",\"detail\":" + JsonSerializer.Serialize(firstJournalDetail) + "}\n");
             File.WriteAllText(secondJournal,
                 "{\"operation\":\"conductor:dispatch\",\"status\":\"Begin\",\"at\":\"2026-07-06T05:30:00+00:00\"}\n");
 
@@ -244,10 +297,11 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
                 dogfood, FileHash(dogfood), repository, repositoryRevision, metadata, FileHash(metadata), firstLog, firstJournal);
         }
 
-        public ProcessResult Run(string outputName)
+        public ProcessResult Run(string outputName, string? dogfoodDigest = null, string? dogfoodWalDigest = null)
         {
             var output = Path.Combine(Root, outputName);
-            return RunProcess(Root, "pwsh",
+            var arguments = new List<string>
+            {
                 "-NoProfile", "-File", _script,
                 "-OperatorLogManifest", _manifest,
                 "-OperatorLogManifestDigestSha256", _manifestDigest,
@@ -255,7 +309,11 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
                 "-JournalManifest", _journalManifest,
                 "-JournalManifestDigestSha256", _journalManifestDigest,
                 "-DogfoodDbPath", _dogfood,
-                "-DogfoodDbSha256", _dogfoodDigest,
+                "-DogfoodDbSha256", dogfoodDigest ?? _dogfoodDigest
+            };
+            if (dogfoodWalDigest is not null)
+                arguments.AddRange(["-DogfoodWalSha256", dogfoodWalDigest]);
+            arguments.AddRange([
                 "-RepositoryRoot", _repository,
                 "-RepositoryRevision", _repositoryRevision,
                 "-StartWeek", "2026-W27",
@@ -264,7 +322,21 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
                 "-CutoffUtc", "2026-08-07T22:43:03.4206169Z",
                 "-TaskMetadataSnapshot", _metadata,
                 "-TaskMetadataSnapshotSha256", _metadataDigest,
-                "-OutputDirectory", output);
+                "-OutputDirectory", output]);
+            return RunProcess(Root, "pwsh", [.. arguments]);
+        }
+
+        public void RefreshFirstJournalDigest()
+        {
+            File.WriteAllLines(_journalManifest,
+            [
+                "path,sha256",
+                $"{Path.GetFileName(FirstJournalPath)},{FileHash(FirstJournalPath)}",
+                $"cccc3333000000000000000000000000.jsonl,{FileHash(Path.Combine(_journals, "cccc3333000000000000000000000000.jsonl"))}"
+            ]);
+            _journalManifestDigest = NormalizedDigest(
+                $"{Path.GetFileName(FirstJournalPath)}|{FileHash(FirstJournalPath)}",
+                $"cccc3333000000000000000000000000.jsonl|{FileHash(Path.Combine(_journals, "cccc3333000000000000000000000000.jsonl"))}");
         }
 
         public void Dispose()
@@ -277,11 +349,19 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         private static string ManifestRow(string path, string timestamp) =>
             $"\"{path.Replace("\"", "\"\"")}\",{FileHash(path)},{timestamp}";
 
-        private static string FileHash(string path) =>
+        public static string FileHash(string path) =>
             Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 
         private static string NormalizedDigest(params string[] rows) =>
             Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join('\n', rows)))).ToLowerInvariant();
+    }
+
+
+    private static async Task ExecuteAsync(SqliteConnection connection, string commandText)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = commandText;
+        await command.ExecuteNonQueryAsync();
     }
 
     private static void RunChecked(string workingDirectory, string fileName, params string[] arguments)

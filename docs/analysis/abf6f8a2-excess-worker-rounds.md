@@ -117,10 +117,10 @@ The verified output digests were:
 
 | Output | SHA-256 | Repeat |
 |---|---|---|
-| `excess-worker-rounds.csv` | `0de2014c7314bc81b5edd6bae68f490be8ee8503f5b07226663fad350467a79e` | byte-identical |
-| `excess-worker-rounds-summary.json` | `6008028781670052ed9dafca77f4441309001d1354ac7627b4336277da35863d` | byte-identical |
+| `excess-worker-rounds.csv` | `3d6e0eb8c96727ffb9e8903c3aff34a922fece8df20ca523575f878ea7e0f704` | byte-identical |
+| `excess-worker-rounds-summary.json` | `145e1f427bf94c2475132c0e50c7b72d12052d3bcb0d42f3ea1409459fa2a30b` | byte-identical |
 
-The helper is read-only with respect to logs, journals, dogfood, Git, backlog, and orchestrator state. It writes only the requested output directory. Operator logs and journals are manifest-only inputs; later undeclared files are ignored. A changed declared file, manifest digest, dogfood DB, optional task snapshot, or Git revision fails closed before output, as do missing/duplicate files, post-cutoff operator rows, ambiguous journal prefixes, invalid weeks, and failed Git/SQLite reads. This means a later ledger rerun is either byte-identical or reports a named input-integrity mismatch; it never silently updates the finding from ambient state.
+The helper is read-only with respect to logs, journals, dogfood, Git, backlog, and orchestrator state. It writes only the requested output directory. Operator logs and journals are manifest-only inputs; later undeclared files are ignored. A changed declared file, manifest digest, dogfood DB, optional task snapshot, or Git revision fails closed before output, as do missing/duplicate files, post-cutoff operator rows, ambiguous journal prefixes, invalid weeks, and failed Git/SQLite reads. A non-empty `dogfood-log.db-wal` is also rejected unless its SHA-256 is supplied with `-DogfoodWalSha256`, and both database hashes are rechecked after the query. This means a later ledger rerun is either byte-identical or reports a named input-integrity mismatch; it never silently updates the finding from ambient state.
 
 ## Metric reproduction and sensitivity
 
@@ -191,13 +191,13 @@ Historical criterion ownership is unavailable, so the trace stops short of claim
 
 ## Category accounting and uncertainty
 
-The available sources do not support a mutually exclusive cohort-wide census of productive defect-catching, no-op, impossible-evidence, provider/preflight, formatting-contract, and unchanged-head rounds. Journals can positively flag terms—44/275 goals contain provider/preflight terms—but they do not bind each completed transition to a final semantic disposition or HEAD change. Treating the other 231 as zero would violate the missing-data rule.
+The available sources do not support a mutually exclusive cohort-wide census of productive defect-catching, no-op, impossible-evidence, provider/preflight, formatting-contract, and unchanged-head rounds. Journals contain positive typed failed-dispatch provider/preflight receipts for 9/275 goals, but they do not bind each completed transition to a final semantic disposition or HEAD change. Incidental words in acceptance-test names are excluded. Treating the other 266 as zero would violate the missing-data rule.
 
 | Category | Positive measured evidence | Defensible contribution to +3 median |
 |---|---|---|
 | Productive Reviewer repair | Six needs-work results with substantive findings in `c4a6fb14`; three repeated at unchanged HEAD before a later changed commit and pass | Chain-level tail mechanism supported; per-round split and cohort median points undetermined |
 | Impossible evidence | Two policy-prohibited deferrals in `c4a6fb14` | Cohort median points undetermined |
-| Provider/preflight | 44/275 journals contain positive terms; provider/model mapping exists for 167/275 | Causal contribution undetermined |
+| Provider/preflight | 9/275 journals contain a failed dispatch with a typed provider/preflight reason; provider/model mapping exists for 167/275 | Causal contribution undetermined |
 | Formatting contract | No cohort-wide transition-to-output binding | Undetermined |
 | Unchanged-head/no-op | No cohort-wide transition-to-HEAD binding | Undetermined |
 | Other no-op | No authoritative historical classification | Undetermined |
