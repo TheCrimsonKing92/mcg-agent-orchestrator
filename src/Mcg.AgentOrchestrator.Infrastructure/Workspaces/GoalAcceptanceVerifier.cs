@@ -29,13 +29,30 @@ public sealed record AcceptanceCheckResult(
     string? TestResultAttemptId = null,
     int TestResultRunOrdinal = 0,
     bool TestResultIsExplicitCrossAttemptReuse = false,
-    IReadOnlyList<string>? FailingTestIdentities = null);
+    IReadOnlyList<string>? FailingTestIdentities = null,
+    int? ExecutedTestCount = null);
 
 public static class AcceptanceFailureClassifications
 {
     public const string GateEnvironmentInterference = "gate-environment-interference";
     public const string StructuralCoverageFailed = "structural-coverage-failed";
+    public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
 }
+
+public enum FocusedEvidenceRejectionCode
+{
+    EmptyRequest,
+    UnsupportedProject,
+    UnsafeFilter,
+    OversizedFilter,
+    UnsupportedToken,
+    UnresolvableSelection
+}
+
+public sealed record FocusedEvidenceRejection(
+    FocusedEvidenceRejectionCode Code,
+    string OffendingToken,
+    string Detail);
 
 public sealed class AcceptanceInfrastructureDeferredException : Exception
 {
@@ -94,7 +111,8 @@ public sealed record FocusedEvidenceRunResult(
     IReadOnlyList<AcceptanceCheckResult> Checks,
     FocusedEvidenceCoverage? Coverage = null,
     IReadOnlyList<FocusedEvidenceArmRunResult>? Arms = null,
-    FindingEvidenceOutcomeReason? OutcomeReason = null)
+    FindingEvidenceOutcomeReason? OutcomeReason = null,
+    FocusedEvidenceRejection? Rejection = null)
 {
     public bool IsValidEvidence =>
         Accepted &&
@@ -181,6 +199,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
     private const string ProviderEnvironmentTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
+    private const int MaxFocusedEvidenceFilterLength = 1024;
     internal const string FocusedEvidenceSupportedProjectForms =
         "Core, Core.Tests, Mcg.AgentOrchestrator.Core.Tests, Infrastructure, Infrastructure.Tests, " +
         "Mcg.AgentOrchestrator.Infrastructure.Tests, or a full .csproj path ending in " +
@@ -653,8 +672,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 request,
                 Accepted: false,
                 Passed: false,
-                Summary: rejection,
-                Checks: []);
+                Summary: rejection.Detail,
+                Checks: [],
+                Rejection: rejection);
         }
 
         var candidateSha = ResolveGitScalar(worktreePath, "rev-parse", "HEAD") ?? "unavailable";
@@ -704,7 +724,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 Summary: candidate.Summary,
                 Checks: candidate.Checks,
                 Coverage: coverage,
-                Arms: [candidate]);
+                Arms: [candidate],
+                OutcomeReason: candidate.Disposition == FindingEvidenceArmDisposition.ApparatusFailure
+                    ? FindingEvidenceOutcomeReason.ApparatusFailure
+                    : null);
         }
 
         var baselineSha = ResolveGitScalar(worktreePath, "merge-base", "HEAD", "main");
@@ -807,6 +830,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var planSummary = FormatFocusedEvidencePlanSummary(coverage);
         var summary = failed is null
             ? $"{checks.Count} check(s) passed; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
+            : disposition == FindingEvidenceArmDisposition.ApparatusFailure
+                ? $"focused selection apparatus failure: {failed.Name}; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}"
             : $"{failed.Name} exit {failed.ExitCode}; {planSummary}; receipts: {FormatReceiptPaths(receiptPaths)}";
         return new FocusedEvidenceArmRunResult(
             arm,
@@ -893,6 +918,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static FindingEvidenceArmDisposition ClassifyFocusedEvidenceArm(
         IReadOnlyList<AcceptanceCheckResult> checks)
     {
+        if (checks.Any(check => check.FailureClassification ==
+                AcceptanceFailureClassifications.FocusedSelectionApparatusFailure))
+        {
+            return FindingEvidenceArmDisposition.ApparatusFailure;
+        }
+
         if (checks.Count > 0 && checks.All(check => check.Passed))
         {
             return FindingEvidenceArmDisposition.Green;
@@ -910,10 +941,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         FocusedEvidenceArmRunResult baseline) =>
         candidate.Disposition switch
         {
+            FindingEvidenceArmDisposition.ApparatusFailure => FindingEvidenceOutcomeReason.ApparatusFailure,
             FindingEvidenceArmDisposition.Red => FindingEvidenceOutcomeReason.CandidateRed,
             FindingEvidenceArmDisposition.Inconclusive => FindingEvidenceOutcomeReason.CandidateInconclusive,
             _ => baseline.Disposition switch
             {
+                FindingEvidenceArmDisposition.ApparatusFailure => FindingEvidenceOutcomeReason.ApparatusFailure,
                 FindingEvidenceArmDisposition.Green => FindingEvidenceOutcomeReason.VacuousEvidence,
                 FindingEvidenceArmDisposition.Red => FindingEvidenceOutcomeReason.ValidEvidence,
                 _ => FindingEvidenceOutcomeReason.BaselineInconclusive
@@ -987,6 +1020,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             FindingEvidenceArmDisposition.Green => "green",
             FindingEvidenceArmDisposition.Red => "red",
+            FindingEvidenceArmDisposition.ApparatusFailure => "apparatus-failure",
             _ => "inconclusive"
         };
 
@@ -1453,35 +1487,43 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         out IReadOnlyList<AcceptanceManifestCheck> checks,
         out FocusedEvidenceCoverage coverage,
-        out string rejection)
+        out FocusedEvidenceRejection rejection)
     {
         checks = [];
         coverage = new FocusedEvidenceCoverage(TargetToChecks: []);
-        rejection = string.Empty;
+        rejection = new FocusedEvidenceRejection(
+            FocusedEvidenceRejectionCode.EmptyRequest,
+            request,
+            "empty evidence request");
         var items = request
-            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            .Split(';')
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .ToArray();
         if (items.Length == 0)
         {
-            rejection = "empty evidence request";
             return false;
         }
 
-        var validated = new List<(string Target, string Project, string? Filter)>();
+        var validated = new List<(string Target, string Project, FocusedEvidenceFilter? Filter)>();
         var totalTargets = 0;
-        foreach (var item in items)
+        foreach (var rawItem in items)
         {
+            var item = rawItem.Trim();
             var project = InfrastructureTestsProject;
-            var expression = item;
+            var expression = rawItem;
             var hasExplicitProject = false;
-            var separator = item.IndexOf(':', StringComparison.Ordinal);
+            var separator = rawItem.IndexOf(':', StringComparison.Ordinal);
             if (separator >= 0)
             {
                 hasExplicitProject = true;
-                var alias = item[..separator].Trim();
-                expression = item[(separator + 1)..].Trim();
+                var alias = rawItem[..separator].Trim();
+                expression = rawItem[(separator + 1)..];
                 if (!TryResolveFocusedEvidenceProject(alias, engineSettings, out project))
                 {
-                    rejection = $"unsupported evidence request project alias '{alias}'";
+                    rejection = new FocusedEvidenceRejection(
+                        FocusedEvidenceRejectionCode.UnsupportedProject,
+                        alias,
+                        $"unsupported evidence request project alias '{alias}'");
                     return false;
                 }
             }
@@ -1489,6 +1531,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             if (!TryNormalizeFocusedEvidenceFilter(
                     expression,
                     allowMappedProject: hasExplicitProject,
+                    worktreePath,
+                    project,
                     out var filter,
                     out var targetCount,
                     out rejection))
@@ -1541,7 +1585,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 Name = item.Filter is null
                     ? $"reviewer mapped project evidence: {ProjectLabel(item.Project)}"
-                    : $"reviewer focused evidence: {ProjectLabel(item.Project)} {item.Filter}",
+                    : $"reviewer focused evidence: {ProjectLabel(item.Project)} {item.Filter.CanonicalText}",
                 Type = "dotnet-test",
                 // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
                 // without this the check defaults to the VSTest runner and fails on .NET 10 with
@@ -1550,7 +1594,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 Project = item.Project,
                 Arguments = item.Filter is null
                     ? ["--verbosity", "minimal"]
-                    : ["--verbosity", "minimal", "--filter", item.Filter],
+                    : ["--verbosity", "minimal", "--filter", item.Filter.CanonicalText],
+                FocusedEvidenceTokens = item.Filter?.Tokens ?? [],
+                IsFocusedEvidenceSelection = item.Filter is not null,
                 TimeoutMinutes = totalTargets <= FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
             };
             built.Add(check);
@@ -1581,16 +1627,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string? ResolveExtractedFocusedEvidenceProject(
         string worktreePath,
         AcceptanceGateEngineSettings engineSettings,
-        string filter)
+        FocusedEvidenceFilter filter)
     {
-        var classFileNames = Regex.Matches(
-                filter,
-                @"FullyQualifiedName\s*~\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)",
-                RegexOptions.IgnoreCase)
-            .Select(match => match.Groups["value"].Value.Split('.').Last() + ".cs")
+        var classNames = filter.Tokens
+            .Where(token => token.Kind is FocusedEvidenceTokenKind.Class or FocusedEvidenceTokenKind.Method)
+            .Select(token => token.ContainingClass)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        if (classFileNames.Length == 0)
+        if (classNames.Length == 0)
         {
             return null;
         }
@@ -1598,20 +1642,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var matchingProjects = engineSettings.MtpInvocations
             .Select(invocation => NormalizePath(invocation.Project))
             .Where(project => IsExtractedInfrastructureTestProject(project!))
-            .Where(project =>
-            {
-                var projectDirectory = Path.GetDirectoryName(
-                    Path.Combine(worktreePath, project!.Replace('/', Path.DirectorySeparatorChar)));
-                return !string.IsNullOrWhiteSpace(projectDirectory) &&
-                    Directory.Exists(projectDirectory) &&
-                    classFileNames.All(classFileName => Directory.EnumerateFiles(
-                            projectDirectory,
-                            "*.cs",
-                            SearchOption.AllDirectories)
-                        .Any(path => Path.GetFileName(path).Equals(
-                            classFileName,
-                            StringComparison.OrdinalIgnoreCase)));
-            })
+            .Where(project => classNames.All(className =>
+                ProjectContainsFocusedEvidenceClass(worktreePath, project!, className)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
@@ -1622,20 +1654,21 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string worktreePath,
         AcceptanceGateEngineSettings engineSettings,
         string umbrellaProject,
-        string filter,
-        out IReadOnlyList<(string Project, string Filter)> arms,
-        out string rejection)
+        FocusedEvidenceFilter filter,
+        out IReadOnlyList<(string Project, FocusedEvidenceFilter Filter)> arms,
+        out FocusedEvidenceRejection rejection)
     {
         arms = [];
-        rejection = string.Empty;
-        var tokens = filter.Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        var classTokens = tokens
-            .Select(token => (Token: token, Match: Regex.Match(
-                token,
-                @"^FullyQualifiedName~(?<value>[A-Za-z_][A-Za-z0-9_.]*)$",
-                RegexOptions.IgnoreCase)))
+        rejection = new FocusedEvidenceRejection(
+            FocusedEvidenceRejectionCode.UnresolvableSelection,
+            filter.OriginalToken,
+            "focused evidence selection could not be routed");
+        var positiveTokens = filter.Tokens
+            .Where(token => token.Kind is FocusedEvidenceTokenKind.Class or FocusedEvidenceTokenKind.Method)
             .ToArray();
-        if (classTokens.Length == 0 || classTokens.Any(item => !item.Match.Success))
+        var isPositiveDisjunction = positiveTokens.Length == filter.Tokens.Count &&
+            !filter.CanonicalText.Contains('&', StringComparison.Ordinal);
+        if (!isPositiveDisjunction)
         {
             var extractedProject = ResolveExtractedFocusedEvidenceProject(
                 worktreePath,
@@ -1651,27 +1684,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var grouped = new List<(string Project, List<string> Filters)>();
-        foreach (var item in classTokens)
+        foreach (var token in positiveTokens)
         {
-            var classFileName = item.Match.Groups["value"].Value.Split('.').Last() + ".cs";
             var matchingProjects = extractedProjects
-                .Where(project =>
-                {
-                    var projectDirectory = Path.GetDirectoryName(Path.Combine(
-                        worktreePath,
-                        project!.Replace('/', Path.DirectorySeparatorChar)));
-                    return !string.IsNullOrWhiteSpace(projectDirectory) &&
-                        Directory.Exists(projectDirectory) &&
-                        Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
-                            .Any(path => Path.GetFileName(path).Equals(
-                                classFileName,
-                                StringComparison.OrdinalIgnoreCase));
-                })
+                .Where(project => ProjectContainsFocusedEvidenceClass(
+                    worktreePath,
+                    project!,
+                    token.ContainingClass))
                 .ToArray();
             if (matchingProjects.Length > 1)
             {
-                rejection =
-                    $"focused evidence class '{item.Match.Groups["value"].Value}' is present in multiple registered extracted projects";
+                rejection = new FocusedEvidenceRejection(
+                    FocusedEvidenceRejectionCode.UnresolvableSelection,
+                    token.OriginalToken,
+                    $"focused evidence class '{token.ContainingClass}' is present in multiple registered extracted projects");
                 return false;
             }
 
@@ -1684,13 +1710,64 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 group = (owningProject, []);
                 grouped.Add(group);
             }
-            group.Filters.Add(item.Token);
+            group.Filters.Add(token.CanonicalToken);
         }
 
         arms = grouped
-            .Select(group => (group.Project, string.Join("|", group.Filters)))
+            .Select(group =>
+            {
+                var groupTokens = filter.Tokens
+                    .Where(token => group.Filters.Contains(token.CanonicalToken, StringComparer.Ordinal))
+                    .ToArray();
+                return (
+                    group.Project,
+                    new FocusedEvidenceFilter(
+                        filter.OriginalToken,
+                        string.Join("|", group.Filters),
+                        groupTokens));
+            })
             .ToArray();
         return true;
+    }
+
+    private static bool ProjectContainsFocusedEvidenceClass(
+        string worktreePath,
+        string project,
+        string className) =>
+        FindFocusedEvidenceClassFiles(worktreePath, project, className).Count > 0;
+
+    private static IReadOnlyList<string> FindFocusedEvidenceClassFiles(
+        string worktreePath,
+        string project,
+        string className)
+    {
+        var projectPath = Path.Combine(worktreePath, project.Replace('/', Path.DirectorySeparatorChar));
+        var projectDirectory = Path.GetDirectoryName(projectPath);
+        if (string.IsNullOrWhiteSpace(projectDirectory) || !Directory.Exists(projectDirectory))
+        {
+            return [];
+        }
+
+        var simpleName = className.Split('.').Last();
+        var declaration = new Regex(
+            $@"\b(?:class|record|struct)\s+{Regex.Escape(simpleName)}\b",
+            RegexOptions.CultureInvariant);
+        return Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(segment =>
+                segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
+                segment.Equals("obj", StringComparison.OrdinalIgnoreCase)))
+            .Where(path =>
+            {
+                try
+                {
+                    return declaration.IsMatch(File.ReadAllText(path));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    return false;
+                }
+            })
+            .ToArray();
     }
 
     internal static bool TryResolveFocusedEvidenceProject(
@@ -1742,17 +1819,34 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool TryNormalizeFocusedEvidenceFilter(
         string expression,
         bool allowMappedProject,
-        out string? filter,
+        string worktreePath,
+        string project,
+        out FocusedEvidenceFilter? filter,
         out int targetCount,
-        out string rejection)
+        out FocusedEvidenceRejection rejection)
     {
         filter = null;
         targetCount = 0;
-        rejection = string.Empty;
+        rejection = new FocusedEvidenceRejection(
+            FocusedEvidenceRejectionCode.UnsupportedToken,
+            expression,
+            "focused evidence filter is invalid");
         var trimmed = expression.Trim();
         if (trimmed.Length == 0)
         {
-            rejection = "empty focused evidence filter";
+            rejection = new FocusedEvidenceRejection(
+                FocusedEvidenceRejectionCode.EmptyRequest,
+                expression,
+                "empty focused evidence filter");
+            return false;
+        }
+
+        if (trimmed.Length > MaxFocusedEvidenceFilterLength)
+        {
+            rejection = new FocusedEvidenceRejection(
+                FocusedEvidenceRejectionCode.OversizedFilter,
+                expression,
+                $"focused evidence filter exceeds the {MaxFocusedEvidenceFilterLength}-character limit");
             return false;
         }
 
@@ -1760,7 +1854,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             if (!allowMappedProject)
             {
-                rejection = "mapped-project evidence requires an explicit supported project alias";
+                rejection = new FocusedEvidenceRejection(
+                    FocusedEvidenceRejectionCode.UnsafeFilter,
+                    expression,
+                    "mapped-project evidence requires an explicit supported project alias");
                 return false;
             }
 
@@ -1777,32 +1874,95 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             trimmed.Contains(".sln", StringComparison.OrdinalIgnoreCase) ||
             trimmed.Contains('*', StringComparison.Ordinal))
         {
-            rejection = "unbounded evidence request rejected; use focused FullyQualifiedName~TestClass filters only";
+            rejection = new FocusedEvidenceRejection(
+                FocusedEvidenceRejectionCode.UnsafeFilter,
+                expression,
+                "unbounded evidence request rejected; use focused FullyQualifiedName~TestClass filters only");
             return false;
         }
 
         if (trimmed.Contains("FullyQualifiedName~", StringComparison.OrdinalIgnoreCase))
         {
-            targetCount = Regex.Matches(trimmed, @"FullyQualifiedName\s*~\s*[A-Za-z_][A-Za-z0-9_.]*", RegexOptions.IgnoreCase).Count;
+            var tokens = new List<FocusedEvidenceFilterToken>();
+            foreach (var rawToken in Regex.Split(expression, @"[&|]"))
+            {
+                var originalToken = rawToken;
+                var token = originalToken.Trim().Trim('(', ')').Trim();
+                if (token.Length == 0)
+                {
+                    continue;
+                }
+
+                var fullyQualifiedName = Regex.Match(
+                    token,
+                    @"^FullyQualifiedName\s*(?<op>!~|~)\s*(?<value>[A-Za-z_][A-Za-z0-9_.]*)$",
+                    RegexOptions.IgnoreCase);
+                if (fullyQualifiedName.Success)
+                {
+                    var value = fullyQualifiedName.Groups["value"].Value;
+                    if (fullyQualifiedName.Groups["op"].Value == "!~")
+                    {
+                        tokens.Add(new FocusedEvidenceFilterToken(
+                            originalToken,
+                            $"FullyQualifiedName!~{value}",
+                            FocusedEvidenceTokenKind.ExcludedClass,
+                            value,
+                            value));
+                        continue;
+                    }
+
+                    if (!TryResolveFocusedEvidenceSelection(
+                            worktreePath,
+                            project,
+                            originalToken,
+                            value,
+                            out var selection,
+                            out rejection))
+                    {
+                        return false;
+                    }
+
+                    tokens.Add(selection);
+                    targetCount++;
+                    continue;
+                }
+
+                var categoryExclusion = Regex.Match(
+                    token,
+                    @"^Category\s*!=\s*(?<value>[A-Za-z_][A-Za-z0-9_.-]*)$",
+                    RegexOptions.IgnoreCase);
+                if (categoryExclusion.Success)
+                {
+                    var value = categoryExclusion.Groups["value"].Value;
+                    tokens.Add(new FocusedEvidenceFilterToken(
+                        originalToken,
+                        $"Category!={value}",
+                        FocusedEvidenceTokenKind.ExcludedTrait,
+                        value,
+                        string.Empty));
+                    continue;
+                }
+
+                rejection = new FocusedEvidenceRejection(
+                    FocusedEvidenceRejectionCode.UnsupportedToken,
+                    originalToken,
+                    $"focused evidence filter contains unsupported token '{originalToken}'");
+                return false;
+            }
+
             if (targetCount == 0)
             {
-                rejection = "focused evidence filter did not name a test class";
+                rejection = new FocusedEvidenceRejection(
+                    FocusedEvidenceRejectionCode.UnsafeFilter,
+                    expression,
+                    "focused evidence filter did not name a positive test selection");
                 return false;
             }
 
-            filter = Regex.Replace(trimmed, @"\s+", "");
-            try
-            {
-                _ = TranslateMtpFilter(filter).ToArray();
-            }
-            catch (InvalidOperationException)
-            {
-                rejection = "focused evidence filter contains an unsupported token";
-                filter = null;
-                targetCount = 0;
-                return false;
-            }
-
+            filter = new FocusedEvidenceFilter(
+                expression,
+                Regex.Replace(trimmed, @"\s+", string.Empty),
+                tokens);
             return true;
         }
 
@@ -1811,13 +1971,107 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (classNames.Length == 0 ||
             classNames.Any(name => !Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
         {
-            rejection = "focused evidence request must be a FullyQualifiedName~ filter or comma-separated test class list";
+            var offendingToken = classNames.FirstOrDefault(name =>
+                !Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_.]*$")) ?? expression;
+            rejection = new FocusedEvidenceRejection(
+                FocusedEvidenceRejectionCode.UnsupportedToken,
+                offendingToken,
+                $"focused evidence request contains unsupported token '{offendingToken}'");
             return false;
         }
 
         targetCount = classNames.Length;
-        filter = string.Join("|", classNames.Select(name => $"FullyQualifiedName~{name}"));
+        filter = new FocusedEvidenceFilter(
+            expression,
+            string.Join("|", classNames.Select(name => $"FullyQualifiedName~{name}")),
+            classNames.Select(name => new FocusedEvidenceFilterToken(
+                name,
+                $"FullyQualifiedName~{name}",
+                FocusedEvidenceTokenKind.Class,
+                name,
+                name)).ToArray());
         return true;
+    }
+
+    private static bool TryResolveFocusedEvidenceSelection(
+        string worktreePath,
+        string project,
+        string originalToken,
+        string value,
+        out FocusedEvidenceFilterToken selection,
+        out FocusedEvidenceRejection rejection)
+    {
+        selection = null!;
+        rejection = new FocusedEvidenceRejection(
+            FocusedEvidenceRejectionCode.UnresolvableSelection,
+            originalToken,
+            $"focused evidence selection '{originalToken}' could not be resolved");
+        var segments = value.Split('.');
+        if (segments.Length == 1)
+        {
+            selection = new FocusedEvidenceFilterToken(
+                originalToken,
+                $"FullyQualifiedName~{value}",
+                FocusedEvidenceTokenKind.Class,
+                value,
+                value);
+            return true;
+        }
+
+        var candidates = new List<FocusedEvidenceFilterToken>();
+        for (var classSegmentCount = 1; classSegmentCount <= segments.Length; classSegmentCount++)
+        {
+            var className = string.Join('.', segments.Take(classSegmentCount));
+            var classFiles = FindFocusedEvidenceClassFiles(worktreePath, project, className);
+            if (classFiles.Count == 0)
+            {
+                continue;
+            }
+
+            if (classSegmentCount == segments.Length)
+            {
+                candidates.Add(new FocusedEvidenceFilterToken(
+                    originalToken,
+                    $"FullyQualifiedName~{value}",
+                    FocusedEvidenceTokenKind.Class,
+                    value,
+                    className));
+                continue;
+            }
+
+            if (classSegmentCount != segments.Length - 1)
+            {
+                continue;
+            }
+
+            var methodName = segments[^1];
+            var methodPattern = new Regex(
+                $@"\b{Regex.Escape(methodName)}\s*\(",
+                RegexOptions.CultureInvariant);
+            if (classFiles.Any(path => methodPattern.IsMatch(File.ReadAllText(path))))
+            {
+                candidates.Add(new FocusedEvidenceFilterToken(
+                    originalToken,
+                    $"FullyQualifiedName~{value}",
+                    FocusedEvidenceTokenKind.Method,
+                    value,
+                    className));
+            }
+        }
+
+        if (candidates.Count == 1)
+        {
+            selection = candidates[0];
+            return true;
+        }
+
+        rejection = new FocusedEvidenceRejection(
+            FocusedEvidenceRejectionCode.UnresolvableSelection,
+            originalToken,
+            candidates.Count == 0
+                ? $"focused evidence selection '{originalToken}' does not resolve to a class or method in {ProjectLabel(project)}"
+                : $"focused evidence selection '{originalToken}' is ambiguous in {ProjectLabel(project)}");
+        return false;
     }
 
     private static string FormatReceiptPaths(IReadOnlyList<string> paths) =>
@@ -3298,24 +3552,39 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cancellationToken).ConfigureAwait(false);
 
         elapsed.Stop();
-        var passed = !result.TimedOut && result.ExitCode == 0;
-        EmitMissingTrxReceiptIfNeeded(passed, telemetry);
-        IReadOnlyList<string> failingTestIdentities = passed
+        var processPassed = !result.TimedOut && result.ExitCode == 0;
+        EmitMissingTrxReceiptIfNeeded(processPassed, telemetry);
+        var executedTestCount = ExtractTrxExecutedTestCount(telemetry.Paths);
+        var zeroTestApparatusFailure = check.IsFocusedEvidenceSelection && executedTestCount == 0;
+        var passed = processPassed && !zeroTestApparatusFailure;
+        IReadOnlyList<string> failingTestIdentities = passed || zeroTestApparatusFailure
             ? []
             : ExtractTrxFailureIdentities(telemetry.Paths);
         var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry.Paths);
+        var outputTail = zeroTestApparatusFailure
+            ? $"Focused evidence selection apparatus failure: '{check.Name}' executed 0 tests."
+            : passed ? null : BuildMtpFailureOutput(check.Name, result, telemetry);
+        var resultSummary = zeroTestApparatusFailure
+            ? PrefixResultSummary(
+                "focused-selection-apparatus-failure executed=0",
+                BuildGenericCommandResultSummary(result))
+            : BuildGenericCommandResultSummary(result);
         return (new AcceptanceCheckResult(
             result.TimedOut ? BuildTimeoutFailureName(check, result) : check.Name,
             passed,
             result.ExitCode,
-            passed ? null : BuildMtpFailureOutput(check.Name, result, telemetry),
+            outputTail,
             environment.ArtifactsPath,
             "goal-acceptance-verifier",
             environment.LeaseId,
             (long)elapsed.Elapsed.TotalMilliseconds,
-            ResultSummary: BuildGenericCommandResultSummary(result),
+            ResultSummary: resultSummary,
             TestResultPaths: durableTestResultPaths,
-            FailingTestIdentities: failingTestIdentities), false);
+            FailureClassification: zeroTestApparatusFailure
+                ? AcceptanceFailureClassifications.FocusedSelectionApparatusFailure
+                : null,
+            FailingTestIdentities: failingTestIdentities,
+            ExecutedTestCount: executedTestCount), false);
     }
 
     private async Task<(AcceptanceCheckResult Result, bool Retried)> RunManagedDotnetTestCheckAsync(
@@ -5887,7 +6156,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var filter = ExtractMtpCompatibleArguments(check.Arguments, args);
         if (!string.IsNullOrWhiteSpace(filter))
         {
-            args.AddRange(TranslateMtpFilter(filter));
+            args.AddRange(check.FocusedEvidenceTokens.Count > 0
+                ? TranslateFocusedEvidenceTokens(check.FocusedEvidenceTokens)
+                : TranslateMtpFilter(filter));
         }
 
         return UseDotnetHostForManagedExecutable(args);
@@ -6347,6 +6618,40 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return identities
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static int? ExtractTrxExecutedTestCount(IEnumerable<string>? trxPaths)
+    {
+        if (trxPaths is null)
+        {
+            return null;
+        }
+
+        foreach (var trxPath in trxPaths.Where(File.Exists))
+        {
+            try
+            {
+                var counters = XDocument.Load(trxPath, LoadOptions.None)
+                    .Descendants()
+                    .FirstOrDefault(element => element.Name.LocalName.Equals(
+                        "Counters",
+                        StringComparison.Ordinal));
+                if (int.TryParse(
+                        counters?.Attribute("total")?.Value,
+                        System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        out var total))
+                {
+                    return total;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                // Missing or unreadable count evidence is unknown, never zero by inference.
+            }
+        }
+
+        return null;
     }
 
     private static string ResolveTrxTestName(XElement result, XElement? definition)
@@ -7778,7 +8083,49 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string? Runner { get; init; } = "vstest";
         public double EstimatedSerialSeconds { get; init; }
         public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
+        public bool IsFocusedEvidenceSelection { get; init; }
+        public IReadOnlyList<FocusedEvidenceFilterToken> FocusedEvidenceTokens { get; init; } = [];
     }
+
+    private static IEnumerable<string> TranslateFocusedEvidenceTokens(
+        IReadOnlyList<FocusedEvidenceFilterToken> tokens)
+    {
+        foreach (var token in tokens)
+        {
+            yield return token.Kind switch
+            {
+                FocusedEvidenceTokenKind.Class => "--filter-class",
+                FocusedEvidenceTokenKind.Method => "--filter-method",
+                FocusedEvidenceTokenKind.ExcludedClass => "--filter-not-class",
+                FocusedEvidenceTokenKind.ExcludedTrait => "--filter-not-trait",
+                _ => throw new InvalidOperationException(
+                    $"Unsupported focused evidence token kind '{token.Kind}'.")
+            };
+            yield return token.Kind == FocusedEvidenceTokenKind.ExcludedTrait
+                ? $"Category={token.Value}"
+                : $"*{token.Value}*";
+        }
+    }
+
+    private enum FocusedEvidenceTokenKind
+    {
+        Class,
+        Method,
+        ExcludedClass,
+        ExcludedTrait
+    }
+
+    private sealed record FocusedEvidenceFilterToken(
+        string OriginalToken,
+        string CanonicalToken,
+        FocusedEvidenceTokenKind Kind,
+        string Value,
+        string ContainingClass);
+
+    private sealed record FocusedEvidenceFilter(
+        string OriginalToken,
+        string CanonicalText,
+        IReadOnlyList<FocusedEvidenceFilterToken> Tokens);
 
     private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
 
