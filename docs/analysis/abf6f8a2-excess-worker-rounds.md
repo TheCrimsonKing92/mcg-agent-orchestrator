@@ -10,9 +10,9 @@ Finding date: 2026-08-10
 
 The explicit reconstruction confirms the endpoint: median excess rounds rose from 1 in W28 to 4 in W32. It does **not** support one cohort-wide causal decomposition of that three-round change.
 
-Two mechanisms are supported, at different strengths:
+One enabling boundary and one tail mechanism are supported, at different strengths:
 
-1. Automatic pipeline selection changed composition toward Reviewer-bearing pipelines. Commit `f2182b05` (July 8) makes routed risk select Developer+Reviewer and implicit scope select the five-role pipeline; `42449341` changed the inference inputs later that day. This directly explains a composition shift, but not the whole rise: excess also rose inside matched Reviewer-bearing role sets.
+1. Commit `f2182b05` (July 8) made automatic selection of Reviewer-bearing pipelines possible—routed risk selects Developer+Reviewer and implicit scope selects the five-role pipeline—and `42449341` changed the inference inputs later that day. The observed Reviewer-bearing share rose from 28/63 to 57/85, which is consistent with that boundary. It is not a proven cause of the shift: selected-pipeline coverage is 0/275, and no archived-objective replay or per-goal routing receipt connects the source change to the observed goals. Excess also rose inside matched Reviewer-bearing role sets, so composition is not sufficient regardless.
 2. Automatic Reviewer `needs-work` routing (`1b0b4307`, July 14) creates real Reviewer-to-upstream repair cycles. The bounded `c4a6fb14` chain proves that these can form a long tail while catching substantive defects. The available historical records do not establish their cohort-wide median contribution.
 
 The data therefore do not justify compensating retry, circuit-breaker, scheduler, acceptance, role, model, or review changes. In particular, productive Reviewer rounds must not be optimized away.
@@ -28,7 +28,7 @@ The data therefore do not justify compensating retry, circuit-breaker, scheduler
 - **Landing:** first `Integrate goal/<prefix>` commit on `main`.
 - **Exclusion:** missing journal or activation data excludes the goal. Missing landing, provider, task, criterion, or path data stays null and is excluded only from that field's denominator; it is never zero-filled.
 
-The reconstructed manifest contains exactly 1,791 `operator-*.out.log` files whose filesystem write time is no later than the cutoff. Its normalized `path|sha256|lastWriteUtc` digest is `9a1264742da9091ec0477ccdcb70c11b541382886d9dd2366b690cb72faba4f2`. This is an explicit new selection rule, not the lost original cohort rule.
+The reconstructed manifest contains exactly 1,791 `operator-*.out.log` files whose filesystem write time is no later than the cutoff. Its normalized `path|sha256|lastWriteUtc` digest is `9a1264742da9091ec0477ccdcb70c11b541382886d9dd2366b690cb72faba4f2`. This is an explicit new selection rule, not the lost original cohort rule. Those logs name 325 goal prefixes; the journal manifest binds the 318 matching journals (seven are missing) at normalized digest `422885d0aa400142011b9ac060444942d096541f06f0d8ecdb5865b2342db6f2`. The other declared identities are dogfood database SHA-256 `f9f6d9e8cb7bed9af660bb94ba7d6ac5c6f9d6cf468a6c5d1781080ac926cba1` and Git history revision `4fc816b898f2a3496bf5b5f2fb6478c00d613908`.
 
 The helper joined 275 W28–W32 goals. Seven transition-bearing prefixes lacked a journal; 43 activated outside the requested weeks. Output coverage was:
 
@@ -60,6 +60,7 @@ $cutoff = [datetimeoffset]'2026-08-07T22:43:03.4206169Z'
 $storeRoot = 'C:\Users\miles\vcs\mcg-agent-orchestrator\.orchestrator'
 $analysisRoot = Join-Path $env:TEMP 'mcg-abf6f8a2'
 $manifest = Join-Path $analysisRoot 'operator-manifest.csv'
+$journalManifest = Join-Path $analysisRoot 'journal-manifest.csv'
 
 New-Item -ItemType Directory -Path $analysisRoot -Force | Out-Null
 Get-ChildItem -LiteralPath (Join-Path $storeRoot 'logs') -Filter 'operator-*.out.log' -File |
@@ -73,14 +74,38 @@ Get-ChildItem -LiteralPath (Join-Path $storeRoot 'logs') -Filter 'operator-*.out
         }
     } | Export-Csv -LiteralPath $manifest -NoTypeInformation -Encoding utf8NoBOM
 
+$prefixes = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($entry in @(Import-Csv -LiteralPath $manifest)) {
+    foreach ($line in [IO.File]::ReadLines($entry.path)) {
+        if ($line -match '^WATCH_TRANSITION goal=(?<goal>[0-9a-f]{8,32}) ') {
+            [void]$prefixes.Add($matches.goal.Substring(0, 8))
+        }
+    }
+}
+
+Get-ChildItem -LiteralPath (Join-Path $storeRoot 'goal-operations') -Filter '*.jsonl' -File |
+    Where-Object { $_.BaseName.Length -ge 8 -and $prefixes.Contains($_.BaseName.Substring(0, 8)) } |
+    Sort-Object Name |
+    ForEach-Object {
+        [pscustomobject]@{
+            path = $_.Name
+            sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+        }
+    } | Export-Csv -LiteralPath $journalManifest -NoTypeInformation -Encoding utf8NoBOM
+
 pwsh -NoProfile -File .\scripts\Analyze-ExcessWorkerRounds.ps1 `
     -OperatorLogManifest $manifest `
+    -OperatorLogManifestDigestSha256 9a1264742da9091ec0477ccdcb70c11b541382886d9dd2366b690cb72faba4f2 `
     -JournalRoot (Join-Path $storeRoot 'goal-operations') `
+    -JournalManifest $journalManifest `
+    -JournalManifestDigestSha256 422885d0aa400142011b9ac060444942d096541f06f0d8ecdb5865b2342db6f2 `
     -DogfoodDbPath (Join-Path $storeRoot 'dogfood-log.db') `
+    -DogfoodDbSha256 f9f6d9e8cb7bed9af660bb94ba7d6ac5c6f9d6cf468a6c5d1781080ac926cba1 `
     -RepositoryRoot . `
+    -RepositoryRevision 4fc816b898f2a3496bf5b5f2fb6478c00d613908 `
     -StartWeek 2026-W28 -EndWeek 2026-W32 `
     -TimeZoneId America/Chicago `
-    -CutoffUtc $cutoff `
+    -CutoffUtc ($cutoff.ToString('o')) `
     -OutputDirectory (Join-Path $analysisRoot 'run1')
 
 # Repeat with run2, then compare both files byte-for-byte.
@@ -93,9 +118,9 @@ The verified output digests were:
 | Output | SHA-256 | Repeat |
 |---|---|---|
 | `excess-worker-rounds.csv` | `0de2014c7314bc81b5edd6bae68f490be8ee8503f5b07226663fad350467a79e` | byte-identical |
-| `excess-worker-rounds-summary.json` | `8834dc8718a246650fb1b811474a7b2d912cbacb594573d33165d1df5f1950be` | byte-identical |
+| `excess-worker-rounds-summary.json` | `6008028781670052ed9dafca77f4441309001d1354ac7627b4336277da35863d` | byte-identical |
 
-The helper is read-only with respect to logs, journals, dogfood, Git, backlog, and orchestrator state. It writes only the requested output directory and fails on missing/duplicate manifest files, changed hashes, post-cutoff manifest rows, ambiguous journal prefixes, invalid weeks, or failed Git/SQLite reads.
+The helper is read-only with respect to logs, journals, dogfood, Git, backlog, and orchestrator state. It writes only the requested output directory. Operator logs and journals are manifest-only inputs; later undeclared files are ignored. A changed declared file, manifest digest, dogfood DB, optional task snapshot, or Git revision fails closed before output, as do missing/duplicate files, post-cutoff operator rows, ambiguous journal prefixes, invalid weeks, and failed Git/SQLite reads. This means a later ledger rerun is either byte-identical or reports a named input-integrity mismatch; it never silently updates the finding from ambient state.
 
 ## Metric reproduction and sensitivity
 
@@ -139,12 +164,12 @@ This says composition is associated with up to two median points at the W29 boun
 
 | Hypothesis | Evidence and discriminator | Disposition |
 |---|---|---|
-| Goal-composition shift | `f2182b05` changes routing; `42449341` changes inference inputs; observed Reviewer-bearing mix rises | Supported mechanism; composition-only explanation rejected by matched strata |
-| Reviewer newly became active | W28 already contains 25 Reviewer-bearing goals; Reviewer was already a configured role | Rejected |
+| Goal-composition shift | `f2182b05` enables automatic Reviewer-bearing routing; `42449341` changes inference inputs; observed Reviewer-bearing mix rises, but selected-pipeline coverage is 0/275 and no per-goal routing replay exists | Source mechanism and observed shift are consistent; causal attribution is undetermined; composition-only explanation rejected by matched strata |
+| Reviewer newly became active | W28 already contains 28 Reviewer-bearing goals; Reviewer was already a configured role | Rejected |
 | Provider/model change universally caused the rise | Provider/model coverage is 167/275; the extreme `c4a6fb14` chain used OpenAI `gpt-5.5` for all roles despite `058c4461`'s Haiku routing | Universal claim rejected; partial effects undetermined |
 | `ReviewerWorkerResultBlockers` change | Source timing and weekly overlap do not discriminate formatting-only from semantic failures | Cause undetermined; replay the same archived outputs across pre/post parser revisions and require an unchanged-HEAD formatting-only control |
 | Impossible RED/GREEN or negative-control evidence | Criterion text and ownership have 0/275 historical coverage; `c4a6fb14` contains two role-policy deferrals but is one case | Cohort share undetermined; supply the frozen task/criterion snapshot and match exact text, owner, capability, deferral, and HEAD |
-| Criterion/scope inference | `f2182b05` and `42449341` provide a direct routing mechanism | Composition mechanism supported; excess magnitude undetermined until archived objectives are replayed and joined to outcomes |
+| Criterion/scope inference | `f2182b05` and `42449341` provide a routing mechanism, but no archived objective was replayed and joined to its observed outcome | Causal role in the composition shift and excess magnitude both undetermined until that replay exists |
 | Automatic Reviewer repair | `1b0b4307` routes `needs-work` upstream; the exact sample below shows finding → changed Developer commit → later pass | Supported tail mechanism; cohort contribution undetermined |
 | `ProgressiveReviewGlance` | It emits `GLANCE`, was introduced July 19 after W29 began, and runs only on an already failing round | Rejected as W28→W29 cause |
 
@@ -152,13 +177,13 @@ Current source anchors are `GoalObjectivePlanner.SelectPipeline` in `src/Mcg.Age
 
 ## Bounded mechanism trace
 
-`c4a6fb148e594fa999a7e44da1a26c70` is the deterministic extreme-tail sample retained because its evidence is complete enough to discriminate productive repair from review noise.
+`c4a6fb148e594fa999a7e44da1a26c70` is the deterministic extreme-tail sample retained because its evidence demonstrates the repair mechanism at chain level while exposing the limit of per-round classification.
 
 - Transition anchors run from `operator-conduct-loop-batch63-20260716162123.out.log:9164` to `operator-conduct-loop-batch75-20260718095458.out.log:501`.
 - It has 49 completed `WATCH_TRANSITION` receipts, five observed roles, and 44 excess rounds: Planner 2, Researcher 2, Developer 12, Tester 15, Reviewer 18.
 - The separate dispatch census has 51 receipts: Planner 2, Researcher 2, Developer 12, Tester 18, Reviewer 17. The mismatch is expected because a dispatch receipt is not a completed transition.
 - Six Reviewer results were `needs-work` and ten were `pass`. Exact needs-work anchors include `c4a6fb14-89adc4ed-20260717014244.out.log:16` (missing lane/reason plumbing, duplicate scorecard handling, typed retry marker) and `c4a6fb14-89adc4ed-20260718034000.out.log:15` (Developer-only mechanical selection, retry-kind plumbing, lost selection-reason receipt).
-- Later Developer rounds produced changed commits before Reviewer passes. That finding → upstream change → later pass sequence discriminates productive defect-catching from unchanged-head review churn.
+- Three Reviewer `needs-work` results occurred at unchanged HEAD `e8ead874` with substantially repeated blockers before the later `4e7490a` change. Their findings were substantive, but the individual unchanged-head re-review rounds cannot be separated into productive repair versus avoidable churn from the retained evidence. The later changed Developer commit followed by Reviewer pass supports the repair mechanism at the chain level only.
 - Two Tester rounds deferred evidence because worker policy prohibited the requested self-verification; two other failed dispositions retained substantive blockers despite green tests. These are positive examples of evidence/role mismatch and “tests green is not done,” but one goal cannot establish cohort prevalence.
 - Dogfood evidence identifies OpenAI `gpt-5.5` for every role. This falsifies a universal Haiku explanation for the representative spiral.
 
@@ -170,7 +195,7 @@ The available sources do not support a mutually exclusive cohort-wide census of 
 
 | Category | Positive measured evidence | Defensible contribution to +3 median |
 |---|---|---|
-| Productive Reviewer repair | Six needs-work results with substantive findings in `c4a6fb14`; later changed commits and passes | Tail mechanism supported; cohort median points undetermined |
+| Productive Reviewer repair | Six needs-work results with substantive findings in `c4a6fb14`; three repeated at unchanged HEAD before a later changed commit and pass | Chain-level tail mechanism supported; per-round split and cohort median points undetermined |
 | Impossible evidence | Two policy-prohibited deferrals in `c4a6fb14` | Cohort median points undetermined |
 | Provider/preflight | 44/275 journals contain positive terms; provider/model mapping exists for 167/275 | Causal contribution undetermined |
 | Formatting contract | No cohort-wide transition-to-output binding | Undetermined |
@@ -181,7 +206,7 @@ These rows overlap and must not be summed. A factor earns a causal median-point 
 
 ## Ranked recommendation
 
-1. **Close this backlog item as investigated with no compensating architecture.** The durable result is the reproduced endpoint, the supported routing and productive-repair mechanisms, the rejected hypotheses, and the explicit limits on attribution.
+1. **Close this backlog item as investigated with no compensating architecture.** The durable result is the reproduced endpoint, the routing boundary consistent with the observed composition shift, the chain-level productive-repair mechanism, the rejected hypotheses, and the explicit limits on attribution.
 2. **At the goal boundary, check the canonical backlog before adding one prospective-measurement follow-up.** If uncovered, the narrow follow-up is to freeze the log manifest plus task/criterion/provider/HEAD snapshot and emit a per-transition typed category. It is measurement work, not retry or review-policy work.
 3. **Do not weaken Reviewer or cap repair rounds from this evidence.** First run the proposed frozen census and the exact replay/control experiments above. If productive and avoidable rounds can then be separated, optimize only the proven avoidable category.
 

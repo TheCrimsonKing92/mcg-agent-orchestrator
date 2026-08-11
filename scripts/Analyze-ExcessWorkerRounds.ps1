@@ -3,22 +3,29 @@
 Builds a bounded, read-only excess-worker-round dataset from an explicit frozen manifest.
 
 .DESCRIPTION
-The script never discovers operator logs. Every log must be named in a CSV manifest with
-path, sha256, and lastWriteUtc columns. Missing files, changed hashes, post-cutoff files,
-ambiguous journal joins, and malformed week bounds fail closed.
+The script never discovers operator logs or journals. Every input file must be named in a
+validated manifest or have an expected SHA-256. Missing files, changed hashes, post-cutoff
+operator logs, ambiguous journal joins, and malformed week bounds fail closed. Git history
+is read only through an explicit immutable revision.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$OperatorLogManifest,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$OperatorLogManifestDigestSha256,
     [Parameter(Mandatory)][string]$JournalRoot,
+    [Parameter(Mandatory)][string]$JournalManifest,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$JournalManifestDigestSha256,
     [Parameter(Mandatory)][string]$DogfoodDbPath,
+    [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$DogfoodDbSha256,
     [Parameter(Mandatory)][string]$RepositoryRoot,
+    [Parameter(Mandatory)][string]$RepositoryRevision,
     [Parameter(Mandatory)][ValidatePattern('^\d{4}-W\d{2}$')][string]$StartWeek,
     [Parameter(Mandatory)][ValidatePattern('^\d{4}-W\d{2}$')][string]$EndWeek,
     [Parameter(Mandatory)][string]$TimeZoneId,
     [Parameter(Mandatory)][datetimeoffset]$CutoffUtc,
     [Parameter(Mandatory)][string]$OutputDirectory,
-    [string]$TaskMetadataSnapshot
+    [string]$TaskMetadataSnapshot,
+    [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$TaskMetadataSnapshotSha256
 )
 
 Set-StrictMode -Version Latest
@@ -97,6 +104,22 @@ function Get-ManifestDigest($Rows) {
     return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
 }
 
+function Get-JournalManifestDigest($Rows) {
+    $normalized = @($Rows | ForEach-Object {
+        '{0}|{1}' -f $_.path, $_.sha256.ToLowerInvariant()
+    }) -join "`n"
+    $bytes = [Text.Encoding]::UTF8.GetBytes($normalized)
+    return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+
+function Assert-ExpectedFileHash([string]$Path, [string]$Expected, [string]$Name) {
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    if ($actual -ne $Expected.ToLowerInvariant()) {
+        throw "$Name hash mismatch: expected $($Expected.ToLowerInvariant()), actual $actual"
+    }
+    return $actual
+}
+
 function Get-JournalFacts([string]$Path) {
     $first = $null
     $focused = 0
@@ -151,6 +174,7 @@ function Read-DogfoodFacts([string]$DatabasePath) {
 
 $manifestPath = Resolve-RequiredPath $OperatorLogManifest 'OperatorLogManifest'
 $journalPath = Resolve-RequiredPath $JournalRoot 'JournalRoot' -Container
+$journalManifestPath = Resolve-RequiredPath $JournalManifest 'JournalManifest'
 $dogfoodPath = Resolve-RequiredPath $DogfoodDbPath 'DogfoodDbPath'
 $repoPath = Resolve-RequiredPath $RepositoryRoot 'RepositoryRoot' -Container
 $zone = [TimeZoneInfo]::FindSystemTimeZoneById($TimeZoneId)
@@ -165,6 +189,10 @@ foreach ($column in $requiredColumns) {
     if ($manifest[0].PSObject.Properties.Name -notcontains $column) { throw "Manifest is missing required column '$column'." }
 }
 $manifest = @($manifest | Sort-Object path)
+$manifestDigest = Get-ManifestDigest $manifest
+if ($manifestDigest -ne $OperatorLogManifestDigestSha256.ToLowerInvariant()) {
+    throw "Operator manifest digest mismatch: expected $($OperatorLogManifestDigestSha256.ToLowerInvariant()), actual $manifestDigest"
+}
 $manifestDirectory = Split-Path -Parent $manifestPath
 $seenPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $validated = [Collections.Generic.List[object]]::new()
@@ -177,6 +205,42 @@ foreach ($entry in $manifest) {
     $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToLowerInvariant()
     if ($actual -ne $entry.sha256.ToLowerInvariant()) { throw "Manifest hash mismatch: $resolved" }
     $validated.Add([pscustomobject]@{ Path = $resolved; SortAt = $recordedWrite.ToUniversalTime(); Manifest = $entry })
+}
+
+$journalManifestRows = @(Import-Csv -LiteralPath $journalManifestPath)
+if ($journalManifestRows.Count -eq 0) { throw 'Journal manifest is empty.' }
+foreach ($column in @('path', 'sha256')) {
+    if ($journalManifestRows[0].PSObject.Properties.Name -notcontains $column) { throw "Journal manifest is missing required column '$column'." }
+}
+$journalManifestRows = @($journalManifestRows | Sort-Object path)
+$journalManifestDigest = Get-JournalManifestDigest $journalManifestRows
+if ($journalManifestDigest -ne $JournalManifestDigestSha256.ToLowerInvariant()) {
+    throw "Journal manifest digest mismatch: expected $($JournalManifestDigestSha256.ToLowerInvariant()), actual $journalManifestDigest"
+}
+$journalRootPrefix = $journalPath.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+$seenJournals = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$validatedJournals = [Collections.Generic.List[string]]::new()
+foreach ($entry in $journalManifestRows) {
+    $candidate = if ([IO.Path]::IsPathRooted($entry.path)) { $entry.path } else { Join-Path $journalPath $entry.path }
+    $resolved = Resolve-RequiredPath $candidate 'Journal manifest entry'
+    if (-not $resolved.StartsWith($journalRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Journal manifest entry is outside JournalRoot: $resolved"
+    }
+    if (-not $seenJournals.Add($resolved)) { throw "Journal manifest contains duplicate path: $resolved" }
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToLowerInvariant()
+    if ($actual -ne $entry.sha256.ToLowerInvariant()) { throw "Journal manifest hash mismatch: $resolved" }
+    $validatedJournals.Add($resolved)
+}
+
+$dogfoodDigest = Assert-ExpectedFileHash $dogfoodPath $DogfoodDbSha256 'Dogfood database'
+$resolvedRevision = @(& git -C $repoPath rev-parse --verify $RepositoryRevision)
+if ($LASTEXITCODE -ne 0 -or $resolvedRevision.Count -ne 1 -or $resolvedRevision[0] -notmatch '^[0-9a-f]{40}$') {
+    throw "Git revision could not be resolved to one commit: $RepositoryRevision"
+}
+$resolvedRevision = $resolvedRevision[0].ToLowerInvariant()
+$revisionType = @(& git -C $repoPath cat-file -t $resolvedRevision)
+if ($LASTEXITCODE -ne 0 -or $revisionType.Count -ne 1 -or $revisionType[0] -ne 'commit') {
+    throw "Git revision does not identify a commit: $RepositoryRevision"
 }
 
 $roundsByPrefix = @{}
@@ -200,15 +264,16 @@ foreach ($item in @($validated | Sort-Object SortAt, Path)) {
 }
 
 $journalByPrefix = @{}
-foreach ($journal in Get-ChildItem -LiteralPath $journalPath -Filter '*.jsonl' -File) {
-    if ($journal.BaseName.Length -lt 8) { continue }
-    $prefix = $journal.BaseName.Substring(0, 8).ToLowerInvariant()
+foreach ($journal in $validatedJournals) {
+    $baseName = [IO.Path]::GetFileNameWithoutExtension($journal)
+    if ($baseName.Length -lt 8) { continue }
+    $prefix = $baseName.Substring(0, 8).ToLowerInvariant()
     if ($journalByPrefix.ContainsKey($prefix)) { throw "Ambiguous journal prefix '$prefix'." }
-    $journalByPrefix[$prefix] = $journal.FullName
+    $journalByPrefix[$prefix] = $journal
 }
 
 $landings = @{}
-$gitLines = @(& git -C $repoPath log main --reverse '--format=%aI%x09%s' '--grep=^Integrate goal/')
+$gitLines = @(& git -C $repoPath log $resolvedRevision --reverse '--format=%aI%x09%s' '--grep=^Integrate goal/')
 if ($LASTEXITCODE -ne 0) { throw "git landing query failed for $repoPath" }
 foreach ($line in $gitLines) {
     $parts = $line -split "`t", 2
@@ -220,8 +285,14 @@ foreach ($line in $gitLines) {
 
 $dogfood = Read-DogfoodFacts $dogfoodPath
 $metadata = @{}
+$metadataDigest = $null
+$metadataPath = $null
 if (-not [string]::IsNullOrWhiteSpace($TaskMetadataSnapshot)) {
+    if ([string]::IsNullOrWhiteSpace($TaskMetadataSnapshotSha256)) {
+        throw 'TaskMetadataSnapshotSha256 is required when TaskMetadataSnapshot is supplied.'
+    }
     $metadataPath = Resolve-RequiredPath $TaskMetadataSnapshot 'TaskMetadataSnapshot'
+    $metadataDigest = Assert-ExpectedFileHash $metadataPath $TaskMetadataSnapshotSha256 'Task metadata snapshot'
     foreach ($entry in @(Import-Csv -LiteralPath $metadataPath)) {
         if (-not $entry.goal) { throw 'Task metadata snapshot contains a row without goal.' }
         $metadata[$entry.goal.ToLowerInvariant()] = $entry
@@ -286,6 +357,23 @@ foreach ($prefix in @($roundsByPrefix.Keys | Sort-Object)) {
         providerMissingReason = if ($null -eq $dogfoodEntry) { 'no-dogfood-entry' } else { $null }
         changedPathMissingReason = if ($null -eq $meta -or [string]::IsNullOrWhiteSpace($meta.changedPathScope)) { 'receipts-contain-counts-not-paths' } else { $null }
     })
+}
+
+# Revalidate mutable files after all reads so a check-then-use change cannot be
+# mislabeled with the declared input identities.
+foreach ($item in $validated) {
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.Path).Hash.ToLowerInvariant()
+    if ($actual -ne $item.Manifest.sha256.ToLowerInvariant()) { throw "Manifest hash changed while reading: $($item.Path)" }
+}
+foreach ($entry in $journalManifestRows) {
+    $candidate = if ([IO.Path]::IsPathRooted($entry.path)) { $entry.path } else { Join-Path $journalPath $entry.path }
+    $resolved = Resolve-RequiredPath $candidate 'Journal manifest entry'
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolved).Hash.ToLowerInvariant()
+    if ($actual -ne $entry.sha256.ToLowerInvariant()) { throw "Journal manifest hash changed while reading: $resolved" }
+}
+[void](Assert-ExpectedFileHash $dogfoodPath $DogfoodDbSha256 'Dogfood database after read')
+if ($null -ne $metadataPath) {
+    [void](Assert-ExpectedFileHash $metadataPath $TaskMetadataSnapshotSha256 'Task metadata snapshot after read')
 }
 
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
@@ -367,12 +455,15 @@ $summary = [ordered]@{
     schemaVersion = 1
     generatedFrom = [ordered]@{
         manifestCount = $manifest.Count
-        manifestDigestSha256 = Get-ManifestDigest $manifest
+        manifestDigestSha256 = $manifestDigest
         manifest = [IO.Path]::GetFileName($manifestPath)
-        cutoffUtc = $CutoffUtc.ToUniversalTime().ToString('o')
-        journalRoot = $journalPath
-        dogfoodDbSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $dogfoodPath).Hash.ToLowerInvariant()
-        repositoryHead = (& git -C $repoPath rev-parse HEAD).Trim()
+        cutoffUtc = $CutoffUtc.UtcDateTime.ToString('o')
+        journalManifestCount = $journalManifestRows.Count
+        journalManifestDigestSha256 = $journalManifestDigest
+        journalManifest = [IO.Path]::GetFileName($journalManifestPath)
+        dogfoodDbSha256 = $dogfoodDigest
+        repositoryRevision = $resolvedRevision
+        taskMetadataSnapshotSha256 = $metadataDigest
         timeZone = $TimeZoneId
         startWeek = $StartWeek
         endWeek = $EndWeek
@@ -382,7 +473,7 @@ $summary = [ordered]@{
         roleRound = 'one line-start WATCH_TRANSITION receipt'
         excessRounds = 'roleRounds minus distinct observed roles'
         week = 'ISO week of first timestamped journal operation after timezone conversion'
-        landing = 'first Integrate goal/<prefix> commit on main'
+        landing = 'first Integrate goal/<prefix> commit reachable from the declared repository revision'
         missingData = 'null and excluded from field-specific denominators; never zero-filled'
     }
     exclusions = [ordered]@{
