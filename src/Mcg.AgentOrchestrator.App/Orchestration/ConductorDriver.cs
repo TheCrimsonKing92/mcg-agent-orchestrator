@@ -1903,7 +1903,7 @@ internal sealed class ConductorDriver
             var testClass = originalTestClass.Trim();
             if (string.IsNullOrWhiteSpace(project) ||
                 string.IsNullOrWhiteSpace(testClass) ||
-                testClass.Length > MaxFindingEvidenceFilterLength ||
+                originalTestClass.Length > MaxFindingEvidenceFilterLength ||
                 !EvidenceClassNamePattern.IsMatch(testClass))
             {
                 refusalDetail =

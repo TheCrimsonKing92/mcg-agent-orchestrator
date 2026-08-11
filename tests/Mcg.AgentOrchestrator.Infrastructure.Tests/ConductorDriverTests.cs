@@ -3666,6 +3666,43 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
+    public void FindingEvidenceRawLengthCannotBeTrimmedBelowBound()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var paddedFilter = "ConductorDriverTests" + new string(' ', 1024);
+        var finding = EvidenceFindingWithRequest(
+            "Whitespace padding must not bypass the selection bound.",
+            id: "raw-filter-bound",
+            classes: [paddedFilter]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        var focusedRuns = 0;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(request, true, true, "unexpected", []);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(0, focusedRuns);
+        Assert.Equal(
+            FindingEvidenceNotHonouredReason.UnparseableSelection,
+            reviewer.VerificationHistory.Last().MergedReviewFindings!.Single().EvidenceOutcome?.Reason);
+    }
+
+    [Xunit.Fact]
     public void FocusedSelectionApparatusFailurePreservesReceiptAndRetriesRequesterOnly()
     {
         var (kernel, goal) = SoftwareGoal();

@@ -2253,7 +2253,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 Directory.CreateDirectory(directory);
                 File.WriteAllText(
                     Path.Combine(directory, "SelectionProbeTests.cs"),
-                    "sealed class SelectionProbeTests { public void SelectsOneMethod() { } }");
+                    """
+                    sealed class SelectionProbeTests
+                    {
+                        [Xunit.Fact]
+                        public void SelectsOneMethod() { }
+                    }
+                    """);
             });
 
         Assert.True(result.Accepted);
@@ -2265,6 +2271,74 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             "--filter-method",
             "*SelectionProbeTests.SelectsOneMethod*");
         Assert.DoesNotContain("--filter-class", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task MethodQualifiedFocusedEvidencePreservesContainsSemantics()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: FullyQualifiedName~SelectionProbeTests.SelectsOne",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """
+                    sealed class SelectionProbeTests
+                    {
+                        [Xunit.Fact]
+                        public void SelectsOneMethod() { }
+                    }
+                    """);
+            });
+
+        Assert.True(result.Accepted);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        AssertArgumentPair(testCall, "--filter-method", "*SelectionProbeTests.SelectsOne*");
+        Assert.DoesNotContain("--filter-class", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task InvocationNameIsNotResolvedAsTestMethod()
+    {
+        const string offendingToken = "FullyQualifiedName~GoalAcceptanceVerifierTests.WriteAllText";
+        var (result, calls) = await RunMappedEvidenceAsync($"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task SiblingTestMethodIsNotResolvedForSelectedClass()
+    {
+        const string offendingToken = "FullyQualifiedName~SelectionProbeTests.SiblingMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """
+                    sealed class SelectionProbeTests { }
+
+                    sealed class SiblingTests
+                    {
+                        [Xunit.Fact]
+                        public void SiblingMethod() { }
+                    }
+                    """);
+            });
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
     }
 
     [Xunit.Fact]
@@ -2280,6 +2354,19 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Equal(FocusedEvidenceRejectionCode.UnsupportedToken, result.Rejection.Code);
         Assert.Equal(offendingToken, result.Rejection.OffendingToken);
         Assert.Contains(offendingToken, result.Rejection.Detail, StringComparison.Ordinal);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task BareInvalidTokenPreservesOriginalWhitespace()
+    {
+        const string offendingToken = " Bogus == token ";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: GoalAcceptanceVerifierTests,{offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnsupportedToken, result.Rejection?.Code);
+        Assert.Equal(offendingToken, result.Rejection?.OffendingToken);
         Assert.Empty(calls);
     }
 
@@ -2300,6 +2387,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     public async Task OversizedFocusedEvidenceTokenIsRejectedBeforeLaunch()
     {
         var offendingToken = "FullyQualifiedName~" + new string('A', 1025);
+        var (result, calls) = await RunMappedEvidenceAsync($"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.OversizedFilter, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task WhitespacePaddedTokenCannotBypassLengthLimit()
+    {
+        var offendingToken = "GoalAcceptanceVerifierTests" + new string(' ', 1024);
         var (result, calls) = await RunMappedEvidenceAsync($"Infrastructure.Tests: {offendingToken}");
 
         Assert.False(result.Accepted);

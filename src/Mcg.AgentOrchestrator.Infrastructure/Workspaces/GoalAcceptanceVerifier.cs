@@ -1841,7 +1841,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
         }
 
-        if (trimmed.Length > MaxFocusedEvidenceFilterLength)
+        if (expression.Length > MaxFocusedEvidenceFilterLength)
         {
             rejection = new FocusedEvidenceRejection(
                 FocusedEvidenceRejectionCode.OversizedFilter,
@@ -1966,13 +1966,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return true;
         }
 
-        var classNames = trimmed
-            .Split([',', '|'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var classNames = expression
+            .Split([',', '|'], StringSplitOptions.None)
+            .Select(original => (Original: original, Normalized: original.Trim()))
+            .Where(token => token.Normalized.Length > 0)
+            .ToArray();
         if (classNames.Length == 0 ||
-            classNames.Any(name => !Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
+            classNames.Any(token => !Regex.IsMatch(token.Normalized, @"^[A-Za-z_][A-Za-z0-9_.]*$")))
         {
-            var offendingToken = classNames.FirstOrDefault(name =>
-                !Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_.]*$")) ?? expression;
+            var offendingToken = classNames.FirstOrDefault(token =>
+                !Regex.IsMatch(token.Normalized, @"^[A-Za-z_][A-Za-z0-9_.]*$")).Original ?? expression;
             rejection = new FocusedEvidenceRejection(
                 FocusedEvidenceRejectionCode.UnsupportedToken,
                 offendingToken,
@@ -1983,13 +1986,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         targetCount = classNames.Length;
         filter = new FocusedEvidenceFilter(
             expression,
-            string.Join("|", classNames.Select(name => $"FullyQualifiedName~{name}")),
-            classNames.Select(name => new FocusedEvidenceFilterToken(
-                name,
-                $"FullyQualifiedName~{name}",
+            string.Join("|", classNames.Select(token => $"FullyQualifiedName~{token.Normalized}")),
+            classNames.Select(token => new FocusedEvidenceFilterToken(
+                token.Original,
+                $"FullyQualifiedName~{token.Normalized}",
                 FocusedEvidenceTokenKind.Class,
-                name,
-                name)).ToArray());
+                token.Normalized,
+                token.Normalized)).ToArray());
         return true;
     }
 
@@ -2044,11 +2047,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 continue;
             }
 
-            var methodName = segments[^1];
-            var methodPattern = new Regex(
-                $@"\b{Regex.Escape(methodName)}\s*\(",
-                RegexOptions.CultureInvariant);
-            if (classFiles.Any(path => methodPattern.IsMatch(File.ReadAllText(path))))
+            var methodSelector = segments[^1];
+            if (FindFocusedEvidenceTestMethodNames(classFiles, className).Any(methodName =>
+                    methodName.StartsWith(methodSelector, StringComparison.OrdinalIgnoreCase)))
             {
                 candidates.Add(new FocusedEvidenceFilterToken(
                     originalToken,
@@ -2072,6 +2073,85 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 ? $"focused evidence selection '{originalToken}' does not resolve to a class or method in {ProjectLabel(project)}"
                 : $"focused evidence selection '{originalToken}' is ambiguous in {ProjectLabel(project)}");
         return false;
+    }
+
+    private static IReadOnlyList<string> FindFocusedEvidenceTestMethodNames(
+        IReadOnlyList<string> classFiles,
+        string className)
+    {
+        var methodNames = new List<string>();
+        var simpleClassName = className.Split('.').Last();
+        foreach (var path in classFiles)
+        {
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            var hasTestAttribute = false;
+            var targetClassIndent = -1;
+            foreach (var rawLine in lines)
+            {
+                var typeDeclaration = Regex.Match(
+                    rawLine,
+                    @"^(?<indent>\s*)(?:(?:public|protected|internal|private|static|abstract|sealed|partial)\s+)*(?:class|struct|record(?:\s+class|\s+struct)?)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\b",
+                    RegexOptions.CultureInvariant);
+                if (typeDeclaration.Success)
+                {
+                    var declarationIndent = typeDeclaration.Groups["indent"].Length;
+                    if (targetClassIndent >= 0 && declarationIndent <= targetClassIndent)
+                    {
+                        break;
+                    }
+
+                    if (typeDeclaration.Groups["name"].Value.Equals(
+                            simpleClassName,
+                            StringComparison.Ordinal))
+                    {
+                        targetClassIndent = declarationIndent;
+                    }
+
+                    continue;
+                }
+
+                if (targetClassIndent < 0)
+                {
+                    continue;
+                }
+
+                var line = rawLine.Trim();
+                if (TestAttrPattern.IsMatch(line))
+                {
+                    hasTestAttribute = true;
+                    var attributeEnd = line.IndexOf(']');
+                    line = attributeEnd >= 0 ? line[(attributeEnd + 1)..].Trim() : string.Empty;
+                }
+
+                if (!hasTestAttribute || line.Length == 0 || line.StartsWith("[", StringComparison.Ordinal) ||
+                    line.StartsWith("//", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var declaration = Regex.Match(
+                    line,
+                    @"^(?:(?:public|protected|internal|private|static|abstract|virtual|override|sealed|new|unsafe|async|partial|extern)\s+)*(?:global::)?[A-Za-z_][A-Za-z0-9_.]*(?:\s*<[^()\r\n]+>)?(?:\[\])?\??\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^()\r\n]+>)?\s*\(",
+                    RegexOptions.CultureInvariant);
+                if (declaration.Success)
+                {
+                    methodNames.Add(declaration.Groups["name"].Value);
+                }
+
+                hasTestAttribute = false;
+            }
+        }
+
+        return methodNames;
     }
 
     private static string FormatReceiptPaths(IReadOnlyList<string> paths) =>
