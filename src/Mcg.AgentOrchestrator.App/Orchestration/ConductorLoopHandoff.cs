@@ -945,7 +945,10 @@ internal static partial class ConductorLoopHandoff
                             lpStartupInfo: ref startupInfo,
                             lpProcessInformation: out var processInformation))
                     {
-                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to start breakaway conduct loop successor.");
+                        var nativeError = Marshal.GetLastWin32Error();
+                        throw new Win32Exception(
+                            nativeError,
+                            $"Failed to start breakaway conduct loop successor (nativeError={nativeError}).");
                     }
 
                     try

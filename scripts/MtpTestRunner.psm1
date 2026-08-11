@@ -96,10 +96,11 @@ public sealed class McgMtpProcessOutputCapture : IDisposable
 
 public sealed class McgMtpOwnedJob : IDisposable
 {
+    private const uint JobObjectLimitBreakawayOk = 0x00000800;
     private const uint JobObjectLimitKillOnJobClose = 0x00002000;
     private IntPtr handle;
 
-    public McgMtpOwnedJob()
+    public McgMtpOwnedJob(bool allowBreakaway)
     {
         handle = CreateJobObject(IntPtr.Zero, null);
         if (handle == IntPtr.Zero)
@@ -108,7 +109,8 @@ public sealed class McgMtpOwnedJob : IDisposable
         }
 
         var limits = new JobObjectExtendedLimitInformation();
-        limits.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
+        limits.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose |
+            (allowBreakaway ? JobObjectLimitBreakawayOk : 0);
         int length = Marshal.SizeOf(typeof(JobObjectExtendedLimitInformation));
         IntPtr buffer = Marshal.AllocHGlobal(length);
         try
@@ -900,6 +902,7 @@ function Invoke-MtpAppHost {
         [Parameter(Mandatory = $true)][string]$Executable,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$OutputLog,
+        [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
     )
 
@@ -921,7 +924,7 @@ function Invoke-MtpAppHost {
     try {
         $capture = [McgMtpProcessOutputCapture]::new($OutputLog)
         if (Test-MtpWindows) {
-            $ownedJob = [McgMtpOwnedJob]::new()
+            $ownedJob = [McgMtpOwnedJob]::new($AllowBreakaway.IsPresent)
         }
         $process = [System.Diagnostics.Process]::new()
         $process.StartInfo = New-MtpProcessStartInfo -Executable $Executable -Arguments $Arguments
@@ -1105,6 +1108,7 @@ function Invoke-MtpTestRun {
         [string]$ResultsRoot,
         [string]$RunnerPath,
         [string]$DotnetPath = 'dotnet',
+        [switch]$AllowBreakaway,
         [ValidateRange(1, 86400)][int]$TestHostTimeoutSeconds = 780
     )
 
@@ -1181,7 +1185,7 @@ function Invoke-MtpTestRun {
                 }
                 Write-Host "Runner output log: $outputLog"
                 $runnerLogPaths.Add($outputLog)
-                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -TestHostTimeoutSeconds $TestHostTimeoutSeconds
+                $run = Invoke-MtpAppHost -Executable $executable -Arguments $arguments -OutputLog $outputLog -AllowBreakaway:$AllowBreakaway -TestHostTimeoutSeconds $TestHostTimeoutSeconds
                 $lastOwnedProcessId = $run.OwnedProcessId
                 $lastRunnerExitCode = $run.ExitCode
                 $allExitsConfirmed = $allExitsConfirmed -and [bool]$run.ExitConfirmed
