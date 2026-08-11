@@ -5,6 +5,67 @@ $script:AutoResumeDirectoryName = "AutoResume"
 $script:LauncherExecutableName = "Mcg.HiddenLauncher.exe"
 $script:MinimumMediumIntegrityRid = 0x2000
 
+function Get-AutoResumeLifecycleMutexName {
+    [CmdletBinding()]
+    param(
+        [string]$UserSid
+    )
+
+    if ([string]::IsNullOrWhiteSpace($UserSid)) {
+        $UserSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    }
+    if ($UserSid -notmatch '^S-\d+(?:-\d+)+$') {
+        throw "Cannot derive the auto-resume lifecycle mutex from an invalid user SID."
+    }
+
+    "Global\Mcg.AgentOrchestrator.AutoResume." + $UserSid.Replace('-', '_')
+}
+
+function Enter-AutoResumeLifecycleLock {
+    [CmdletBinding()]
+    param(
+        [string]$UserSid,
+        [TimeSpan]$Timeout = [TimeSpan]::FromSeconds(30)
+    )
+
+    $mutexName = Get-AutoResumeLifecycleMutexName -UserSid $UserSid
+    $mutex = $null
+    $lockTaken = $false
+    try {
+        $mutex = [System.Threading.Mutex]::new($false, $mutexName)
+        try { $lockTaken = $mutex.WaitOne($Timeout) }
+        catch [System.Threading.AbandonedMutexException] { $lockTaken = $true }
+        if (-not $lockTaken) {
+            throw "Timed out waiting for the auto-resume lifecycle lock."
+        }
+
+        [pscustomobject]@{
+            Mutex = $mutex
+            Name = $mutexName
+        }
+    }
+    catch {
+        if ($null -ne $mutex -and -not $lockTaken) {
+            $mutex.Dispose()
+        }
+        throw
+    }
+}
+
+function Exit-AutoResumeLifecycleLock {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Lease
+    )
+
+    try {
+        $Lease.Mutex.ReleaseMutex()
+    }
+    finally {
+        $Lease.Mutex.Dispose()
+    }
+}
+
 function Get-AutoResumeLayout {
     [CmdletBinding()]
     param(
@@ -422,13 +483,10 @@ function Invoke-AutoResumeInstall {
 
     $layout = Get-AutoResumeLayout -LocalApplicationData $LocalApplicationData
     [void](Assert-AutoResumeOwnedRoot -LocalApplicationData $LocalApplicationData -OwnedRoot $layout.Root -RepositoryRoot $RepositoryRoot)
-    $mutex = [System.Threading.Mutex]::new($false, ("Local\Mcg.AgentOrchestrator.AutoResume." + [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value.Replace('-', '_')))
-    $lockTaken = $false
+    $lifecycleLock = $null
     $stagingDirectory = $null
     try {
-        try { $lockTaken = $mutex.WaitOne([TimeSpan]::FromSeconds(30)) }
-        catch [System.Threading.AbandonedMutexException] { $lockTaken = $true }
-        if (-not $lockTaken) { throw "Timed out waiting for the auto-resume installer lock." }
+        $lifecycleLock = Enter-AutoResumeLifecycleLock
 
         $previousTask = Invoke-AutoResumeOperation $Operations "GetTask" @($TaskName)
         if ($null -eq $previousTask) { throw "Scheduled task query returned no result." }
@@ -495,8 +553,9 @@ function Invoke-AutoResumeInstall {
         if ($null -ne $stagingDirectory -and (Test-Path -LiteralPath $stagingDirectory)) {
             Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
         }
-        if ($lockTaken) { $mutex.ReleaseMutex() }
-        $mutex.Dispose()
+        if ($null -ne $lifecycleLock) {
+            Exit-AutoResumeLifecycleLock -Lease $lifecycleLock
+        }
     }
 }
 
@@ -511,12 +570,9 @@ function Invoke-AutoResumeRemoval {
 
     $layout = Get-AutoResumeLayout $LocalApplicationData
     $ownedRoot = Assert-AutoResumeOwnedRoot -LocalApplicationData $LocalApplicationData -OwnedRoot $layout.Root -RepositoryRoot $RepositoryRoot
-    $mutex = [System.Threading.Mutex]::new($false, ("Local\Mcg.AgentOrchestrator.AutoResume." + [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value.Replace('-', '_')))
-    $lockTaken = $false
+    $lifecycleLock = $null
     try {
-        try { $lockTaken = $mutex.WaitOne([TimeSpan]::FromSeconds(30)) }
-        catch [System.Threading.AbandonedMutexException] { $lockTaken = $true }
-        if (-not $lockTaken) { throw "Timed out waiting for the auto-resume installer lock." }
+        $lifecycleLock = Enter-AutoResumeLifecycleLock
 
         $task = Invoke-AutoResumeOperation $Operations "GetTask" @($TaskName)
         if ($null -eq $task) { throw "Scheduled task query returned no result." }
@@ -531,8 +587,9 @@ function Invoke-AutoResumeRemoval {
         [pscustomobject]@{ TaskName = $TaskName; RemovedRoot = $ownedRoot; TaskWasPresent = [bool]$task.Exists }
     }
     finally {
-        if ($lockTaken) { $mutex.ReleaseMutex() }
-        $mutex.Dispose()
+        if ($null -ne $lifecycleLock) {
+            Exit-AutoResumeLifecycleLock -Lease $lifecycleLock
+        }
     }
 }
 
@@ -598,6 +655,9 @@ function New-WindowsAutoResumeOperations {
 }
 
 Export-ModuleMember -Function @(
+    'Get-AutoResumeLifecycleMutexName',
+    'Enter-AutoResumeLifecycleLock',
+    'Exit-AutoResumeLifecycleLock',
     'Get-AutoResumeLayout',
     'ConvertTo-WindowsCommandLineArgument',
     'Get-AutoResumeTaskArguments',

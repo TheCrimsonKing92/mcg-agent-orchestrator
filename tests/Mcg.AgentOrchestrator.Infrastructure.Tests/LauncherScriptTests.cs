@@ -304,6 +304,125 @@ public sealed class LauncherScriptTests
         Assert.Contains("OrchestratorAutoResume.Install.psm1", installer, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact(DisplayName = "AutoResume_lifecycle_lock_is_cross_session_per_user_and_serializes_install_remove")]
+    public void AutoResumeLifecycleLockIsCrossSessionPerUserAndSerializesInstallRemove()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var modulePath = Path.Combine(repoRoot, "scripts", "OrchestratorAutoResume.Install.psm1");
+        var installerModule = File.ReadAllText(modulePath);
+        var sandbox = Path.Combine(Path.GetTempPath(), $"auto-resume-lifecycle-lock-{Guid.NewGuid():N}");
+        var localAppData = Path.Combine(sandbox, "LocalAppData");
+        var fakeRepository = Path.Combine(sandbox, "repository");
+        Directory.CreateDirectory(localAppData);
+        Directory.CreateDirectory(fakeRepository);
+        try
+        {
+            Assert.DoesNotContain("Local\\Mcg.AgentOrchestrator.AutoResume", installerModule, StringComparison.Ordinal);
+            Assert.Contains("Global\\Mcg.AgentOrchestrator.AutoResume", installerModule, StringComparison.Ordinal);
+
+            var result = RunPowerShellCommand(repoRoot, $$"""
+                $ErrorActionPreference = 'Stop'
+                Import-Module '{{EscapePowerShellSingleQuoted(modulePath)}}' -Force
+                $installEntered = Join-Path '{{EscapePowerShellSingleQuoted(sandbox)}}' 'install-entered'
+                $releaseInstall = Join-Path '{{EscapePowerShellSingleQuoted(sandbox)}}' 'release-install'
+                $removeAttempted = Join-Path '{{EscapePowerShellSingleQuoted(sandbox)}}' 'remove-attempted'
+                $removeEntered = Join-Path '{{EscapePowerShellSingleQuoted(sandbox)}}' 'remove-entered'
+
+                $installJob = Start-Job -ArgumentList @(
+                    '{{EscapePowerShellSingleQuoted(modulePath)}}',
+                    '{{EscapePowerShellSingleQuoted(fakeRepository)}}',
+                    '{{EscapePowerShellSingleQuoted(localAppData)}}',
+                    $installEntered,
+                    $releaseInstall
+                ) -ScriptBlock {
+                    param($modulePath,$repository,$local,$entered,$release)
+                    $ErrorActionPreference = 'Stop'
+                    Import-Module $modulePath -Force
+                    $state = [pscustomobject]@{ Task = [pscustomobject]@{ Exists=$false; Xml=$null; Execute=$null; Arguments=$null } }
+                    $ops = @{
+                        Publish = { param($project,$destination)
+                            Set-Content -LiteralPath $entered -Value 'entered'
+                            $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                            while (-not (Test-Path -LiteralPath $release)) {
+                                if ([DateTime]::UtcNow -ge $deadline) { throw 'install release signal timed out' }
+                                Start-Sleep -Milliseconds 25
+                            }
+                            foreach ($file in @('Mcg.HiddenLauncher.exe','Mcg.HiddenLauncher.dll','Mcg.HiddenLauncher.deps.json','Mcg.HiddenLauncher.runtimeconfig.json')) {
+                                Set-Content -LiteralPath (Join-Path $destination $file) -Value $file
+                            }
+                        }.GetNewClosure()
+                        SetMediumIntegrity = { param($path) }
+                        QueryIntegrity = { param($path) [pscustomobject]@{ Exists=$true; ParseSucceeded=$true; Rids=@(8192); Diagnostic='medium' } }
+                        Promote = { param($source,$destination) [System.IO.Directory]::Move($source,$destination) }
+                        GetTask = { param($name) $state.Task }.GetNewClosure()
+                        RegisterTask = { param($name,$spec) $state.Task = [pscustomobject]@{ Exists=$true; Xml='<Task />'; Execute=$spec.Execute; Arguments=$spec.Arguments } }.GetNewClosure()
+                        RestoreTask = { param($name,$snapshot) $state.Task = $snapshot }.GetNewClosure()
+                    }
+                    Invoke-AutoResumeInstall -RepositoryRoot $repository -LocalApplicationData $local -LauncherProject 'launcher.csproj' -ResumeScriptPath 'C:\repo\Resume-OrchestratorLoop.ps1' -PowerShellPath 'C:\pwsh.exe' -TaskName 'Auto Resume' -Operations $ops | Out-Null
+                }
+
+                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                while (-not (Test-Path -LiteralPath $installEntered)) {
+                    if ([DateTime]::UtcNow -ge $deadline) { throw 'install did not enter its locked publish phase' }
+                    Start-Sleep -Milliseconds 25
+                }
+
+                $removeJob = Start-Job -ArgumentList @(
+                    '{{EscapePowerShellSingleQuoted(modulePath)}}',
+                    '{{EscapePowerShellSingleQuoted(fakeRepository)}}',
+                    '{{EscapePowerShellSingleQuoted(localAppData)}}',
+                    $removeAttempted,
+                    $removeEntered
+                ) -ScriptBlock {
+                    param($modulePath,$repository,$local,$attempted,$entered)
+                    $ErrorActionPreference = 'Stop'
+                    Import-Module $modulePath -Force
+                    Set-Content -LiteralPath $attempted -Value 'attempted'
+                    $ops = @{
+                        GetTask = { param($name) Set-Content -LiteralPath $entered -Value 'entered'; [pscustomobject]@{ Exists=$false } }.GetNewClosure()
+                        UnregisterTask = { param($name) }
+                        RemoveOwnedRoot = { param($path) }
+                    }
+                    Invoke-AutoResumeRemoval -RepositoryRoot $repository -LocalApplicationData $local -TaskName 'Auto Resume' -Operations $ops | Out-Null
+                }
+
+                try {
+                    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                    while (-not (Test-Path -LiteralPath $removeAttempted)) {
+                        if ([DateTime]::UtcNow -ge $deadline) { throw 'removal did not attempt lifecycle entry' }
+                        Start-Sleep -Milliseconds 25
+                    }
+                    Start-Sleep -Milliseconds 400
+                    $blockedDuringInstall = -not (Test-Path -LiteralPath $removeEntered)
+                    Set-Content -LiteralPath $releaseInstall -Value 'release'
+                    $completed = Wait-Job -Job @($installJob,$removeJob) -Timeout 15
+                    if ($completed.Count -ne 2) { throw 'lifecycle jobs did not complete' }
+                    Receive-Job -Job @($installJob,$removeJob) -ErrorAction Stop | Out-Null
+                    [pscustomobject]@{
+                        mutexName = Get-AutoResumeLifecycleMutexName
+                        blockedDuringInstall = $blockedDuringInstall
+                        removalEnteredAfterRelease = Test-Path -LiteralPath $removeEntered
+                    } | ConvertTo-Json -Compress
+                }
+                finally {
+                    Get-Job | Where-Object Id -in @($installJob.Id,$removeJob.Id) | Stop-Job -ErrorAction SilentlyContinue
+                    Get-Job | Where-Object Id -in @($installJob.Id,$removeJob.Id) | Remove-Job -Force -ErrorAction SilentlyContinue
+                }
+                """);
+
+            Assert.True(result.ExitCode == 0, $"PowerShell exited {result.ExitCode}: {result.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            using var document = JsonDocument.Parse(result.Stdout);
+            Assert.StartsWith("Global\\Mcg.AgentOrchestrator.AutoResume.S_", document.RootElement.GetProperty("mutexName").GetString(), StringComparison.Ordinal);
+            Assert.True(document.RootElement.GetProperty("blockedDuringInstall").GetBoolean());
+            Assert.True(document.RootElement.GetProperty("removalEnteredAfterRelease").GetBoolean());
+        }
+        finally
+        {
+            TryDeleteDirectory(sandbox);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "AutoResume_installer_derives_owned_paths_quotes_arguments_and_rejects_unsafe_roots")]
     public void AutoResumeInstallerDerivesOwnedPathsQuotesArgumentsAndRejectsUnsafeRoots()
     {
