@@ -25,14 +25,25 @@ function Enter-AutoResumeLifecycleLock {
     [CmdletBinding()]
     param(
         [string]$UserSid,
-        [TimeSpan]$Timeout = [TimeSpan]::FromSeconds(30)
+        [TimeSpan]$Timeout = [TimeSpan]::FromSeconds(30),
+        [string]$MutexName,
+        [scriptblock]$WaitStarted
     )
 
-    $mutexName = Get-AutoResumeLifecycleMutexName -UserSid $UserSid
+    if ([string]::IsNullOrWhiteSpace($MutexName)) {
+        $MutexName = Get-AutoResumeLifecycleMutexName -UserSid $UserSid
+    }
+    if ($MutexName -notmatch '^Global\\Mcg\.AgentOrchestrator\.AutoResume\.S_\d+(?:_\d+)+$') {
+        throw "The auto-resume lifecycle mutex must use the per-user Global namespace."
+    }
+
     $mutex = $null
     $lockTaken = $false
     try {
-        $mutex = [System.Threading.Mutex]::new($false, $mutexName)
+        $mutex = [System.Threading.Mutex]::new($false, $MutexName)
+        if ($null -ne $WaitStarted) {
+            & $WaitStarted
+        }
         try { $lockTaken = $mutex.WaitOne($Timeout) }
         catch [System.Threading.AbandonedMutexException] { $lockTaken = $true }
         if (-not $lockTaken) {
@@ -41,7 +52,7 @@ function Enter-AutoResumeLifecycleLock {
 
         [pscustomobject]@{
             Mutex = $mutex
-            Name = $mutexName
+            Name = $MutexName
         }
     }
     catch {
@@ -478,7 +489,8 @@ function Invoke-AutoResumeInstall {
         [Parameter(Mandatory)][string]$ResumeScriptPath,
         [Parameter(Mandatory)][string]$PowerShellPath,
         [Parameter(Mandatory)][string]$TaskName,
-        [Parameter(Mandatory)][System.Collections.IDictionary]$Operations
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Operations,
+        [string]$LifecycleMutexName
     )
 
     $layout = Get-AutoResumeLayout -LocalApplicationData $LocalApplicationData
@@ -486,7 +498,7 @@ function Invoke-AutoResumeInstall {
     $lifecycleLock = $null
     $stagingDirectory = $null
     try {
-        $lifecycleLock = Enter-AutoResumeLifecycleLock
+        $lifecycleLock = Enter-AutoResumeLifecycleLock -MutexName $LifecycleMutexName
 
         $previousTask = Invoke-AutoResumeOperation $Operations "GetTask" @($TaskName)
         if ($null -eq $previousTask) { throw "Scheduled task query returned no result." }
@@ -565,14 +577,16 @@ function Invoke-AutoResumeRemoval {
         [Parameter(Mandatory)][string]$RepositoryRoot,
         [Parameter(Mandatory)][string]$LocalApplicationData,
         [Parameter(Mandatory)][string]$TaskName,
-        [Parameter(Mandatory)][System.Collections.IDictionary]$Operations
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Operations,
+        [string]$LifecycleMutexName,
+        [scriptblock]$LifecycleLockWaitStarted
     )
 
     $layout = Get-AutoResumeLayout $LocalApplicationData
     $ownedRoot = Assert-AutoResumeOwnedRoot -LocalApplicationData $LocalApplicationData -OwnedRoot $layout.Root -RepositoryRoot $RepositoryRoot
     $lifecycleLock = $null
     try {
-        $lifecycleLock = Enter-AutoResumeLifecycleLock
+        $lifecycleLock = Enter-AutoResumeLifecycleLock -MutexName $LifecycleMutexName -WaitStarted $LifecycleLockWaitStarted
 
         $task = Invoke-AutoResumeOperation $Operations "GetTask" @($TaskName)
         if ($null -eq $task) { throw "Scheduled task query returned no result." }
