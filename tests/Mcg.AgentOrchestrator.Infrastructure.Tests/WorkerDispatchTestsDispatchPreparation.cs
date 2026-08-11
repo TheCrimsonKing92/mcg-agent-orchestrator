@@ -1081,6 +1081,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     [Xunit.InlineData(AgentRole.Developer, "artifact-registry.json: verify current context artifacts", "workflow-brokers.md: use deterministic broker actions")]
     [Xunit.InlineData(AgentRole.Tester, "artifact-registry.json: verify artifact freshness", "workflow-brokers.md: use deterministic broker actions")]
     [Xunit.InlineData(AgentRole.Reviewer, "artifact-registry.json: verify hashes", "workflow-brokers.md: check deterministic broker failures")]
+    [Xunit.InlineData(AgentRole.Planner, "artifact-registry.json: confirm available artifacts", "selected-skills.md: read the selected planning skill")]
+    [Xunit.InlineData(AgentRole.Researcher, "artifact-registry.json: identify relevant artifacts", "selected-skills.md: read the selected research skill")]
     public void WorkerContextArtifactsWritesRoleSpecificPrioritiesAndPriorSummaries(
         AgentRole role,
         string expectedPrimaryPriority,
@@ -1166,6 +1168,64 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("skill selection", skillArtifact.GetProperty("summary").GetString()!, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact]
+    public void WorkerSkillSelectorRoutesUpstreamRoleDefaultsOnlyToOwners()
+    {
+        var workingDirectory = CreateTempDirectory();
+        WriteSkill(workingDirectory, "research-evidence");
+        WriteSkill(workingDirectory, "criterion-ownership-planning");
+
+        foreach (var role in Enum.GetValues<AgentRole>())
+        {
+            var task = new TaskSpec(TaskId.New(), "Map bounded inputs.", role);
+            var goal = new AgentOrchestratorKernel().CreateGoal("Bounded inquiry", [task]);
+            var selected = new WorkerSkillSelector().SelectSkillRequirements(goal, task, workingDirectory);
+
+            Assert.Equal(role == AgentRole.Researcher, selected.Any(skill => skill.Name == "research-evidence"));
+            Assert.Equal(role == AgentRole.Planner, selected.Any(skill => skill.Name == "criterion-ownership-planning"));
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Researcher, "research-evidence")]
+    [Xunit.InlineData(AgentRole.Planner, "criterion-ownership-planning")]
+    public void WorkerContextArtifactsMarksUpstreamRoleSkillsAvailable(AgentRole role, string expectedSkill)
+    {
+        var workingDirectory = CreateTempDirectory();
+        WriteSkill(workingDirectory, expectedSkill);
+        var task = new TaskSpec(TaskId.New(), "Map bounded inputs.", role);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Bounded inquiry", [task]);
+
+        var selected = new WorkerSkillSelector().SelectSkillRequirements(goal, task, workingDirectory);
+        var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+        var selectedSkills = File.ReadAllText(Path.Combine(contextDirectory, "selected-skills.md"));
+
+        var skill = Assert.Single(selected);
+        Assert.Equal(expectedSkill, skill.Name);
+        Assert.True(skill.Available);
+        Assert.Contains($"- {expectedSkill}{Environment.NewLine}", selectedSkills, StringComparison.Ordinal);
+        Assert.Contains("  Status: available", selectedSkills, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(AgentRole.Researcher, "selected-skills.md: read the selected research skill")]
+    [Xunit.InlineData(AgentRole.Planner, "selected-skills.md: read the selected planning skill")]
+    public void WorkerContextArtifactsWritesSelectedSkillsPriorityForUpstreamRoles(
+        AgentRole role,
+        string expectedPriority)
+    {
+        var workingDirectory = CreateTempDirectory();
+        var task = new TaskSpec(TaskId.New(), "Map bounded inputs.", role);
+        var goal = new AgentOrchestratorKernel().CreateGoal("Bounded inquiry", [task]);
+
+        var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
+        var manifest = File.ReadAllText(Path.Combine(contextDirectory, "manifest.md"));
+        var digest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
+
+        Assert.Contains(expectedPriority, manifest, StringComparison.Ordinal);
+        Assert.Contains(expectedPriority, digest, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerSkillSelector_routes_hyphenated_worker_skill_signal_in_isolation")]
     public void WorkerSkillSelectorRoutesHyphenatedWorkerSkillSignalInIsolation()
     {
@@ -1174,7 +1234,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         var task = new TaskSpec(
             TaskId.New(),
             "Document hyphenated worker-skill behavior.",
-            AgentRole.Researcher);
+            AgentRole.Ideation);
         var goal = new AgentOrchestratorKernel().CreateGoal("Maintain procedural catalog", [task]);
 
         var selected = new WorkerSkillSelector().SelectSkillRequirements(goal, task, workingDirectory);

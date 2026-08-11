@@ -159,6 +159,7 @@ public sealed class RunGoalServiceTests
     public async Task RunGoalServiceCompletesAllTasksSequentiallyAndStopsWithNoActions()
     {
         var root = CreateTempDirectory();
+        SeedLocalSkillCatalog(root);
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         var kernel = new AgentOrchestratorKernel();
         var task1 = new TaskSpec(TaskId.New(), "First echo task", AgentRole.Planner);
