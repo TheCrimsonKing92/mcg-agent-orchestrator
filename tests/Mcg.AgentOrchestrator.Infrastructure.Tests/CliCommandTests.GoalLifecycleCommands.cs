@@ -83,8 +83,8 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("Daily trend:", output);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_goal_timing_links_backlog_reference_from_objective_and_labels_pending_landing")]
-    public void CliGoalTimingLinksBacklogReferenceFromObjectiveAndLabelsPendingLanding()
+    [Xunit.Fact(DisplayName = "Cli_goal_timing_keeps_old_backlog_upstream_and_renders_not_landed")]
+    public void CliGoalTimingKeepsOldBacklogUpstreamAndRendersNotLanded()
     {
         var root = CreateTempDirectory();
         var workspace = CreateRefinedWorkspace(root);
@@ -116,9 +116,12 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
 
-        Xunit.Assert.Contains("source=pending", output);
-        Xunit.Assert.Contains("backlogIntentWait=", output);
-        Xunit.Assert.DoesNotContain("backlogIntentWait=0s", output);
+        Xunit.Assert.Contains("e2eStartSource=task-delegated", output);
+        Xunit.Assert.Contains("e2eEndSource=sample-time", output);
+        Xunit.Assert.Contains("backlogIntentSource=objective-backlog-created-at", output);
+        Xunit.Assert.Contains("upstreamBacklogIntentWait=", output);
+        Xunit.Assert.DoesNotContain("upstreamBacklogIntentWait=0s", output);
+        Xunit.Assert.Contains("landedAt=not-landed landingSource=none", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_timing_uses_integration_commit_for_hand_landed_goal")]
@@ -153,8 +156,8 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
 
-        Xunit.Assert.Contains("source=git-integration-commit", output);
-        Xunit.Assert.DoesNotContain("source=pending", output);
+        Xunit.Assert.Contains("landingSource=git-integration-commit", output);
+        Xunit.Assert.DoesNotContain("landingSource=pending", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_timing_uses_terminal_disposition_for_sweep_reconciliation")]
@@ -184,8 +187,30 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
 
-        Xunit.Assert.Contains("source=terminal-disposition", output);
-        Xunit.Assert.DoesNotContain("source=pending", output);
+        Xunit.Assert.Contains("landingSource=terminal-disposition", output);
+        Xunit.Assert.DoesNotContain("landingSource=pending", output);
+    }
+
+    [Xunit.Fact]
+    public void CliGoalTimingRetiredDispositionRendersNotLanded()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Retire obsolete goal", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Retired timing", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        GoalOperationJournal.RecordTerminalDisposition(
+            root,
+            goal,
+            new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, "Obsolete goal retired."));
+
+        var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
+
+        Xunit.Assert.Contains("e2eEndSource=retired-terminal-disposition", output);
+        Xunit.Assert.Contains("landedAt=not-landed landingSource=none", output);
+        Xunit.Assert.DoesNotContain("landingSource=landing-journal", output);
+        Xunit.Assert.DoesNotContain("landingSource=terminal-disposition", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_timing_keeps_conductor_acceptance_pass_without_landing_pending")]
@@ -213,10 +238,11 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
 
-        Xunit.Assert.Contains("source=pending", output);
+        Xunit.Assert.Contains("landedAt=not-landed landingSource=none", output);
+        Xunit.Assert.Contains("e2eEndSource=sample-time", output);
         Xunit.Assert.Contains("gate=", output);
-        Xunit.Assert.DoesNotContain("source=acceptance-journal", output);
-        Xunit.Assert.DoesNotContain("source=landing-journal", output);
+        Xunit.Assert.DoesNotContain("landingSource=acceptance-journal", output);
+        Xunit.Assert.DoesNotContain("landingSource=landing-journal", output);
     }
 
     [Xunit.Fact(DisplayName = "Cli_goal_timing_uses_conductor_landing_journal_for_landing")]
@@ -246,9 +272,9 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 
         var output = ExecuteCliAndCapture(["goal-timing", goal.Id.Value[..8]], kernel, workspace);
 
-        Xunit.Assert.Contains("source=landing-journal", output);
-        Xunit.Assert.DoesNotContain("source=pending", output);
-        Xunit.Assert.DoesNotContain("source=acceptance-journal", output);
+        Xunit.Assert.Contains("landingSource=landing-journal", output);
+        Xunit.Assert.DoesNotContain("landingSource=pending", output);
+        Xunit.Assert.DoesNotContain("landingSource=acceptance-journal", output);
     }
 
 

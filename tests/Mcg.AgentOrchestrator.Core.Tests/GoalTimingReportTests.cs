@@ -5,6 +5,126 @@ public sealed class GoalTimingReportTests
     private const string WorkDir = "C:\\repo";
     private const string Command = "codex exec prompt.md";
 
+    [Xunit.Fact]
+    public void ActiveOldBacklog_AtSample_ExcludesBacklogAge()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement active timing", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Active timing", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var activatedAt = clock.UtcNow;
+        clock.Advance(TimeSpan.FromMinutes(10));
+
+        var report = GoalTimingReport.Build(
+            goal,
+            new GoalTimingReportContext(
+                BacklogIntentAt: activatedAt.AddMinutes(-1000),
+                BacklogIntentSource: "backlog-item-created-at",
+                AsOf: clock.UtcNow));
+
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(10), report.TotalDuration);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(1000), report.BacklogIntentWait);
+        Xunit.Assert.Equal(activatedAt, report.GoalE2EStartedAt);
+        Xunit.Assert.Equal("task-delegated", report.GoalE2EStartSource);
+        Xunit.Assert.Equal(clock.UtcNow, report.GoalE2EEndedAt);
+        Xunit.Assert.Equal("sample-time", report.GoalE2EEndSource);
+        Xunit.Assert.Null(report.LandedAt);
+        Xunit.Assert.Equal(report.TotalDuration, report.WorkDuration + report.WaitDuration);
+    }
+
+    [Xunit.Fact]
+    public void RunningRound_AtSample_AccruesWorkerRuntime()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement running timing", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Running timing", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        clock.Advance(TimeSpan.FromMinutes(5));
+        kernel.RecordTaskDispatch(goal.Id, task.Id, Dispatch(clock.UtcNow));
+        clock.Advance(TimeSpan.FromMinutes(2));
+        kernel.RecordTaskProcessStarted(goal.Id, task.Id, Process(clock.UtcNow, null, "running"));
+        clock.Advance(TimeSpan.FromMinutes(18));
+
+        var report = GoalTimingReport.Build(goal, new GoalTimingReportContext(AsOf: clock.UtcNow));
+        var round = Xunit.Assert.Single(report.Tasks.Single().Rounds);
+
+        Xunit.Assert.Null(round.CompletedAt);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(18), round.WorkerRunDuration);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(25), report.TotalDuration);
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(18), report.WorkDuration);
+        Xunit.Assert.Equal(report.TotalDuration, report.WorkDuration + report.WaitDuration);
+    }
+
+    [Xunit.Fact]
+    public void ParkedGoal_AtSample_IsNotLanded()
+    {
+        var clock = new FakeClock();
+        var kernel = new AgentOrchestratorKernel(clock);
+        var task = new TaskSpec(TaskId.New(), "Implement parked timing", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Parked timing", [task]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        clock.Advance(TimeSpan.FromMinutes(12));
+        kernel.ParkGoal(goal.Id, "awaiting operator");
+        clock.Advance(TimeSpan.FromMinutes(8));
+
+        var report = GoalTimingReport.Build(goal, new GoalTimingReportContext(AsOf: clock.UtcNow));
+
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(20), report.TotalDuration);
+        Xunit.Assert.Equal("sample-time", report.GoalE2EEndSource);
+        Xunit.Assert.Null(report.LandedAt);
+        Xunit.Assert.Null(report.LandingSource);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(GoalStatus.Failed)]
+    [Xunit.InlineData(GoalStatus.Cancelled)]
+    [Xunit.InlineData(GoalStatus.Superseded)]
+    public void CleanedNonLandedMetadata_AtTerminal_UsesTerminalBoundary(GoalStatus status)
+    {
+        var createdAt = new DateTimeOffset(2026, 8, 10, 12, 0, 0, TimeSpan.Zero);
+        var terminatedAt = createdAt.AddMinutes(30);
+        var goal = Goal.CreateMetadataOnlyTerminal(new TerminalGoalMetadata(
+            GoalId.New(),
+            status,
+            "Cleaned terminal timing",
+            null,
+            createdAt,
+            terminatedAt));
+
+        var report = GoalTimingReport.Build(
+            goal,
+            new GoalTimingReportContext(AsOf: terminatedAt.AddHours(5)));
+
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(30), report.TotalDuration);
+        Xunit.Assert.Equal(createdAt, report.GoalE2EStartedAt);
+        Xunit.Assert.Equal(terminatedAt, report.GoalE2EEndedAt);
+        Xunit.Assert.Equal("terminal-metadata", report.GoalE2EEndSource);
+        Xunit.Assert.Null(report.LandedAt);
+    }
+
+    [Xunit.Fact]
+    public void CleanedCompletedMetadata_AtTerminal_IsDurablyLanded()
+    {
+        var createdAt = new DateTimeOffset(2026, 8, 10, 12, 0, 0, TimeSpan.Zero);
+        var terminatedAt = createdAt.AddMinutes(45);
+        var goal = Goal.CreateMetadataOnlyTerminal(new TerminalGoalMetadata(
+            GoalId.New(),
+            GoalStatus.Completed,
+            "Cleaned completed timing",
+            "abc123",
+            createdAt,
+            terminatedAt));
+
+        var report = GoalTimingReport.Build(goal);
+
+        Xunit.Assert.Equal(TimeSpan.FromMinutes(45), report.TotalDuration);
+        Xunit.Assert.Equal(terminatedAt, report.LandedAt);
+        Xunit.Assert.Equal("terminal-metadata", report.LandingSource);
+        Xunit.Assert.Equal("terminal-metadata", report.GoalE2EEndSource);
+    }
+
     [Xunit.Fact(DisplayName = "GoalTimingReport_partitions_two_round_goal_with_receipt_sourced_prep")]
     public void GoalTimingReportPartitionsTwoRoundGoalWithReceiptSourcedPrep()
     {
@@ -50,7 +170,7 @@ public sealed class GoalTimingReportTests
         clock.Advance(TimeSpan.FromMinutes(40));
         kernel.ParkGoal(goal.Id, "landed timing marker");
 
-        var report = GoalTimingReport.Build(goal);
+        var report = GoalTimingReport.Build(goal, new GoalTimingReportContext(AsOf: clock.UtcNow));
         var rounds = report.Tasks.Single().Rounds;
 
         Xunit.Assert.Collection(
@@ -119,8 +239,8 @@ public sealed class GoalTimingReportTests
         Xunit.Assert.Equal(TimeSpan.FromMinutes(50), report.TotalDuration);
     }
 
-    [Xunit.Fact(DisplayName = "GoalTimingReport_verified_unlanded_goal_reports_pending_landing_wait")]
-    public void GoalTimingReportVerifiedUnlandedGoalReportsPendingLandingWait()
+    [Xunit.Fact(DisplayName = "GoalTimingReport_verified_unlanded_goal_uses_sample_boundary")]
+    public void GoalTimingReportVerifiedUnlandedGoalUsesSampleBoundary()
     {
         var clock = new FakeClock();
         var kernel = new AgentOrchestratorKernel(clock);
@@ -130,14 +250,17 @@ public sealed class GoalTimingReportTests
         RecordRound(kernel, clock, goal.Id, task.Id, Success(clock.UtcNow));
 
         var verifiedAt = goal.Timeline.Max(evt => evt.OccurredAt);
+        var asOf = verifiedAt.AddMinutes(20);
         var report = GoalTimingReport.Build(
             goal,
-            new GoalTimingReportContext(LandedAt: verifiedAt.AddMinutes(20), LandingSource: "pending"));
+            new GoalTimingReportContext(AsOf: asOf));
 
         Xunit.Assert.Equal(GoalStatus.Verified, goal.Status);
-        Xunit.Assert.Equal("pending", report.LandingSource);
-        Xunit.Assert.InRange(report.LandingWait, TimeSpan.FromMinutes(20), TimeSpan.FromMinutes(21));
-        Xunit.Assert.True(report.TotalDuration > TimeSpan.Zero);
+        Xunit.Assert.Null(report.LandedAt);
+        Xunit.Assert.Null(report.LandingSource);
+        Xunit.Assert.Equal(asOf, report.GoalE2EEndedAt);
+        Xunit.Assert.Equal("sample-time", report.GoalE2EEndSource);
+        Xunit.Assert.Equal(asOf - report.GoalE2EStartedAt, report.TotalDuration);
     }
 
     [Xunit.Fact(DisplayName = "GoalTimingReport_gate_duration_uses_acceptance_journal_span")]
@@ -195,8 +318,7 @@ public sealed class GoalTimingReportTests
                 LandingSource: "fixture",
                 GateSpans: [new GoalTimingGateSpan(second.Timeline.Max(evt => evt.OccurredAt), second.Timeline.Max(evt => evt.OccurredAt).AddMinutes(2), "passed")]),
             [pending.Id] = new(
-                LandedAt: pending.Timeline.Max(evt => evt.OccurredAt).AddMinutes(20),
-                LandingSource: "pending")
+                AsOf: pending.Timeline.Max(evt => evt.OccurredAt).AddMinutes(20))
         };
 
         var firstReport = GoalTimingReport.Build(first, contexts[first.Id]);
@@ -207,7 +329,7 @@ public sealed class GoalTimingReportTests
         Xunit.Assert.Equal(firstReport.TotalDuration + secondReport.TotalDuration, rollup.TotalDuration);
         Xunit.Assert.Equal(firstReport.WorkDuration + secondReport.WorkDuration, rollup.WorkDuration);
         Xunit.Assert.Equal(1, rollup.WastedEnvironmentalCount);
-        Xunit.Assert.Contains(rollup.Phases, phase => phase.Phase == "BacklogIntentWait" && phase.Total == TimeSpan.FromMinutes(4));
+        Xunit.Assert.Contains(rollup.Phases, phase => phase.Phase == "UpstreamBacklogIntentWait" && phase.Total == TimeSpan.FromMinutes(4));
         Xunit.Assert.Single(rollup.TopWasteSources, source => source.Source == DispatchOutcomeKind.ProviderConnectivity.ToString() && source.Count == 1);
     }
 

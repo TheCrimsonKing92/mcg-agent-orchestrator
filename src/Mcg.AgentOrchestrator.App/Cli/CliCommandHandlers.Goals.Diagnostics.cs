@@ -137,6 +137,7 @@ internal static string? ResolveGoalFriendlyLabel(Goal goal, string backlogStoreP
 
 private static IReadOnlyDictionary<GoalId, GoalTimingReportContext> BuildGoalTimingContexts(CliExecutionContext context)
 {
+    var asOf = DateTimeOffset.UtcNow;
     var journals = GoalOperationJournal.ReadAll(
         context.Workspace.ExecutionDirectory,
         context.Kernel.Goals.Select(goal => goal.Id));
@@ -145,32 +146,39 @@ private static IReadOnlyDictionary<GoalId, GoalTimingReportContext> BuildGoalTim
         goal => BuildGoalTimingContext(
             context,
             goal,
-            journals.TryGetValue(goal.Id, out var journal) ? journal : null));
+            journals.TryGetValue(goal.Id, out var journal) ? journal : null,
+            asOf));
 }
 
 private static GoalTimingReportContext BuildGoalTimingContext(
     CliExecutionContext context,
     Goal goal,
-    GoalOperationJournalSummary? journal = null)
+    GoalOperationJournalSummary? journal = null,
+    DateTimeOffset? asOf = null)
 {
+    asOf ??= DateTimeOffset.UtcNow;
     journal ??= GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, goal.Id);
-    var backlogIntentAt = ResolveBacklogIntentAt(goal, context.Workspace.BacklogStorePath);
+    var backlogIntent = ResolveBacklogIntent(goal, context.Workspace.BacklogStorePath);
     var gateSpans = BuildGoalTimingGateSpans(journal);
     var landing = ResolveGoalTimingLanding(context.Workspace.ExecutionDirectory, goal, journal);
+    var end = ResolveGoalTimingEnd(goal, journal, landing, asOf.Value);
     return new GoalTimingReportContext(
-        backlogIntentAt,
-        landing.LandedAt,
-        landing.Source,
-        gateSpans,
-        AsOf: DateTimeOffset.UtcNow);
+        BacklogIntentAt: backlogIntent.IntentAt,
+        LandedAt: landing.LandedAt,
+        LandingSource: landing.Source,
+        GateSpans: gateSpans,
+        AsOf: asOf,
+        BacklogIntentSource: backlogIntent.Source,
+        GoalE2EEndedAt: end.EndedAt,
+        GoalE2EEndSource: end.Source);
 }
 
-private static DateTimeOffset? ResolveBacklogIntentAt(Goal goal, string backlogStorePath)
+private static (DateTimeOffset? IntentAt, string? Source) ResolveBacklogIntent(Goal goal, string backlogStorePath)
 {
     if (string.IsNullOrWhiteSpace(backlogStorePath) ||
         !File.Exists(backlogStorePath))
     {
-        return null;
+        return (null, null);
     }
 
     try
@@ -179,14 +187,14 @@ private static DateTimeOffset? ResolveBacklogIntentAt(Goal goal, string backlogS
         if (!string.IsNullOrWhiteSpace(goal.SourceBacklogItemId) &&
             TryResolveBacklogItemCreatedAt(store, goal.SourceBacklogItemId, out var linkedCreatedAt))
         {
-            return linkedCreatedAt;
+            return (linkedCreatedAt, "linked-backlog-created-at");
         }
 
         foreach (Match match in BacklogObjectiveReferenceRegex.Matches(goal.Objective))
         {
             if (TryResolveBacklogItemCreatedAt(store, match.Groups[1].Value, out var objectiveCreatedAt))
             {
-                return objectiveCreatedAt;
+                return (objectiveCreatedAt, "objective-backlog-created-at");
             }
         }
     }
@@ -194,7 +202,7 @@ private static DateTimeOffset? ResolveBacklogIntentAt(Goal goal, string backlogS
     {
     }
 
-    return null;
+    return (null, null);
 }
 
 private static bool TryResolveBacklogItemCreatedAt(
@@ -274,6 +282,11 @@ private static (DateTimeOffset? LandedAt, string? Source) ResolveGoalTimingLandi
         .Select(entry => (DateTimeOffset?)entry.At)
         .LastOrDefault();
 
+    if (GoalOperationJournal.HasRetiredTerminalDisposition(journal))
+    {
+        return (null, null);
+    }
+
     var conductorLandingAt = journal.Entries
         .Where(entry =>
             entry.Status == GoalOperationStatus.Completed &&
@@ -310,9 +323,55 @@ private static (DateTimeOffset? LandedAt, string? Source) ResolveGoalTimingLandi
         return (dispositionAt, "terminal-disposition");
     }
 
-    return goal.Status == GoalStatus.Verified
-        ? (DateTimeOffset.UtcNow, "pending")
+    return goal is { IsMetadataOnly: true, Status: GoalStatus.Completed, MetadataTerminatedAt: { } metadataTerminatedAt }
+        ? (metadataTerminatedAt, "terminal-metadata")
         : (null, null);
+}
+
+private static (DateTimeOffset? EndedAt, string Source) ResolveGoalTimingEnd(
+    Goal goal,
+    GoalOperationJournalSummary journal,
+    (DateTimeOffset? LandedAt, string? Source) landing,
+    DateTimeOffset asOf)
+{
+    if (landing.LandedAt is { } landedAt)
+    {
+        return (landedAt, landing.Source ?? "landing-evidence");
+    }
+
+    var terminalDispositionAt = journal.Entries
+        .Where(entry =>
+            entry.Status == GoalOperationStatus.Completed &&
+            entry.Operation.Equals(GoalOperationJournal.TerminalDispositionOperation, StringComparison.OrdinalIgnoreCase))
+        .OrderBy(entry => entry.At)
+        .Select(entry => (DateTimeOffset?)entry.At)
+        .LastOrDefault();
+    if (terminalDispositionAt is not null)
+    {
+        var source = GoalOperationJournal.HasRetiredTerminalDisposition(journal)
+            ? "retired-terminal-disposition"
+            : "terminal-disposition";
+        return (terminalDispositionAt, source);
+    }
+
+    if (goal.IsTerminal && goal.MetadataTerminatedAt is { } metadataTerminatedAt)
+    {
+        return (metadataTerminatedAt, "terminal-metadata");
+    }
+
+    if (goal.IsTerminal)
+    {
+        var terminalTimelineAt = goal.Timeline
+            .OrderByDescending(entry => entry.OccurredAt)
+            .Select(entry => (DateTimeOffset?)entry.OccurredAt)
+            .FirstOrDefault();
+        if (terminalTimelineAt is not null)
+        {
+            return (terminalTimelineAt, "terminal-timeline");
+        }
+    }
+
+    return (asOf, "sample-time");
 }
 
 private static bool TryResolveIntegrationCommitAuthoredAt(
