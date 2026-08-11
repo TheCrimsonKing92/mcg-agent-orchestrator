@@ -8,6 +8,27 @@ using Microsoft.VisualBasic.FileIO;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ExcessWorkerRoundAnalysisScriptTests
 {
+    [Xunit.Fact]
+    public void FixtureProcessesUseAHermeticEnvironment()
+    {
+        var ambientOverrides = new Dictionary<string, string>
+        {
+            ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = @"C:\ambient\wrong-repository",
+            ["GIT_DIR"] = @"C:\ambient\wrong-git-dir",
+            ["GIT_CONFIG_GLOBAL"] = @"C:\ambient\wrong-git-config"
+        };
+
+        var result = RunProcessWithAmbientOverrides(
+            Directory.GetCurrentDirectory(),
+            "pwsh",
+            ambientOverrides,
+            "-NoProfile",
+            "-Command",
+            "if ($env:MCG_ORCHESTRATOR_REPOSITORY_ROOT -or $env:GIT_DIR -or $env:GIT_CONFIG_GLOBAL -ne 'NUL') { exit 41 }; if (-not $env:PATH -or -not $env:SYSTEMROOT) { exit 42 }");
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+    }
+
     [Xunit.Fact(DisplayName = "Excess_round_analyzer_is_bounded_deterministic_and_preserves_missing_data")]
     public async Task ExcessRoundAnalyzerIsBoundedDeterministicAndPreservesMissingData()
     {
@@ -510,7 +531,21 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         return result.Stdout;
     }
 
-    private static ProcessResult RunProcess(string workingDirectory, string fileName, params string[] arguments)
+    private static ProcessResult RunProcess(string workingDirectory, string fileName, params string[] arguments) =>
+        RunProcessCore(workingDirectory, fileName, arguments, ambientOverrides: null);
+
+    private static ProcessResult RunProcessWithAmbientOverrides(
+        string workingDirectory,
+        string fileName,
+        IReadOnlyDictionary<string, string> ambientOverrides,
+        params string[] arguments) =>
+        RunProcessCore(workingDirectory, fileName, arguments, ambientOverrides);
+
+    private static ProcessResult RunProcessCore(
+        string workingDirectory,
+        string fileName,
+        string[] arguments,
+        IReadOnlyDictionary<string, string>? ambientOverrides)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -521,6 +556,11 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
             UseShellExecute = false,
             CreateNoWindow = true
         };
+        if (ambientOverrides is not null)
+        {
+            foreach (var (name, value) in ambientOverrides) startInfo.Environment[name] = value;
+        }
+        UseHermeticEnvironment(startInfo, workingDirectory);
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
         using var process = Process.Start(startInfo) ?? throw new InvalidOperationException($"Could not start {fileName}.");
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
@@ -535,6 +575,27 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         var stdout = stdoutTask.GetAwaiter().GetResult();
         var stderr = stderrTask.GetAwaiter().GetResult();
         return new ProcessResult(process.ExitCode, stdout, stderr);
+    }
+
+    private static void UseHermeticEnvironment(ProcessStartInfo startInfo, string workingDirectory)
+    {
+        string[] requiredNames =
+        [
+            "COMSPEC", "LOCALAPPDATA", "PATH", "PATHEXT", "PROGRAMDATA", "PROGRAMFILES",
+            "PROGRAMFILES(X86)", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "WINDIR"
+        ];
+        var required = requiredNames
+            .Select(name => (Name: name, Value: startInfo.Environment[name]))
+            .Where(item => !string.IsNullOrWhiteSpace(item.Value))
+            .ToArray();
+
+        startInfo.Environment.Clear();
+        foreach (var (name, value) in required) startInfo.Environment[name] = value!;
+        startInfo.Environment["HOME"] = workingDirectory;
+        startInfo.Environment["USERPROFILE"] = workingDirectory;
+        startInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        startInfo.Environment["GIT_CONFIG_GLOBAL"] = "NUL";
+        startInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
     }
 
     private sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
