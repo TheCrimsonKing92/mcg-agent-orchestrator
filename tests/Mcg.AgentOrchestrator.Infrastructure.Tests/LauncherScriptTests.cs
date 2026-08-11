@@ -286,17 +286,483 @@ public sealed class LauncherScriptTests
         var repoRoot = FindLauncherSourceRoot();
         var resume = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Resume-OrchestratorLoop.ps1"));
         var installer = File.ReadAllText(Path.Combine(repoRoot, "scripts", "Install-OrchestratorAutoResume.ps1"));
+        var installerModule = File.ReadAllText(Path.Combine(repoRoot, "scripts", "OrchestratorAutoResume.Install.psm1"));
+        var installerContract = installer + Environment.NewLine + installerModule;
 
         Assert.Contains(".SYNOPSIS", resume, StringComparison.Ordinal);
         Assert.Contains("RESUME_SKIPPED reason=conduct-loop-running", resume, StringComparison.Ordinal);
         Assert.Contains("RESUME_SKIPPED reason=conduct-stop", resume, StringComparison.Ordinal);
         Assert.Contains("Start-OrchestratorCommand.ps1", resume, StringComparison.Ordinal);
         Assert.Contains(".SYNOPSIS", installer, StringComparison.Ordinal);
-        Assert.Contains("New-ScheduledTaskTrigger -AtLogOn", installer, StringComparison.Ordinal);
-        Assert.Contains("-RepetitionInterval (New-TimeSpan -Minutes 10)", installer, StringComparison.Ordinal);
-        Assert.Contains("New-ScheduledTaskPrincipal", installer, StringComparison.Ordinal);
-        Assert.Contains("-LogonType Interactive", installer, StringComparison.Ordinal);
-        Assert.Contains("Unregister-ScheduledTask", installer, StringComparison.Ordinal);
+        Assert.Contains("New-ScheduledTaskTrigger -AtLogOn", installerContract, StringComparison.Ordinal);
+        Assert.Contains("-RepetitionInterval (New-TimeSpan -Minutes 10)", installerContract, StringComparison.Ordinal);
+        Assert.Contains("New-ScheduledTaskPrincipal", installerContract, StringComparison.Ordinal);
+        Assert.Contains("-LogonType Interactive", installerContract, StringComparison.Ordinal);
+        Assert.Contains("-RunLevel Limited", installerContract, StringComparison.Ordinal);
+        Assert.Contains("Unregister-ScheduledTask", installerContract, StringComparison.Ordinal);
+        Assert.Contains("LocalApplicationData", installer, StringComparison.Ordinal);
+        Assert.Contains("OrchestratorAutoResume.Install.psm1", installer, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void AutoResumeLifecycleLockUsesGlobalPerUserScopeAndSerializesMutations()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var modulePath = Path.Combine(repoRoot, "scripts", "OrchestratorAutoResume.Install.psm1");
+        var installerModule = File.ReadAllText(modulePath);
+        var sandbox = Path.Combine(Path.GetTempPath(), $"auto-resume-lifecycle-lock-{Guid.NewGuid():N}");
+        var localAppData = Path.Combine(sandbox, "LocalAppData");
+        var fakeRepository = Path.Combine(sandbox, "repository");
+        Directory.CreateDirectory(localAppData);
+        Directory.CreateDirectory(fakeRepository);
+        try
+        {
+            Assert.DoesNotContain("Local\\Mcg.AgentOrchestrator.AutoResume", installerModule, StringComparison.Ordinal);
+            Assert.Contains("Global\\Mcg.AgentOrchestrator.AutoResume", installerModule, StringComparison.Ordinal);
+
+            var result = RunPowerShellCommand(repoRoot, $$"""
+                $ErrorActionPreference = 'Stop'
+                Import-Module '{{EscapePowerShellSingleQuoted(modulePath)}}' -Force
+                $testSid = 'S-1-5-21-' + [BitConverter]::ToUInt32([Guid]::NewGuid().ToByteArray(), 0)
+                $mutexName = Get-AutoResumeLifecycleMutexName -UserSid $testSid
+                $localNameRejected = $false
+                try {
+                    $localLease = Enter-AutoResumeLifecycleLock -MutexName $mutexName.Replace('Global\', 'Local\')
+                    Exit-AutoResumeLifecycleLock -Lease $localLease
+                }
+                catch {
+                    $localNameRejected = $_.Exception.Message -like '*Global namespace*'
+                }
+
+                $installEntered = [System.Threading.ManualResetEventSlim]::new($false)
+                $releaseInstall = [System.Threading.ManualResetEventSlim]::new($false)
+                $removeWaitStarted = [System.Threading.ManualResetEventSlim]::new($false)
+                $removeEntered = [System.Threading.ManualResetEventSlim]::new($false)
+                $installPowerShell = $null
+                $removePowerShell = $null
+                $installAsync = $null
+                $removeAsync = $null
+                $installEnded = $false
+                $removeEnded = $false
+                try {
+                    $installPowerShell = [System.Management.Automation.PowerShell]::Create()
+                    [void]$installPowerShell.AddScript({
+                        param($modulePath,$repository,$local,$mutexName,$entered,$release)
+                    $ErrorActionPreference = 'Stop'
+                    Import-Module $modulePath -Force
+                    $state = [pscustomobject]@{ Task = [pscustomobject]@{ Exists=$false; Xml=$null; Execute=$null; Arguments=$null } }
+                    $ops = @{
+                        Publish = { param($project,$destination)
+                            $entered.Set()
+                            if (-not $release.Wait([TimeSpan]::FromSeconds(15))) { throw 'install release signal timed out' }
+                            foreach ($file in @('Mcg.HiddenLauncher.exe','Mcg.HiddenLauncher.dll','Mcg.HiddenLauncher.deps.json','Mcg.HiddenLauncher.runtimeconfig.json')) {
+                                Set-Content -LiteralPath (Join-Path $destination $file) -Value $file
+                            }
+                        }.GetNewClosure()
+                        SetMediumIntegrity = { param($path) }
+                        QueryIntegrity = { param($path) [pscustomobject]@{ Exists=$true; ParseSucceeded=$true; Rids=@(8192); Diagnostic='medium' } }
+                        Promote = { param($source,$destination) [System.IO.Directory]::Move($source,$destination) }
+                        GetTask = { param($name) $state.Task }.GetNewClosure()
+                        RegisterTask = { param($name,$spec) $state.Task = [pscustomobject]@{ Exists=$true; Xml='<Task />'; Execute=$spec.Execute; Arguments=$spec.Arguments } }.GetNewClosure()
+                        RestoreTask = { param($name,$snapshot) $state.Task = $snapshot }.GetNewClosure()
+                    }
+                        Invoke-AutoResumeInstall -RepositoryRoot $repository -LocalApplicationData $local -LauncherProject 'launcher.csproj' -ResumeScriptPath 'C:\repo\Resume-OrchestratorLoop.ps1' -PowerShellPath 'C:\pwsh.exe' -TaskName 'Auto Resume' -Operations $ops -LifecycleMutexName $mutexName | Out-Null
+                    }.ToString())
+                    foreach ($argument in @(
+                        '{{EscapePowerShellSingleQuoted(modulePath)}}',
+                        '{{EscapePowerShellSingleQuoted(fakeRepository)}}',
+                        '{{EscapePowerShellSingleQuoted(localAppData)}}',
+                        $mutexName,
+                        $installEntered,
+                        $releaseInstall)) {
+                        [void]$installPowerShell.AddArgument($argument)
+                    }
+                    $installAsync = $installPowerShell.BeginInvoke()
+                    if (-not $installEntered.Wait([TimeSpan]::FromSeconds(15))) { throw 'install did not enter its locked publish phase' }
+
+                    $removePowerShell = [System.Management.Automation.PowerShell]::Create()
+                    [void]$removePowerShell.AddScript({
+                        param($modulePath,$repository,$local,$mutexName,$waitStarted,$entered)
+                        $ErrorActionPreference = 'Stop'
+                        Import-Module $modulePath -Force
+                        $ops = @{
+                            GetTask = { param($name) $entered.Set(); [pscustomobject]@{ Exists=$false } }.GetNewClosure()
+                            UnregisterTask = { param($name) }
+                            RemoveOwnedRoot = { param($path) }
+                        }
+                        Invoke-AutoResumeRemoval -RepositoryRoot $repository -LocalApplicationData $local -TaskName 'Auto Resume' -Operations $ops -LifecycleMutexName $mutexName -LifecycleLockWaitStarted ({ $waitStarted.Set() }.GetNewClosure()) | Out-Null
+                    }.ToString())
+                    foreach ($argument in @(
+                        '{{EscapePowerShellSingleQuoted(modulePath)}}',
+                        '{{EscapePowerShellSingleQuoted(fakeRepository)}}',
+                        '{{EscapePowerShellSingleQuoted(localAppData)}}',
+                        $mutexName,
+                        $removeWaitStarted,
+                        $removeEntered)) {
+                        [void]$removePowerShell.AddArgument($argument)
+                    }
+                    $removeAsync = $removePowerShell.BeginInvoke()
+                    if (-not $removeWaitStarted.Wait([TimeSpan]::FromSeconds(15))) { throw 'removal did not reach the lifecycle lock wait' }
+
+                    $blockedDuringInstall = -not $removeEntered.IsSet
+                    $releaseInstall.Set()
+                    if (-not $installAsync.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds(15))) { throw 'install invocation did not complete' }
+                    [void]$installPowerShell.EndInvoke($installAsync)
+                    $installEnded = $true
+                    if ($installPowerShell.HadErrors) { throw ($installPowerShell.Streams.Error -join [Environment]::NewLine) }
+                    if (-not $removeAsync.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds(15))) { throw 'remove invocation did not complete' }
+                    [void]$removePowerShell.EndInvoke($removeAsync)
+                    $removeEnded = $true
+                    if ($removePowerShell.HadErrors) { throw ($removePowerShell.Streams.Error -join [Environment]::NewLine) }
+
+                    [pscustomobject]@{
+                        mutexName = $mutexName
+                        localNameRejected = $localNameRejected
+                        blockedDuringInstall = $blockedDuringInstall
+                        removalEnteredAfterRelease = $removeEntered.IsSet
+                    } | ConvertTo-Json -Compress
+                }
+                finally {
+                    $releaseInstall.Set()
+                    if ($null -ne $installPowerShell) {
+                        if ($null -ne $installAsync -and -not $installEnded) {
+                            if (-not $installAsync.IsCompleted) { $installPowerShell.Stop() }
+                            try { [void]$installPowerShell.EndInvoke($installAsync) } catch { }
+                        }
+                        $installPowerShell.Dispose()
+                    }
+                    if ($null -ne $removePowerShell) {
+                        if ($null -ne $removeAsync -and -not $removeEnded) {
+                            if (-not $removeAsync.IsCompleted) { $removePowerShell.Stop() }
+                            try { [void]$removePowerShell.EndInvoke($removeAsync) } catch { }
+                        }
+                        $removePowerShell.Dispose()
+                    }
+                    $installEntered.Dispose()
+                    $releaseInstall.Dispose()
+                    $removeWaitStarted.Dispose()
+                    $removeEntered.Dispose()
+                }
+                """);
+
+            Assert.True(result.ExitCode == 0, $"PowerShell exited {result.ExitCode}: {result.Stderr}");
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            using var document = JsonDocument.Parse(result.Stdout);
+            Assert.StartsWith("Global\\Mcg.AgentOrchestrator.AutoResume.S_", document.RootElement.GetProperty("mutexName").GetString(), StringComparison.Ordinal);
+            Assert.True(document.RootElement.GetProperty("localNameRejected").GetBoolean());
+            Assert.True(document.RootElement.GetProperty("blockedDuringInstall").GetBoolean());
+            Assert.True(document.RootElement.GetProperty("removalEnteredAfterRelease").GetBoolean());
+        }
+        finally
+        {
+            TryDeleteDirectory(sandbox);
+        }
+    }
+
+    [Xunit.Fact]
+    public void AutoResumeInstallerDerivesOwnedPathsQuotesArgumentsAndRejectsUnsafeRoots()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var modulePath = Path.Combine(repoRoot, "scripts", "OrchestratorAutoResume.Install.psm1");
+        var sandbox = Path.Combine(Path.GetTempPath(), $"auto-resume-layout-{Guid.NewGuid():N}");
+        var localAppData = Path.Combine(sandbox, "Local App Data");
+        var unrelatedRepository = Path.Combine(sandbox, "repository");
+        Directory.CreateDirectory(localAppData);
+        Directory.CreateDirectory(unrelatedRepository);
+        try
+        {
+            var result = RunPowerShellCommand(repoRoot, $$"""
+                $ErrorActionPreference = 'Stop'
+                Import-Module '{{EscapePowerShellSingleQuoted(modulePath)}}' -Force
+                $layout = Get-AutoResumeLayout -LocalApplicationData '{{EscapePowerShellSingleQuoted(localAppData)}}'
+                $owned = Assert-AutoResumeOwnedRoot -LocalApplicationData '{{EscapePowerShellSingleQuoted(localAppData)}}' -OwnedRoot $layout.Root -RepositoryRoot '{{EscapePowerShellSingleQuoted(unrelatedRepository)}}'
+                $rejections = 0
+                foreach ($candidate in @(
+                    '{{EscapePowerShellSingleQuoted(localAppData)}}',
+                    (Join-Path $layout.Root '..\..'),
+                    '{{EscapePowerShellSingleQuoted(unrelatedRepository)}}',
+                    '{{EscapePowerShellSingleQuoted(Path.GetPathRoot(localAppData)! )}}',
+                    '{{EscapePowerShellSingleQuoted(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))}}'
+                )) {
+                    try {
+                        Assert-AutoResumeOwnedRoot -LocalApplicationData '{{EscapePowerShellSingleQuoted(localAppData)}}' -OwnedRoot $candidate -RepositoryRoot '{{EscapePowerShellSingleQuoted(unrelatedRepository)}}' | Out-Null
+                    } catch { $rejections++ }
+                }
+                try {
+                    Assert-AutoResumeOwnedRoot -LocalApplicationData '{{EscapePowerShellSingleQuoted(localAppData)}}' -OwnedRoot $layout.Root -RepositoryRoot '{{EscapePowerShellSingleQuoted(unrelatedRepository)}}' -ReparsePointProbe { param($path) $path -eq $layout.Root } | Out-Null
+                } catch { $rejections++ }
+                try {
+                    Assert-AutoResumeOwnedRoot -LocalApplicationData '{{EscapePowerShellSingleQuoted(localAppData)}}' -OwnedRoot $layout.Root -RepositoryRoot '{{EscapePowerShellSingleQuoted(sandbox)}}' | Out-Null
+                } catch { $rejections++ }
+                try {
+                    $driveLayout = Get-AutoResumeLayout -LocalApplicationData '{{EscapePowerShellSingleQuoted(Path.GetPathRoot(localAppData)! )}}'
+                    Assert-AutoResumeOwnedRoot -LocalApplicationData $driveLayout.KnownFolder -OwnedRoot $driveLayout.Root -RepositoryRoot '{{EscapePowerShellSingleQuoted(unrelatedRepository)}}' | Out-Null
+                } catch { $rejections++ }
+                $payloadDirectory = Join-Path '{{EscapePowerShellSingleQuoted(sandbox)}}' 'payload'
+                New-Item -ItemType Directory -Path $payloadDirectory -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path $payloadDirectory 'a.dll') -Value 'a'
+                Set-Content -LiteralPath (Join-Path $payloadDirectory 'b.dll') -Value 'b'
+                $identity1 = (Get-LauncherPayloadIdentity $payloadDirectory).Identity
+                $identity2 = (Get-LauncherPayloadIdentity $payloadDirectory).Identity
+                Set-Content -LiteralPath (Join-Path $payloadDirectory 'b.dll') -Value 'changed'
+                $identity3 = (Get-LauncherPayloadIdentity $payloadDirectory).Identity
+                [pscustomobject]@{
+                    root = $layout.Root
+                    owned = $owned
+                    plain = ConvertTo-WindowsCommandLineArgument 'plain'
+                    spaced = ConvertTo-WindowsCommandLineArgument 'C:\Program Files\pwsh\'
+                    quoted = ConvertTo-WindowsCommandLineArgument 'say "hi"'
+                    arguments = Get-AutoResumeTaskArguments -PowerShellPath 'C:\Program Files\pwsh.exe' -ResumeScriptPath 'C:\repo path\resume.ps1' -TaskName 'task "quoted"'
+                    rejections = $rejections
+                    identityStable = $identity1 -ceq $identity2
+                    identityChanges = $identity1 -cne $identity3
+                } | ConvertTo-Json -Compress
+                """);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            using var document = JsonDocument.Parse(result.Stdout);
+            var root = document.RootElement;
+            var expectedRoot = Path.Combine(localAppData, "Mcg.AgentOrchestrator", "AutoResume");
+            Assert.Equal(expectedRoot, root.GetProperty("root").GetString());
+            Assert.Equal(expectedRoot, root.GetProperty("owned").GetString());
+            Assert.Equal("plain", root.GetProperty("plain").GetString());
+            Assert.Equal("\"C:\\Program Files\\pwsh\\\\\"", root.GetProperty("spaced").GetString());
+            Assert.Equal("\"say \\\"hi\\\"\"", root.GetProperty("quoted").GetString());
+            Assert.Equal(8, root.GetProperty("rejections").GetInt32());
+            Assert.True(root.GetProperty("identityStable").GetBoolean());
+            Assert.True(root.GetProperty("identityChanges").GetBoolean());
+            Assert.Contains("\"C:\\Program Files\\pwsh.exe\"", root.GetProperty("arguments").GetString());
+            Assert.Contains("\"task \\\"quoted\\\"\"", root.GetProperty("arguments").GetString());
+        }
+        finally
+        {
+            TryDeleteDirectory(sandbox);
+        }
+    }
+
+    [Xunit.Fact]
+    public void AutoResumeInstallerIntegrityEvidenceFailsClosed()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var modulePath = Path.Combine(repoRoot, "scripts", "OrchestratorAutoResume.Install.psm1");
+        var result = RunPowerShellCommand(repoRoot, $$"""
+            $ErrorActionPreference = 'Stop'
+            Import-Module '{{EscapePowerShellSingleQuoted(modulePath)}}' -Force
+            $accepted = 0
+            foreach ($rid in @(8192, 12288, 16384)) {
+                Assert-MediumMandatoryIntegrity -Path 'candidate.exe' -Evidence ([pscustomobject]@{ Exists=$true; ParseSucceeded=$true; Rids=@($rid); Diagnostic='test' })
+                $accepted++
+            }
+            $rejected = 0
+            $bad = @(
+                [pscustomobject]@{ Exists=$false; ParseSucceeded=$false; Rids=@(); Diagnostic='missing' },
+                [pscustomobject]@{ Exists=$true; ParseSucceeded=$false; Rids=@(); Diagnostic='query failed' },
+                [pscustomobject]@{ Exists=$true; ParseSucceeded=$true; Rids=@(); Diagnostic='missing label' },
+                [pscustomobject]@{ Exists=$true; ParseSucceeded=$true; Rids=@(4096); Diagnostic='low' },
+                [pscustomobject]@{ Exists=$true; ParseSucceeded=$true; Rids=@('not-a-rid'); Diagnostic='bad' },
+                [pscustomobject]@{ Exists=$true; ParseSucceeded=$true; Rids=@(8192,12288); Diagnostic='conflict' }
+            )
+            foreach ($evidence in $bad) {
+                try { Assert-MediumMandatoryIntegrity -Path 'candidate.exe' -Evidence $evidence }
+                catch { $rejected++ }
+            }
+            [pscustomobject]@{ accepted=$accepted; rejected=$rejected } | ConvertTo-Json -Compress
+            """);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        using var document = JsonDocument.Parse(result.Stdout);
+        Assert.Equal(3, document.RootElement.GetProperty("accepted").GetInt32());
+        Assert.Equal(6, document.RootElement.GetProperty("rejected").GetInt32());
+    }
+
+    [Xunit.Fact]
+    public void AutoResumeInstallerValidatesBeforeTaskMutationAndRestoresLastKnownGood()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var modulePath = Path.Combine(repoRoot, "scripts", "OrchestratorAutoResume.Install.psm1");
+        var sandbox = Path.Combine(Path.GetTempPath(), $"auto-resume-transaction-{Guid.NewGuid():N}");
+        var fakeRepository = Path.Combine(sandbox, "repository");
+        Directory.CreateDirectory(sandbox);
+        Directory.CreateDirectory(fakeRepository);
+        try
+        {
+            var result = RunPowerShellCommand(repoRoot, $$"""
+                $ErrorActionPreference = 'Stop'
+                Import-Module '{{EscapePowerShellSingleQuoted(modulePath)}}' -Force
+
+                function Invoke-Scenario([string]$name, [string]$failure) {
+                    $local = Join-Path '{{EscapePowerShellSingleQuoted(sandbox)}}' $name
+                    New-Item -ItemType Directory -Path $local -Force | Out-Null
+                    $log = [System.Collections.Generic.List[string]]::new()
+                    $prior = if ($failure -eq 'verify-absent') {
+                        [pscustomobject]@{ Exists=$false; Xml=$null; Execute=$null; Arguments=$null }
+                    } else {
+                        [pscustomobject]@{ Exists=$true; Xml='<Task />'; Execute='C:\known-good.exe'; Arguments='old args' }
+                    }
+                    $state = [pscustomobject]@{ Task=$prior }
+                    $publish = { param($project,$destination)
+                        $log.Add('publish')
+                        if ($failure -eq 'publish') { throw 'publish failed' }
+                        foreach ($file in @('Mcg.HiddenLauncher.exe','Mcg.HiddenLauncher.dll','Mcg.HiddenLauncher.deps.json','Mcg.HiddenLauncher.runtimeconfig.json')) {
+                            Set-Content -LiteralPath (Join-Path $destination $file) -Value $file
+                        }
+                    }.GetNewClosure()
+                    $query = { param($path)
+                        $log.Add('query-integrity')
+                        if ($failure -eq 'integrity') { return [pscustomobject]@{ Exists=$true; ParseSucceeded=$true; Rids=@(4096); Diagnostic='low' } }
+                        [pscustomobject]@{ Exists=$true; ParseSucceeded=$true; Rids=@(8192); Diagnostic='medium' }
+                    }.GetNewClosure()
+                    $getTask = { param($taskName) $log.Add('get-task'); $state.Task }.GetNewClosure()
+                    $register = { param($taskName,$spec)
+                        $log.Add('register')
+                        $state.Task = if ($failure -in @('verify','verify-absent','register')) {
+                            [pscustomobject]@{ Exists=$true; Xml='<Task />'; Execute='C:\wrong.exe'; Arguments=$spec.Arguments }
+                        } else {
+                            [pscustomobject]@{ Exists=$true; Xml='<Task />'; Execute=$spec.Execute; Arguments=$spec.Arguments }
+                        }
+                        if ($failure -eq 'register') { throw 'registration failed after mutation' }
+                    }.GetNewClosure()
+                    $restore = { param($taskName,$snapshot) $log.Add('restore'); $state.Task = $snapshot }.GetNewClosure()
+                    $operations = @{
+                        Publish=$publish
+                        SetMediumIntegrity={ param($path) $log.Add('set-integrity') }.GetNewClosure()
+                        QueryIntegrity=$query
+                        Promote={ param($source,$destination) $log.Add('promote'); if ($failure -eq 'promote') { throw 'promotion failed' }; [System.IO.Directory]::Move($source,$destination) }.GetNewClosure()
+                        GetTask=$getTask
+                        RegisterTask=$register
+                        RestoreTask=$restore
+                    }
+                    $failed = $false
+                    try {
+                        $install = Invoke-AutoResumeInstall -RepositoryRoot '{{EscapePowerShellSingleQuoted(fakeRepository)}}' -LocalApplicationData $local -LauncherProject 'launcher.csproj' -ResumeScriptPath 'C:\repo path\Resume-OrchestratorLoop.ps1' -PowerShellPath 'C:\Program Files\PowerShell\pwsh.exe' -TaskName 'Auto Resume' -Operations $operations
+                        if ($failure -eq 'reinstall') {
+                            $log.Add('second-install')
+                            $install = Invoke-AutoResumeInstall -RepositoryRoot '{{EscapePowerShellSingleQuoted(fakeRepository)}}' -LocalApplicationData $local -LauncherProject 'launcher.csproj' -ResumeScriptPath 'C:\repo path\Resume-OrchestratorLoop.ps1' -PowerShellPath 'C:\Program Files\PowerShell\pwsh.exe' -TaskName 'Auto Resume' -Operations $operations
+                        }
+                    } catch { $failed = $true }
+                    [pscustomobject]@{
+                        name=$name
+                        failure=$failure
+                        failed=$failed
+                        log=@($log)
+                        exists=[bool]$state.Task.Exists
+                        execute=$state.Task.Execute
+                        launcher=if ($null -ne $install) { $install.LauncherPath } else { $null }
+                    }
+                }
+
+                @(
+                    Invoke-Scenario 'success' ''
+                    Invoke-Scenario 'reinstall' 'reinstall'
+                    Invoke-Scenario 'publish-failure' 'publish'
+                    Invoke-Scenario 'integrity-failure' 'integrity'
+                    Invoke-Scenario 'promotion-failure' 'promote'
+                    Invoke-Scenario 'registration-failure' 'register'
+                    Invoke-Scenario 'verification-failure' 'verify'
+                    Invoke-Scenario 'new-task-verification-failure' 'verify-absent'
+                ) | ConvertTo-Json -Compress -Depth 5
+                """);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            using var document = JsonDocument.Parse(result.Stdout);
+            var scenarios = document.RootElement.EnumerateArray().ToDictionary(item => item.GetProperty("name").GetString()!);
+            var success = scenarios["success"];
+            Assert.False(success.GetProperty("failed").GetBoolean());
+            Assert.Contains("releases", success.GetProperty("launcher").GetString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(success.GetProperty("launcher").GetString(), success.GetProperty("execute").GetString());
+            Assert.Equal(
+                new[] { "get-task", "publish", "set-integrity", "query-integrity", "promote", "query-integrity", "register", "get-task" },
+                success.GetProperty("log").EnumerateArray().Select(value => value.GetString()).ToArray());
+
+            var reinstallLog = scenarios["reinstall"].GetProperty("log").EnumerateArray().Select(value => value.GetString()).ToArray();
+            Assert.Equal(1, reinstallLog.Count(value => value == "promote"));
+            Assert.Equal(2, reinstallLog.Count(value => value == "register"));
+            Assert.True(Array.IndexOf(reinstallLog, "second-install") < Array.LastIndexOf(reinstallLog, "query-integrity"));
+            Assert.True(Array.LastIndexOf(reinstallLog, "query-integrity") < Array.LastIndexOf(reinstallLog, "register"));
+
+            foreach (var name in new[] { "publish-failure", "integrity-failure", "promotion-failure" })
+            {
+                var scenario = scenarios[name];
+                Assert.True(scenario.GetProperty("failed").GetBoolean());
+                Assert.Equal("C:\\known-good.exe", scenario.GetProperty("execute").GetString());
+                Assert.DoesNotContain("register", scenario.GetProperty("log").EnumerateArray().Select(value => value.GetString()));
+            }
+
+            var verificationFailure = scenarios["verification-failure"];
+            Assert.True(verificationFailure.GetProperty("failed").GetBoolean());
+            Assert.Equal("C:\\known-good.exe", verificationFailure.GetProperty("execute").GetString());
+            Assert.Contains("restore", verificationFailure.GetProperty("log").EnumerateArray().Select(value => value.GetString()));
+            var registrationFailure = scenarios["registration-failure"];
+            Assert.True(registrationFailure.GetProperty("failed").GetBoolean());
+            Assert.Equal("C:\\known-good.exe", registrationFailure.GetProperty("execute").GetString());
+            Assert.Contains("restore", registrationFailure.GetProperty("log").EnumerateArray().Select(value => value.GetString()));
+            var newTaskFailure = scenarios["new-task-verification-failure"];
+            Assert.True(newTaskFailure.GetProperty("failed").GetBoolean());
+            Assert.False(newTaskFailure.GetProperty("exists").GetBoolean());
+            Assert.Contains("restore", newTaskFailure.GetProperty("log").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            TryDeleteDirectory(sandbox);
+        }
+    }
+
+    [Xunit.Fact]
+    public void AutoResumeRemoveUnregistersBeforeScopedCleanupAndPreservesFilesOnFailure()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var modulePath = Path.Combine(repoRoot, "scripts", "OrchestratorAutoResume.Install.psm1");
+        var sandbox = Path.Combine(Path.GetTempPath(), $"auto-resume-remove-{Guid.NewGuid():N}");
+        var fakeRepository = Path.Combine(sandbox, "repository");
+        Directory.CreateDirectory(sandbox);
+        Directory.CreateDirectory(fakeRepository);
+        try
+        {
+            var result = RunPowerShellCommand(repoRoot, $$"""
+                $ErrorActionPreference = 'Stop'
+                Import-Module '{{EscapePowerShellSingleQuoted(modulePath)}}' -Force
+                function Invoke-RemoveScenario([string]$name, [bool]$present, [bool]$unregisterFails) {
+                    $local = Join-Path '{{EscapePowerShellSingleQuoted(sandbox)}}' $name
+                    $layout = Get-AutoResumeLayout $local
+                    New-Item -ItemType Directory -Path $layout.Root -Force | Out-Null
+                    Set-Content -LiteralPath (Join-Path $layout.Root 'owned.txt') -Value 'owned'
+                    $log = [System.Collections.Generic.List[string]]::new()
+                    $state = [pscustomobject]@{ Present=$present }
+                    $ops = @{
+                        GetTask={ param($task) $log.Add('get-task'); [pscustomobject]@{ Exists=$state.Present } }.GetNewClosure()
+                        UnregisterTask={ param($task) $log.Add('unregister'); if ($unregisterFails) { throw 'unregister failed' }; $state.Present=$false }.GetNewClosure()
+                        RemoveOwnedRoot={ param($path) $log.Add('remove-root'); Remove-Item -LiteralPath $path -Recurse -Force }.GetNewClosure()
+                    }
+                    $failed=$false
+                    try { Invoke-AutoResumeRemoval -RepositoryRoot '{{EscapePowerShellSingleQuoted(fakeRepository)}}' -LocalApplicationData $local -TaskName 'Auto Resume' -Operations $ops | Out-Null }
+                    catch { $failed=$true }
+                    [pscustomobject]@{ name=$name; failed=$failed; rootExists=(Test-Path -LiteralPath $layout.Root); log=@($log) }
+                }
+                @(
+                    Invoke-RemoveScenario 'missing-task' $false $false
+                    Invoke-RemoveScenario 'present-task' $true $false
+                    Invoke-RemoveScenario 'unregister-failure' $true $true
+                ) | ConvertTo-Json -Compress -Depth 4
+                """);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            using var document = JsonDocument.Parse(result.Stdout);
+            var scenarios = document.RootElement.EnumerateArray().ToDictionary(item => item.GetProperty("name").GetString()!);
+            Assert.False(scenarios["missing-task"].GetProperty("rootExists").GetBoolean());
+            Assert.Equal(new[] { "get-task", "remove-root" }, scenarios["missing-task"].GetProperty("log").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.Equal(new[] { "get-task", "unregister", "get-task", "remove-root" }, scenarios["present-task"].GetProperty("log").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.True(scenarios["unregister-failure"].GetProperty("failed").GetBoolean());
+            Assert.True(scenarios["unregister-failure"].GetProperty("rootExists").GetBoolean());
+            Assert.DoesNotContain("remove-root", scenarios["unregister-failure"].GetProperty("log").EnumerateArray().Select(value => value.GetString()));
+        }
+        finally
+        {
+            TryDeleteDirectory(sandbox);
+        }
     }
 
     [Xunit.Fact(DisplayName = "InvokeOrchestratorCommand_defaults_to_launcher_refresh_path")]
