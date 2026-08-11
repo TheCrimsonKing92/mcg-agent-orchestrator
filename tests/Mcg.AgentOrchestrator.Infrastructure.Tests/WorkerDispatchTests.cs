@@ -1445,9 +1445,10 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             DateTimeOffset.UtcNow);
         var plannerPrompt = File.ReadAllText(preparedPlanner.PromptPath!);
         var contextDirectory = Path.Combine(root, ".orchestrator-context", goal.Id.Value);
+        var plannerDigest = File.ReadAllText(Path.Combine(contextDirectory, "digest.md"));
         Assert.Contains("## Durable Research Notes", plannerPrompt, StringComparison.Ordinal);
         Assert.Contains("CURRENT-SOURCE-RESEARCH-9182", plannerPrompt, StringComparison.Ordinal);
-        Assert.Contains("selected-skills.md: read the selected planning skill", plannerPrompt, StringComparison.Ordinal);
+        Assert.Contains("selected-skills.md: read the selected planning skill", plannerDigest, StringComparison.Ordinal);
         Assert.DoesNotContain("Prefer the dashboard source survey", plannerPrompt, StringComparison.Ordinal);
         Assert.False(File.Exists(Path.Combine(contextDirectory, "source-survey.md")));
         Assert.DoesNotContain(

@@ -228,9 +228,13 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         var kernel = new AgentOrchestratorKernel();
         var task = new TaskSpec(TaskId.New(), "Map bounded inputs.", role);
         var goal = kernel.CreateGoal("Bounded inquiry", [task]);
-        var agent = role == AgentRole.Planner
-            ? SubscriptionPlannerAgent("planner", "Planner")
-            : TestSubscriptionAgent("researcher", "Researcher", AgentRole.Researcher);
+        var agent = new AgentDefinition(
+            new AgentId(role.ToString().ToLowerInvariant()),
+            role.ToString(),
+            role,
+            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
         kernel.ActivateGoal(goal.Id, [agent]);
 
         var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
