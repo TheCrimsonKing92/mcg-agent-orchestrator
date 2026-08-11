@@ -11,6 +11,8 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutboxRepository
 {
+    public bool SupportsGoalCheckpointContainment => true;
+
     public const string CurrentSchemaVersion = "1";
     private const int GoalMetadataTitleMaxChars = 240;
     private const int MaxOptimisticConcurrencyRetries = 6;
@@ -145,10 +147,18 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         return new RestoreWriteOperationTag(previous);
     }
 
-    private static string ResolveOperationTag(string fallback) =>
-        string.IsNullOrWhiteSpace(CurrentWriteOperationTag.Value)
-            ? fallback
-            : CurrentWriteOperationTag.Value!;
+    private static string ResolveOperationTag(string fallback)
+    {
+        var ambient = CurrentWriteOperationTag.Value;
+        if (string.IsNullOrWhiteSpace(ambient) ||
+            fallback.Equals(ambient, StringComparison.Ordinal) ||
+            fallback.StartsWith(ambient + "/", StringComparison.Ordinal))
+        {
+            return fallback;
+        }
+
+        return $"{ambient}/{fallback}";
+    }
 
     private static string ResolveOperationTag(string fallback, string operationName)
     {
@@ -209,10 +219,13 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
         CancellationToken ct,
         TimeSpan? retryBudget = null,
         int maxBusyRetries = int.MaxValue,
-        Func<int, TimeSpan, CancellationToken, Task>? retryDelay = null)
+        Func<int, TimeSpan, CancellationToken, Task>? retryDelay = null,
+        Func<TimeSpan>? elapsed = null,
+        Action<int, TimeSpan, SqliteException>? retryObserver = null)
     {
         var budget = retryBudget ?? TimeSpan.FromMilliseconds(StateDbConnectionFactory.DefaultBusyTimeoutMilliseconds);
         var stopwatch = Stopwatch.StartNew();
+        TimeSpan Elapsed() => elapsed?.Invoke() ?? stopwatch.Elapsed;
         var delayMs = 50;
         for (var attempt = 1; ; attempt++)
         {
@@ -220,12 +233,18 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
             {
                 return await operation();
             }
-            catch (SqliteException ex) when (
-                attempt < maxBusyRetries &&
-                IsTransientLock(ex) &&
-                stopwatch.Elapsed < budget)
+            catch (SqliteException ex) when (IsTransientLock(ex))
             {
-                var remaining = budget - stopwatch.Elapsed;
+                var observedElapsed = Elapsed();
+                if (attempt >= maxBusyRetries || observedElapsed >= budget)
+                {
+                    ex.Data["Mcg.AttemptCount"] = attempt;
+                    ex.Data["Mcg.ElapsedMilliseconds"] = observedElapsed.TotalMilliseconds;
+                    throw;
+                }
+
+                retryObserver?.Invoke(attempt, observedElapsed, ex);
+                var remaining = budget - observedElapsed;
                 var delay = TimeSpan.FromMilliseconds(Math.Min(delayMs, Math.Max(0, remaining.TotalMilliseconds)));
                 if (delay <= TimeSpan.Zero)
                     throw;
@@ -243,15 +262,21 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
     // side-effecting transaction delegate is ever re-executed.
     private async Task<WriteConnection> BeginWriteAsync(string operation, CancellationToken cancellationToken)
     {
-        var acquisitionStopwatch = Stopwatch.StartNew();
+        var startedAt = _writeTelemetry.Options.MonotonicMilliseconds();
+        TimeSpan Elapsed() => TimeSpan.FromMilliseconds(Math.Max(
+            0,
+            _writeTelemetry.Options.MonotonicMilliseconds() - startedAt));
+        var attemptCount = 0;
+        SqliteException? lastTransient = null;
         try
         {
             var retryBudget = _writeTelemetry.Options.BusyRetryBudget;
             var conn = await WithBusyRetryAsync(async () =>
             {
+                attemptCount++;
                 var remainingMilliseconds = Math.Max(
                     1,
-                    (int)Math.Ceiling((retryBudget - acquisitionStopwatch.Elapsed).TotalMilliseconds));
+                    (int)Math.Ceiling((retryBudget - Elapsed()).TotalMilliseconds));
                 var conn = OpenConnection(remainingMilliseconds);
                 try
                 {
@@ -267,16 +292,29 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
                     await conn.DisposeAsync();
                     throw;
                 }
-            }, cancellationToken, retryBudget, _writeTelemetry.Options.MaxBusyRetries);
-            acquisitionStopwatch.Stop();
+            }, cancellationToken, retryBudget, _writeTelemetry.Options.MaxBusyRetries,
+                _writeTelemetry.Options.RetryDelay,
+                Elapsed,
+                (attempt, elapsed, exception) =>
+                {
+                    lastTransient = exception;
+                    _writeTelemetry.EmitBusyRetry(operation, elapsed, exception, attempt);
+                });
+            var acquisitionWait = Elapsed();
+            if (lastTransient is not null)
+                _writeTelemetry.EmitBusyRecovered(operation, acquisitionWait, lastTransient, attemptCount);
             return new WriteConnection(
                 conn,
-                _writeTelemetry.StartScope(operation, acquisitionStopwatch.Elapsed));
+                _writeTelemetry.StartScope(operation, acquisitionWait));
         }
         catch (SqliteException ex) when (IsTransientLock(ex))
         {
-            acquisitionStopwatch.Stop();
-            _writeTelemetry.EmitBusyFailure(operation, acquisitionStopwatch.Elapsed, ex);
+            ex.Data["Mcg.StateStore"] = "state";
+            ex.Data["Mcg.DatabasePath"] = Path.GetFullPath(_dbPath);
+            ex.Data["Mcg.Operation"] = operation;
+            ex.Data["Mcg.AttemptCount"] = Math.Max(1, attemptCount);
+            ex.Data["Mcg.ElapsedMilliseconds"] = Elapsed().TotalMilliseconds;
+            _writeTelemetry.EmitBusyFailure(operation, Elapsed(), ex, Math.Max(1, attemptCount));
             throw;
         }
     }
@@ -694,6 +732,64 @@ public sealed class SqliteOrchestratorStateRepository : IOrchestratorStateOutbox
 
         return results;
     }
+
+    public async Task<IReadOnlyList<GoalSnapshotCheckpointResult>> CheckpointGoalSnapshotsAsync(
+        IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(goals);
+        var results = new List<GoalSnapshotCheckpointResult>(goals.Count);
+        foreach (var request in goals)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var operation = ResolveOperationTag(
+                $"{nameof(TransactGoalStateAsync)}({ShortGoalId(request.Current.Id)})");
+            try
+            {
+                var saveResult = (await SaveGoalSnapshotsWithMergeAsync([request], cancellationToken)).Single();
+                results.Add(new GoalSnapshotCheckpointResult(
+                    request.Current.Id,
+                    GoalSnapshotCheckpointDisposition.Durable,
+                    saveResult,
+                    "state",
+                    Path.GetFullPath(_dbPath),
+                    operation));
+            }
+            catch (SqliteException ex) when (IsTransientLock(ex))
+            {
+                results.Add(new GoalSnapshotCheckpointResult(
+                    request.Current.Id,
+                    GoalSnapshotCheckpointDisposition.Held,
+                    SaveResult: null,
+                    Store: ReadExceptionData(ex, "Mcg.StateStore") ?? "state",
+                    DatabasePath: ReadExceptionData(ex, "Mcg.DatabasePath") ?? Path.GetFullPath(_dbPath),
+                    Operation: ReadExceptionData(ex, "Mcg.Operation") ?? operation,
+                    SqliteErrorCode: ex.SqliteErrorCode,
+                    SqliteExtendedErrorCode: ex.SqliteExtendedErrorCode,
+                    AttemptCount: ReadExceptionInt(ex, "Mcg.AttemptCount", _writeTelemetry.Options.MaxBusyRetries),
+                    ElapsedMilliseconds: ReadExceptionDouble(ex, "Mcg.ElapsedMilliseconds")));
+            }
+        }
+
+        return results;
+    }
+
+    private static string? ReadExceptionData(Exception exception, string key) =>
+        exception.Data.Contains(key) ? exception.Data[key]?.ToString() : null;
+
+    private static int ReadExceptionInt(Exception exception, string key, int fallback) =>
+        exception.Data.Contains(key) && int.TryParse(exception.Data[key]?.ToString(), out var value)
+            ? value
+            : fallback;
+
+    private static double ReadExceptionDouble(Exception exception, string key) =>
+        exception.Data.Contains(key) && double.TryParse(
+            exception.Data[key]?.ToString(),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : 0;
 
     private static bool HasHumanWaitState(GoalSnapshot goal) =>
         goal.Status == GoalStatus.WaitingForHuman ||

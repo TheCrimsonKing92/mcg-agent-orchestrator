@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -45,7 +46,7 @@ internal sealed class ConductorBatchLoop
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
     internal const bool DefaultSelfRelaunchEnabled = false;
 
-    private readonly Func<AgentOrchestratorKernel, TerminalGoalSweepResult?> _sweep;
+    private readonly Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
@@ -94,13 +95,19 @@ internal sealed class ConductorBatchLoop
         Func<string, GoalStatus?>? evictedGoalStatusLookup = null,
         ConductorLifecycleRecorder? lifecycleRecorder = null,
         Func<double>? writeJitter = null,
-        TimeSpan? blockedRecheckHeartbeatInterval = null)
+        TimeSpan? blockedRecheckHeartbeatInterval = null,
+        Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?>? measuredSweepWithCheckpointHolds = null)
     {
-        _sweep = measuredSweep ?? (kernel =>
+        _sweep = measuredSweepWithCheckpointHolds is not null
+            ? measuredSweepWithCheckpointHolds
+            : measuredSweep is not null
+                ? (kernel, _) => measuredSweep(kernel)
+                : (kernel, _) => InvokeLegacySweep(kernel);
+        TerminalGoalSweepResult? InvokeLegacySweep(AgentOrchestratorKernel kernel)
         {
             sweep?.Invoke(kernel);
             return null;
-        });
+        }
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
         _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
@@ -150,7 +157,9 @@ internal sealed class ConductorBatchLoop
         Action<TimeSpan>? busyWriteDelay = null,
         string? journalMode = null,
         string policySource = "preset",
-        Func<ConductorPolicyResolution>? reloadPolicy = null)
+        Func<ConductorPolicyResolution>? reloadPolicy = null,
+        Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick = null,
+        Func<bool>? hasTransientLoadHold = null)
     {
         _consecutiveJanitorialFailures.Clear();
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
@@ -166,6 +175,7 @@ internal sealed class ConductorBatchLoop
         var blockedRecheckCycles = 0;
         var totalBlockedRechecks = 0;
         var dispatchRecordWriteSkips = new Dictionary<string, int>(StringComparer.Ordinal);
+        var checkpointHeldGoals = new Dictionary<string, GoalSnapshotCheckpointResult>(StringComparer.Ordinal);
         var blockedRecheckRecurrences = new Dictionary<string, BlockedRecheckRecurrence>(StringComparer.Ordinal);
         DateTimeOffset? lastBlockedRecheckHeartbeatAt = null;
         string? stopReason = null;
@@ -340,7 +350,8 @@ internal sealed class ConductorBatchLoop
                 Console.WriteLine($"[conduct --loop] Stop signal detected at tick {totalTicks + 1}; no new dispatches will be started.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 PersistGracefulDetachCheckpoint(
-                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop", null, busyWriteDelay);
+                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop", null, busyWriteDelay,
+                    checkpointGoalTick, checkpointHeldGoals);
                 break;
             }
 
@@ -352,7 +363,8 @@ internal sealed class ConductorBatchLoop
                 Console.WriteLine($"[conduct --loop] Max iterations ({maxIterations.Value}) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 PersistGracefulDetachCheckpoint(
-                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-iterations", null, busyWriteDelay);
+                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-iterations", null, busyWriteDelay,
+                    checkpointGoalTick, checkpointHeldGoals);
                 break;
             }
 
@@ -364,7 +376,8 @@ internal sealed class ConductorBatchLoop
                 Console.WriteLine($"[conduct --loop] Max duration ({maxDuration.Value.TotalSeconds:0}s) reached after {totalTicks} ticks.");
                 DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                 PersistGracefulDetachCheckpoint(
-                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-duration", null, busyWriteDelay);
+                    persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "max-duration", null, busyWriteDelay,
+                    checkpointGoalTick, checkpointHeldGoals);
                 maxDurationReached = true;
                 break;
             }
@@ -399,8 +412,29 @@ internal sealed class ConductorBatchLoop
             }
 
             var preTickTimingLines = new List<string>();
+            if (checkpointGoalTick is not null && checkpointHeldGoals.Count > 0)
+            {
+                var recoveryGoalIds = kernel.Goals
+                    .Where(goal => checkpointHeldGoals.ContainsKey(goal.Id.Value))
+                    .Select(goal => goal.Id)
+                    .ToArray();
+                if (recoveryGoalIds.Length > 0)
+                {
+                    ApplyCheckpointOutcomes(
+                        checkpointGoalTick(kernel, recoveryGoalIds),
+                        recoveryGoalIds,
+                        checkpointHeldGoals,
+                        nextTick,
+                        "recovery",
+                        preTickTimingLines,
+                        deferEmission: true);
+                }
+            }
             var sweepClock = Stopwatch.StartNew();
-            var sweepResult = RunJanitorialPhase("sweep", nextTick, () => _sweep(kernel));
+            var sweepResult = RunJanitorialPhase(
+                "sweep",
+                nextTick,
+                () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
             foreach (var sweepEvent in sweepResult?.Events ?? [])
             {
                 EmitProgress(sweepEvent);
@@ -441,7 +475,9 @@ internal sealed class ConductorBatchLoop
                             onlyGoalId,
                             "self-relaunch-drain",
                             null,
-                            busyWriteDelay);
+                            busyWriteDelay,
+                            checkpointGoalTick: checkpointGoalTick,
+                            checkpointHeldGoalIds: checkpointHeldGoals);
                         var drainWait = TimeSpan.FromSeconds(WatchStopPollIntervalSeconds);
                         if (sleepFunc is not null)
                         {
@@ -560,6 +596,7 @@ internal sealed class ConductorBatchLoop
 
             var scopedGoals = kernel.Goals
                 .Where(g => (onlyGoalId is null || g.Id.Value == onlyGoalId)
+                    && !checkpointHeldGoals.ContainsKey(g.Id.Value)
                     && (!excludedGoals.Contains(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value))
                     && (!setAsideGoals.ContainsKey(g.Id.Value) || actionableIntentGoalIds.Contains(g.Id.Value)))
                 .ToArray();
@@ -571,6 +608,13 @@ internal sealed class ConductorBatchLoop
                 {
                     if (!scopedGoalsById.TryGetValue(actionableGoalId, out var scopedGoal))
                     {
+                        if (checkpointHeldGoals.ContainsKey(actionableGoalId))
+                        {
+                            EmitProgress(
+                                $"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=deferred reason=checkpoint-held");
+                            continue;
+                        }
+
                         var isOutsideScope = kernel.Goals.Any(goal => goal.Id.Value == actionableGoalId);
                         var evictedStatus = isOutsideScope ? null : _evictedGoalStatusLookup(actionableGoalId);
                         var reason = isOutsideScope
@@ -667,7 +711,21 @@ internal sealed class ConductorBatchLoop
                         $"TICK_END tick={totalTicks} advanced=0 held={preWalkIntentChangedGoalIds.Count} escalated=0 done=0",
                         intentTickLines);
                     var intentStatePersisted = preWalkIntentChangedGoalIds.Count == 0;
-                    if (preWalkIntentChangedGoalIds.Count > 0 && persistGoalTick is not null)
+                    if (preWalkIntentChangedGoalIds.Count > 0 && checkpointGoalTick is not null)
+                    {
+                        var requested = preWalkIntentChangedGoalIds.ToArray();
+                        var durable = ApplyCheckpointOutcomes(
+                            checkpointGoalTick(kernel, requested),
+                            requested,
+                            checkpointHeldGoals,
+                            totalTicks,
+                            "operator-intent",
+                            intentTickLines);
+                        intentStatePersisted = durable.Count == requested.Length;
+                        if (durable.Count > 0)
+                            CompletePersistedOperatorIntents(durable, intentTickLines);
+                    }
+                    else if (preWalkIntentChangedGoalIds.Count > 0 && persistGoalTick is not null)
                     {
                         PersistGoalTickOrThrow(
                             persistGoalTick,
@@ -690,7 +748,7 @@ internal sealed class ConductorBatchLoop
                             busyWriteDelay);
                     }
 
-                    if (intentStatePersisted && preWalkIntentChangedGoalIds.Count > 0)
+                    if (checkpointGoalTick is null && intentStatePersisted && preWalkIntentChangedGoalIds.Count > 0)
                     {
                         CompletePersistedOperatorIntents(preWalkIntentChangedGoalIds, intentTickLines);
                     }
@@ -721,7 +779,9 @@ internal sealed class ConductorBatchLoop
                             onlyGoalId,
                             "stop-after-operator-intent",
                             null,
-                            busyWriteDelay);
+                            busyWriteDelay,
+                            checkpointGoalTick,
+                            checkpointHeldGoals);
                         break;
                     }
 
@@ -738,10 +798,12 @@ internal sealed class ConductorBatchLoop
                 var recheckableBlockedGoals = CountRecheckableNonTerminalGoals(
                     kernel,
                     onlyGoalId,
-                    setAsideGoals);
-                if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0)
+                    setAsideGoals,
+                    transientRecheckableGoalIds: checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal));
+                var transientLoadRecheckPending = hasTransientLoadHold?.Invoke() == true;
+                if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0 || transientLoadRecheckPending)
                 {
-                    if (recheckableBlockedGoals > 0)
+                    if (recheckableBlockedGoals > 0 || transientLoadRecheckPending)
                     {
                         blockedRecheckCycles++;
                         totalBlockedRechecks++;
@@ -782,29 +844,39 @@ internal sealed class ConductorBatchLoop
                                 onlyGoalId,
                                 exhaustedExplicitIterationBudget ? "max-iterations" : "blocked-recheck-exhausted",
                                 null,
-                                busyWriteDelay);
+                                busyWriteDelay,
+                                checkpointGoalTick,
+                                checkpointHeldGoals);
                             break;
                         }
                     }
 
                     var configuredInterval = watchInterval ?? TimeSpan.FromSeconds(DefaultWatchIntervalSeconds);
-                    var idleInterval = ConsumeWatchInterval(configuredInterval, recheckableBlockedGoals);
+                    var idleInterval = ConsumeWatchInterval(
+                        configuredInterval,
+                        Math.Max(recheckableBlockedGoals, transientLoadRecheckPending ? 1 : 0));
                     EmitProgress(
-                        recheckableBlockedGoals > 0
-                            ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals} seconds={(int)idleInterval.TotalSeconds}"
+                        recheckableBlockedGoals > 0 || transientLoadRecheckPending
+                            ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals}" +
+                              (transientLoadRecheckPending ? " loadHeld=true" : string.Empty) +
+                              $" seconds={(int)idleInterval.TotalSeconds}"
                             : $"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
                         : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
                     if (idleSleep == WatchSleepResult.WakeSignaled)
                     {
-                        RunJanitorialPhase("idle-wake-sweep", nextTick, () => _sweep(kernel));
+                        RunJanitorialPhase(
+                            "idle-wake-sweep",
+                            nextTick,
+                            () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
                         RunJanitorialPhase("idle-wake-recover-interrupted-dispatches", nextTick, () =>
                         {
                             _recoverInterruptedDispatches(kernel);
                             return true;
                         });
-                        TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "idle-wake-sweep", null, busyWriteDelay);
+                        TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "idle-wake-sweep", null, busyWriteDelay,
+                            checkpointGoalTick: checkpointGoalTick, checkpointHeldGoalIds: checkpointHeldGoals);
                     }
 
                     if (idleSleep == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
@@ -813,7 +885,8 @@ internal sealed class ConductorBatchLoop
                         StopLoop("stop-while-idle");
                         DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                         PersistGracefulDetachCheckpoint(
-                            persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-while-idle", null, busyWriteDelay);
+                            persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-while-idle", null, busyWriteDelay,
+                            checkpointGoalTick, checkpointHeldGoals);
                         break;
                     }
 
@@ -823,6 +896,10 @@ internal sealed class ConductorBatchLoop
                 var remainingNonTerminalGoals = kernel.Goals.Count(goal =>
                     (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
                     !IsTerminalGoal(goal));
+                foreach (var line in preTickTimingLines)
+                {
+                    EmitProgress(line);
+                }
                 StopLoop(
                     remainingNonTerminalGoals == 0 ? "all-terminal" : "no-recheckable-work",
                     remainingNonTerminalGoals == 0 ? null : $"nonTerminalGoals={remainingNonTerminalGoals}");
@@ -1255,7 +1332,39 @@ internal sealed class ConductorBatchLoop
             // state machine; the durable write is intentionally batched. A contention-bound escalation is
             // persisted separately so the same BUSY/LOCKED condition remains a per-goal degradation instead
             // of being promoted back into a loop-fatal end-of-tick write.
-            if (persistGoalTick is not null)
+            if (checkpointGoalTick is not null)
+            {
+                var criticalGoalIds = changedGoalIds
+                    .Except(dispatchRecordWriteBoundGoalIds)
+                    .ToArray();
+                if (criticalGoalIds.Length > 0)
+                {
+                    var durable = ApplyCheckpointOutcomes(
+                        checkpointGoalTick(kernel, criticalGoalIds),
+                        criticalGoalIds,
+                        checkpointHeldGoals,
+                        totalTicks,
+                        "goal",
+                        tickLines);
+                    if (durable.Count > 0)
+                        CompletePersistedOperatorIntents(durable, tickLines);
+                }
+
+                if (dispatchRecordWriteBoundGoalIds.Count > 0)
+                {
+                    var boundGoalIds = dispatchRecordWriteBoundGoalIds.ToArray();
+                    var durable = ApplyCheckpointOutcomes(
+                        checkpointGoalTick(kernel, boundGoalIds),
+                        boundGoalIds,
+                        checkpointHeldGoals,
+                        totalTicks,
+                        "dispatch-record-contention-escalation",
+                        tickLines);
+                    if (durable.Count > 0)
+                        CompletePersistedOperatorIntents(durable, tickLines);
+                }
+            }
+            else if (persistGoalTick is not null)
             {
                 var criticalGoalIds = changedGoalIds
                     .Except(dispatchRecordWriteBoundGoalIds)
@@ -1318,7 +1427,7 @@ internal sealed class ConductorBatchLoop
                             kernel,
                             onlyGoalId,
                             setAsideGoals,
-                            transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals) > 0)
+                            transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals.Keys).ToHashSet(StringComparer.Ordinal)) > 0)
                     {
                         onTick?.Invoke(tickSummary);
                         continue;
@@ -1328,7 +1437,8 @@ internal sealed class ConductorBatchLoop
                     Console.WriteLine($"[conduct --loop] No progress in tick {totalTicks}; all eligible goals held or escalated.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                     PersistGracefulDetachCheckpoint(
-                        persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "no-progress", tickLines, busyWriteDelay);
+                        persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "no-progress", tickLines, busyWriteDelay,
+                        checkpointGoalTick, checkpointHeldGoals);
                     onTick?.Invoke(tickSummary);
                     break;
                 }
@@ -1337,14 +1447,14 @@ internal sealed class ConductorBatchLoop
                     kernel,
                     onlyGoalId,
                     setAsideGoals,
-                    transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals);
+                        transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals.Keys).ToHashSet(StringComparer.Ordinal));
                 var fallbackInterval = ConsumeWatchInterval(watchInterval.Value, recheckableBlockedGoals);
                 var sleepSeconds = (int)fallbackInterval.TotalSeconds;
                 if (CountRecheckableNonTerminalGoals(
                         kernel,
                         onlyGoalId,
                         setAsideGoals,
-                        transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals) > 0)
+                        transientRecheckableGoalIds: dispatchRecordWriteSkippedGoals.Concat(checkpointHeldGoals.Keys).ToHashSet(StringComparer.Ordinal)) > 0)
                 {
                     totalBlockedRechecks++;
                     UpdateBlockedRecheckRecurrences(sweepResult, blockedRecheckRecurrences);
@@ -1369,13 +1479,17 @@ internal sealed class ConductorBatchLoop
 
                 if (sleepResult == WatchSleepResult.WakeSignaled)
                 {
-                    RunJanitorialPhase("wake-sweep", totalTicks, () => _sweep(kernel));
+                    RunJanitorialPhase(
+                        "wake-sweep",
+                        totalTicks,
+                        () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
                     RunJanitorialPhase("wake-recover-interrupted-dispatches", totalTicks, () =>
                     {
                         _recoverInterruptedDispatches(kernel);
                         return true;
                     });
-                    TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "wake-sweep", tickLines, busyWriteDelay);
+                    TryPersistCheckpoint(persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "wake-sweep", tickLines, busyWriteDelay,
+                        checkpointGoalTick: checkpointGoalTick, checkpointHeldGoalIds: checkpointHeldGoals);
                 }
 
                 if (sleepResult == WatchSleepResult.StopRequested || IsStopRequested(stopFilePath))
@@ -1385,7 +1499,8 @@ internal sealed class ConductorBatchLoop
                     Console.WriteLine($"[conduct --loop --watch] Stop signal detected during sleep after tick {totalTicks}; no new dispatches.");
                     DetachNonTerminalEligibleGoals(kernel, onlyGoalId, excludedGoals, reapedGoals);
                     PersistGracefulDetachCheckpoint(
-                        persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-during-sleep", tickLines, busyWriteDelay);
+                        persistTick, persistGoalTick, kernel, totalTicks, onlyGoalId, "stop-during-sleep", tickLines, busyWriteDelay,
+                        checkpointGoalTick, checkpointHeldGoals);
                     break;
                 }
 
@@ -1924,6 +2039,65 @@ internal sealed class ConductorBatchLoop
         }
     }
 
+    private static IReadOnlyCollection<GoalId> ApplyCheckpointOutcomes(
+        IReadOnlyList<GoalSnapshotCheckpointResult> outcomes,
+        IReadOnlyCollection<GoalId> requestedGoalIds,
+        Dictionary<string, GoalSnapshotCheckpointResult> heldGoals,
+        int tick,
+        string kind,
+        List<string> tickLines,
+        bool deferEmission = false)
+    {
+        var byGoal = outcomes.ToDictionary(outcome => outcome.GoalId, StringComparer.Ordinal);
+        var durable = new List<GoalId>(requestedGoalIds.Count);
+        foreach (var goalId in requestedGoalIds)
+        {
+            if (!byGoal.TryGetValue(goalId.Value, out var outcome))
+            {
+                throw new InvalidOperationException(
+                    $"Checkpoint persistence returned no disposition for goal {ShortGoalId(goalId.Value)}.");
+            }
+
+            var goal = ShortGoalId(goalId.Value);
+            if (outcome.IsDurable)
+            {
+                durable.Add(goalId);
+                if (heldGoals.Remove(goalId.Value, out var heldOutcome))
+                {
+                    var line =
+                        $"TICK_CHECKPOINT_RECOVERED tick={tick} kind={kind} goal={goal} store={Sanitize(heldOutcome.Store)} " +
+                        $"database={SanitizeReceiptToken(heldOutcome.DatabasePath)} operation={SanitizeReceiptToken(heldOutcome.Operation)} " +
+                        $"sqlite_code={heldOutcome.SqliteErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
+                        $"sqlite_extended_code={heldOutcome.SqliteExtendedErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
+                        $"attempt={outcome.AttemptCount} elapsed_ms={heldOutcome.ElapsedMilliseconds.ToString("0.###", CultureInfo.InvariantCulture)} disposition=recovered";
+                    if (deferEmission)
+                        tickLines.Add(line);
+                    else
+                        EmitProgress(line, tickLines);
+                }
+                continue;
+            }
+
+            var firstHoldReceipt = !heldGoals.ContainsKey(goalId.Value);
+            heldGoals[goalId.Value] = outcome;
+            var eventName = firstHoldReceipt ? "TICK_CHECKPOINT_HOLD" : "TICK_CHECKPOINT_RETRY";
+            var disposition = firstHoldReceipt ? "exhausted-held" : "still-held";
+            var holdLine =
+                $"{eventName} tick={tick} kind={kind} goal={goal} store={Sanitize(outcome.Store)} " +
+                $"database={SanitizeReceiptToken(outcome.DatabasePath)} operation={SanitizeReceiptToken(outcome.Operation)} " +
+                $"sqlite_code={outcome.SqliteErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
+                $"sqlite_extended_code={outcome.SqliteExtendedErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
+                $"attempt={outcome.AttemptCount} elapsed_ms={outcome.ElapsedMilliseconds.ToString("0.###", CultureInfo.InvariantCulture)} " +
+                $"disposition={disposition} holder=unknown";
+            if (deferEmission)
+                tickLines.Add(holdLine);
+            else
+                EmitProgress(holdLine, tickLines);
+        }
+
+        return durable;
+    }
+
     private static void PersistGoalTickOrThrow(
         Action<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>> persistGoalTick,
         AgentOrchestratorKernel kernel,
@@ -2004,9 +2178,11 @@ internal sealed class ConductorBatchLoop
         string kind,
         List<string>? tickLines,
         Action<TimeSpan>? busyWriteDelay,
-        int? diagnosticAttempt = null)
+        int? diagnosticAttempt = null,
+        Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick = null,
+        Dictionary<string, GoalSnapshotCheckpointResult>? checkpointHeldGoalIds = null)
     {
-        if (persistGoalTick is null)
+        if (checkpointGoalTick is null && persistGoalTick is null)
         {
             return TryPersistTick(
                 persistTick,
@@ -2023,6 +2199,19 @@ internal sealed class ConductorBatchLoop
         if (goalIds.Length == 0)
         {
             return true;
+        }
+
+        if (checkpointGoalTick is not null)
+        {
+            ArgumentNullException.ThrowIfNull(checkpointHeldGoalIds);
+            var lines = tickLines ?? [];
+            return ApplyCheckpointOutcomes(
+                checkpointGoalTick(kernel, goalIds),
+                goalIds,
+                checkpointHeldGoalIds,
+                tick,
+                kind,
+                lines).Count == goalIds.Length;
         }
 
         return TryPersistWithBusyContainment(
@@ -2043,8 +2232,31 @@ internal sealed class ConductorBatchLoop
         string? onlyGoalId,
         string kind,
         List<string>? tickLines,
-        Action<TimeSpan>? busyWriteDelay)
+        Action<TimeSpan>? busyWriteDelay,
+        Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick,
+        Dictionary<string, GoalSnapshotCheckpointResult> checkpointHeldGoalIds)
     {
+        if (checkpointGoalTick is not null)
+        {
+            if (!TryPersistCheckpoint(
+                    persistTick,
+                    persistGoalTick,
+                    kernel,
+                    tick,
+                    onlyGoalId,
+                    kind,
+                    tickLines,
+                    busyWriteDelay,
+                    checkpointGoalTick: checkpointGoalTick,
+                    checkpointHeldGoalIds: checkpointHeldGoalIds))
+            {
+                EmitProgress(
+                    $"TICK_WRITE_DETACH_CHECKPOINT_DEFERRED tick={tick} kind={kind} goal={ResolveGoalContext(kernel, onlyGoalId)} disposition=held",
+                    tickLines);
+            }
+            return;
+        }
+
         for (var attempt = 1; attempt <= DefaultGracefulDetachCheckpointAttempts; attempt++)
         {
             if (TryPersistCheckpoint(
@@ -2137,7 +2349,7 @@ internal sealed class ConductorBatchLoop
                     "TICK_WRITE_BUSY",
                     goals,
                     kind,
-                    $"TICK_WRITE_BUSY tick={tick} kind={kind} goal={goals} attempt={reportedAttempt} likelyHolder=concurrent-per-command-host",
+                    $"TICK_WRITE_BUSY tick={tick} kind={kind} goal={goals} attempt={reportedAttempt} holder=unknown",
                     tickLines);
 
                 if (attempt == DefaultMaxBusyWriteAttempts)
@@ -2146,7 +2358,7 @@ internal sealed class ConductorBatchLoop
                         "TICK_WRITE_DEGRADED",
                         goals,
                         kind,
-                        $"TICK_WRITE_DEGRADED tick={tick} kind={kind} goal={goals} attempt={reportedAttempt} likelyHolder=concurrent-per-command-host error={Sanitize(ex.Message)}",
+                        $"TICK_WRITE_DEGRADED tick={tick} kind={kind} goal={goals} attempt={reportedAttempt} disposition=exhausted holder=unknown error={Sanitize(ex.Message)}",
                         tickLines);
                     return new PersistWriteAttemptResult(false, ex);
                 }
@@ -2367,6 +2579,9 @@ internal sealed class ConductorBatchLoop
         var s = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
         return s.Length > 40 ? s[..40] : s;
     }
+
+    private static string SanitizeReceiptToken(string value) =>
+        value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
     internal static string SanitizeReason(string value)
     {

@@ -167,6 +167,121 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.InRange(stopwatch.Elapsed, TimeSpan.FromMilliseconds(150), TimeSpan.FromSeconds(2));
     }
 
+    [Xunit.Fact]
+    public async Task TransientSqliteCheckpointControlledWriterRecoversWithExactRetryReceipts()
+    {
+        var db = TempDb();
+        var diagnosticsPath = DiagnosticsPath(db);
+        long elapsedMilliseconds = 0;
+        SqliteConnection? holder = null;
+        var holderReleased = false;
+        var repository = new SqliteOrchestratorStateRepository(
+            db,
+            statementObserver: null,
+            new SqliteWriteTelemetryOptions
+            {
+                DiagnosticsPath = diagnosticsPath,
+                BusyTimeoutMilliseconds = 1,
+                BusyRetryBudget = TimeSpan.FromMilliseconds(250),
+                MaxBusyRetries = 3,
+                MirrorToConductEventStream = false,
+                MonotonicMilliseconds = () => elapsedMilliseconds,
+                RetryDelay = (_, delay, _) =>
+                {
+                    elapsedMilliseconds += Math.Max(1, (long)Math.Ceiling(delay.TotalMilliseconds));
+                    ExecuteSql(holder!, "ROLLBACK");
+                    holderReleased = true;
+                    return Task.CompletedTask;
+                }
+            });
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "controlled writer recovery");
+        await repository.SaveAsync(kernel);
+        var snapshot = kernel.ExportSnapshot().Goals.Single();
+        holder = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite);
+        ExecuteSql(holder, "BEGIN IMMEDIATE");
+
+        IReadOnlyList<GoalSnapshotCheckpointResult> results;
+        using (SqliteOrchestratorStateRepository.UseWriteOperationTag("loop:tick"))
+        {
+            results = await repository.CheckpointGoalSnapshotsAsync([
+                new GoalSnapshotSaveRequest(snapshot, snapshot)
+            ]);
+        }
+        holder.Dispose();
+
+        var result = Assert.Single(results);
+        Assert.True(holderReleased);
+        Assert.True(result.IsDurable);
+        var receipts = File.ReadAllLines(diagnosticsPath)
+            .Select(line => JsonNode.Parse(line)!.AsObject())
+            .Where(receipt => receipt["eventType"]?.GetValue<string>() == "sqlite-state-write-lock")
+            .ToArray();
+        Assert.Equal(2, receipts.Length);
+        Assert.Equal("retrying", receipts[0]["disposition"]?.GetValue<string>());
+        Assert.Equal("recovered", receipts[1]["disposition"]?.GetValue<string>());
+        Assert.All(receipts, receipt =>
+        {
+            Assert.Equal("state", receipt["store"]?.GetValue<string>());
+            Assert.Equal(Path.GetFullPath(db), receipt["stateDbPath"]?.GetValue<string>());
+            Assert.Contains("loop:tick/TransactGoalStateAsync", receipt["operation"]?.GetValue<string>(), StringComparison.Ordinal);
+            Assert.Equal(5, receipt["sqliteErrorCode"]?.GetValue<int>());
+            Assert.Equal(3, receipt["maxAttempts"]?.GetValue<int>());
+            Assert.NotNull(receipt["attemptCount"]);
+            Assert.NotNull(receipt["acquisitionWaitMs"]);
+        });
+        Assert.Equal(1, receipts[0]["attemptCount"]?.GetValue<int>());
+        Assert.Equal(2, receipts[1]["attemptCount"]?.GetValue<int>());
+    }
+
+    [Xunit.Fact]
+    public async Task TransientSqliteCheckpointRetryExhaustionReturnsTypedHold()
+    {
+        var db = TempDb();
+        long elapsedMilliseconds = 0;
+        var repository = new SqliteOrchestratorStateRepository(
+            db,
+            statementObserver: null,
+            new SqliteWriteTelemetryOptions
+            {
+                BusyTimeoutMilliseconds = 1,
+                BusyRetryBudget = TimeSpan.FromMilliseconds(200),
+                MaxBusyRetries = 3,
+                MirrorToConductEventStream = false,
+                MonotonicMilliseconds = () => elapsedMilliseconds,
+                RetryDelay = (_, _, _) =>
+                {
+                    elapsedMilliseconds = 200;
+                    return Task.CompletedTask;
+                }
+            });
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(kernel, AgentCatalog.Default().Agents, "controlled writer exhaustion");
+        await repository.SaveAsync(kernel);
+        var snapshot = kernel.ExportSnapshot().Goals.Single();
+        using var holder = StateDbConnectionFactory.Open(db, StateDbConnectionProfile.ReadWrite);
+        ExecuteSql(holder, "BEGIN IMMEDIATE");
+
+        IReadOnlyList<GoalSnapshotCheckpointResult> results;
+        using (SqliteOrchestratorStateRepository.UseWriteOperationTag("loop:tick"))
+        {
+            results = await repository.CheckpointGoalSnapshotsAsync([
+                new GoalSnapshotSaveRequest(snapshot, snapshot)
+            ]);
+        }
+        ExecuteSql(holder, "ROLLBACK");
+
+        var held = Assert.Single(results);
+        Assert.Equal(GoalSnapshotCheckpointDisposition.Held, held.Disposition);
+        Assert.Equal(goal.Id.Value, held.GoalId);
+        Assert.Equal("state", held.Store);
+        Assert.Equal(Path.GetFullPath(db), held.DatabasePath);
+        Assert.Contains("loop:tick/TransactGoalStateAsync", held.Operation, StringComparison.Ordinal);
+        Assert.Equal(5, held.SqliteErrorCode);
+        Assert.Equal(2, held.AttemptCount);
+        Assert.Equal(200, held.ElapsedMilliseconds);
+    }
+
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_fresh_schema_creates_expected_catalog_objects")]
     public void FreshSchemaCreatesExpectedCatalogObjects()
     {

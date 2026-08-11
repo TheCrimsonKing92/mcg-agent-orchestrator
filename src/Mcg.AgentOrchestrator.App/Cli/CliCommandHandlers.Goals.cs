@@ -7,6 +7,7 @@ using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.App.Rendering;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
@@ -1324,6 +1325,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 // finishes but its result is never recorded — and a stop/restart re-dispatches the same
                 // stage. Fault-isolated so one goal's refresh failure can't kill the loop.
                 var terminalSweepCache = new TerminalGoalSweepCache();
+                var conductEventLogWriter = new ConductEventLogWriter(context.Workspace.ConductEventsLogPath);
                 var reconcileSweepOptions = ReconcileSweepConfiguration.Load(AppContext.BaseDirectory);
                 var reconcileSweepCoordinator = new ReconcileSweepRemediationCoordinator(
                     new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath),
@@ -1339,7 +1341,10 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
                 var parkedGoalSafetyNetTick = 0;
-                TerminalGoalSweepResult reconcileSweep(AgentOrchestratorKernel loopKernel)
+                var scheduledLoadHold = context.InitialConductLoopLoadHold;
+                TerminalGoalSweepResult reconcileSweep(
+                    AgentOrchestratorKernel loopKernel,
+                    IReadOnlySet<string> checkpointHeldGoalIds)
                 {
                     loopReaper.BeginRefreshCycle();
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
@@ -1354,30 +1359,53 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         var trackedGoalIdSet = trackedGoalIds.ToHashSet(StringComparer.Ordinal);
                         var actionableGoalIds = operatorIntents.ListActionableGoalIds()
                             .ToHashSet(StringComparer.Ordinal);
-                        var reloadedKernel = context.ReloadKernel(trackedGoalIds);
-                        loopKernel.MarkKnownDependencyGoalStatuses(reloadedKernel.KnownDependencyGoalStatuses);
-                        loopKernel.MarkKnownCompletedDependencyGoals(reloadedKernel.KnownCompletedDependencyGoals);
-                        var snapshot = reloadedKernel.ExportSnapshot();
-                        foreach (var persistedGoal in snapshot.Goals.Where(goal =>
-                                     trackedGoalIdSet.Contains(goal.Id) &&
-                                     GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status)))
+                        if (CliPersistentStateRunner.TryReloadConductLoopKernel(
+                                () => context.ReloadKernel(trackedGoalIds),
+                                context.Workspace,
+                                conductEventLogWriter,
+                                ref scheduledLoadHold,
+                                out var reloadedKernel))
                         {
-                            evictedGoalStatuses[persistedGoal.Id] = persistedGoal.Status;
-                        }
+                            loopKernel.MarkKnownDependencyGoalStatuses(
+                                reloadedKernel!.KnownDependencyGoalStatuses.Where(pair =>
+                                    !checkpointHeldGoalIds.Contains(pair.Key.Value)));
+                            loopKernel.MarkKnownCompletedDependencyGoals(
+                                reloadedKernel.KnownCompletedDependencyGoals.Where(goalId =>
+                                    !checkpointHeldGoalIds.Contains(goalId.Value)));
+                            var snapshot = reloadedKernel.ExportSnapshot();
+                            foreach (var persistedGoal in snapshot.Goals.Where(goal =>
+                                         trackedGoalIdSet.Contains(goal.Id) &&
+                                         !checkpointHeldGoalIds.Contains(goal.Id) &&
+                                         GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status)))
+                            {
+                                evictedGoalStatuses[persistedGoal.Id] = persistedGoal.Status;
+                            }
 
-                        loopKernel.RefreshTrackedGoals(snapshot);
-                        loopKernel.IngestNewGoals(snapshot);
-                        foreach (var (goalId, status) in evictedGoalStatuses)
-                        {
-                            context.EventWriter.AppendGoalEvictedFromConductor(
-                                new GoalId(goalId),
-                                status,
-                                actionableGoalIds.Contains(goalId)
-                                    ? "operator-intent-forced-reload"
-                                    : "scheduled-reload");
+                            RefreshTrackedGoalsPreservingCheckpointHolds(
+                                loopKernel,
+                                snapshot,
+                                checkpointHeldGoalIds);
+                            loopKernel.IngestNewGoals(snapshot with
+                            {
+                                Goals = snapshot.Goals
+                                    .Where(goal => !checkpointHeldGoalIds.Contains(goal.Id))
+                                    .ToArray(),
+                                HumanInputRequests = snapshot.HumanInputRequests
+                                    .Where(request => !checkpointHeldGoalIds.Contains(request.GoalId))
+                                    .ToArray()
+                            });
+                            foreach (var (goalId, status) in evictedGoalStatuses)
+                            {
+                                context.EventWriter.AppendGoalEvictedFromConductor(
+                                    new GoalId(goalId),
+                                    status,
+                                    actionableGoalIds.Contains(goalId)
+                                        ? "operator-intent-forced-reload"
+                                        : "scheduled-reload");
+                            }
                         }
                     }
-                    catch { /* dynamic pickup is best-effort */ }
+                    catch { /* non-transient dynamic pickup remains best-effort under the existing policy */ }
 
                     AgentOrchestratorKernel? resolvedParkedHumanWaitKernel = null;
                     try
@@ -1453,7 +1481,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
                     : null;
                 var loopSummary = new ConductorBatchLoop(
-                    measuredSweep: reconcileSweep,
+                    measuredSweepWithCheckpointHolds: reconcileSweep,
                     reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(
@@ -1467,7 +1495,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         GoalManagementCommandService.RefreshDispatches(loopKernel, loopGoal, loopReaper);
                     },
                     handoffOnMaxDuration: supervisedChild ? null : handoff,
-                    conductEventLogWriter: new ConductEventLogWriter(context.Workspace.ConductEventsLogPath),
+                    conductEventLogWriter: conductEventLogWriter,
                     operatorIntents: operatorIntents,
                     progressiveReviewGlances: ProgressiveReviewGlanceCoordinator.CreateDefault(context.Workspace, context.WorkerProfiles),
                     progressiveReviewSteering: ProgressiveReviewSteeringCoordinator.CreateDefault(context.Workspace, context.Agents, context.WorkerProfiles, context.Providers),
@@ -1491,7 +1519,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     policySource: loopPolicyResolution.Source,
                     reloadPolicy: loopPolicyName is null
                         ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
-                        : null);
+                        : null,
+                    checkpointGoalTick: context.CheckpointGoals,
+                    hasTransientLoadHold: () => scheduledLoadHold is not null);
                 if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
                 {
                     ConductorContinuityExitArtifact.Write(
@@ -1589,7 +1619,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     policySource: conductPolicyResolution.Source,
                     reloadPolicy: conductPolicyName is null
                         ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
-                        : null);
+                        : null,
+                    checkpointGoalTick: context.CheckpointGoals);
                 Console.WriteLine($"Conduct --watch complete: ticks={watchSummary.Ticks} advanced={watchSummary.Advanced} held={watchSummary.Held} escalated={watchSummary.Escalated}{(watchSummary.StopRequested ? " (stopped)" : "")}");
                 return watchSummary.Escalated == 0;
             }
@@ -1630,6 +1661,28 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return null;
     }
 }
+
+    internal static int RefreshTrackedGoalsPreservingCheckpointHolds(
+        AgentOrchestratorKernel loopKernel,
+        OrchestratorSnapshot snapshot,
+        IReadOnlySet<string> checkpointHeldGoalIds)
+    {
+        ArgumentNullException.ThrowIfNull(loopKernel);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(checkpointHeldGoalIds);
+        if (checkpointHeldGoalIds.Count == 0)
+            return loopKernel.RefreshTrackedGoals(snapshot);
+
+        return loopKernel.RefreshTrackedGoals(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Where(goal => !checkpointHeldGoalIds.Contains(goal.Id))
+                .ToArray(),
+            HumanInputRequests = snapshot.HumanInputRequests
+                .Where(request => !checkpointHeldGoalIds.Contains(request.GoalId))
+                .ToArray()
+        });
+    }
 
 private static string FormatRevisionTaskIds(IReadOnlyList<TaskId> taskIds) =>
     taskIds.Count == 0

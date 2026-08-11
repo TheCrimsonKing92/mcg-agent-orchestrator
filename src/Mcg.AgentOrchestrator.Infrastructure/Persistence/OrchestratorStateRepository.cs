@@ -37,6 +37,8 @@ public interface IOrchestratorStateRepository
 
 public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateRepository
 {
+    bool SupportsGoalCheckpointContainment => false;
+
     Task<T> TransactAsync<T>(
         Func<AgentOrchestratorKernel, CancellationToken, Task<(bool ShouldSave, T Result)>> transaction,
         CancellationToken cancellationToken = default);
@@ -81,6 +83,16 @@ public interface ITransactionalOrchestratorStateRepository : IOrchestratorStateR
         IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
         CancellationToken cancellationToken = default) =>
         throw new NotSupportedException("This repository does not support conductor tick snapshot merge persistence.");
+
+    /// <summary>
+    /// Persists conductor checkpoints independently so an exhausted transient lock for one goal does
+    /// not prevent later goals in the same tick from becoming durable. Only typed SQLITE_BUSY and
+    /// SQLITE_LOCKED results are converted to held outcomes; every other failure remains fail-closed.
+    /// </summary>
+    Task<IReadOnlyList<GoalSnapshotCheckpointResult>> CheckpointGoalSnapshotsAsync(
+        IReadOnlyCollection<GoalSnapshotSaveRequest> goals,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This repository does not support conductor checkpoint containment.");
 
     /// <summary>
     /// Loads the goal's current snapshot outside a transaction, calls the delegate to produce
@@ -181,4 +193,25 @@ public enum GoalSnapshotSaveDisposition
     Saved,
     Merged,
     Skipped
+}
+
+public enum GoalSnapshotCheckpointDisposition
+{
+    Durable,
+    Held
+}
+
+public sealed record GoalSnapshotCheckpointResult(
+    string GoalId,
+    GoalSnapshotCheckpointDisposition Disposition,
+    GoalSnapshotSaveResult? SaveResult,
+    string Store,
+    string DatabasePath,
+    string Operation,
+    int? SqliteErrorCode = null,
+    int? SqliteExtendedErrorCode = null,
+    int AttemptCount = 1,
+    double ElapsedMilliseconds = 0)
+{
+    public bool IsDurable => Disposition == GoalSnapshotCheckpointDisposition.Durable;
 }

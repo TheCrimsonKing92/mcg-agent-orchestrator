@@ -3,8 +3,24 @@ using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
+
+internal sealed record TransientSqliteLoadHold(
+    int SqliteErrorCode,
+    int SqliteExtendedErrorCode,
+    string AttemptCount,
+    string ElapsedMilliseconds,
+    string Operation)
+{
+    internal static TransientSqliteLoadHold From(SqliteException exception, string operation) => new(
+        exception.SqliteErrorCode,
+        exception.SqliteExtendedErrorCode,
+        exception.Data["Mcg.AttemptCount"]?.ToString() ?? "unknown",
+        exception.Data["Mcg.ElapsedMilliseconds"]?.ToString() ?? "unknown",
+        operation);
+}
 
 internal static class CliPersistentStateRunner
 {
@@ -826,7 +842,13 @@ internal static class CliPersistentStateRunner
                     .Distinct(StringComparer.Ordinal)
                     .ToArray(),
                 workspace.ExecutionDirectory);
-        var kernel = LoadLoopKernel();
+        var startupStopPath = Path.Combine(workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+        TransientSqliteLoadHold? initialConductLoopLoadHold = null;
+        var kernel = LoadInitialConductLoopKernelWithTransientHold(
+            LoadLoopKernel,
+            workspace,
+            stopRequested: () => File.Exists(startupStopPath),
+            onHoldExhausted: hold => initialConductLoopLoadHold = hold);
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         TerminalGoalSweepResult? sweep = null;
         try
@@ -868,33 +890,65 @@ internal static class CliPersistentStateRunner
 
         void PersistGoals(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
         {
-            if (changedGoalIds.Count == 0) return;
-
-            var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
-            var checkpointSnapshot = checkpoint.ExportSnapshot();
-            var humanInputByGoal = checkpointSnapshot.HumanInputRequests
-                .Where(request => changed.Contains(request.GoalId))
-                .GroupBy(request => request.GoalId, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => (IReadOnlyList<HumanInputRequestSnapshot>)group.ToArray(), StringComparer.Ordinal);
-            var requests = checkpointSnapshot.Goals
-                .Where(goal => changed.Contains(goal.Id))
-                .Select(goal =>
-                {
-                    var baseline = tickBaselines.TryGetValue(goal.Id, out var known)
-                        ? known
-                        : stateRepository.LoadGoalAsync(new GoalId(goal.Id), CancellationToken.None)
-                            .GetAwaiter()
-                            .GetResult() ?? goal;
-                    return new GoalSnapshotSaveRequest(
-                        baseline,
-                        goal,
-                        humanInputByGoal.GetValueOrDefault(goal.Id, []));
-                })
-                .ToArray();
-
+            var requests = BuildCheckpointRequests(checkpoint, changedGoalIds, containTransientBaselineLoads: false, out _);
             if (requests.Length == 0) return;
 
             var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
+            ApplyDurableResults(checkpoint, results);
+        }
+
+        IReadOnlyList<GoalSnapshotCheckpointResult> CheckpointGoals(
+            AgentOrchestratorKernel checkpoint,
+            IReadOnlyCollection<GoalId> changedGoalIds)
+        {
+            var requests = BuildCheckpointRequests(
+                checkpoint,
+                changedGoalIds,
+                containTransientBaselineLoads: true,
+                out var baselineLoadHolds);
+            if (requests.Length == 0)
+                return baselineLoadHolds;
+
+            if (!stateRepository.SupportsGoalCheckpointContainment)
+            {
+                var legacyResults = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                ApplyDurableResults(checkpoint, legacyResults);
+                return baselineLoadHolds.Concat(legacyResults.Select(result => new GoalSnapshotCheckpointResult(
+                    result.GoalId,
+                    GoalSnapshotCheckpointDisposition.Durable,
+                    result,
+                    "state",
+                    "unknown",
+                    "legacy-checkpoint"))).ToArray();
+            }
+
+            var results = stateRepository.CheckpointGoalSnapshotsAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
+            ApplyDurableResults(
+                checkpoint,
+                results.Where(result => result.IsDurable && result.SaveResult is not null)
+                    .Select(result => result.SaveResult!)
+                    .ToArray());
+            return baselineLoadHolds.Concat(results).ToArray();
+        }
+
+        GoalSnapshotSaveRequest[] BuildCheckpointRequests(
+            AgentOrchestratorKernel checkpoint,
+            IReadOnlyCollection<GoalId> changedGoalIds,
+            bool containTransientBaselineLoads,
+            out IReadOnlyList<GoalSnapshotCheckpointResult> baselineLoadHolds)
+            => BuildConductLoopCheckpointRequests(
+                checkpoint,
+                changedGoalIds,
+                tickBaselines,
+                stateRepository,
+                workspace.SqliteStatePath,
+                containTransientBaselineLoads,
+                out baselineLoadHolds);
+
+        void ApplyDurableResults(AgentOrchestratorKernel checkpoint, IReadOnlyList<GoalSnapshotSaveResult> results)
+        {
             var persistedTerminalGoalIds = new List<GoalId>();
             var persistedTerminalGoalIdValues = new HashSet<string>(StringComparer.Ordinal);
             foreach (var result in results)
@@ -942,14 +996,92 @@ internal static class CliPersistentStateRunner
             reacquireConductLoopLease: conductLoopLease.Reacquire,
             reloadResolvedParkedHumanWaitKernel: () => LoadConductLoopResolvedParkedHumanWaitKernel(stateRepository),
             reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository),
-            reloadKernelForGoals: LoadLoopKernelForGoals);
+            reloadKernelForGoals: LoadLoopKernelForGoals,
+            checkpointGoalKernel: CheckpointGoals,
+            initialConductLoopLoadHold: initialConductLoopLoadHold);
 
         // A successful handoff has transferred the lease and authority to the successor. All incumbent
         // tick state was persisted before handoff; do not write once the successor owns the loop.
         if (conductLoopLease.IsHeld)
-            Persist(kernel);
+            _ = CheckpointGoals(kernel, kernel.Goals.Select(goal => goal.Id).ToArray());
         currentGoal = loopCurrentGoal;
         return shouldSave;
+    }
+
+    internal static GoalSnapshotSaveRequest[] BuildConductLoopCheckpointRequests(
+        AgentOrchestratorKernel checkpoint,
+        IReadOnlyCollection<GoalId> changedGoalIds,
+        IReadOnlyDictionary<string, GoalSnapshot> tickBaselines,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        string databasePath,
+        bool containTransientBaselineLoads,
+        out IReadOnlyList<GoalSnapshotCheckpointResult> baselineLoadHolds)
+    {
+        if (changedGoalIds.Count == 0)
+        {
+            baselineLoadHolds = [];
+            return [];
+        }
+
+        var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+        var checkpointSnapshot = checkpoint.ExportSnapshot();
+        var humanInputByGoal = checkpointSnapshot.HumanInputRequests
+            .Where(request => changed.Contains(request.GoalId))
+            .GroupBy(request => request.GoalId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<HumanInputRequestSnapshot>)group.ToArray(),
+                StringComparer.Ordinal);
+        var requests = new List<GoalSnapshotSaveRequest>(changedGoalIds.Count);
+        var holds = new List<GoalSnapshotCheckpointResult>();
+        foreach (var goal in checkpointSnapshot.Goals.Where(goal => changed.Contains(goal.Id)))
+        {
+            GoalSnapshot baseline;
+            if (tickBaselines.TryGetValue(goal.Id, out var known))
+            {
+                baseline = known;
+            }
+            else
+            {
+                try
+                {
+                    baseline = stateRepository.LoadGoalAsync(new GoalId(goal.Id), CancellationToken.None)
+                        .GetAwaiter()
+                        .GetResult() ?? goal;
+                }
+                catch (SqliteException ex) when (
+                    containTransientBaselineLoads &&
+                    SqliteOrchestratorStateRepository.IsTransientLock(ex))
+                {
+                    var operation = $"loop:tick/LoadGoalAsync({goal.Id[..8]})";
+                    var hold = TransientSqliteLoadHold.From(ex, operation);
+                    holds.Add(new GoalSnapshotCheckpointResult(
+                        goal.Id,
+                        GoalSnapshotCheckpointDisposition.Held,
+                        SaveResult: null,
+                        Store: "state",
+                        DatabasePath: databasePath,
+                        Operation: operation,
+                        SqliteErrorCode: hold.SqliteErrorCode,
+                        SqliteExtendedErrorCode: hold.SqliteExtendedErrorCode,
+                        AttemptCount: int.TryParse(hold.AttemptCount, out var attempt) ? attempt : 1,
+                        ElapsedMilliseconds: double.TryParse(
+                            hold.ElapsedMilliseconds,
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out var elapsed) ? elapsed : 0));
+                    continue;
+                }
+            }
+
+            requests.Add(new GoalSnapshotSaveRequest(
+                baseline,
+                goal,
+                humanInputByGoal.GetValueOrDefault(goal.Id, [])));
+        }
+
+        baselineLoadHolds = holds;
+        return requests.ToArray();
     }
 
     private static void EmitPreLoopJanitorialFailure(OrchestratorWorkspace workspace, Exception ex)
@@ -965,6 +1097,121 @@ internal static class CliPersistentStateRunner
         catch
         {
             // Shared event streaming is advisory; stdout remains the primary conduct log.
+        }
+    }
+
+    internal static AgentOrchestratorKernel LoadInitialConductLoopKernelWithTransientHold(
+        Func<AgentOrchestratorKernel> load,
+        OrchestratorWorkspace workspace,
+        Func<bool>? stopRequested = null,
+        Action<TimeSpan>? holdDelay = null,
+        TimeSpan? holdInterval = null,
+        int maxHoldRetries = 1,
+        Action<TransientSqliteLoadHold>? onHoldExhausted = null)
+    {
+        ArgumentNullException.ThrowIfNull(load);
+        ArgumentNullException.ThrowIfNull(workspace);
+        var delay = holdInterval ?? TimeSpan.FromSeconds(1);
+        if (delay < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(holdInterval));
+        if (maxHoldRetries < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxHoldRetries));
+
+        var eventWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        var maxLoadAttempts = checked(maxHoldRetries + 1);
+        int? lastSqliteErrorCode = null;
+        int? lastSqliteExtendedErrorCode = null;
+        string? lastAttempt = null;
+        string? lastElapsedMilliseconds = null;
+        for (var holdCycle = 1; holdCycle <= maxLoadAttempts; holdCycle++)
+        {
+            try
+            {
+                var kernel = load();
+                if (holdCycle > 1)
+                {
+                    var recovered =
+                        $"LOOP_LOAD_RECOVERED store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
+                        $"operation=loop:startup/load sqlite_code={lastSqliteErrorCode} " +
+                        $"sqlite_extended_code={lastSqliteExtendedErrorCode} attempt={lastAttempt} hold_cycle={holdCycle - 1} " +
+                        $"elapsed_ms={lastElapsedMilliseconds} disposition=recovered";
+                    Console.WriteLine(recovered);
+                    eventWriter.Append("loop-load-recovered", null, recovered);
+                }
+                return kernel;
+            }
+            catch (SqliteException ex) when (SqliteOrchestratorStateRepository.IsTransientLock(ex))
+            {
+                var hold = TransientSqliteLoadHold.From(ex, "loop:startup/load");
+                var attempt = hold.AttemptCount;
+                var elapsed = hold.ElapsedMilliseconds;
+                lastSqliteErrorCode = ex.SqliteErrorCode;
+                lastSqliteExtendedErrorCode = ex.SqliteExtendedErrorCode;
+                lastAttempt = attempt;
+                lastElapsedMilliseconds = elapsed;
+                var held =
+                    $"LOOP_LOAD_HOLD store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
+                    $"operation=loop:startup/load sqlite_code={ex.SqliteErrorCode} sqlite_extended_code={ex.SqliteExtendedErrorCode} " +
+                    $"attempt={attempt} hold_cycle={holdCycle} elapsed_ms={elapsed} disposition=exhausted-held holder=unknown";
+                Console.WriteLine(held);
+                eventWriter.Append("loop-load-hold", null, held);
+                if (stopRequested?.Invoke() == true)
+                    return new AgentOrchestratorKernel();
+
+                if (holdCycle == maxLoadAttempts)
+                {
+                    onHoldExhausted?.Invoke(hold);
+                    return new AgentOrchestratorKernel();
+                }
+
+                if (holdDelay is null)
+                    Thread.Sleep(delay);
+                else
+                    holdDelay(delay);
+            }
+        }
+
+        throw new InvalidOperationException("The bounded startup load policy exhausted without returning a disposition.");
+    }
+
+    internal static bool TryReloadConductLoopKernel(
+        Func<AgentOrchestratorKernel> reload,
+        OrchestratorWorkspace workspace,
+        ConductEventLogWriter eventWriter,
+        ref TransientSqliteLoadHold? holdEpisode,
+        out AgentOrchestratorKernel? kernel)
+    {
+        ArgumentNullException.ThrowIfNull(reload);
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(eventWriter);
+        try
+        {
+            kernel = reload();
+            if (holdEpisode is not null)
+            {
+                var recovered =
+                    $"TICK_LOAD_RECOVERED store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
+                    $"operation=loop:tick/reload sqlite_code={holdEpisode.SqliteErrorCode} " +
+                    $"sqlite_extended_code={holdEpisode.SqliteExtendedErrorCode} attempt=1 " +
+                    $"elapsed_ms={holdEpisode.ElapsedMilliseconds} disposition=recovered";
+                Console.WriteLine(recovered);
+                eventWriter.Append("tick-load-recovered", null, recovered);
+                holdEpisode = null;
+            }
+            return true;
+        }
+        catch (SqliteException ex) when (SqliteOrchestratorStateRepository.IsTransientLock(ex))
+        {
+            holdEpisode = TransientSqliteLoadHold.From(ex, "loop:tick/reload");
+            var held =
+                $"TICK_LOAD_HOLD store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
+                $"operation={holdEpisode.Operation} sqlite_code={holdEpisode.SqliteErrorCode} " +
+                $"sqlite_extended_code={holdEpisode.SqliteExtendedErrorCode} attempt={holdEpisode.AttemptCount} " +
+                $"elapsed_ms={holdEpisode.ElapsedMilliseconds} disposition=exhausted-held holder=unknown";
+            Console.WriteLine(held);
+            eventWriter.Append("tick-load-hold", null, held);
+            kernel = null;
+            return false;
         }
     }
 

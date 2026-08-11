@@ -2952,7 +2952,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 logPath,
                 "budget-test",
                 budgetSeconds: 5,
-                leaseWaitSeconds: 1,
+                leaseWaitSeconds: 5,
                 projectFile,
                 "FullyQualifiedName~FocusedProcessFixtureTests");
             startInfo.Environment["FOCUSED_STARTED_MARKER"] = startedPath;

@@ -8,10 +8,264 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Data.Sqlite;
 
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 {
+    [Xunit.Fact]
+    public void TransientSqliteCheckpointNewGoalBaselineLoadIsContainedPerGoal()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var heldGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "newly ingested held goal");
+        var unrelatedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "unrelated durable goal");
+        var repository = new InMemoryTransactionalStateRepository(kernel)
+        {
+            BeforeNextLoadGoalAsync = _ =>
+            {
+                var exception = new SqliteException("busy baseline load", 5);
+                exception.Data["Mcg.AttemptCount"] = 4;
+                exception.Data["Mcg.ElapsedMilliseconds"] = 375d;
+                throw exception;
+            }
+        };
+        var snapshots = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+        var baselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal)
+        {
+            [unrelatedGoal.Id.Value] = snapshots[unrelatedGoal.Id.Value]
+        };
+
+        var requests = CliPersistentStateRunner.BuildConductLoopCheckpointRequests(
+            kernel,
+            [heldGoal.Id, unrelatedGoal.Id],
+            baselines,
+            repository,
+            "C:/fixture/state.db",
+            containTransientBaselineLoads: true,
+            out var holds);
+
+        var hold = Xunit.Assert.Single(holds);
+        Xunit.Assert.Equal(heldGoal.Id.Value, hold.GoalId);
+        Xunit.Assert.Equal(GoalSnapshotCheckpointDisposition.Held, hold.Disposition);
+        Xunit.Assert.Equal(5, hold.SqliteErrorCode);
+        Xunit.Assert.Equal(4, hold.AttemptCount);
+        Xunit.Assert.Equal(375d, hold.ElapsedMilliseconds);
+        Xunit.Assert.Contains("LoadGoalAsync", hold.Operation, StringComparison.Ordinal);
+        Xunit.Assert.Equal(unrelatedGoal.Id.Value, Xunit.Assert.Single(requests).Current.Id);
+    }
+
+    [Xunit.Fact]
+    public void TransientSqliteCheckpointNewGoalBaselineLoadNonTransientFailureRemainsFailClosed()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "newly ingested readonly goal");
+        var repository = new InMemoryTransactionalStateRepository(kernel)
+        {
+            BeforeNextLoadGoalAsync = _ => throw new SqliteException("readonly baseline load", 8)
+        };
+
+        var exception = Xunit.Assert.Throws<SqliteException>(() =>
+            CliPersistentStateRunner.BuildConductLoopCheckpointRequests(
+                kernel,
+                [goal.Id],
+                new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal),
+                repository,
+                "C:/fixture/state.db",
+                containTransientBaselineLoads: true,
+                out _));
+
+        Xunit.Assert.Equal(8, exception.SqliteErrorCode);
+    }
+
+    [Xunit.Fact]
+    public void TransientSqliteCheckpointHeldPendingSnapshotSurvivesScheduledRefresh()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "held pending refresh goal");
+        var durableSnapshot = kernel.ExportSnapshot();
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("fixture", "fixture", "C:/fixture", DateTimeOffset.UtcNow));
+
+        var heldRefreshes = CliCommandHandlers.RefreshTrackedGoalsPreservingCheckpointHolds(
+            kernel,
+            durableSnapshot,
+            new HashSet<string>([goal.Id.Value], StringComparer.Ordinal));
+
+        Xunit.Assert.Equal(0, heldRefreshes);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+
+        var recoveredRefreshes = CliCommandHandlers.RefreshTrackedGoalsPreservingCheckpointHolds(
+            kernel,
+            durableSnapshot,
+            new HashSet<string>(StringComparer.Ordinal));
+
+        Xunit.Assert.Equal(1, recoveredRefreshes);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(5)]
+    [Xunit.InlineData(6)]
+    public void TransientSqliteCheckpointStartupLoadHoldsUnderLeaseAndRecovers(int sqliteErrorCode)
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var loadAttempts = 0;
+        var delays = new List<TimeSpan>();
+        using var lease = ConductorLoopLeaseController.Acquire(workspace.OrchestratorDirectory);
+
+        var loaded = CliPersistentStateRunner.LoadInitialConductLoopKernelWithTransientHold(
+            () =>
+            {
+                Assert.True(lease.IsHeld);
+                loadAttempts++;
+                if (loadAttempts == 1)
+                {
+                    var exception = new SqliteException("startup database locked", sqliteErrorCode);
+                    exception.Data["Mcg.AttemptCount"] = 3;
+                    exception.Data["Mcg.ElapsedMilliseconds"] = 250d;
+                    throw exception;
+                }
+                return new AgentOrchestratorKernel();
+            },
+            workspace,
+            stopRequested: () => false,
+            holdDelay: delays.Add,
+            holdInterval: TimeSpan.FromMilliseconds(25));
+
+        Assert.True(lease.IsHeld);
+        Assert.Empty(loaded.Goals);
+        Assert.Equal(2, loadAttempts);
+        Assert.Equal([TimeSpan.FromMilliseconds(25)], delays);
+        var events = File.ReadAllLines(workspace.ConductEventsLogPath);
+        Assert.Contains(events, line => line.Contains("LOOP_LOAD_HOLD", StringComparison.Ordinal) &&
+            line.Contains($"sqlite_code={sqliteErrorCode}", StringComparison.Ordinal) &&
+            line.Contains("attempt=3", StringComparison.Ordinal) &&
+            line.Contains("elapsed_ms=250", StringComparison.Ordinal));
+        var recovered = Assert.Single(events, line => line.Contains("LOOP_LOAD_RECOVERED", StringComparison.Ordinal));
+        Assert.Contains($"sqlite_code={sqliteErrorCode}", recovered, StringComparison.Ordinal);
+        Assert.Contains("sqlite_extended_code=", recovered, StringComparison.Ordinal);
+        Assert.Contains("elapsed_ms=250", recovered, StringComparison.Ordinal);
+        Assert.Contains("disposition=recovered", recovered, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(true)]
+    [Xunit.InlineData(false)]
+    public void TransientSqliteCheckpointStartupLoadNonTransientFailuresRemainFailClosed(bool sqliteCodeEight)
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var exception = sqliteCodeEight
+            ? (Exception)new SqliteException("readonly", 8)
+            : new InvalidOperationException("non-SQLite load failure");
+
+        var actual = Assert.Throws(exception.GetType(), () =>
+            CliPersistentStateRunner.LoadInitialConductLoopKernelWithTransientHold(
+                () => throw exception,
+                workspace,
+                holdDelay: _ => throw new Xunit.Sdk.XunitException("delay must not run")));
+
+        Assert.Same(exception, actual);
+    }
+
+    [Xunit.Fact]
+    public void TransientSqliteCheckpoint_StartupLoadYieldsAfterFiniteRetries()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var attempts = 0;
+        var delays = new List<TimeSpan>();
+        TransientSqliteLoadHold? exhausted = null;
+
+        var kernel = CliPersistentStateRunner.LoadInitialConductLoopKernelWithTransientHold(
+            () =>
+            {
+                attempts++;
+                var exception = new SqliteException("startup remains locked", 5);
+                exception.Data["Mcg.AttemptCount"] = 3;
+                exception.Data["Mcg.ElapsedMilliseconds"] = 250d;
+                throw exception;
+            },
+            workspace,
+            holdDelay: delays.Add,
+            holdInterval: TimeSpan.FromMilliseconds(25),
+            maxHoldRetries: 1,
+            onHoldExhausted: hold => exhausted = hold);
+
+        Assert.Empty(kernel.Goals);
+        Assert.Equal(2, attempts);
+        Assert.Equal([TimeSpan.FromMilliseconds(25)], delays);
+        Assert.NotNull(exhausted);
+        Assert.Equal(5, exhausted!.SqliteErrorCode);
+        Assert.Equal("loop:startup/load", exhausted.Operation);
+        var events = File.ReadAllLines(workspace.ConductEventsLogPath);
+        Assert.Equal(2, events.Count(line => line.Contains("LOOP_LOAD_HOLD", StringComparison.Ordinal)));
+        Assert.DoesNotContain(events, line => line.Contains("LOOP_LOAD_RECOVERED", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void TransientSqliteCheckpoint_ScheduledLoadEmitsRecovery()
+    {
+        var workspace = OrchestratorWorkspace.ForDirectory(CreateTempDirectory());
+        var writer = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        TransientSqliteLoadHold? episode = null;
+        var attempts = 0;
+
+        var held = CliPersistentStateRunner.TryReloadConductLoopKernel(
+            () =>
+            {
+                attempts++;
+                var exception = new SqliteException("scheduled reload locked", 6);
+                exception.Data["Mcg.AttemptCount"] = 4;
+                exception.Data["Mcg.ElapsedMilliseconds"] = 375d;
+                throw exception;
+            },
+            workspace,
+            writer,
+            ref episode,
+            out var heldKernel);
+        var recovered = CliPersistentStateRunner.TryReloadConductLoopKernel(
+            () =>
+            {
+                attempts++;
+                return new AgentOrchestratorKernel();
+            },
+            workspace,
+            writer,
+            ref episode,
+            out var recoveredKernel);
+
+        Assert.False(held);
+        Assert.Null(heldKernel);
+        Assert.True(recovered);
+        Assert.NotNull(recoveredKernel);
+        Assert.Null(episode);
+        Assert.Equal(2, attempts);
+        var events = File.ReadAllLines(workspace.ConductEventsLogPath);
+        var holdLine = Assert.Single(events, line => line.Contains("TICK_LOAD_HOLD", StringComparison.Ordinal));
+        Assert.Contains("operation=loop:tick/reload", holdLine, StringComparison.Ordinal);
+        Assert.Contains("sqlite_code=6", holdLine, StringComparison.Ordinal);
+        Assert.Contains("attempt=4", holdLine, StringComparison.Ordinal);
+        Assert.Contains("elapsed_ms=375", holdLine, StringComparison.Ordinal);
+        var recoveryLine = Assert.Single(events, line => line.Contains("TICK_LOAD_RECOVERED", StringComparison.Ordinal));
+        Assert.Contains("sqlite_code=6", recoveryLine, StringComparison.Ordinal);
+        Assert.Contains("disposition=recovered", recoveryLine, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact]
     public async Task OperatorDecisionRepositoryBootstrapsFreshStateStoreBeforeUse()
     {
