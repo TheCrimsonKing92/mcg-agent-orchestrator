@@ -113,12 +113,27 @@ Get-FileHash (Join-Path $analysisRoot 'run1\excess-worker-rounds.csv')
 Get-FileHash (Join-Path $analysisRoot 'run1\excess-worker-rounds-summary.json')
 ```
 
-The verified output digests were:
+The original pre-fix verified output digests were:
 
 | Output | SHA-256 | Repeat |
 |---|---|---|
 | `excess-worker-rounds.csv` | `3d6e0eb8c96727ffb9e8903c3aff34a922fece8df20ca523575f878ea7e0f704` | byte-identical |
 | `excess-worker-rounds-summary.json` | `145e1f427bf94c2475132c0e50c7b72d12052d3bcb0d42f3ea1409459fa2a30b` | byte-identical |
+
+### Post-fix operator rerun
+
+The operator reran the corrected analyzer twice at `2026-08-11T15:38:46.5830999+00:00` against candidate `f0db9e1c8dd06d2ea321ee04f542f4d3e2e65515`. The conductor was stopped while a GUID temp snapshot copied only the 1,791 declared pre-cutoff logs, 318 matching journals, and dogfood database. Manifest entries used stable relative paths. Both analyzer passes consumed the same frozen snapshot; all raw logs, journals, database copies, manifests, and generated tables were deleted afterward.
+
+| Post-fix input/output | Receipt |
+|---|---|
+| Cutoff / repository revision | `2026-08-07T22:43:03.4206169Z` / `4fc816b898f2a3496bf5b5f2fb6478c00d613908` |
+| Operator manifest | 1,791 rows; SHA-256 `1856b9381b1786c611a75e3309b3351c0b05a5bd6b773ed19c0141c788c8d456` |
+| Journal manifest | 318 rows; SHA-256 `422885d0aa400142011b9ac060444942d096541f06f0d8ecdb5865b2342db6f2` |
+| Dogfood database / WAL | SHA-256 `f9f6d9e8cb7bed9af660bb94ba7d6ac5c6f9d6cf468a6c5d1781080ac926cba1`; no WAL content |
+| `excess-worker-rounds.csv` | 275 rows; SHA-256 `ff9f2e1360d5e4f481dd02ca1be3a3785095321816046bafa6d309f13fd17283`; repeat byte-identical |
+| `excess-worker-rounds-summary.json` | SHA-256 `505170ed5694988192595e2c0aba8c7d30a335543198e88da06aab37897a392f`; repeat byte-identical |
+
+The post-fix weekly receipts remain W28 `63 / 4 / 1`, W29 `85 / 6 / 2`, W30 `41 / 8 / 4`, W31 `44 / 5 / 3`, and W32 `42 / 6 / 4` for goals / median rounds / median excess. Thus the corrected cutoff and typed-category logic preserve the report's `1 → 4` endpoint and the checked-in tables. The temporary operator harness SHA-256 was `e1c4ad713e6176fa8ba933f011cba0150d33faee1d24bdd7ae6ce876cf60e544`; the raw JSON receipt SHA-256 was `a94feb80c82a9d35f15b3073b81045e556a222d0ed4b31dc814483091abce8fe`. These hashes identify the executed harness/receipt, while the bounded facts above are authoritative after scratch cleanup.
 
 The helper is read-only with respect to logs, journals, dogfood, Git, backlog, and orchestrator state. It writes only the requested output directory. Operator logs and journals are manifest-only inputs; later undeclared files are ignored. A changed declared file, manifest digest, dogfood DB, optional task snapshot, or Git revision fails closed before output, as do missing/duplicate files, post-cutoff operator rows, ambiguous journal prefixes, invalid weeks, and failed Git/SQLite reads. A non-empty `dogfood-log.db-wal` is also rejected unless its SHA-256 is supplied with `-DogfoodWalSha256`, and both database hashes are rechecked after the query. This means a later ledger rerun is either byte-identical or reports a named input-integrity mismatch; it never silently updates the finding from ambient state.
 
