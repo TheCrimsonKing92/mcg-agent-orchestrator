@@ -485,8 +485,10 @@ public sealed class FundamentalAliasTests
         Xunit.Assert.Contains("## Add smoke test coverage", output);
     }
 
-    [Xunit.Fact]
-    public void CliGoalFromBacklogForwardsPipelineValueToCreation()
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void CliGoalFromBacklogForwardsPipelineInEitherOrder(bool pipelineBeforeFilter)
     {
         var root = CreateTempDirectory();
         SeedBacklog(root, """
@@ -503,9 +505,12 @@ public sealed class FundamentalAliasTests
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
+        string[] args = pipelineBeforeFilter
+            ? ["goal", "--pipeline", "five-role", "--from-backlog", "Update alias help", "--create-goal", "--backlog-coverage", "full"]
+            : ["goal", "Update alias help", "--from-backlog", "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"];
         var output = CaptureConsole(() =>
             CliCommandDispatcher.ExecuteCommand(
-                ["goal", "Update alias help", "--from-backlog", "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                args,
                 kernel,
                 workspace,
                 ref agents,

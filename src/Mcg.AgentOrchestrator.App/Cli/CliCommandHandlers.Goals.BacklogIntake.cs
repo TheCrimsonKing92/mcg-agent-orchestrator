@@ -18,7 +18,7 @@ private static void AppendGoalAliasFlags(
     bool includeRoleAgentFlags,
     params string[] excludedFlags)
 {
-    for (var i = 2; i < parts.Count; i++)
+    for (var i = 1; i < parts.Count; i++)
     {
         var part = parts[i];
         if (!part.StartsWith("--", StringComparison.Ordinal))
