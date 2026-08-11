@@ -52,7 +52,10 @@ internal static partial class LockAttribution
     internal static string? HandleExecutableForTests { get; set; }
     internal static TimeSpan? HandleProbeTimeoutForTests { get; set; }
     internal static Action<ProcessStartInfo, string>? ConfigureHandleProbeForTests { get; set; }
+    internal static Func<ProcessStartInfo, TimeSpan, HandleProbeExecution>? ExecuteHandleProbeForTests { get; set; }
     internal static bool DisableRestartManagerForTests { get; set; }
+
+    internal readonly record struct HandleProbeExecution(bool TimedOut, string Output);
 
     public static BuildLockAttribution Attribute(string path, string? ownershipHint = null, string? phase = null, string? operation = null)
     {
@@ -225,8 +228,7 @@ internal static partial class LockAttribution
 
         try
         {
-            using var process = new Process();
-            process.StartInfo = new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = handle,
                 RedirectStandardOutput = true,
@@ -235,38 +237,52 @@ internal static partial class LockAttribution
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            process.StartInfo.ArgumentList.Add("-accepteula");
-            process.StartInfo.ArgumentList.Add("-nobanner");
-            process.StartInfo.ArgumentList.Add(path);
-            ConfigureHandleProbeForTests?.Invoke(process.StartInfo, path);
-            if (!process.Start())
+            startInfo.ArgumentList.Add("-accepteula");
+            startInfo.ArgumentList.Add("-nobanner");
+            startInfo.ArgumentList.Add(path);
+            ConfigureHandleProbeForTests?.Invoke(startInfo, path);
+            var timeout = HandleProbeTimeoutForTests ?? HandleProbeTimeout;
+            var execution = ExecuteHandleProbeForTests?.Invoke(startInfo, timeout)
+                ?? ExecuteHandleProbe(startInfo, timeout);
+            if (execution.TimedOut)
             {
-                return null;
-            }
-
-            try { process.StandardInput.Close(); } catch { }
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(HandleProbeTimeoutForTests ?? HandleProbeTimeout))
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                try { process.WaitForExit(1000); } catch { }
-                _ = Task.WhenAny(outputTask, Task.Delay(TimeSpan.FromSeconds(1)));
-                _ = Task.WhenAny(errorTask, Task.Delay(TimeSpan.FromSeconds(1)));
                 return new BuildLockAttribution(
                     path,
                     [new BuildLockHolder(null, "unknown-probe-timeout", null, false)],
                     "handle64-timeout");
             }
 
-            var output = outputTask.GetAwaiter().GetResult() + Environment.NewLine + errorTask.GetAwaiter().GetResult();
-            var holders = ParseHandleOutput(output, ownershipHint);
+            var holders = ParseHandleOutput(execution.Output, ownershipHint);
             return holders.Count == 0 ? null : new BuildLockAttribution(path, holders, "handle64");
         }
         catch
         {
             return null;
         }
+    }
+
+    private static HandleProbeExecution ExecuteHandleProbe(ProcessStartInfo startInfo, TimeSpan timeout)
+    {
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start())
+        {
+            return new HandleProbeExecution(false, string.Empty);
+        }
+
+        try { process.StandardInput.Close(); } catch { }
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(timeout))
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+            try { process.WaitForExit(1000); } catch { }
+            _ = Task.WhenAny(outputTask, Task.Delay(TimeSpan.FromSeconds(1)));
+            _ = Task.WhenAny(errorTask, Task.Delay(TimeSpan.FromSeconds(1)));
+            return new HandleProbeExecution(true, string.Empty);
+        }
+
+        var output = outputTask.GetAwaiter().GetResult() + Environment.NewLine + errorTask.GetAwaiter().GetResult();
+        return new HandleProbeExecution(false, output);
     }
 
     private static BuildLockAttribution AttributeFromProcessSnapshot(string path, string? ownershipHint)

@@ -623,18 +623,17 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "LockAttribution_handle_probe_timeout_returns_unknown_without_wedging")]
+    [Xunit.Fact]
     public void LockAttributionHandleProbeTimeoutReturnsUnknownWithoutWedging()
     {
-        LockAttribution.HandleExecutableForTests = ResolvePowerShell();
-        LockAttribution.HandleProbeTimeoutForTests = TimeSpan.FromMilliseconds(200);
-        LockAttribution.ConfigureHandleProbeForTests = (startInfo, _) =>
+        var probeExecuted = false;
+        LockAttribution.HandleExecutableForTests = "injected-handle-probe";
+        LockAttribution.ExecuteHandleProbeForTests = (startInfo, timeout) =>
         {
-            startInfo.ArgumentList.Clear();
-            startInfo.ArgumentList.Add("-NoProfile");
-            startInfo.ArgumentList.Add("-NonInteractive");
-            startInfo.ArgumentList.Add("-Command");
-            startInfo.ArgumentList.Add("Start-Sleep -Seconds 60");
+            probeExecuted = true;
+            Assert.Equal("injected-handle-probe", startInfo.FileName);
+            Assert.Equal(TimeSpan.FromSeconds(10), timeout);
+            return new LockAttribution.HandleProbeExecution(true, string.Empty);
         };
 
         try
@@ -645,6 +644,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 "artifact-prep",
                 "prepare-artifacts");
 
+            Assert.True(probeExecuted);
             var holder = Assert.Single(attribution.Holders);
             Assert.Equal("handle64-timeout", attribution.Source);
             Assert.Null(holder.ProcessId);
@@ -655,8 +655,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         finally
         {
             LockAttribution.HandleExecutableForTests = null;
-            LockAttribution.HandleProbeTimeoutForTests = null;
-            LockAttribution.ConfigureHandleProbeForTests = null;
+            LockAttribution.ExecuteHandleProbeForTests = null;
         }
     }
 
