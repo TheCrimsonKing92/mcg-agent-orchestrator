@@ -87,6 +87,9 @@ public sealed class AgentOutputDirectivesTests
             StringComparison.Ordinal);
         Assert.DoesNotContain("not-verifiable-from-diff", complex, StringComparison.Ordinal);
         Assert.DoesNotContain("not-verifiable-from-diff", compact, StringComparison.Ordinal);
+        const string attestationInstructionStart = "End needs-work verdict prose";
+        const string exactAttestationInstruction =
+            "End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
         foreach (var requirements in new[] { complex, compact })
         {
             Assert.Contains("complete candidate diff supplied for the current round", requirements, StringComparison.Ordinal);
@@ -94,7 +97,12 @@ public sealed class AgentOutputDirectivesTests
             Assert.Contains("file:line", requirements, StringComparison.Ordinal);
             Assert.Contains("severity `blocking`", requirements, StringComparison.Ordinal);
             Assert.Contains("violated acceptance criterion", requirements, StringComparison.Ordinal);
-            Assert.Contains("no other blocking findings exist in this diff", requirements, StringComparison.Ordinal);
+            var attestationRequirement = Assert.Single(
+                requirements.Split(Environment.NewLine),
+                line => line.Contains(attestationInstructionStart, StringComparison.Ordinal));
+            Assert.Equal(
+                exactAttestationInstruction,
+                attestationRequirement[attestationRequirement.IndexOf(attestationInstructionStart, StringComparison.Ordinal)..]);
             Assert.Contains("REVIEW DEFECT", requirements, StringComparison.Ordinal);
             Assert.Contains("demonstrably present in an earlier reviewed complete candidate diff", requirements, StringComparison.Ordinal);
             Assert.Contains("violated criterion index, normalized file path, line/region, then stable_id", requirements, StringComparison.Ordinal);

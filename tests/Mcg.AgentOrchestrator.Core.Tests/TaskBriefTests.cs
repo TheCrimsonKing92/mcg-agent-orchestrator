@@ -330,6 +330,10 @@ public sealed class TaskBriefTests
     {
         Assert.Contains("complete candidate diff supplied for the current round", brief, StringComparison.Ordinal);
         Assert.Contains("enumerate every blocking finding", brief, StringComparison.Ordinal);
+        Assert.Contains(
+            "with file:line, severity `blocking` from `blocking|advisory`, and a violated acceptance criterion",
+            brief,
+            StringComparison.Ordinal);
         Assert.Contains("no other blocking findings exist in this diff", brief, StringComparison.Ordinal);
         Assert.Contains("REVIEW DEFECT", brief, StringComparison.Ordinal);
     }
