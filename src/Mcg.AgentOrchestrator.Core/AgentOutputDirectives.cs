@@ -78,7 +78,7 @@ public static class AgentOutputDirectives
             "tests: <pass|fail|not-run|deferred|inconclusive - token first, then current-round evidence>",
             "commit: <commit sha or none>",
             role == AgentRole.Reviewer
-                ? "blockers: <none - token first when verdict is pass; exact-blocker - token first for every open blocking finding; blank is invalid; advisory findings belong only in findings>"
+                ? "blockers: <none - token first when verdict is pass; otherwise one complete semicolon-delimited token per open blocking finding, each with file:line, severity blocking, and a violated acceptance criterion; no literal semicolons inside a token; blank is invalid; advisory findings belong only in findings>"
                 : "blockers: <none|premise-invalid - fact and evidence (Planner/Researcher only)|exact-blocker - token first; blank is invalid; put deferred-verification notes in tests>"
         };
 

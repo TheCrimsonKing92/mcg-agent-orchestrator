@@ -449,6 +449,18 @@ public static class WorkerResultBlockers
         return false;
     }
 
+    public static bool TryFindBlockers(string workerOutput, out IReadOnlyList<string> blockers)
+    {
+        blockers = [];
+        if (!TryFindBlocker(workerOutput, out var blocker))
+        {
+            return false;
+        }
+
+        blockers = SplitBlockerFindings(blocker);
+        return blockers.Count > 0;
+    }
+
     public static bool TryFindPremiseInvalidEvidence(TaskVerificationRecord? verification, out string evidence)
     {
         evidence = string.Empty;

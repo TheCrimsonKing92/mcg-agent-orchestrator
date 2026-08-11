@@ -302,8 +302,8 @@ public sealed class TaskBriefTests
     Assert.True(!brief.Contains("Keep the response concise", StringComparison.Ordinal));
 }
 
-    [Xunit.Fact(DisplayName = "BuildTaskBrief_adds_high_risk_reviewer_enumeration_contract_only_for_stored_intake_labels")]
-    public void BuildTaskBriefAddsHighRiskReviewerEnumerationContractOnlyForStoredIntakeLabels()
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_adds_exhaustive_reviewer_contract_for_all_intake_labels")]
+    public void BuildTaskBriefAddsExhaustiveReviewerContractForAllIntakeLabels()
 {
     var kernel = new AgentOrchestratorKernel(new FakeClock());
     var highRiskReviewer = new TaskSpec(TaskId.New(), "Review implementation output and risks.", AgentRole.Reviewer);
@@ -326,13 +326,13 @@ public sealed class TaskBriefTests
     var complexBrief = kernel.BuildTaskBrief(complexGoal.Id, complexReviewer.Id).Content;
     var normalBrief = kernel.BuildTaskBrief(normalGoal.Id, normalReviewer.Id).Content;
 
-    Assert.Contains("High-risk review enumeration contract", highRiskBrief, StringComparison.Ordinal);
-    Assert.Contains("list all acceptance-blocking findings in one ranked pass", highRiskBrief, StringComparison.Ordinal);
-    Assert.Contains("do not stop at the first blocker", highRiskBrief, StringComparison.Ordinal);
-    Assert.Contains("put exactly the complete ranked open blocking set in `blockers`", highRiskBrief, StringComparison.Ordinal);
-    Assert.Contains("High-risk review enumeration contract", complexBrief, StringComparison.Ordinal);
-    Assert.DoesNotContain("High-risk review enumeration contract", normalBrief, StringComparison.Ordinal);
-    Assert.DoesNotContain("list all acceptance-blocking findings in one ranked pass", normalBrief, StringComparison.Ordinal);
+    foreach (var brief in new[] { highRiskBrief, complexBrief, normalBrief })
+    {
+        Assert.Contains("complete candidate diff supplied for the current round", brief, StringComparison.Ordinal);
+        Assert.Contains("enumerate every blocking finding", brief, StringComparison.Ordinal);
+        Assert.Contains("no other blocking findings exist in this diff", brief, StringComparison.Ordinal);
+        Assert.Contains("REVIEW DEFECT", brief, StringComparison.Ordinal);
+    }
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_reviewer_staleness_policy")]

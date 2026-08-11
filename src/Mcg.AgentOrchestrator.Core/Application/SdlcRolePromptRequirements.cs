@@ -3,8 +3,14 @@ namespace Mcg.AgentOrchestrator.Core;
 internal static class SdlcRolePromptRequirements
 {
     private const string IntakeRiskLabelsMarker = "risk labels:";
-    internal const int ReviewerComplexRequirementsMaxChars = 3556;
-    internal const int ReviewerCompactRequirementsMaxChars = 2546;
+    internal const int ReviewerComplexRequirementsMaxChars = 4356;
+    internal const int ReviewerCompactRequirementsMaxChars = 3346;
+
+    private const string ReviewerExhaustiveFindingsContract =
+        "- Every `needs-work` verdict must inspect the complete candidate diff supplied for the current round and enumerate every blocking finding; never stop after the first. Put each in verdict prose and one semicolon-delimited `blockers` token (no literal semicolons), with file:line, severity `blocking` from `blocking|advisory`, and a violated acceptance criterion ID/label or clear quote/paraphrase. For deletions cite an old/new diff line; for file-wide defects, the defining line. Deduplicate only the same defect identity (stable_id preferred; otherwise normalized file/region+criterion+meaning), union criterion references, retain the most precise current anchor, and never merge by shared file, criterion, or cause. Order by violated criterion index, normalized file path, line/region, then stable_id; `blockers` uses that order. End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
+
+    private const string ReviewerDefectContract =
+        "- `REVIEW DEFECT` is a later-round blocker demonstrably present in an earlier reviewed complete candidate diff. Self-check for it; absent historical comparison evidence prevents this label, not current-diff review.";
 
     public static IReadOnlyList<string> Build(AgentRole role)
     {
@@ -86,7 +92,10 @@ internal static class SdlcRolePromptRequirements
                 "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use only `Core.Tests` or `Infrastructure.Tests`; never infer or encode a request in description prose.",
                 "- Classify findings with `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, or `operator-owned`; mixed source/test findings are correctness work for Developer.",
                 "- Treat the structured Review Convergence Scope as authoritative: re-check OPEN findings and net-new diff code; carry RESOLVED findings without re-review unless this round's diff touched the exact structural anchor.",
-                "- Emit every finding in one-line `findings` JSON with stable_id, state, required severity, category, structural location, and description. Missing severity is blocking; missing category is unspecified. Any remediable open blocking finding requires `needs-work` plus its exact blocker in `blockers`; reserve `fail` for a non-remediable stop. When no open blocking findings remain, use `verdict: pass` and `blockers: none` even when open advisory findings remain; advisories belong only in `findings`. Reuse a carried stable_id at its current location when the system-derived round diff touched its prior anchor; otherwise retain the prior location. Emit exact prior anchors touched in `touched_anchors`; similar defects on new code get new stable IDs.",
+                "- Emit one-line `findings` JSON with stable_id, state, severity, category, structural location, and description; missing severity is blocking and missing category unspecified. Reuse a carried stable_id at its current location if the round diff touched its prior anchor; otherwise retain its prior location. Emit exact `touched_anchors`; new-code defects get new stable IDs.",
+                ReviewerExhaustiveFindingsContract,
+                ReviewerDefectContract,
+                "- Remediable open blockers require `needs-work`; reserve `fail` for non-remediable stops. With none, use `verdict: pass` and `blockers: none`; advisories belong only in `findings`.",
                 "- State residual risk, test gaps, and whether acceptance is justified; do not approve from another role's summary alone.",
                 "- Do not modify repository files; implementation belongs to the Developer task."
             ],
@@ -119,13 +128,6 @@ internal static class SdlcRolePromptRequirements
             requirements[1] = "- Synthesize the plan from the complete Durable Research Notes supplied by the orchestrator; do not repeat a broad repository source survey.";
         }
 
-        if (!includeHighRiskReviewerEnumerationContract || role != AgentRole.Reviewer)
-        {
-            return requirements;
-        }
-
-        requirements.Add("- High-risk review enumeration contract: if any open blocking findings are remediable, use `needs-work` and list all acceptance-blocking findings in one ranked pass (P1/P2); do not stop at the first blocker because the Developer receives exactly one findings list per cycle.");
-        requirements.Add("- Keep the WORKER_RESULT blockers field format unchanged: put exactly the complete ranked open blocking set in `blockers`; when none remain, use `verdict: pass` and `blockers: none`. Keep advisories only in `findings`.");
         return requirements;
     }
 
@@ -215,7 +217,10 @@ internal static class SdlcRolePromptRequirements
                 "- Use git diff main...HEAD for scope. Branch-behind-main alone is NOT a blocker; block only on concrete conflict, semantic overlap, or a non-applying diff.",
                 "- A finding that needs executed focused test evidence may include `evidence_request:{selections:[{test_project,test_class}]}` regardless of category. Use only `Core.Tests` or `Infrastructure.Tests`; never infer or encode a request in description prose.",
                 "- Classify findings as `spec-compliance`, `spec-defect`, `correctness`, `test-evidence`, `test-coverage`, `code-quality`, or `operator-owned`.",
-                "- Treat structured Review Convergence Scope as authoritative: re-check OPEN findings and new diff code; carry RESOLVED findings unless their exact anchor was touched. Keep a carried stable ID at its current location when the system-derived round diff touched its prior anchor; otherwise retain the prior location. Findings require severity and category; missing severity is blocking and missing category unspecified. Any remediable open blocker requires `needs-work` plus exact `blockers`; reserve `fail` for non-remediable stops. When none remain, use `verdict: pass` and `blockers: none` even with open advisories. Emit `touched_anchors`; new-code defects get new stable IDs.",
+                "- Treat Review Convergence Scope as authoritative: re-check OPEN findings and new diff code; carry RESOLVED findings unless their exact anchor was touched. Keep carried IDs at their current touched location, else their prior location. Findings require severity/category. Emit `touched_anchors`; new-code defects get new IDs.",
+                ReviewerExhaustiveFindingsContract,
+                ReviewerDefectContract,
+                "- Remediable open blockers require `needs-work`; reserve `fail` for non-remediable stops. With none, use `verdict: pass` and `blockers: none`; advisories belong only in `findings`.",
                 "- Challenge generic summaries by comparing implementation and verification evidence.",
                 "- Ignore generated bin/obj output unless targeted; state residual risk, test gaps, and acceptance recommendation.",
                 "- Do not modify repository files; implementation belongs to the Developer task."

@@ -434,6 +434,8 @@ public sealed class ModelExecutionTests
     Assert.Contains(openAi.LastRequest!.Messages, message => message.Content.Contains("Reviewer Requirements", StringComparison.Ordinal));
     Assert.Contains(openAi.LastRequest.Messages, message => message.Content.Contains("findings first", StringComparison.Ordinal));
     Assert.Contains(openAi.LastRequest.Messages, message => message.Content.Contains("Challenge generic summaries", StringComparison.Ordinal));
+    Assert.Contains(openAi.LastRequest.Messages, message => message.Content.Contains("enumerate every blocking finding", StringComparison.Ordinal));
+    Assert.Contains(openAi.LastRequest.Messages, message => message.Content.Contains("no other blocking findings exist in this diff", StringComparison.Ordinal));
     Assert.Equal("high", openAi.LastRequest.Options.ReasoningEffort);
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_trims_noisy_timeline_messages_in_prompt")]
