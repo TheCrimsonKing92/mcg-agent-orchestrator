@@ -2674,8 +2674,11 @@ internal sealed class ConductorBatchLoop
                 driver.ReadSuppressedCohortPairs());
             if (cohortSelection is not null)
             {
-                driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection);
-                var cohortRun = driver.RunAcceptanceCohort(cohortSelection, cohortEligible, policy);
+                var cohortRun = driver.RunAcceptanceCohort(
+                    cohortSelection,
+                    cohortEligible,
+                    policy,
+                    onGateAdmitted: () => driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection));
                 foreach (var pair in cohortRun.MemberResults)
                 {
                     results[pair.Key] = new ParallelLandingOutcome(pair.Value, SlotIndex: 0);

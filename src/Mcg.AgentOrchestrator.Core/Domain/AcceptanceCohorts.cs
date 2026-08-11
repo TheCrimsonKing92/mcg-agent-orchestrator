@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Security.Cryptography;
 using System.Text;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.Core;
@@ -241,7 +242,40 @@ public sealed record AcceptanceCohortReceipt(
         Outcome == AcceptanceCohortGateOutcome.Passed &&
         ValidForLanding &&
         GateExitCode == 0 &&
-        HasNormalizedTestResultPaths(GateTestResultPaths);
+        AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(GateTestResultPaths);
+}
+
+public static class AcceptanceCohortGateEvidence
+{
+    public static bool HasCoherentTrxEvidence(IReadOnlyList<string>? paths)
+    {
+        if (!HasNormalizedTestResultPaths(paths))
+        {
+            return false;
+        }
+
+        foreach (var path in paths!)
+        {
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (!HasCoherentExecutedTrxEvidence(XDocument.Load(path, LoadOptions.None)))
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static bool HasNormalizedTestResultPaths(IReadOnlyList<string>? paths)
     {
@@ -263,5 +297,51 @@ public sealed record AcceptanceCohortReceipt(
         {
             return false;
         }
+    }
+
+    private static bool HasCoherentExecutedTrxEvidence(XDocument document)
+    {
+        XNamespace trxNamespace = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+        var root = document.Root;
+        if (root?.Name != trxNamespace + "TestRun")
+        {
+            return false;
+        }
+
+        var results = root.Element(trxNamespace + "Results");
+        var unitResults = results?.Elements(trxNamespace + "UnitTestResult").ToArray() ?? [];
+        var counters = root.Element(trxNamespace + "ResultSummary")?.Element(trxNamespace + "Counters");
+        if (unitResults.Length == 0 || counters is null ||
+            !TryReadNonNegativeCounter(counters, "total", out var total) ||
+            !TryReadNonNegativeCounter(counters, "executed", out var executed) ||
+            !TryReadNonNegativeCounter(counters, "passed", out var passed) ||
+            !TryReadNonNegativeCounter(counters, "failed", out var failed))
+        {
+            return false;
+        }
+
+        var passedResults = unitResults.Count(result =>
+            string.Equals((string?)result.Attribute("outcome"), "Passed", StringComparison.OrdinalIgnoreCase));
+        var failedResults = unitResults.Count(result =>
+            string.Equals((string?)result.Attribute("outcome"), "Failed", StringComparison.OrdinalIgnoreCase));
+        return total > 0 &&
+            executed > 0 &&
+            executed <= total &&
+            unitResults.Length == executed &&
+            passedResults == passed &&
+            failedResults == failed &&
+            passed + failed == executed;
+    }
+
+    private static bool TryReadNonNegativeCounter(XElement counters, string name, out int value)
+    {
+        var raw = counters.Attributes().FirstOrDefault(attribute =>
+            attribute.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;
+        return int.TryParse(
+                raw,
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out value) &&
+            value >= 0;
     }
 }

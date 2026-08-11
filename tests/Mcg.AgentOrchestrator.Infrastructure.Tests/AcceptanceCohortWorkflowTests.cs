@@ -178,7 +178,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 [],
                 ValidForLanding: true,
                 GateExitCode: 0,
-                GateTestResultPaths: [Path.GetFullPath("cohort.trx")]);
+                GateTestResultPaths: [WritePassingTrx(root, "cohort.trx")]);
             var store = new CohortAcceptanceStore(databasePath);
 
             Assert.Equal(receipt, store.SaveGateReceipt(receipt));
@@ -241,10 +241,21 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 new string('d', 40),
                 "manifest-v1");
             var store = new CohortAcceptanceStore(Path.Combine(root, "cohort.db"));
+            var validTrx = WritePassingTrx(root, "valid.trx");
+            var missingFile = Path.GetFullPath(Path.Combine(root, "missing.trx"));
+            var malformedTrx = Path.GetFullPath(Path.Combine(root, "malformed.trx"));
+            var incoherentTrx = Path.GetFullPath(Path.Combine(root, "incoherent.trx"));
+            File.WriteAllText(malformedTrx, "not xml");
+            File.WriteAllText(incoherentTrx, """
+                <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                  <Results><UnitTestResult testId="1" testName="Passes" outcome="Passed" /></Results>
+                  <ResultSummary outcome="Completed"><Counters total="2" executed="2" passed="2" failed="0" /></ResultSummary>
+                </TestRun>
+                """);
 
             var missingExit = new AcceptanceCohortReceipt(
                 "missing-exit", identity, AcceptanceCohortGateOutcome.Passed,
-                DateTimeOffset.UtcNow, 1, [], null, [Path.GetFullPath("missing-exit.trx")],
+                DateTimeOffset.UtcNow, 1, [], null, [validTrx],
                 ValidForLanding: true);
             var missingTrx = missingExit with
             {
@@ -257,10 +268,29 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 ReceiptId = "unnormalized-trx",
                 GateTestResultPaths = ["relative.trx"]
             };
+            var absentTrx = missingExit with
+            {
+                ReceiptId = "absent-trx",
+                GateExitCode = 0,
+                GateTestResultPaths = [missingFile]
+            };
+            var malformed = absentTrx with
+            {
+                ReceiptId = "malformed-trx",
+                GateTestResultPaths = [malformedTrx]
+            };
+            var incoherent = absentTrx with
+            {
+                ReceiptId = "incoherent-trx",
+                GateTestResultPaths = [incoherentTrx]
+            };
 
             Assert.Throws<ArgumentException>(() => store.SaveGateReceipt(missingExit));
             Assert.Throws<ArgumentException>(() => store.SaveGateReceipt(missingTrx));
             Assert.Throws<ArgumentException>(() => store.SaveGateReceipt(unnormalizedTrx));
+            Assert.Throws<ArgumentException>(() => store.SaveGateReceipt(absentTrx));
+            Assert.Throws<ArgumentException>(() => store.SaveGateReceipt(malformed));
+            Assert.Throws<ArgumentException>(() => store.SaveGateReceipt(incoherent));
             Assert.Null(store.TryReadReceipt(identity.Value));
         }
         finally
@@ -307,7 +337,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 100,
                 [],
                 GateExitCode: 0,
-                GateTestResultPaths: [Path.GetFullPath("receipt-shared.trx")],
+                GateTestResultPaths: [WritePassingTrx(repo, "receipt-shared.trx")],
                 ValidForLanding: true));
 
             var result = LandingExecutor.ExecuteCohort(
@@ -375,7 +405,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 100,
                 [],
                 GateExitCode: 0,
-                GateTestResultPaths: [Path.GetFullPath("receipt-invalidated.trx")],
+                GateTestResultPaths: [WritePassingTrx(repo, "receipt-invalidated.trx")],
                 ValidForLanding: true));
 
             File.WriteAllText(Path.Combine(repo, "main-moved.txt"), "new main");
@@ -408,7 +438,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
-    public void MainMovementToCohortAncestorAtMutationBoundary_FailsCompareAndSwap()
+    public void MainCasFailure_RestoresIntegrationRef_AndLandsNeitherMember()
     {
         var repo = CreateAcceptanceCohortRepository();
         var previousGitRunner = LandingExecutor.GitRunner;
@@ -428,12 +458,17 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             };
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+            RunGit(repo, "branch", LandingExecutor.IntegrationBranchName, main);
+            var integrationBefore = RunGitOutput(
+                repo,
+                "rev-parse",
+                $"refs/heads/{LandingExecutor.IntegrationBranchName}").Trim();
             using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings);
             var identity = AcceptanceCohortIdentity.Create(
                 bindings, main, integration.TreeRevision, GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
             var receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
                 "receipt-cas", identity, AcceptanceCohortGateOutcome.Passed, DateTimeOffset.UtcNow,
-                100, [], 0, [Path.GetFullPath("receipt-cas.trx")], ValidForLanding: true));
+                100, [], 0, [WritePassingTrx(repo, "receipt-cas.trx")], ValidForLanding: true));
             var moved = false;
             LandingExecutor.GitRunner = (workingDirectory, args) =>
             {
@@ -456,6 +491,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(AcceptanceCohortLandingOutcome.StateInvalidated, result.Outcome);
             Assert.False(result.MainAdvanced);
             Assert.Equal(first.Revision, RunGitOutput(repo, "rev-parse", "main").Trim());
+            Assert.Equal(
+                integrationBefore,
+                RunGitOutput(repo, "rev-parse", $"refs/heads/{LandingExecutor.IntegrationBranchName}").Trim());
             using var connection = new SqliteConnection($"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
             connection.Open();
             using var command = connection.CreateCommand();
@@ -521,6 +559,81 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void ProductionRed_RunsBothPartitions_AndClassifiesInteraction()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First RED cohort member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second RED cohort member", repo);
+            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/First.cs", "first");
+            _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var failingTrx = WriteFailingTrx(repo, "combined-red.trx");
+            var firstPassingTrx = WritePassingTrx(repo, "first-green.trx");
+            var secondPassingTrx = WritePassingTrx(repo, "second-green.trx");
+            var verifier = new SequenceAcceptanceVerifier(
+            [
+                new AcceptanceVerificationResult(
+                    Passed: false,
+                    Skipped: false,
+                    ExitCode: 1,
+                    OutputTail: "combined failure",
+                    Checks: [new AcceptanceCheckResult("combined", false, 1, "combined failure")],
+                    TestResultPaths: [failingTrx]),
+                new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    Checks: [new AcceptanceCheckResult("first partition", true, 0, null)],
+                    TestResultPaths: [firstPassingTrx]),
+                new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    Checks: [new AcceptanceCheckResult("second partition", true, 0, null)],
+                    TestResultPaths: [secondPassingTrx])
+            ]);
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+            var selection = ProjectSelection(driver, firstGoal, secondGoal);
+            var mainBefore = RunGitOutput(repo, "rev-parse", "main").Trim();
+
+            var result = driver.RunAcceptanceCohort(
+                selection, [firstGoal, secondGoal], ConductorAutonomyPolicy.Permissive);
+
+            Assert.Equal(3, verifier.RunCount);
+            Assert.Equal<GoalId?>([null, firstGoal.Id, secondGoal.Id], verifier.GoalIds);
+            Assert.Equal(AcceptanceCohortGateOutcome.Failed, result.Receipt?.Outcome);
+            Assert.Equal(AcceptanceCohortAttributionOutcome.InteractionOnly, result.Receipt?.Attribution);
+            Assert.All(result.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
+            Assert.Equal(mainBefore, RunGitOutput(repo, "rev-parse", "main").Trim());
+            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+
+            var store = new CohortAcceptanceStore(
+                Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+            Assert.Contains(
+                ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
+                store.ReadSuppressedPairs());
+            using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM cohort_partition_receipts WHERE cohort_id=$cohort;";
+            command.Parameters.AddWithValue("$cohort", result.Receipt!.Identity.Value);
+            Assert.Equal(2, Convert.ToInt32(command.ExecuteScalar()));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void PreparedLanding_RecoversCoverageOnlyAfterExactCommitIsReachableFromMain()
     {
         var repo = CreateAcceptanceCohortRepository();
@@ -549,7 +662,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 100,
                 [],
                 GateExitCode: 0,
-                GateTestResultPaths: [Path.GetFullPath("recoverable-receipt.trx")],
+                GateTestResultPaths: [WritePassingTrx(repo, "recoverable-receipt.trx")],
                 ValidForLanding: true));
             store.PrepareLanding(receipt, integration.CommitRevision);
 
@@ -608,6 +721,10 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 verifier,
                 AgentCatalog.Default().Agents,
                 WorkerProfileCatalog.Default());
+            var fairnessStore = new CohortAcceptanceStore(
+                Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+            fairnessStore.RecordOvertake(firstGoal.Id);
+            fairnessStore.RecordOvertake(secondGoal.Id);
             var stopPath = Path.Combine(repo, "stop-does-not-exist");
 
             var summary = new ConductorBatchLoop().Run(
@@ -619,6 +736,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 
             Assert.Equal(1, verifier.RunCount);
             Assert.True(verifier.StableSlotLeaseObserved);
+            Assert.Equal(0, fairnessStore.ReadOvertakeCount(firstGoal.Id));
+            Assert.Equal(0, fairnessStore.ReadOvertakeCount(secondGoal.Id));
             Assert.Equal(2, summary.Advanced);
             Assert.True(File.Exists(Path.Combine(
                 repo,
@@ -705,6 +824,10 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 AgentCatalog.Default().Agents,
                 WorkerProfileCatalog.Default());
             var selection = ProjectSelection(driver, firstGoal, secondGoal);
+            var store = new CohortAcceptanceStore(
+                Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+            store.RecordOvertake(firstGoal.Id);
+            var gateAdmissions = 0;
 
             File.WriteAllText(Path.Combine(repo, "main-moved.txt"), "new main");
             RunGit(repo, "add", "main-moved.txt");
@@ -713,13 +836,20 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var result = driver.RunAcceptanceCohort(
                 selection,
                 [firstGoal, secondGoal],
-                ConductorAutonomyPolicy.Permissive);
+                ConductorAutonomyPolicy.Permissive,
+                onGateAdmitted: () =>
+                {
+                    gateAdmissions++;
+                    driver.RecordCohortAdmissionFairness([firstGoal, secondGoal], selection);
+                });
 
             Assert.Null(result.Receipt);
             Assert.Empty(result.MemberResults);
             Assert.Contains("outcome=materialization-failure", result.Detail, StringComparison.Ordinal);
             Assert.Contains("fallback=ordinary", result.Detail, StringComparison.Ordinal);
             Assert.Equal(0, verifier.RunCount);
+            Assert.Equal(0, gateAdmissions);
+            Assert.Equal(1, store.ReadOvertakeCount(firstGoal.Id));
             Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
             Assert.Equal(firstRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(firstGoal.Id)}").Trim());
             Assert.Equal(secondRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(secondGoal.Id)}").Trim());
@@ -781,7 +911,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 100,
                 [],
                 GateExitCode: 0,
-                GateTestResultPaths: [Path.GetFullPath("retryable-hold-receipt.trx")],
+                GateTestResultPaths: [WritePassingTrx(repo, "retryable-hold-receipt.trx")],
                 ValidForLanding: true));
 
             driver.LandingMutationBlocker = () => "operator-controlled landing pause";
@@ -859,7 +989,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 100,
                 [],
                 GateExitCode: 0,
-                GateTestResultPaths: [Path.GetFullPath("legacy-cached-pass.trx")],
+                GateTestResultPaths: [WritePassingTrx(repo, "legacy-cached-pass.trx")],
                 ValidForLanding: true));
             using (var connection = new SqliteConnection($"Data Source={databasePath}"))
             {
@@ -1015,6 +1145,31 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         </TestRun>
         """;
 
+    private static string WritePassingTrx(string directory, string fileName)
+    {
+        Directory.CreateDirectory(directory);
+        var path = Path.GetFullPath(Path.Combine(directory, fileName));
+        File.WriteAllText(path, ValidPassingTrx());
+        return path;
+    }
+
+    private static string WriteFailingTrx(string directory, string fileName)
+    {
+        Directory.CreateDirectory(directory);
+        var path = Path.GetFullPath(Path.Combine(directory, fileName));
+        File.WriteAllText(path, """
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <Results>
+                <UnitTestResult testId="1" testName="Fails" outcome="Failed" />
+              </Results>
+              <ResultSummary outcome="Failed">
+                <Counters total="1" executed="1" passed="0" failed="1" />
+              </ResultSummary>
+            </TestRun>
+            """);
+        return path;
+    }
+
     private static string CreateAcceptanceCohortRepository()
     {
         var repo = CreateSeededRepository();
@@ -1092,6 +1247,38 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             [resource],
             ChangeRiskTier.Behavior,
             ConductorTransitionDecision.Auto,
-            GateReadyMergeStatus.Clean.ToString(),
-            GateReadyMergeReason.NoConflictsDetected.ToString());
+             GateReadyMergeStatus.Clean.ToString(),
+             GateReadyMergeReason.NoConflictsDetected.ToString());
+
+    private sealed class SequenceAcceptanceVerifier(
+        IReadOnlyList<AcceptanceVerificationResult> results) : IGoalAcceptanceVerifier
+    {
+        private int _nextResult;
+
+        internal int RunCount => _nextResult;
+        internal List<GoalId?> GoalIds { get; } = [];
+
+        public Task<AcceptanceVerificationResult> RunAsync(
+            string worktreePath,
+            GoalId? goalId = null,
+            IReadOnlyList<string>? changedFiles = null,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            CancellationToken cancellationToken = default)
+        {
+            GoalIds.Add(goalId);
+            Assert.True(_nextResult < results.Count, "The cohort invoked the acceptance verifier more times than expected.");
+            return Task.FromResult(results[_nextResult++]);
+        }
+
+        public Task<FocusedEvidenceRunResult> RunFocusedEvidenceAsync(
+            string worktreePath,
+            GoalId? goalId,
+            string request,
+            int? stableSlotIndex = null,
+            DotnetBuildEnvironmentLease? stableSlotLease = null,
+            bool runBaselineArm = false,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Focused evidence is not used by the cohort sequence fixture.");
+    }
 }

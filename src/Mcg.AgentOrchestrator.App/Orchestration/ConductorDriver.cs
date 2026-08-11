@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
@@ -2390,7 +2389,8 @@ internal sealed class ConductorDriver
         ConductorAcceptanceCohortSelection selection,
         IReadOnlyList<Goal> orderedGoals,
         ConductorAutonomyPolicy policy,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? onGateAdmitted = null)
     {
         ArgumentNullException.ThrowIfNull(selection);
         ArgumentNullException.ThrowIfNull(orderedGoals);
@@ -2457,7 +2457,7 @@ internal sealed class ConductorDriver
             receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
             return CohortFallback(
                 receipt,
-                "cached passing receipt lacks successful exit and normalized TRX evidence; both goals returned to Ready projection fallback=ordinary");
+                "cached passing receipt lacks successful exit and extant coherent TRX evidence; both goals returned to Ready projection fallback=ordinary");
         }
 
         if (receipt is null)
@@ -2472,6 +2472,7 @@ internal sealed class ConductorDriver
                 using var stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(
                     identity.Value,
                     cancellationToken);
+                onGateAdmitted?.Invoke();
                 verification = _cohortAcceptanceVerifier.RunAsync(
                     integration.Path,
                     goalId: null,
@@ -2722,23 +2723,16 @@ internal sealed class ConductorDriver
         {
             return AcceptanceCohortGateOutcome.InfrastructureFailure;
         }
-        if (result.TestResultPaths is { Count: > 0 })
+        IReadOnlyList<string> normalizedTestResultPaths;
+        try
         {
-            foreach (var path in result.TestResultPaths)
-            {
-                if (!File.Exists(path)) return AcceptanceCohortGateOutcome.InfrastructureFailure;
-                try
-                {
-                    var document = XDocument.Load(path, LoadOptions.None);
-                    if (!HasCoherentExecutedTrxEvidence(document))
-                    {
-                        return AcceptanceCohortGateOutcome.InfrastructureFailure;
-                    }
-                }
-                catch { return AcceptanceCohortGateOutcome.InfrastructureFailure; }
-            }
+            normalizedTestResultPaths = NormalizeCohortTestResultPaths(result.TestResultPaths);
         }
-        else
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return AcceptanceCohortGateOutcome.InfrastructureFailure;
+        }
+        if (!AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(normalizedTestResultPaths))
         {
             return AcceptanceCohortGateOutcome.InfrastructureFailure;
         }
@@ -2754,52 +2748,6 @@ internal sealed class ConductorDriver
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-
-    private static bool HasCoherentExecutedTrxEvidence(XDocument document)
-    {
-        XNamespace trxNamespace = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
-        var root = document.Root;
-        if (root?.Name != trxNamespace + "TestRun")
-        {
-            return false;
-        }
-
-        var results = root.Element(trxNamespace + "Results");
-        var unitResults = results?.Elements(trxNamespace + "UnitTestResult").ToArray() ?? [];
-        var counters = root.Element(trxNamespace + "ResultSummary")?.Element(trxNamespace + "Counters");
-        if (unitResults.Length == 0 || counters is null ||
-            !TryReadNonNegativeCounter(counters, "total", out var total) ||
-            !TryReadNonNegativeCounter(counters, "executed", out var executed) ||
-            !TryReadNonNegativeCounter(counters, "passed", out var passed) ||
-            !TryReadNonNegativeCounter(counters, "failed", out var failed))
-        {
-            return false;
-        }
-
-        var passedResults = unitResults.Count(result =>
-            string.Equals((string?)result.Attribute("outcome"), "Passed", StringComparison.OrdinalIgnoreCase));
-        var failedResults = unitResults.Count(result =>
-            string.Equals((string?)result.Attribute("outcome"), "Failed", StringComparison.OrdinalIgnoreCase));
-        return total > 0 &&
-            executed > 0 &&
-            executed <= total &&
-            unitResults.Length == executed &&
-            passedResults == passed &&
-            failedResults == failed &&
-            passed + failed == executed;
-    }
-
-    private static bool TryReadNonNegativeCounter(XElement counters, string name, out int value)
-    {
-        var raw = counters.Attributes().FirstOrDefault(attribute =>
-            attribute.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase))?.Value;
-        return int.TryParse(
-                raw,
-                System.Globalization.NumberStyles.None,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out value) &&
-            value >= 0;
-    }
 
     private static ConductorAcceptanceCohortRunResult CohortHeld(
         IReadOnlyList<Goal> goals,

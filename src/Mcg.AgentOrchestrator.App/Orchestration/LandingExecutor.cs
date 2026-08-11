@@ -246,7 +246,7 @@ internal static class LandingExecutor
         if (!receipt.HasAuthoritativeLandingEvidence)
         {
             throw new InvalidOperationException(
-                "Only an exact passing cohort receipt with successful exit and normalized TRX evidence can authorize landing.");
+                "Only an exact passing cohort receipt with successful exit and extant coherent TRX evidence can authorize landing.");
         }
 
         var executionDirectory = workspace.ExecutionDirectory;
@@ -335,10 +335,11 @@ internal static class LandingExecutor
         var currentIntegration = RunGit(
             executionDirectory,
             "rev-parse", "--verify", "--quiet", $"refs/heads/{IntegrationBranchName}");
+        string? priorIntegrationRevision = null;
         if (currentIntegration.ExitCode == 0 && !string.IsNullOrWhiteSpace(currentIntegration.Output))
         {
-            var integrationRevision = currentIntegration.Output.Trim();
-            if (RunGit(executionDirectory, "merge-base", "--is-ancestor", integrationRevision, liveMain).ExitCode != 0)
+            priorIntegrationRevision = currentIntegration.Output.Trim();
+            if (RunGit(executionDirectory, "merge-base", "--is-ancestor", priorIntegrationRevision, liveMain).ExitCode != 0)
             {
                 return new AcceptanceCohortLandingResult(
                     AcceptanceCohortLandingOutcome.RetryableHold,
@@ -349,7 +350,7 @@ internal static class LandingExecutor
                 "update-ref",
                 $"refs/heads/{IntegrationBranchName}",
                 commit,
-                integrationRevision);
+                priorIntegrationRevision);
             if (advanceIntegration.ExitCode != 0)
             {
                 return new AcceptanceCohortLandingResult(
@@ -380,16 +381,31 @@ internal static class LandingExecutor
             receipt.Identity.ObservedMainRevision);
         if (advanceMain.ExitCode != 0)
         {
+            var rollbackIntegration = priorIntegrationRevision is null
+                ? RunGit(
+                    executionDirectory,
+                    "update-ref", "-d", $"refs/heads/{IntegrationBranchName}", commit)
+                : RunGit(
+                    executionDirectory,
+                    "update-ref",
+                    $"refs/heads/{IntegrationBranchName}",
+                    priorIntegrationRevision,
+                    commit);
+            var rollbackDetail = rollbackIntegration.ExitCode == 0
+                ? "integration ref restored"
+                : $"integration ref rollback failed: {rollbackIntegration.Error}";
             foreach (var goal in goals)
             {
                 GoalOperationJournal.TombstoneLandingIntent(
                     executionDirectory,
                     goal,
-                    $"cohort main compare-and-swap failed: {advanceMain.Error}");
+                    $"cohort main compare-and-swap failed: {advanceMain.Error}; {rollbackDetail}");
             }
             return new AcceptanceCohortLandingResult(
-                AcceptanceCohortLandingOutcome.StateInvalidated,
-                $"Cohort receipt invalidated because main changed at the compare-and-swap boundary: {advanceMain.Error}");
+                rollbackIntegration.ExitCode == 0
+                    ? AcceptanceCohortLandingOutcome.StateInvalidated
+                    : AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Cohort receipt invalidated because main changed at the compare-and-swap boundary: {advanceMain.Error}; {rollbackDetail}.");
         }
         var refreshCheckout = RunGit(
             executionDirectory,
