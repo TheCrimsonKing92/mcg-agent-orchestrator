@@ -164,42 +164,34 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         var falsePositiveRows = ReadCsv(Path.Combine(fixture.Root, "provider-false-positive", "excess-worker-rounds.csv"));
         var falsePositive = Xunit.Assert.Single(falsePositiveRows, row => row["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
         Xunit.Assert.DoesNotContain("provider/preflight", falsePositive["failureFindingCategories"], StringComparison.Ordinal);
-
-        File.AppendAllText(
-            fixture.FirstJournalPath,
-            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"No tasks dispatched; assigned tasks were excluded from the ready batch: task 1 aaaaaaaa000000000000000000000000 provider=codex-cli reason=preflight-blocked: blocked: fixture\"}\n");
-        fixture.RefreshFirstJournalDigest();
-        var positive = fixture.Run("provider-positive");
-        Xunit.Assert.True(positive.ExitCode == 0, positive.Stdout + positive.Stderr);
-        var positiveRows = ReadCsv(Path.Combine(fixture.Root, "provider-positive", "excess-worker-rounds.csv"));
-        var positiveRow = Xunit.Assert.Single(positiveRows, row => row["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
-        Xunit.Assert.Contains("provider/preflight", positiveRow["failureFindingCategories"], StringComparison.Ordinal);
     }
 
-    [Xunit.Fact]
-    public async Task SubscriptionPreflightReadyBlockedReason_IsProviderEvidence()
+    [Xunit.Theory]
+    [Xunit.InlineData("preflight-blocked")]
+    [Xunit.InlineData("subscription-preflight")]
+    public async Task ProducedProviderPreflightReadyBlockedReasons_AreProviderEvidence(string reason)
     {
         using var fixture = await AnalysisFixture.CreateAsync();
         File.AppendAllText(
             fixture.FirstJournalPath,
-            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"No tasks dispatched; assigned tasks were excluded from the ready batch: task 1 aaaaaaaa000000000000000000000000 provider=codex-cli reason=subscription-preflight: blocked: subscription retry is cooling down\"}\n");
+            $"{{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"No tasks dispatched; assigned tasks were excluded from the ready batch: task 1 aaaaaaaa000000000000000000000000 provider=codex-cli reason={reason}: blocked: fixture\"}}\n");
         fixture.RefreshFirstJournalDigest();
 
-        var result = fixture.Run("subscription-preflight-positive");
+        var result = fixture.Run($"{reason}-positive");
 
         Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
-        var rows = ReadCsv(Path.Combine(fixture.Root, "subscription-preflight-positive", "excess-worker-rounds.csv"));
+        var rows = ReadCsv(Path.Combine(fixture.Root, $"{reason}-positive", "excess-worker-rounds.csv"));
         var row = Xunit.Assert.Single(rows, candidate => candidate["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
         Xunit.Assert.Contains("provider/preflight", row["failureFindingCategories"], StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
-    public async Task TaskOutcomeTokens_WithoutReadyBlockedReason_AreNotProviderEvidence()
+    public async Task TaskOutcomeReason_WithoutReadyBlockedProducer_IsNotProviderEvidence()
     {
         using var fixture = await AnalysisFixture.CreateAsync();
         File.AppendAllText(
             fixture.FirstJournalPath,
-            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"task-outcome outcomeRule=provider-rate-limit outcome=preflight-blocked\"}\n");
+            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"task-outcome outcomeRule=provider-rate-limit outcome=preflight-blocked reason=provider-rate-limit\"}\n");
         fixture.RefreshFirstJournalDigest();
 
         var result = fixture.Run("task-outcome-negative");

@@ -164,9 +164,12 @@ function Get-JournalFacts([string]$Path, [datetimeoffset]$Cutoff) {
         if ($operation -eq 'conductor:finding-evidence' -and $status -eq 'Begin' -and
             $detail -match '(?i)Running focused (?:finding|reviewer) evidence') { $focused++ }
         if ($operation -eq 'conductor:acceptance' -and $status -eq 'Begin') { $gates++ }
-        $isFailedDispatch = $operation -in @('conductor:dispatch', 'conductor:dispatch-start') -and $status -eq 'Failed'
-        if ($isFailedDispatch -and
-            $detail -match '(?i)(?:^|[; ])reason=(?:preflight-blocked|preflight-failure|subscription-preflight|provider-(?:authentication|connectivity|model-rejection|neutral-progress-stall|rate-limit|sandbox-launch-1312)|subscription-limit|silent-launch-failure|rate-limited)(?:[; :,]|$)') {
+        $isFailedSubscriptionDispatch = $operation -eq 'conductor:dispatch' -and $status -eq 'Failed'
+        $hasReadyBlockedEnvelope = $detail.StartsWith(
+            'No tasks dispatched; assigned tasks were excluded from the ready batch: ',
+            [StringComparison]::Ordinal)
+        $hasProviderPreflightDiagnostic = $detail -match '(?i)(?:ready batch: |; )task \d+ [0-9a-f]{32} provider=[^\s;]+ reason=(?:preflight-blocked|subscription-preflight)(?:[ :;]|$)'
+        if ($isFailedSubscriptionDispatch -and $hasReadyBlockedEnvelope -and $hasProviderPreflightDiagnostic) {
             [void]$categories.Add('provider/preflight')
         }
     }
