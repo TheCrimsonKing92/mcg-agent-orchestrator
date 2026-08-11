@@ -29,6 +29,8 @@ public sealed class AcceptanceCohortWorkspace : IDisposable
 {
     private readonly string _executionDirectory;
     private bool _disposed;
+    internal static Action<string, string> WorkspaceRemover { get; set; } =
+        GoalWorktrees.RemoveAcceptanceCohortWorkspace;
 
     internal AcceptanceCohortWorkspace(
         string executionDirectory,
@@ -67,8 +69,16 @@ public sealed class AcceptanceCohortWorkspace : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true;
-        GoalWorktrees.RemoveAcceptanceCohortWorkspace(_executionDirectory, Path);
+        try
+        {
+            WorkspaceRemover(_executionDirectory, Path);
+            _disposed = true;
+        }
+        catch
+        {
+            GoalWorktrees.RecordAcceptanceCohortCleanupNeeded(Path);
+            throw;
+        }
     }
 }
 
@@ -262,4 +272,7 @@ public static partial class GoalWorktrees
         }
         _ = GitCli.Run(executionDirectory, "worktree", "prune");
     }
+
+    internal static void RecordAcceptanceCohortCleanupNeeded(string workspacePath) =>
+        RecordCleanupNeeded(workspacePath, "cohort:worktree-remove-failed", hooks: GoalWorktreeCleanupHooks.Default);
 }

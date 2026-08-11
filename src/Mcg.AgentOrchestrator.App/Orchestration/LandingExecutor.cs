@@ -371,19 +371,32 @@ internal static class LandingExecutor
             }
         }
 
-        var merge = RunGit(executionDirectory, "merge", "--ff-only", commit);
-        if (merge.ExitCode != 0)
+        var advanceMain = RunGit(
+            executionDirectory,
+            "update-ref",
+            "refs/heads/main",
+            commit,
+            receipt.Identity.ObservedMainRevision);
+        if (advanceMain.ExitCode != 0)
         {
             foreach (var goal in goals)
             {
                 GoalOperationJournal.TombstoneLandingIntent(
                     executionDirectory,
                     goal,
-                    $"cohort fast-forward failed: {merge.Error}");
+                    $"cohort main compare-and-swap failed: {advanceMain.Error}");
             }
             return new AcceptanceCohortLandingResult(
-                AcceptanceCohortLandingOutcome.RetryableHold,
-                $"Cohort fast-forward failed: {merge.Error}");
+                AcceptanceCohortLandingOutcome.StateInvalidated,
+                $"Cohort receipt invalidated because main changed at the compare-and-swap boundary: {advanceMain.Error}");
+        }
+        var refreshCheckout = RunGit(
+            executionDirectory,
+            "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);
+        if (refreshCheckout.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Main advanced to the exact cohort commit, but its checked-out files could not be refreshed: {refreshCheckout.Error}");
         }
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);

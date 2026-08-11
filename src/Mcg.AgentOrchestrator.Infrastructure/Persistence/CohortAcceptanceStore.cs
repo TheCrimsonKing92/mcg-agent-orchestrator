@@ -79,8 +79,10 @@ public sealed class CohortAcceptanceStore
             command.CommandText = """
                 INSERT INTO cohort_members(
                     cohort_id, member_ordinal, goal_id, branch_revision, candidate_revision,
-                    landing_paths_json, resource_keys_json, landed)
-                VALUES ($cohort, $ordinal, $goal, $branch, $candidate, $paths, $resources, 0);
+                    landing_paths_json, resource_keys_json, risk_tier, promotion_disposition,
+                    merge_status, merge_reason, landed)
+                VALUES ($cohort, $ordinal, $goal, $branch, $candidate, $paths, $resources,
+                    $risk, $promotion, $mergeStatus, $mergeReason, 0);
                 """;
             command.Parameters.AddWithValue("$cohort", receipt.Identity.Value);
             command.Parameters.AddWithValue("$ordinal", index);
@@ -89,6 +91,10 @@ public sealed class CohortAcceptanceStore
             command.Parameters.AddWithValue("$candidate", member.CandidateRevision);
             command.Parameters.AddWithValue("$paths", JsonSerializer.Serialize(member.LandingPaths));
             command.Parameters.AddWithValue("$resources", JsonSerializer.Serialize(member.ResourceKeys));
+            command.Parameters.AddWithValue("$risk", member.ChangeRiskTier.ToString());
+            command.Parameters.AddWithValue("$promotion", member.AutoPromotionDisposition.ToString());
+            command.Parameters.AddWithValue("$mergeStatus", member.MergeStatus);
+            command.Parameters.AddWithValue("$mergeReason", member.MergeReason);
             command.ExecuteNonQuery();
         }
 
@@ -246,6 +252,14 @@ public sealed class CohortAcceptanceStore
             {
                 throw new InvalidOperationException("Cohort receipt was missing during invalidation.");
             }
+        }
+        using (var invalidateIntent = connection.CreateCommand())
+        {
+            invalidateIntent.Transaction = transaction;
+            invalidateIntent.CommandText = "UPDATE cohort_landing_intents SET state='invalidated', updated_at=$updated WHERE cohort_id=$cohort;";
+            invalidateIntent.Parameters.AddWithValue("$cohort", cohortId);
+            invalidateIntent.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
+            invalidateIntent.ExecuteNonQuery();
         }
         var receipt = ReadReceipt(connection, cohortId, transaction) ??
             throw new InvalidOperationException("Cohort receipt disappeared during invalidation.");
@@ -459,6 +473,10 @@ public sealed class CohortAcceptanceStore
                 candidate_revision TEXT NOT NULL,
                 landing_paths_json TEXT NOT NULL,
                 resource_keys_json TEXT NOT NULL,
+                risk_tier TEXT NOT NULL,
+                promotion_disposition TEXT NOT NULL,
+                merge_status TEXT NOT NULL,
+                merge_reason TEXT NOT NULL,
                 landed INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY(cohort_id, member_ordinal),
                 UNIQUE(cohort_id, goal_id));
@@ -503,6 +521,36 @@ public sealed class CohortAcceptanceStore
                 recorded_at TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
+        EnsureColumn(connection, "cohort_members", "risk_tier", "TEXT NOT NULL DEFAULT 'DocsOnly'");
+        EnsureColumn(connection, "cohort_members", "promotion_disposition", "TEXT NOT NULL DEFAULT 'Auto'");
+        EnsureColumn(connection, "cohort_members", "merge_status", "TEXT NOT NULL DEFAULT 'Clean'");
+        EnsureColumn(connection, "cohort_members", "merge_reason", "TEXT NOT NULL DEFAULT 'NoConflictsDetected'");
+        using var invalidateLegacy = connection.CreateCommand();
+        invalidateLegacy.CommandText = """
+            UPDATE cohort_receipts
+            SET outcome='Invalidated', valid_for_landing=0
+            WHERE cohort_id NOT LIKE 'cohort-v2-%';
+            UPDATE cohort_landing_intents
+            SET state='invalidated', updated_at=$updated
+            WHERE cohort_id NOT LIKE 'cohort-v2-%' AND state='prepared';
+            """;
+        invalidateLegacy.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
+        invalidateLegacy.ExecuteNonQuery();
+    }
+
+    private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)
+    {
+        using var inspect = connection.CreateCommand();
+        inspect.CommandText = $"PRAGMA table_info({table});";
+        using var reader = inspect.ExecuteReader();
+        while (reader.Read())
+        {
+            if (reader.GetString(1).Equals(column, StringComparison.OrdinalIgnoreCase)) return;
+        }
+        reader.Close();
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition};";
+        alter.ExecuteNonQuery();
     }
 
     private static AcceptanceCohortReceipt? ReadReceipt(
@@ -510,6 +558,10 @@ public sealed class CohortAcceptanceStore
         string cohortId,
         SqliteTransaction? transaction)
     {
+        if (!cohortId.StartsWith($"{AcceptanceCohortIdentity.Version}-", StringComparison.Ordinal))
+        {
+            return null;
+        }
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
@@ -535,7 +587,8 @@ public sealed class CohortAcceptanceStore
         using var membersCommand = connection.CreateCommand();
         membersCommand.Transaction = transaction;
         membersCommand.CommandText = """
-            SELECT goal_id, branch_revision, candidate_revision, landing_paths_json, resource_keys_json
+            SELECT goal_id, branch_revision, candidate_revision, landing_paths_json, resource_keys_json,
+                   risk_tier, promotion_disposition, merge_status, merge_reason
             FROM cohort_members WHERE cohort_id=$cohort ORDER BY member_ordinal;
             """;
         membersCommand.Parameters.AddWithValue("$cohort", cohortId);
@@ -548,7 +601,11 @@ public sealed class CohortAcceptanceStore
                 membersReader.GetString(1),
                 membersReader.GetString(2),
                 JsonSerializer.Deserialize<string[]>(membersReader.GetString(3)) ?? [],
-                JsonSerializer.Deserialize<string[]>(membersReader.GetString(4)) ?? []));
+                JsonSerializer.Deserialize<string[]>(membersReader.GetString(4)) ?? [],
+                Enum.Parse<Mcg.AgentOrchestrator.Core.Conductor.ChangeRiskTier>(membersReader.GetString(5)),
+                Enum.Parse<Mcg.AgentOrchestrator.Core.Conductor.ConductorTransitionDecision>(membersReader.GetString(6)),
+                membersReader.GetString(7),
+                membersReader.GetString(8)));
         }
         if (members.Count != 2)
         {

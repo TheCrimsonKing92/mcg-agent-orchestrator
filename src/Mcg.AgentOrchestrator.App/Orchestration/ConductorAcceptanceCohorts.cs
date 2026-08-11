@@ -31,7 +31,11 @@ internal sealed record ConductorAcceptanceCohortSelection(
             member.BranchRevision,
             member.CandidateRevision,
             member.LandingPaths,
-            member.ResourceKeys)).ToArray();
+            member.ResourceKeys,
+            member.ChangeRiskTier,
+            member.AutoPromotionDisposition,
+            member.MergeEvidence.Status.ToString(),
+            member.MergeEvidence.Reason.ToString())).ToArray();
 }
 
 internal sealed record ConductorAcceptanceCohortRunResult(
@@ -65,6 +69,7 @@ internal static class ConductorAcceptanceCohortSelector
             ready.Add(projected.Projection);
         }
 
+        var forcedCandidateIsReady = false;
         if (forcedCandidate is not null)
         {
             var forcedIndex = ready.FindIndex(candidate => candidate.GoalId == forcedCandidate);
@@ -73,11 +78,13 @@ internal static class ConductorAcceptanceCohortSelector
                 var forced = ready[forcedIndex];
                 ready.RemoveAt(forcedIndex);
                 ready.Insert(0, forced);
+                forcedCandidateIsReady = true;
             }
         }
 
         var exclusions = new List<ConductorAcceptanceCohortPairExclusion>();
-        for (var firstIndex = 0; firstIndex < ready.Count - 1; firstIndex++)
+        var firstCandidateLimit = forcedCandidateIsReady ? Math.Min(1, ready.Count - 1) : ready.Count - 1;
+        for (var firstIndex = 0; firstIndex < firstCandidateLimit; firstIndex++)
         {
             for (var secondIndex = firstIndex + 1; secondIndex < ready.Count; secondIndex++)
             {

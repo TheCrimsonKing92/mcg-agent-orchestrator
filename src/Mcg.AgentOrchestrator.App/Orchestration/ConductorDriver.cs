@@ -2477,7 +2477,7 @@ internal sealed class ConductorDriver
             }
             gateClock.Stop();
             receipt = new AcceptanceCohortReceipt(
-                $"cohort-receipt-v1-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
+                $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
                 identity,
                 outcome,
                 DateTimeOffset.UtcNow,
@@ -2487,7 +2487,21 @@ internal sealed class ConductorDriver
             receipt = _cohortAcceptanceStore.SaveGateReceipt(receipt);
         }
 
-        integration.AssertGoalBranchesUnchanged();
+        try
+        {
+            integration.AssertGoalBranchesUnchanged();
+        }
+        catch (InvalidOperationException ex)
+        {
+            receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+            return CohortFallback(receipt, $"post-gate goal branch changed; fallback=ordinary detail={BoundCohortDetail(ex.Message)}");
+        }
+        if (receipt.Outcome is AcceptanceCohortGateOutcome.InfrastructureFailure or AcceptanceCohortGateOutcome.Invalidated)
+        {
+            return CohortFallback(
+                receipt,
+                $"indeterminate cohort outcome={receipt.Outcome}; attribution=none fallback=ordinary");
+        }
         if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
             receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable)
         {
@@ -2516,10 +2530,18 @@ internal sealed class ConductorDriver
                     !live.Projection.Equals(selection.Members[index]))
                 {
                     receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
-                    return CohortHeld(goals, policy, receipt, "post-gate binding changed; both goals returned to Ready projection");
+                    return CohortFallback(receipt, "post-gate binding changed; both goals returned to Ready projection fallback=ordinary");
                 }
             }
-            integration.AssertGoalBranchesUnchanged();
+            try
+            {
+                integration.AssertGoalBranchesUnchanged();
+            }
+            catch (InvalidOperationException ex)
+            {
+                receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+                return CohortFallback(receipt, $"post-gate goal branch changed; fallback=ordinary detail={BoundCohortDetail(ex.Message)}");
+            }
             var landing = LandingExecutor.ExecuteCohort(
                 _cohortKernel,
                 goals,
@@ -2535,6 +2557,7 @@ internal sealed class ConductorDriver
                 if (landing.Outcome == AcceptanceCohortLandingOutcome.StateInvalidated)
                 {
                     receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+                    return CohortFallback(receipt, $"{landing.Message} fallback=ordinary");
                 }
                 return CohortHeld(goals, policy, receipt, landing.Message);
             }
@@ -2644,6 +2667,13 @@ internal sealed class ConductorDriver
                 checked((long)clock.Elapsed.TotalMilliseconds),
                 testResultPaths);
         }
+
+        ConductorAcceptanceCohortRunResult CohortFallback(
+            AcceptanceCohortReceipt diagnosticReceipt,
+            string detail) => new(
+                diagnosticReceipt,
+                new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
+                $"outcome={diagnosticReceipt.Outcome} receipt={diagnosticReceipt.ReceiptId} {BoundCohortDetail(detail)}");
     }
 
     private static string CreateCohortPartitionReceiptId(
@@ -2678,7 +2708,7 @@ internal sealed class ConductorDriver
                 catch { return AcceptanceCohortGateOutcome.InfrastructureFailure; }
             }
         }
-        else if (result.Passed)
+        else
         {
             return AcceptanceCohortGateOutcome.InfrastructureFailure;
         }

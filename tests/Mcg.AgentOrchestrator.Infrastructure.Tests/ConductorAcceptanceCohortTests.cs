@@ -37,6 +37,16 @@ public sealed class ConductorAcceptanceCohortTests
     }
 
     [Fact]
+    public void Selector_ForcedCandidateWithoutCompatiblePeer_DoesNotAdmitLaterPair()
+    {
+        var forced = Ready("11111111111111111111111111111111", "src", "resource:forced");
+        var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
+        var third = Ready("33333333333333333333333333333333", "tests/Third.cs", "resource:third");
+
+        Assert.Null(ConductorAcceptanceCohortSelector.Select([forced, second, third], forced.GoalId));
+    }
+
+    [Fact]
     public void Selector_FailsClosedForEmptyResources_AndChecksResourcesCaseInsensitively()
     {
         var empty = Ready("11111111111111111111111111111111", "src/First.cs", resource: null);
@@ -70,9 +80,45 @@ public sealed class ConductorAcceptanceCohortTests
             "manifest-v1");
 
         Assert.Equal(identity.Value, repeated.Value);
-        Assert.StartsWith("cohort-v1-", identity.Value, StringComparison.Ordinal);
-        Assert.Equal("cohort-v1-".Length + 64, identity.Value.Length);
+        Assert.StartsWith($"{AcceptanceCohortIdentity.Version}-", identity.Value, StringComparison.Ordinal);
+        Assert.Equal(AcceptanceCohortIdentity.Version.Length + 1 + 64, identity.Value.Length);
         Assert.NotEqual(identity.Value, reversed.Value);
+    }
+
+    [Fact]
+    public void Identity_BindsLandingScopeAndResources()
+    {
+        var first = Binding("11111111111111111111111111111111", 'b', "src/A.cs", "resource:a");
+        var second = Binding("22222222222222222222222222222222", 'c', "tests/B.cs", "resource:b");
+        var changedPath = Binding("11111111111111111111111111111111", 'b', "src/Changed.cs", "resource:a");
+        var changedResource = Binding("11111111111111111111111111111111", 'b', "src/A.cs", "resource:changed");
+        var changedRisk = Binding(
+            "11111111111111111111111111111111", 'b', "src/A.cs", "resource:a", ChangeRiskTier.Security);
+        var changedPromotion = Binding(
+            "11111111111111111111111111111111", 'b', "src/A.cs", "resource:a",
+            promotion: ConductorTransitionDecision.Escalate);
+        var changedMerge = Binding(
+            "11111111111111111111111111111111", 'b', "src/A.cs", "resource:a",
+            mergeStatus: "Conflict", mergeReason: "ConflictsDetected");
+
+        var original = AcceptanceCohortIdentity.Create(
+            [first, second], MainRevision, new string('d', 40), "manifest-v1");
+        var withChangedPath = AcceptanceCohortIdentity.Create(
+            [changedPath, second], MainRevision, new string('d', 40), "manifest-v1");
+        var withChangedResource = AcceptanceCohortIdentity.Create(
+            [changedResource, second], MainRevision, new string('d', 40), "manifest-v1");
+        var withChangedRisk = AcceptanceCohortIdentity.Create(
+            [changedRisk, second], MainRevision, new string('d', 40), "manifest-v1");
+        var withChangedPromotion = AcceptanceCohortIdentity.Create(
+            [changedPromotion, second], MainRevision, new string('d', 40), "manifest-v1");
+        var withChangedMerge = AcceptanceCohortIdentity.Create(
+            [changedMerge, second], MainRevision, new string('d', 40), "manifest-v1");
+
+        Assert.NotEqual(original.Value, withChangedPath.Value);
+        Assert.NotEqual(original.Value, withChangedResource.Value);
+        Assert.NotEqual(original.Value, withChangedRisk.Value);
+        Assert.NotEqual(original.Value, withChangedPromotion.Value);
+        Assert.NotEqual(original.Value, withChangedMerge.Value);
     }
 
     [Fact]
@@ -127,6 +173,18 @@ public sealed class ConductorAcceptanceCohortTests
         }
     }
 
+    [Fact]
+    public void FailedGateWithoutTrxIsInfrastructureFailure()
+    {
+        Assert.Equal(
+            AcceptanceCohortGateOutcome.InfrastructureFailure,
+            ConductorDriver.ClassifyCohortVerification(new AcceptanceVerificationResult(
+                Passed: false,
+                Skipped: false,
+                ExitCode: 1,
+                OutputTail: "runner returned no result artifact")));
+    }
+
     private static ConductorSpeculativeAcceptanceCandidate Ready(
         string goalValue,
         string path,
@@ -156,10 +214,18 @@ public sealed class ConductorAcceptanceCohortTests
         string goalValue,
         char revisionCharacter,
         string path,
-        string resource) => new(
+        string resource,
+        ChangeRiskTier risk = ChangeRiskTier.Behavior,
+        ConductorTransitionDecision promotion = ConductorTransitionDecision.Auto,
+        string? mergeStatus = null,
+        string? mergeReason = null) => new(
             new GoalId(goalValue),
             new string(revisionCharacter, 40),
             new string(revisionCharacter, 40),
             [path],
-            [resource]);
+            [resource],
+            risk,
+            promotion,
+            mergeStatus ?? GateReadyMergeStatus.Clean.ToString(),
+            mergeReason ?? GateReadyMergeReason.NoConflictsDetected.ToString());
 }

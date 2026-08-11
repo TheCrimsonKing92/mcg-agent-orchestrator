@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Security.Cryptography;
 using System.Text;
+using Mcg.AgentOrchestrator.Core.Conductor;
 
 namespace Mcg.AgentOrchestrator.Core;
 
@@ -11,7 +12,11 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
         string branchRevision,
         string candidateRevision,
         IReadOnlyList<string> landingPaths,
-        IReadOnlyList<string> resourceKeys)
+        IReadOnlyList<string> resourceKeys,
+        ChangeRiskTier changeRiskTier,
+        ConductorTransitionDecision autoPromotionDisposition,
+        string mergeStatus,
+        string mergeReason)
     {
         ArgumentNullException.ThrowIfNull(landingPaths);
         ArgumentNullException.ThrowIfNull(resourceKeys);
@@ -26,9 +31,23 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
         {
             throw new ArgumentException("A cohort member requires authoritative resource keys.", nameof(resourceKeys));
         }
+        if (!Enum.IsDefined(changeRiskTier))
+        {
+            throw new ArgumentOutOfRangeException(nameof(changeRiskTier));
+        }
+        if (!Enum.IsDefined(autoPromotionDisposition))
+        {
+            throw new ArgumentOutOfRangeException(nameof(autoPromotionDisposition));
+        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(mergeStatus);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mergeReason);
 
         LandingPaths = Copy(landingPaths);
         ResourceKeys = Copy(resourceKeys);
+        ChangeRiskTier = changeRiskTier;
+        AutoPromotionDisposition = autoPromotionDisposition;
+        MergeStatus = mergeStatus.Trim();
+        MergeReason = mergeReason.Trim();
     }
 
     public GoalId GoalId { get; }
@@ -36,6 +55,10 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
     public string CandidateRevision { get; }
     public IReadOnlyList<string> LandingPaths { get; }
     public IReadOnlyList<string> ResourceKeys { get; }
+    public ChangeRiskTier ChangeRiskTier { get; }
+    public ConductorTransitionDecision AutoPromotionDisposition { get; }
+    public string MergeStatus { get; }
+    public string MergeReason { get; }
 
     public bool Equals(AcceptanceCohortMemberBinding? other) =>
         other is not null &&
@@ -43,7 +66,11 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
         BranchRevision.Equals(other.BranchRevision, StringComparison.Ordinal) &&
         CandidateRevision.Equals(other.CandidateRevision, StringComparison.Ordinal) &&
         LandingPaths.SequenceEqual(other.LandingPaths, StringComparer.Ordinal) &&
-        ResourceKeys.SequenceEqual(other.ResourceKeys, StringComparer.Ordinal);
+        ResourceKeys.SequenceEqual(other.ResourceKeys, StringComparer.Ordinal) &&
+        ChangeRiskTier == other.ChangeRiskTier &&
+        AutoPromotionDisposition == other.AutoPromotionDisposition &&
+        MergeStatus.Equals(other.MergeStatus, StringComparison.Ordinal) &&
+        MergeReason.Equals(other.MergeReason, StringComparison.Ordinal);
 
     public override bool Equals(object? obj) => Equals(obj as AcceptanceCohortMemberBinding);
 
@@ -55,6 +82,10 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
         hash.Add(CandidateRevision, StringComparer.Ordinal);
         foreach (var path in LandingPaths) hash.Add(path, StringComparer.Ordinal);
         foreach (var resource in ResourceKeys) hash.Add(resource, StringComparer.Ordinal);
+        hash.Add(ChangeRiskTier);
+        hash.Add(AutoPromotionDisposition);
+        hash.Add(MergeStatus, StringComparer.Ordinal);
+        hash.Add(MergeReason, StringComparer.Ordinal);
         return hash.ToHashCode();
     }
 
@@ -75,7 +106,7 @@ public sealed class AcceptanceCohortMemberBinding : IEquatable<AcceptanceCohortM
 
 public sealed class AcceptanceCohortIdentity : IEquatable<AcceptanceCohortIdentity>
 {
-    public const string Version = "cohort-v1";
+    public const string Version = "cohort-v2";
 
     private AcceptanceCohortIdentity(
         IReadOnlyList<AcceptanceCohortMemberBinding> members,
@@ -125,6 +156,14 @@ public sealed class AcceptanceCohortIdentity : IEquatable<AcceptanceCohortIdenti
             WriteField(stream, member.GoalId.Value);
             WriteField(stream, member.BranchRevision);
             WriteField(stream, member.CandidateRevision);
+            WriteField(stream, member.LandingPaths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            foreach (var path in member.LandingPaths) WriteField(stream, path);
+            WriteField(stream, member.ResourceKeys.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            foreach (var resource in member.ResourceKeys) WriteField(stream, resource);
+            WriteField(stream, member.ChangeRiskTier.ToString());
+            WriteField(stream, member.AutoPromotionDisposition.ToString());
+            WriteField(stream, member.MergeStatus);
+            WriteField(stream, member.MergeReason);
         }
         WriteField(stream, main);
         WriteField(stream, tree);
