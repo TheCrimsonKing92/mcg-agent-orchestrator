@@ -1690,6 +1690,92 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains("\"verdict\"", output, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public async Task GoalCreateForcedFiveRolePersistsExactTaskOrder()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        const string objective = "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with one focused assertion.";
+
+        Xunit.Assert.NotEqual(
+            GoalIntakePipeline.FiveRole,
+            GoalObjectivePlanner.Build(objective).PipelineDecision.Pipeline);
+
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal", objective, "--pipeline", "five-role"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var restored = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
+        var persistedGoal = Xunit.Assert.Single(restored.Goals);
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            persistedGoal.Tasks.Select(task => task.RequiredRole));
+    }
+
+    [Xunit.Fact]
+    public async Task GoalCreateUnsatisfiedPipelineLeavesStateAndOutboxUnchanged()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initialKernel = new AgentOrchestratorKernel();
+        var existingGoal = initialKernel.CreateGoal(
+            "Existing durable goal",
+            [new TaskSpec(TaskId.New(), "Keep existing work", AgentRole.Developer)]);
+        await repository.SaveAsync(initialKernel);
+        var existingMessage = GoalCreationSideEffectDelivery.CreateMessage(existingGoal.Id, [], []);
+        await repository.TransactWithOutboxAsync(
+            (_, _) => Task.FromResult((
+                ShouldSave: false,
+                Result: true,
+                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[existingMessage])));
+        var beforeKernel = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
+        var beforeSnapshot = JsonSerializer.Serialize(beforeKernel.ExportGoalSnapshot(existingGoal.Id));
+        var beforeOutbox = await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents
+            .Where(agent => agent.Role != AgentRole.Tester)
+            .ToArray();
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["goal", "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs", "--pipeline", "five-role"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal)));
+
+        var reloadedRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var afterKernel = await reloadedRepository.LoadAsync();
+        var afterGoal = Xunit.Assert.Single(afterKernel.Goals);
+        Xunit.Assert.Equal(beforeSnapshot, JsonSerializer.Serialize(afterKernel.ExportGoalSnapshot(afterGoal.Id)));
+        Xunit.Assert.Equal(beforeOutbox, await reloadedRepository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+        Xunit.Assert.Equal(existingGoal.Id, currentGoal!.Id);
+        Xunit.Assert.Contains("missing available agent role(s): Tester", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("No goal was created", exception.Message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_delivery_failure_is_durable_and_retry_only")]
     public async Task PersistentRunnerGoalCreateDeliveryFailureIsDurableAndRetryOnly()
     {

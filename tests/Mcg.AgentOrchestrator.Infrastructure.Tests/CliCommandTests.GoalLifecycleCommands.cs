@@ -11,6 +11,99 @@ using System.Text.Json;
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 {
+    [Xunit.Fact]
+    public void CliGoalPipelineValueHasHelpSplitAndNormalizationParity()
+    {
+        var interactive = CliArgumentParser.SplitCommand(
+            "goal Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs --pipeline five-role");
+        var oneShot = CliArgumentParser.NormalizeArgs(
+            ["goal", "Update", "src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs", "--pipeline", "five-role"]);
+
+        Xunit.Assert.Equal(
+            ["goal", "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs", "--pipeline", "five-role"],
+            interactive);
+        Xunit.Assert.Equal(interactive, oneShot);
+        Xunit.Assert.Contains("--pipeline <auto|five-role>", CliCommandHelp.GoalUsage, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void CliGoalBriefFileForcesFiveRoleAndRejectsSimpleConflict()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var briefPath = Path.Combine(root, "forced-pipeline.md");
+        File.WriteAllText(
+            briefPath,
+            "Update security token handling in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs with focused tests.");
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["goal", "--brief-file", briefPath, "--pipeline", "five-role"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            currentGoal!.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
+
+        var conflictKernel = new AgentOrchestratorKernel();
+        Goal? conflictGoal = null;
+        var exception = Xunit.Assert.Throws<ArgumentException>(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["goal", "--brief-file", briefPath, "--simple", "--pipeline", "five-role"],
+                conflictKernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref conflictGoal));
+        Xunit.Assert.Empty(conflictKernel.Goals);
+        Xunit.Assert.Contains("cannot be combined with a simple-goal", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void CliGoalPipelineRejectsMissingUnknownAndConflictingValues()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        foreach (var args in new[]
+        {
+            new[] { "goal", "Update docs/usage.md", "--pipeline" },
+            new[] { "goal", "Update docs/usage.md", "--pipeline", "developer-reviewer" },
+            new[] { "goal", "Update docs/usage.md", "--pipeline", "auto", "--pipeline", "five-role" }
+        })
+        {
+            Xunit.Assert.Throws<ArgumentException>(() =>
+                CliCommandDispatcher.ExecuteCommand(
+                    args,
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal));
+        }
+
+        Xunit.Assert.Empty(kernel.Goals);
+    }
+
     [Xunit.Fact(DisplayName = "Cli_goal_mark_landed_splits_confirmation_and_force_flags")]
     public void CliGoalMarkLandedSplitsConfirmationAndForceFlags()
     {

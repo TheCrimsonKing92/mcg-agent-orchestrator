@@ -298,8 +298,8 @@ Console.WriteLine("    Show recommended next action and print the exact command 
 Console.WriteLine("    --full: also surfaces status, monitor, readiness, evidence, stages, gates, verify-needed,");
 Console.WriteLine("            input-needed, subscription-plan, model-outcomes, durations, dispatch-value, loop-health, failure-triage,");
 Console.WriteLine("            goal-recovery, supervisor, and operator-inbox detail in one output.");
-Console.WriteLine("  goal <objective> [--simple] [--from-backlog] [--run --confirm-batch-start]");
-Console.WriteLine("    Create a goal. --simple: single Developer task. --from-backlog: read from the backlog store. --run: create and start.");
+Console.WriteLine("  goal <objective> [--pipeline auto|five-role] [--simple] [--from-backlog] [--run --confirm-batch-start]");
+Console.WriteLine("    Create a goal. --pipeline: automatic selection or explicitly require five roles. --simple: single Developer task. --from-backlog: read from the backlog store. --run: create and start.");
 Console.WriteLine("  accept [goal-id] [--skip-verify] [--autonomy <policy>]");
 Console.WriteLine("    Accept a completed goal: run acceptance checks, merge workspace, and clean up worktree.");
 Console.WriteLine("  stop <goal-id> <reason>|--text-file <path> --as cancel|park|abandon|supersede [--confirm-goal-stop|--confirm-goal-park|--confirm-goal-abandon]");
@@ -325,7 +325,7 @@ Console.WriteLine("  simple-hosted-dashboard [port|url] [--refresh seconds] [--o
 Console.WriteLine("  open-dashboard [port|url] [--refresh seconds] [--open] [--no-open]");
 Console.WriteLine("  transcript [path]");
 Console.WriteLine("  simple-goal <objective>, goal-plan [heading-filter] [--create-goals|--create-simple-goals] [--backlog-coverage full|slice]");
-Console.WriteLine("  backlog-intake [heading-filter] [--create-goal|--create-simple-goal] [--backlog-coverage full|slice] [--force-reclaim]");
+Console.WriteLine("  backlog-intake [heading-filter] [--create-goal [--pipeline auto|five-role]|--create-simple-goal] [--backlog-coverage full|slice] [--force-reclaim]");
 Console.WriteLine("  intent-template [template request] [--create-goal|--create-simple-goal]");
 Console.WriteLine("  goals, agents, autonomy-policies");
 Console.WriteLine("  agent <role> <provider> <model> [name] [--complex-model <model>] (replace role)");

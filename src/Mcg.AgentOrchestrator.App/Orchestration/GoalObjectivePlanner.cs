@@ -23,6 +23,37 @@ internal enum GoalIntakePipeline
     FiveRole
 }
 
+internal enum GoalIntakePipelineRequest
+{
+    Auto,
+    FiveRole
+}
+
+internal static class GoalIntakePipelineRequestParser
+{
+    public const string AllowedValues = "auto, five-role";
+
+    public static GoalIntakePipelineRequest Parse(string value)
+    {
+        if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return GoalIntakePipelineRequest.Auto;
+        }
+
+        if (value.Equals("five-role", StringComparison.OrdinalIgnoreCase))
+        {
+            return GoalIntakePipelineRequest.FiveRole;
+        }
+
+        throw new ArgumentException($"--pipeline must be one of: {AllowedValues}.");
+    }
+
+    public static GoalIntakePipeline? ToPipelineOverride(this GoalIntakePipelineRequest request) =>
+        request == GoalIntakePipelineRequest.FiveRole
+            ? GoalIntakePipeline.FiveRole
+            : null;
+}
+
 internal sealed record GoalIntakePipelineDecision(
     GoalIntakePipeline Pipeline,
     bool IsOverride,
@@ -35,6 +66,8 @@ internal sealed record GoalIntakePipelineDecision(
         GoalIntakePipeline.FiveRole => "five-role",
         _ => Pipeline.ToString()
     };
+
+    public string SelectionSource => IsOverride ? "explicitly-required" : "automatic";
 }
 
 internal sealed record GoalHistoricalOutcomeRates(

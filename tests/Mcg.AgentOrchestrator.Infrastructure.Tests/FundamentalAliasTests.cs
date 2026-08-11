@@ -485,6 +485,46 @@ public sealed class FundamentalAliasTests
         Xunit.Assert.Contains("## Add smoke test coverage", output);
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void CliGoalFromBacklogForwardsPipelineInEitherOrder(bool pipelineBeforeFilter)
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, """
+        # Backlog
+
+        ## Update alias help
+
+        Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs. Done when a focused assertion passes.
+        """);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        string[] args = pipelineBeforeFilter
+            ? ["goal", "--pipeline", "five-role", "--from-backlog", "Update alias help", "--create-goal", "--backlog-coverage", "full"]
+            : ["goal", "Update alias help", "--from-backlog", "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"];
+        var output = CaptureConsole(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                args,
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            currentGoal!.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
+    }
+
     // ─── SplitCommand for new aliases ────────────────────────────────────────
 
     [Xunit.Fact(DisplayName = "CliArgumentParser_stop_splits_goal_reason_and_mode_flag")]

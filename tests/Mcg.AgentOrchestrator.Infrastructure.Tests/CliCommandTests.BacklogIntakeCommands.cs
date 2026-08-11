@@ -281,6 +281,228 @@ public sealed class CliCommandTestsBacklogIntakeCommands : CliCommandTestBase
         Xunit.Assert.Contains("Created simple goal from backlog slice.", output);
     }
 
+    [Xunit.Fact]
+    public void CliBacklogIntakeReportsActualAutomaticReducedPipeline()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, """
+        # Backlog
+
+        ## Update CLI help label
+
+        Update one label in src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs. Done when a focused assertion passes.
+        """);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", "Update CLI help label", "--create-goal", "--backlog-coverage", "full"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.InRange(currentGoal!.Tasks.Count, 1, 2);
+        Xunit.Assert.Equal(AgentRole.Developer, currentGoal.Tasks[0].RequiredRole);
+        Xunit.Assert.DoesNotContain(currentGoal.Tasks, task => task.RequiredRole is AgentRole.Researcher or AgentRole.Planner or AgentRole.Tester);
+        var expectedWorkflow = currentGoal.Tasks.Count == 1 ? "developer-only" : "developer-reviewer";
+        Xunit.Assert.Contains("Created goal from backlog slice.", output, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("Created five-role", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"\"workflow\":\"{expectedWorkflow}\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"selectionSource\":\"automatic\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"reasons\":[", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void CliBacklogIntakeForcedFiveRoleUsesExactPersistedOrder()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, """
+        # Backlog
+
+        ## Update forced CLI help label
+
+        Update one label in src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs. Done when a focused assertion passes.
+        """);
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", "Update forced CLI help label", "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.NotNull(currentGoal);
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            currentGoal!.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Contains("\"workflow\":\"five-role\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void CliBacklogIntakeUnsatisfiedForcedBatchFailsBeforeAnyReservation()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, """
+        # Backlog
+
+        ## Update first forced label
+
+        Update one label in src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs. Done when a focused assertion passes.
+
+        ## Update second forced label
+
+        Update one label in src/Mcg.AgentOrchestrator.App/Program.cs. Done when a focused assertion passes.
+        """);
+        var workspace = CreateRefinedWorkspace(root);
+        var intake = BacklogIntakePlanner.Build(workspace.BacklogStorePath, headingFilter: null, maxItems: 5);
+        var items = intake.Items.OrderBy(item => item.Heading, StringComparer.Ordinal).ToArray();
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents
+            .Where(agent => agent.Role != AgentRole.Reviewer)
+            .ToArray();
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", items[0].Heading, items[1].Heading, "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.Empty(kernel.Goals);
+        Xunit.Assert.Null(currentGoal);
+        Xunit.Assert.Contains("missing available agent role(s): Reviewer", exception.Message, StringComparison.Ordinal);
+        var intakeRecords = new BacklogIntakeRecordStore(workspace.SqliteStatePath);
+        Xunit.Assert.All(items, item => Xunit.Assert.Null(intakeRecords.Get(item.Id)));
+        var backlog = new BacklogStore(workspace.BacklogStorePath);
+        Xunit.Assert.All(items, item =>
+            Xunit.Assert.Equal(
+                BacklogItemStatus.Open,
+                backlog.GetByExactIdAsync(item.Id).GetAwaiter().GetResult()!.Status));
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public void CliBacklogIntakeForcedFiveRoleRejectsMismatchedReuse(bool reuseByIntakeRecord)
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, """
+        # Backlog
+
+        ## Update security token reuse guard
+
+        Update security token rollback behavior in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs with focused tests.
+        """);
+        var workspace = CreateRefinedWorkspace(root);
+        var intake = BacklogIntakePlanner.Build(workspace.BacklogStorePath, "Update security token reuse guard", maxItems: 1);
+        var item = Xunit.Assert.Single(intake.Items);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var existingGoal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, agents, item.SuggestedObjective);
+        Xunit.Assert.Equal(
+            [AgentRole.Developer, AgentRole.Reviewer],
+            existingGoal.Tasks.Select(task => task.RequiredRole));
+        if (reuseByIntakeRecord)
+        {
+            var records = new BacklogIntakeRecordStore(workspace.SqliteStatePath);
+            _ = records.Reserve(item.Id, item.Heading);
+            records.MarkGoalCreated(item.Id, existingGoal.Id.Value);
+        }
+        else
+        {
+            kernel.SetGoalSourceBacklogItemId(existingGoal.Id, item.Id);
+        }
+
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", item.Heading, "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.Single(kernel.Goals);
+        Xunit.Assert.Null(currentGoal);
+        Xunit.Assert.Contains("does not match the explicitly requested intake pipeline", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Requested workflow='five-role'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("selectionSource='explicitly-required'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("persisted workflow='developer-reviewer'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("selectionSource='automatic'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("Existing goal was not reused", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void CliBacklogIntakeForcedFiveRoleRendersMatchingReuseDecision()
+    {
+        var root = CreateTempDirectory();
+        SeedBacklog(root, """
+        # Backlog
+
+        ## Update matching reuse label
+
+        Update one label in src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs. Done when a focused assertion passes.
+        """);
+        var workspace = CreateRefinedWorkspace(root);
+        var intake = BacklogIntakePlanner.Build(workspace.BacklogStorePath, "Update matching reuse label", maxItems: 1);
+        var item = Xunit.Assert.Single(intake.Items);
+        var kernel = new AgentOrchestratorKernel();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var forcedPlan = GoalObjectivePlanner.Build(item.SuggestedObjective, GoalIntakePipeline.FiveRole);
+        var existingGoal = GoalLifecycleCommands.CreateAndActivateGoal(kernel, agents, forcedPlan);
+        kernel.SetGoalSourceBacklogItemId(existingGoal.Id, item.Id);
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var changed = true;
+
+        var output = CaptureConsole(() =>
+            changed = CliCommandDispatcher.ExecuteCommand(
+                ["backlog-intake", item.Heading, "--create-goal", "--pipeline", "five-role", "--backlog-coverage", "full"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+        Xunit.Assert.False(changed);
+        Xunit.Assert.Equal(existingGoal.Id, currentGoal!.Id);
+        Xunit.Assert.Contains($"already has goal {existingGoal.Id.Value[..8]}", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"workflow\":\"five-role\"", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"selectionSource\":\"explicitly-required\"", output, StringComparison.Ordinal);
+    }
+
 
     [Xunit.Fact(DisplayName = "Cli_goal_plan_prints_dependency_graph_without_mutating_state")]
     public void CliGoalPlanPrintsDependencyGraphWithoutMutatingState()

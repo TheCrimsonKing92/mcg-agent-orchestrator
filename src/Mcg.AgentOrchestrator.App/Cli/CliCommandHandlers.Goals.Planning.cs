@@ -34,10 +34,21 @@ private static bool HandleOperatorIntentTemplate(CliExecutionContext context, IR
         return false;
     }
 
+    GoalObjectivePlan? goalObjectivePlan = null;
+    if (createGoal)
+    {
+        goalObjectivePlan = BuildGoalObjectivePlan(context, plan.ReadyObjective, simple: false);
+        GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
+    }
+
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, plan.ReadyObjective, context.Workspace, context.Providers, context.EventWriter)
-        : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, plan.ReadyObjective, context.Workspace, context.Providers, context.EventWriter);
-    Console.WriteLine(createSimpleGoal ? "Created simple goal from intent template." : "Created five-role goal from intent template.");
+        : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, goalObjectivePlan!, context.Workspace, context.Providers, context.EventWriter);
+    Console.WriteLine(createSimpleGoal ? "Created simple goal from intent template." : "Created goal from intent template.");
+    if (goalObjectivePlan is not null)
+    {
+        ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+    }
     ConsoleViews.PrintGoal(context.CurrentGoal);
     return true;
 }
@@ -117,15 +128,30 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
         throw new InvalidOperationException("goal-plan compiled graph has validation errors; inspect the printed findings before creating goals.");
     }
 
+    var goalObjectivePlans = createGoals
+        ? plan.Nodes.ToDictionary(
+            node => node.Id,
+            node => BuildGoalObjectivePlan(context, node.ReadyObjective, simple: false))
+        : [];
+    foreach (var objectivePlan in goalObjectivePlans.Values)
+    {
+        GoalObjectivePlanner.ThrowIfBlocked(objectivePlan);
+    }
+
     foreach (var node in plan.Nodes)
     {
+        var nodeObjectivePlan = createGoals ? goalObjectivePlans[node.Id] : null;
         context.CurrentGoal = createSimpleGoals
             ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers, context.EventWriter)
-            : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, node.ReadyObjective, context.Workspace, context.Providers, context.EventWriter);
+            : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, nodeObjectivePlan!, context.Workspace, context.Providers, context.EventWriter);
         context.Kernel.SetGoalSourceBacklogItemLink(context.CurrentGoal.Id, node.Intake.Id, sourceBacklogCoverage!.Value);
         Console.WriteLine(createSimpleGoals
             ? $"Created simple goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}."
-            : $"Created five-role goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}.");
+            : $"Created goal {context.CurrentGoal.Id.Value[..8]} from plan node {node.Id}.");
+        if (nodeObjectivePlan is not null)
+        {
+            ConsoleViews.PrintGoalObjectivePlan(nodeObjectivePlan);
+        }
     }
 
     return true;

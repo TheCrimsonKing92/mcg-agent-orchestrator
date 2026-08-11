@@ -29,6 +29,8 @@ internal static partial class ConsoleViews
                 pipeline = plan.PipelineDecision.Pipeline.ToString(),
                 workflow = plan.PipelineDecision.Workflow,
                 isOverride = plan.PipelineDecision.IsOverride,
+                selectionSource = plan.PipelineDecision.SelectionSource,
+                orderedRoles = plan.TaskBoundaries.Select(boundary => boundary.Role.ToString()),
                 reasons = plan.PipelineDecision.Reasons
             },
             fileScopes = plan.FileScopes,
