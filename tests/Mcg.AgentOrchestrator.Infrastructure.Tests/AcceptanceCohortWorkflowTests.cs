@@ -140,7 +140,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 DateTimeOffset.Parse("2026-08-11T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
                 123,
                 [],
-                ValidForLanding: true);
+                ValidForLanding: true,
+                GateExitCode: 0,
+                GateTestResultPaths: [Path.GetFullPath("cohort.trx")]);
             var store = new CohortAcceptanceStore(databasePath);
 
             Assert.Equal(receipt, store.SaveGateReceipt(receipt));
@@ -152,6 +154,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(receipt.Outcome, reloadedReceipt.Outcome);
             Assert.Equal(receipt.FailedChecks, reloadedReceipt.FailedChecks);
             Assert.Equal(receipt.ValidForLanding, reloadedReceipt.ValidForLanding);
+            Assert.Equal(0, reloadedReceipt.GateExitCode);
+            Assert.Equal(receipt.GateTestResultPaths!.ToArray(), reloadedReceipt.GateTestResultPaths!.ToArray());
             store.PrepareLanding(receipt, new string('e', 40));
             var coverage = store.FinalizeLanding(identity.Value, receipt.ReceiptId);
             store.RecordOvertake(first.GoalId);
@@ -480,6 +484,109 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void ProductionBatch_SelectsRunsPersistsLandsAndCleansOneSharedCohort()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        var trx = Path.Combine(Path.GetTempPath(), $"cohort-production-{Guid.NewGuid():N}.trx");
+        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                Path.Combine(repo, ".dotnet-test-root"));
+            AddAcceptanceManifest(repo);
+            File.WriteAllText(trx, ValidPassingTrx());
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First production cohort member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second production cohort member", repo);
+            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/First.cs", "first");
+            _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var verifier = new FakeAcceptanceVerifier(new AcceptanceVerificationResult(
+                Passed: true,
+                Skipped: false,
+                ExitCode: 0,
+                OutputTail: null,
+                Checks: [new AcceptanceCheckResult("shared-production-gate", true, 0, null)],
+                TestResultPaths: [trx]));
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                verifier,
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default());
+            var stopPath = Path.Combine(repo, "stop-does-not-exist");
+
+            var summary = new ConductorBatchLoop().Run(
+                kernel,
+                driver,
+                ConductorAutonomyPolicy.Permissive,
+                stopPath,
+                maxIterations: 1);
+
+            Assert.Equal(1, verifier.RunCount);
+            Assert.True(verifier.StableSlotLeaseObserved);
+            Assert.Equal(2, summary.Advanced);
+            Assert.True(File.Exists(Path.Combine(repo, "src", "First.cs")));
+            Assert.True(File.Exists(Path.Combine(repo, "tests", "Second.cs")));
+            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+            using var connection = new SqliteConnection(
+                $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT COUNT(*), MIN(gate_exit_code), MAX(json_array_length(gate_test_result_paths_json))
+                FROM cohort_receipts;
+                """;
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(1, reader.GetInt32(0));
+            Assert.Equal(0, reader.GetInt32(1));
+            Assert.Equal(1, reader.GetInt32(2));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                previousIsolatedRoot);
+            if (File.Exists(trx)) File.Delete(trx);
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void CohortStableSlotLease_RefusesToExceedTrustedHostGateCap()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cohort-slot-cap-{Guid.NewGuid():N}");
+        var previousIsolatedRoot = Environment.GetEnvironmentVariable(
+            DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                root);
+            using var first = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(0, TimeSpan.Zero)).Lease;
+            using var second = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireStableSlotExecutionLock(1, TimeSpan.Zero)).Lease;
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"),
+                runInline: true);
+
+            Assert.Throws<DotnetBuildSlotsBusyException>(() =>
+                coordinator.AcquireCohortStableSlotLease("cohort-v2-slot-cap", timeout: TimeSpan.Zero));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
+                previousIsolatedRoot);
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void MaterializationStaleBinding_PersistsTypedOutcome_CleansWorkspace_AndReturnsOrdinaryFallback()
     {
         var repo = CreateAcceptanceCohortRepository();
@@ -619,7 +726,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         try
         {
             AddAcceptanceManifest(repo);
-            File.WriteAllText(trx, "<TestRun />");
+            File.WriteAllText(trx, ValidPassingTrx());
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First moving member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second moving member", repo);
@@ -719,6 +826,17 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         RunGit(repo, "add", "config/acceptance-manifest.json");
         RunGit(repo, "commit", "-m", "Add manifest");
     }
+
+    private static string ValidPassingTrx() => """
+        <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+          <Results>
+            <UnitTestResult testId="1" testName="Passes" outcome="Passed" />
+          </Results>
+          <ResultSummary outcome="Completed">
+            <Counters total="1" executed="1" passed="1" failed="0" />
+          </ResultSummary>
+        </TestRun>
+        """;
 
     private static string CreateAcceptanceCohortRepository()
     {

@@ -54,8 +54,10 @@ public sealed class CohortAcceptanceStore
             command.CommandText = """
                 INSERT INTO cohort_receipts(
                     cohort_id, receipt_id, main_revision, combined_tree_revision, manifest_identity,
-                    outcome, attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json)
-                VALUES ($cohort, $receipt, $main, $tree, $manifest, $outcome, $attribution, $valid, $completed, $elapsed, $failed);
+                    outcome, attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
+                    gate_exit_code, gate_test_result_paths_json)
+                VALUES ($cohort, $receipt, $main, $tree, $manifest, $outcome, $attribution, $valid, $completed, $elapsed, $failed,
+                    $exitCode, $testResultPaths);
                 """;
             command.Parameters.AddWithValue("$cohort", receipt.Identity.Value);
             command.Parameters.AddWithValue("$receipt", receipt.ReceiptId);
@@ -68,6 +70,10 @@ public sealed class CohortAcceptanceStore
             command.Parameters.AddWithValue("$completed", receipt.CompletedAt.ToUniversalTime().ToString("O"));
             command.Parameters.AddWithValue("$elapsed", receipt.GateElapsedMilliseconds);
             command.Parameters.AddWithValue("$failed", JsonSerializer.Serialize(receipt.FailedChecks));
+            command.Parameters.AddWithValue("$exitCode", (object?)receipt.GateExitCode ?? DBNull.Value);
+            command.Parameters.AddWithValue(
+                "$testResultPaths",
+                JsonSerializer.Serialize(receipt.GateTestResultPaths ?? []));
             command.ExecuteNonQuery();
         }
 
@@ -464,7 +470,9 @@ public sealed class CohortAcceptanceStore
                 valid_for_landing INTEGER NOT NULL,
                 completed_at TEXT NOT NULL,
                 gate_elapsed_ms INTEGER NOT NULL,
-                failed_checks_json TEXT NOT NULL);
+                failed_checks_json TEXT NOT NULL,
+                gate_exit_code INTEGER NULL,
+                gate_test_result_paths_json TEXT NOT NULL DEFAULT '[]');
             CREATE TABLE IF NOT EXISTS cohort_members(
                 cohort_id TEXT NOT NULL REFERENCES cohort_receipts(cohort_id) ON DELETE CASCADE,
                 member_ordinal INTEGER NOT NULL CHECK(member_ordinal IN (0,1)),
@@ -525,6 +533,8 @@ public sealed class CohortAcceptanceStore
         EnsureColumn(connection, "cohort_members", "promotion_disposition", "TEXT NOT NULL DEFAULT 'Auto'");
         EnsureColumn(connection, "cohort_members", "merge_status", "TEXT NOT NULL DEFAULT 'Clean'");
         EnsureColumn(connection, "cohort_members", "merge_reason", "TEXT NOT NULL DEFAULT 'NoConflictsDetected'");
+        EnsureColumn(connection, "cohort_receipts", "gate_exit_code", "INTEGER NULL");
+        EnsureColumn(connection, "cohort_receipts", "gate_test_result_paths_json", "TEXT NOT NULL DEFAULT '[]'");
         using var invalidateLegacy = connection.CreateCommand();
         invalidateLegacy.CommandText = """
             UPDATE cohort_receipts
@@ -566,7 +576,8 @@ public sealed class CohortAcceptanceStore
         command.Transaction = transaction;
         command.CommandText = """
             SELECT receipt_id, main_revision, combined_tree_revision, manifest_identity, outcome,
-                   attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json
+                   attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
+                   gate_exit_code, gate_test_result_paths_json
             FROM cohort_receipts WHERE cohort_id=$cohort;
             """;
         command.Parameters.AddWithValue("$cohort", cohortId);
@@ -582,6 +593,8 @@ public sealed class CohortAcceptanceStore
         var completed = DateTimeOffset.Parse(reader.GetString(7), System.Globalization.CultureInfo.InvariantCulture);
         var elapsed = reader.GetInt64(8);
         var failed = JsonSerializer.Deserialize<string[]>(reader.GetString(9)) ?? [];
+        int? gateExitCode = reader.IsDBNull(10) ? null : reader.GetInt32(10);
+        var gateTestResultPaths = JsonSerializer.Deserialize<string[]>(reader.GetString(11)) ?? [];
         reader.Close();
 
         using var membersCommand = connection.CreateCommand();
@@ -618,7 +631,8 @@ public sealed class CohortAcceptanceStore
             throw new InvalidDataException($"Stored cohort identity {cohortId} failed canonical reconstruction.");
         }
         return new AcceptanceCohortReceipt(
-            receiptId, identity, outcome, completed, elapsed, failed, attribution, valid);
+            receiptId, identity, outcome, completed, elapsed, failed, attribution, valid,
+            gateExitCode, gateTestResultPaths);
     }
 
     private static IReadOnlyList<AcceptanceCohortCoverage> ReadCoverage(

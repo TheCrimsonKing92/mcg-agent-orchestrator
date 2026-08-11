@@ -47,6 +47,20 @@ public sealed class ConductorAcceptanceCohortTests
     }
 
     [Fact]
+    public void Selector_ForcedCandidateWithoutReadyProjection_DoesNotAdmitLaterPair()
+    {
+        var forcedGoal = new GoalId("11111111111111111111111111111111");
+        var excludedForced = new ConductorSpeculativeAcceptanceCandidate(
+            forcedGoal,
+            new GateReadyCandidateProjectionResult.Excluded(
+                GateReadyCandidateExclusionReason.LifecycleNotReady));
+        var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
+        var third = Ready("33333333333333333333333333333333", "tests/Third.cs", "resource:third");
+
+        Assert.Null(ConductorAcceptanceCohortSelector.Select([excludedForced, second, third], forcedGoal));
+    }
+
+    [Fact]
     public void Selector_FailsClosedForEmptyResources_AndChecksResourcesCaseInsensitively()
     {
         var empty = Ready("11111111111111111111111111111111", "src/First.cs", resource: null);
@@ -163,6 +177,11 @@ public sealed class ConductorAcceptanceCohortTests
                     Passed: true, Skipped: false, ExitCode: 0, OutputTail: null, TestResultPaths: [trx])));
             File.WriteAllText(trx, "<TestRun />");
             Assert.Equal(
+                AcceptanceCohortGateOutcome.InfrastructureFailure,
+                ConductorDriver.ClassifyCohortVerification(new AcceptanceVerificationResult(
+                    Passed: true, Skipped: false, ExitCode: 0, OutputTail: null, TestResultPaths: [trx])));
+            File.WriteAllText(trx, ValidPassingTrx());
+            Assert.Equal(
                 AcceptanceCohortGateOutcome.Passed,
                 ConductorDriver.ClassifyCohortVerification(new AcceptanceVerificationResult(
                     Passed: true, Skipped: false, ExitCode: 0, OutputTail: null, TestResultPaths: [trx])));
@@ -172,6 +191,17 @@ public sealed class ConductorAcceptanceCohortTests
             if (File.Exists(trx)) File.Delete(trx);
         }
     }
+
+    private static string ValidPassingTrx() => """
+        <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+          <Results>
+            <UnitTestResult testId="1" testName="Passes" outcome="Passed" />
+          </Results>
+          <ResultSummary outcome="Completed">
+            <Counters total="1" executed="1" passed="1" failed="0" />
+          </ResultSummary>
+        </TestRun>
+        """;
 
     [Fact]
     public void FailedGateWithoutTrxIsInfrastructureFailure()

@@ -73,7 +73,11 @@ internal static class ConductorAcceptanceCohortSelector
         if (forcedCandidate is not null)
         {
             var forcedIndex = ready.FindIndex(candidate => candidate.GoalId == forcedCandidate);
-            if (forcedIndex >= 0)
+            if (forcedIndex < 0)
+            {
+                return null;
+            }
+            else
             {
                 var forced = ready[forcedIndex];
                 ready.RemoveAt(forcedIndex);

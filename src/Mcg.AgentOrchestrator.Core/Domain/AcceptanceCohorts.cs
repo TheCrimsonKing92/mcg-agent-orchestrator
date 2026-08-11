@@ -233,4 +233,6 @@ public sealed record AcceptanceCohortReceipt(
     long GateElapsedMilliseconds,
     IReadOnlyList<string> FailedChecks,
     AcceptanceCohortAttributionOutcome Attribution = AcceptanceCohortAttributionOutcome.NotApplicable,
-    bool ValidForLanding = false);
+    bool ValidForLanding = false,
+    int? GateExitCode = null,
+    IReadOnlyList<string>? GateTestResultPaths = null);

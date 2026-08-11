@@ -2660,16 +2660,17 @@ internal sealed class ConductorBatchLoop
         var productionCandidates = speculativeCandidates
             .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value))
             .ToArray();
+        GoalId? forcedCohortCandidate = null;
         if (driver.AcceptanceCohortsEnabled &&
             cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
             !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
                 goal.Status,
                 _acceptanceEngineCircuit?.Read())))
         {
-            var forcedCandidate = driver.SelectForcedCohortCandidate(cohortEligible);
+            forcedCohortCandidate = driver.SelectForcedCohortCandidate(cohortEligible);
             var cohortSelection = ConductorAcceptanceCohortSelector.Select(
                 productionCandidates,
-                forcedCandidate,
+                forcedCohortCandidate,
                 driver.ReadSuppressedCohortPairs());
             if (cohortSelection is not null)
             {
@@ -2682,10 +2683,6 @@ internal sealed class ConductorBatchLoop
                 RecordParallelAcceptanceProgress(
                     $"ACCEPTANCE_COHORT tick={tick} members={string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]))} {cohortRun.Detail}",
                     changedGoalLines);
-            }
-            else if (forcedCandidate is not null)
-            {
-                driver.ResetCohortFairness(forcedCandidate);
             }
         }
         var oldestWaiter = SelectOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
@@ -2864,6 +2861,13 @@ internal sealed class ConductorBatchLoop
                 candidate,
                 policy,
                 driver.RunParallelLandingAcceptance);
+            if (forcedCohortCandidate == goal.Id &&
+                decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Started or
+                    ConductorParallelAcceptanceAttemptDecisionKind.Running or
+                    ConductorParallelAcceptanceAttemptDecisionKind.Completed)
+            {
+                driver.ResetCohortFairness(goal.Id);
+            }
             ReplayParallelAcceptanceLeaseReceipts(driver, decision.Attempt, changedGoalLines);
 
             switch (decision.Kind)

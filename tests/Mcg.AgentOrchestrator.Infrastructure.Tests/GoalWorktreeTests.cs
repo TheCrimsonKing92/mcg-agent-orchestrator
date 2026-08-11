@@ -462,6 +462,7 @@ public abstract class GoalWorktreeTestBase
         Exception? exception = null) : IGoalAcceptanceVerifier
     {
         public int RunCount { get; private set; }
+        public bool StableSlotLeaseObserved { get; private set; }
 
         public Task<AcceptanceVerificationResult> RunAsync(
             string worktreePath,
@@ -472,6 +473,7 @@ public abstract class GoalWorktreeTestBase
             CancellationToken cancellationToken = default)
         {
             RunCount++;
+            StableSlotLeaseObserved |= stableSlotLease is not null && stableSlotIndex is not null;
             onRun?.Invoke();
             if (exception is not null)
                 throw exception;
