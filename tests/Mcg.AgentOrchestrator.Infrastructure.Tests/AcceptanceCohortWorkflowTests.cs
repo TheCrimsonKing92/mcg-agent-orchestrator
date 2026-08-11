@@ -588,7 +588,11 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First production cohort member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second production cohort member", repo);
-            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/First.cs", "first");
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
+                "first");
             _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
             var verifier = new FakeAcceptanceVerifier(new AcceptanceVerificationResult(
                 Passed: true,
@@ -616,7 +620,11 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(1, verifier.RunCount);
             Assert.True(verifier.StableSlotLeaseObserved);
             Assert.Equal(2, summary.Advanced);
-            Assert.True(File.Exists(Path.Combine(repo, "src", "First.cs")));
+            Assert.True(File.Exists(Path.Combine(
+                repo,
+                "src",
+                "Mcg.AgentOrchestrator.Infrastructure",
+                "First.cs")));
             Assert.True(File.Exists(Path.Combine(repo, "tests", "Second.cs")));
             Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
             using var connection = new SqliteConnection(
@@ -818,7 +826,11 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First cached receipt member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second cached receipt member", repo);
-            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/First.cs", "first");
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
+                "first");
             _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var verifier = FakeAcceptanceVerifier.Throws(
@@ -885,7 +897,11 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First moving member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second moving member", repo);
-            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/First.cs", "first");
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
+                "first");
             _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
             var firstWorktree = Assert.IsType<string>(GoalWorktrees.TryResolve(repo, firstGoal.Id));
             var verifier = new FakeAcceptanceVerifier(
@@ -932,7 +948,11 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First infrastructure member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second infrastructure member", repo);
-            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/First.cs", "first");
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
+                "first");
             _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var verifier = FakeAcceptanceVerifier.Throws(

@@ -41,7 +41,7 @@ public sealed class ConductorAcceptanceCohortTests
     {
         var forced = Ready("11111111111111111111111111111111", "src", "resource:forced");
         var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
-        var third = Ready("33333333333333333333333333333333", "tests/Third.cs", "resource:third");
+        var third = Ready("33333333333333333333333333333333", "src/Third.cs", "resource:third");
 
         Assert.Null(ConductorAcceptanceCohortSelector.Select([forced, second, third], forced.GoalId));
     }

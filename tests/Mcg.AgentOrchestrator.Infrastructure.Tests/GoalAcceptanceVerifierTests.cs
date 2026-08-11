@@ -5433,6 +5433,49 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
+    [Xunit.Fact]
+    public async Task PartitionCache_ManifestChange_RerunsAllPartitions()
+    {
+        var root = CreateCheckedInManifestShapeWorkspace();
+        var goalId = new GoalId("12345678123456781234567812345678");
+        var calls = new List<string[]>();
+        SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
+        GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = false;
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
+                    0,
+                    args.Length > 1 && args[0] == "dotnet" && args[1] == "test"
+                        ? "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."
+                        : ""));
+            });
+
+            Assert.True((await verifier.RunAsync(root, goalId)).Passed);
+            var laneCount = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count;
+            Assert.Equal(laneCount, CountInfrastructurePartitionTestCalls(calls));
+
+            var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
+            var manifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+            var infrastructureCheck = manifest["checks"]!.AsArray()
+                .Select(node => node!.AsObject())
+                .Single(check => check["name"]!.GetValue<string>() == "infrastructure tests");
+            infrastructureCheck["timeoutMinutes"] = 2;
+            File.WriteAllText(manifestPath, manifest.ToJsonString());
+
+            Assert.True((await verifier.RunAsync(root, goalId)).Passed);
+            Assert.Equal(laneCount * 2, CountInfrastructurePartitionTestCalls(calls));
+        }
+        finally
+        {
+            GoalAcceptanceVerifier.PartitionVerdictWithinAttemptRerunEnabled = true;
+            ResetPartitionVerdictKeyHooks();
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_filter_hash_change_runs_only_changed_partition")]
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheFilterHashChangeRunsOnlyChangedPartition()
     {

@@ -2861,15 +2861,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
+        var manifestIdentity = ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks);
         var journalPath = PartitionVerdictJournalPath(worktreePath, goalId.Value);
         var journal = ReadPartitionVerdictJournal(journalPath);
-        var pairKey = PartitionVerdictPairKey(goalId.Value, candidateTreeSha, mainSha);
+        var pairKey = PartitionVerdictPairKey(goalId.Value, candidateTreeSha, mainSha, manifestIdentity);
         var priorReuseAttemptCount = LatestPartitionReuseAttemptCount(journal, pairKey);
         var reusableGreenExists = effectiveChecks.Any(check =>
             TryBuildPartitionCacheKey(
                 goalId.Value,
                 candidateTreeSha,
                 mainSha,
+                manifestIdentity,
                 check,
                 out _,
                 out _,
@@ -2881,6 +2883,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId.Value,
             NormalizeShaToken(candidateTreeSha),
             NormalizeShaToken(mainSha),
+            manifestIdentity,
             NormalizeShaToken(verifyingCommitSha),
             CurrentAcceptanceAttemptId(),
             pairKey,
@@ -2920,6 +2923,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             $"partition-verdict-cache reused_partitions={FormatPartitionReuseReceipt(cacheContext.Reused)} " +
             $"executed_partitions={FormatPartitionExecutionReceipt(cacheContext.Executed)} " +
             $"aggregate_verdict={aggregateVerdict} verifying_commit_sha={cacheContext.VerifyingCommitSha} " +
+            $"effective_manifest_identity={cacheContext.ManifestIdentity} " +
             $"reroll_attempt_count={attemptCount.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"forced_full_rerun={cacheContext.ForceFullRerun.ToString().ToLowerInvariant()} " +
             "before_reroll_wall_time=20-25m after_reroll_wall_time=2-7m";
@@ -2961,6 +2965,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cacheContext.GoalId,
             cacheContext.CandidateTreeSha,
             cacheContext.MainSha,
+            cacheContext.ManifestIdentity,
             check,
             out partitionId,
             out filterHash,
@@ -2970,6 +2975,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string goalId,
         string candidateTreeSha,
         string mainSha,
+        string manifestIdentity,
         AcceptanceManifestCheck check,
         out string partitionId,
         out string filterHash,
@@ -2982,9 +2988,38 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
 
         filterHash = ShortHash(filter);
-        cacheKey =
-            $"{goalId}:{NormalizeShaToken(candidateTreeSha)}:{NormalizeShaToken(mainSha)}:{filterHash}".ToLowerInvariant();
+        cacheKey = string.Join(
+                ':',
+                goalId,
+                NormalizeShaToken(candidateTreeSha),
+                NormalizeShaToken(mainSha),
+                manifestIdentity,
+                filterHash)
+            .ToLowerInvariant();
         return true;
+    }
+
+    private static string ComputeEffectiveAcceptanceManifestIdentity(
+        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
+    {
+        var canonicalChecks = effectiveChecks.Select(check => new
+        {
+            check.Name,
+            check.Type,
+            check.Command,
+            check.Project,
+            Arguments = check.Arguments.ToArray(),
+            check.Pattern,
+            check.FilePath,
+            check.TimeoutMinutes,
+            check.Advisory,
+            check.Runner,
+            check.EstimatedSerialSeconds,
+            ExclusiveResourceKeys = check.ExclusiveResourceKeys.ToArray()
+        });
+        var canonicalJson = JsonSerializer.Serialize(canonicalChecks);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonicalJson));
+        return $"effective-manifest-sha256-{Convert.ToHexStringLower(hash)}";
     }
 
     private static bool TryGetInfrastructurePartitionId(
@@ -3205,8 +3240,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string PartitionVerdictPairKey(
         string goalId,
         string candidateTreeSha,
-        string mainSha) =>
-        $"{goalId}:acceptance:{NormalizeShaToken(candidateTreeSha)}:{NormalizeShaToken(mainSha)}".ToLowerInvariant();
+        string mainSha,
+        string manifestIdentity) =>
+        string.Join(
+                ':',
+                goalId,
+                "acceptance",
+                NormalizeShaToken(candidateTreeSha),
+                NormalizeShaToken(mainSha),
+                manifestIdentity)
+            .ToLowerInvariant();
 
     private static string CurrentAcceptanceAttemptId()
     {
@@ -8270,6 +8313,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string goalId,
         string candidateTreeSha,
         string mainSha,
+        string manifestIdentity,
         string verifyingCommitSha,
         string attemptId,
         string pairKey,
@@ -8284,6 +8328,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string GoalId { get; } = goalId;
         public string CandidateTreeSha { get; } = candidateTreeSha;
         public string MainSha { get; } = mainSha;
+        public string ManifestIdentity { get; } = manifestIdentity;
         public string VerifyingCommitSha { get; } = verifyingCommitSha;
         public string AttemptId { get; } = attemptId;
         public string PairKey { get; } = pairKey;
