@@ -11,11 +11,12 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
     [Xunit.Fact]
     public void FixtureProcessesUseAHermeticEnvironment()
     {
-        var ambientOverrides = new Dictionary<string, string>
+        var ambientOverrides = new Dictionary<string, string?>
         {
             ["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = @"C:\ambient\wrong-repository",
             ["GIT_DIR"] = @"C:\ambient\wrong-git-dir",
-            ["GIT_CONFIG_GLOBAL"] = @"C:\ambient\wrong-git-config"
+            ["GIT_CONFIG_GLOBAL"] = @"C:\ambient\wrong-git-config",
+            ["PROGRAMDATA"] = null
         };
 
         var result = RunProcessWithAmbientOverrides(
@@ -529,7 +530,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
     private static ProcessResult RunProcessWithAmbientOverrides(
         string workingDirectory,
         string fileName,
-        IReadOnlyDictionary<string, string> ambientOverrides,
+        IReadOnlyDictionary<string, string?> ambientOverrides,
         params string[] arguments) =>
         RunProcessCore(workingDirectory, fileName, arguments, ambientOverrides);
 
@@ -537,7 +538,7 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         string workingDirectory,
         string fileName,
         string[] arguments,
-        IReadOnlyDictionary<string, string>? ambientOverrides)
+        IReadOnlyDictionary<string, string?>? ambientOverrides)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -550,7 +551,17 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
         };
         if (ambientOverrides is not null)
         {
-            foreach (var (name, value) in ambientOverrides) startInfo.Environment[name] = value;
+            foreach (var (name, value) in ambientOverrides)
+            {
+                if (value is null)
+                {
+                    startInfo.Environment.Remove(name);
+                }
+                else
+                {
+                    startInfo.Environment[name] = value;
+                }
+            }
         }
         UseHermeticEnvironment(startInfo, workingDirectory);
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
@@ -577,7 +588,9 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
             "PROGRAMFILES(X86)", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "WINDIR"
         ];
         var required = requiredNames
-            .Select(name => (Name: name, Value: startInfo.Environment[name]))
+            .Select(name => (
+                Name: name,
+                Value: startInfo.Environment.TryGetValue(name, out var value) ? value : null))
             .Where(item => !string.IsNullOrWhiteSpace(item.Value))
             .ToArray();
 
