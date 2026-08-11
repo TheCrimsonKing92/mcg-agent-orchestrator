@@ -65,12 +65,12 @@ public sealed class WorkerSandboxCapabilityPlannerTests
         Assert.True(permittedByOverride.Allowed);
     }
 
-    [Xunit.Theory(DisplayName = "WorkerSandboxCapabilityPlanner_allows_typed_Codex_file_roles_for_repo_skills_with_OS_confinement")]
+    [Xunit.Theory]
     [Xunit.InlineData(AgentRole.Developer, "codex-cli")]
     [Xunit.InlineData(AgentRole.Tester, "codex-cli")]
     [Xunit.InlineData(AgentRole.Developer, "codex-spark")]
     [Xunit.InlineData(AgentRole.Developer, "codex-oss-cli")]
-    public void WorkerSandboxCapabilityPlannerAllowsTypedCodexFileRolesForRepoSkillsWithOsConfinement(
+    public void AllowsCodexRepoSkillWritesWithOsConfinement(
         AgentRole role,
         string profileName)
     {
@@ -150,10 +150,10 @@ public sealed class WorkerSandboxCapabilityPlannerTests
         Assert.DoesNotContain("repo-skill-write", result.Status, StringComparison.Ordinal);
     }
 
-    [Xunit.Theory(DisplayName = "WorkerSandboxCapabilityPlanner_requires_OS_confinement_for_Claude_repo_skill_behavior")]
+    [Xunit.Theory]
     [Xunit.InlineData(true, true, "repo-skill-write")]
     [Xunit.InlineData(false, false, "blocked")]
-    public void WorkerSandboxCapabilityPlannerRequiresOsConfinementForClaudeRepoSkillBehavior(
+    public void RequiresOsConfinementForClaudeRepoSkills(
         bool sandboxEnabled,
         bool expectedAllowed,
         string expectedStatus)
@@ -174,8 +174,8 @@ public sealed class WorkerSandboxCapabilityPlannerTests
         Assert.Equal(expectedStatus, result.Status);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerSandboxCapabilityPlanner_blocks_unknown_provider_even_with_Claude_permission_flags")]
-    public void WorkerSandboxCapabilityPlannerBlocksUnknownProviderEvenWithClaudePermissionFlags()
+    [Xunit.Fact]
+    public void BlocksUnknownProviderForRepoSkillWrites()
     {
         var (goal, task, _, workingDirectory) = CreateEvaluateFixture(
             "Update .agents/skills/systematic-debugging/SKILL.md");

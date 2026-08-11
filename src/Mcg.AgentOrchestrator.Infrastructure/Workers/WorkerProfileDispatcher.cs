@@ -2231,7 +2231,7 @@ public static class WorkerProfileDispatcher
                     "sandboxMode",
                     "workingDirectory"),
             ProviderKind.OpenAICodexOssCli =>
-                HasKeys(variables, "subscriptionModelName", "workingDirectory"),
+                HasKeys(variables, "subscriptionModelName", "sandboxMode", "workingDirectory"),
             ProviderKind.AnthropicClaudeCli =>
                 HasKeys(variables, "subscriptionModelName", "permissionMode"),
             ProviderKind.OllamaQwenCodeCli =>

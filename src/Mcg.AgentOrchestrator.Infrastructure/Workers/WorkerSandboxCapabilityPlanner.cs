@@ -81,7 +81,7 @@ public static class WorkerSandboxCapabilityPlanner
             return new WorkerSandboxCapabilityResult(
                 false,
                 "blocked",
-                "Task appears to target repo-scoped .agents/skills files, but this profile lacks an authorized patch-capable, OS-confined worktree mode; Git metadata and commit authority remain with the orchestrator.");
+                detail);
         }
 
         if (text.Contains("skill.md", StringComparison.Ordinal))

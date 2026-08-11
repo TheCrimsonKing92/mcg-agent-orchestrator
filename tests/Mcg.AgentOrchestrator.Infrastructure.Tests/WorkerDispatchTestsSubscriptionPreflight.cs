@@ -293,7 +293,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
                 AgentRole.Developer,
                 new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"),
+                IsProviderRoutingConstrained: true);
             kernel.ActivateGoal(goal.Id, [agent]);
             var workingDirectory = GoalWorktrees.Ensure(root, goal.Id);
             var statusBefore = ReadGit(workingDirectory, ["status", "--short"]);
@@ -313,6 +314,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
                 commandExists: _ => true);
 
             Assert.Equal(expectedAllowed, preflight.Allowed);
+            Assert.Equal("codex-cli", preflight.ProfileName);
             Assert.Equal(expectedCapabilityStatus, preflight.CapabilityStatus);
             Assert.Contains(
                 preflight.Findings,
