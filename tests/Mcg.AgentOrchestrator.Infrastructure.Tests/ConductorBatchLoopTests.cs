@@ -3353,7 +3353,7 @@ public sealed class ConductorBatchLoopTests
             return;
         }
 
-        using var _ = IsolatedDotnetRootScope();
+        using var isolatedDotnetRoot = IsolatedDotnetRootScope();
         var root = CreateSeededGitRepository();
         var attemptRoot = CreateTempDirectory("mcg-conductor-owned-start");
         var kernel = new AgentOrchestratorKernel();
@@ -3403,6 +3403,7 @@ public sealed class ConductorBatchLoopTests
                 launchOwnedProcess: launch => LaunchExternalAcceptanceProcess(
                     launch,
                     useLegacyStartThenAttach,
+                    isolatedDotnetRoot.Value,
                     externalProcesses));
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
@@ -3498,6 +3499,7 @@ public sealed class ConductorBatchLoopTests
     private static ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalAcceptanceProcess(
         ConductorParallelAcceptanceOwnedProcessLaunch launch,
         bool useLegacyStartThenAttach,
+        string isolatedDotnetRoot,
         ConcurrentBag<Process> externalProcesses)
     {
         var appAssembly = Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
@@ -3506,6 +3508,13 @@ public sealed class ConductorBatchLoopTests
             launch.Attempt,
             "dotnet",
             [appAssembly]);
+        // The production child is intentionally hermetic and scrubs MCG_* variables. This real-process
+        // fixture must reapply its test-only lease root so unrelated stable-slot users cannot preempt the
+        // owned-start seam that the test is meant to exercise.
+        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedDotnetRoot;
+        Assert.Equal(
+            isolatedDotnetRoot,
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable]);
         if (useLegacyStartThenAttach)
         {
             startInfo.Environment[GoalAcceptanceVerifier.LegacyOwnedStartNegativeControlVariable] =
@@ -4011,7 +4020,7 @@ public sealed class ConductorBatchLoopTests
         return path;
     }
 
-    private static IDisposable IsolatedDotnetRootScope() =>
+    private static EnvVarScope IsolatedDotnetRootScope() =>
         new EnvVarScope(
             DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
             Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-batch-loop-{Guid.NewGuid():N}"));
@@ -4033,15 +4042,17 @@ public sealed class ConductorBatchLoopTests
     {
         private readonly string _name;
         private readonly string? _previousValue;
-        private readonly string? _value;
+        private readonly string _value;
 
-        public EnvVarScope(string name, string? value)
+        public EnvVarScope(string name, string value)
         {
             _name = name;
             _value = value;
             _previousValue = Environment.GetEnvironmentVariable(name);
             Environment.SetEnvironmentVariable(name, value);
         }
+
+        public string Value => _value;
 
         public void Dispose()
         {
