@@ -98,6 +98,10 @@ internal sealed class GateReadyCandidateProjector
         {
             return Excluded(GateReadyCandidateExclusionReason.ScopeEmpty);
         }
+        if (normalizedScope.ResourceKeys.Count == 0)
+        {
+            return Excluded(GateReadyCandidateExclusionReason.ResourcesEmpty);
+        }
 
         GateReadyMergeTreeObservation mergeTree;
         try

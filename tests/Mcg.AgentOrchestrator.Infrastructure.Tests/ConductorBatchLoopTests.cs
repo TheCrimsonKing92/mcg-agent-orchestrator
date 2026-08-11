@@ -163,7 +163,12 @@ public sealed class ConductorBatchLoopTests
         Func<bool>? hasGateReadyGoal = null,
         Func<int>? getWorkerAdmissionCapacity = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
-        GateReadyCandidateProjector? gateReadyCandidateProjector = null) =>
+        GateReadyCandidateProjector? gateReadyCandidateProjector = null,
+        Func<
+            ConductorAcceptanceCohortSelection,
+            IReadOnlyList<Goal>,
+            ConductorAutonomyPolicy,
+            ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -197,7 +202,8 @@ public sealed class ConductorBatchLoopTests
             getWorkerAdmissionCapacity: getWorkerAdmissionCapacity,
             recheckPreLandingRebaseConflict: recheckPreLandingRebaseConflict,
             isVerificationGateSatisfied: isVerificationGateSatisfied,
-            gateReadyCandidateProjector: gateReadyCandidateProjector);
+            gateReadyCandidateProjector: gateReadyCandidateProjector,
+            runAcceptanceCohort: runAcceptanceCohort);
 
     // Returns a path to a stop file that does NOT exist yet.
     private static string NoStopPath() =>
@@ -1522,8 +1528,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal([passing.Id.Value], landed);
     }
 
-    [Xunit.Fact(DisplayName = "SpeculativeCohort_advisory_receipt_does_not_change_ordinary_acceptance")]
-    public void SpeculativeCohortAdvisoryReceiptDoesNotChangeOrdinaryAcceptance()
+    [Xunit.Fact(DisplayName = "ProductionCohort_runs_one_shared_gate_and_bypasses_ordinary_member_gates")]
+    public void ProductionCohortRunsOneSharedGateAndBypassesOrdinaryMemberGates()
     {
         var root = CreateTempDirectory("mcg-speculative-cohort-advisory");
         var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
@@ -1533,11 +1539,13 @@ public sealed class ConductorBatchLoopTests
         var statusesBefore = new[] { first.Status, second.Status };
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Cli/FirstAdvisory.cs"],
-            [second.Id] = ["src/Mcg.AgentOrchestrator.App/Orchestration/SecondAdvisory.cs"]
+            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/FirstAdvisory.razor"],
+            [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondAdvisoryTests.cs"]
         };
         var acceptanceCalls = new List<string>();
         var landed = new List<string>();
+        var cohortCalls = 0;
+        string? sharedReceiptId = null;
         var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var projector = new GateReadyCandidateProjector(
             goalId => new GateReadyCandidateRevisionPair(
@@ -1569,7 +1577,38 @@ public sealed class ConductorBatchLoopTests
                 classifyRisk: _ => ChangeRiskTier.DocsOnly,
                 getLandingFileScopes: goal => paths[goal.Id],
                 isVerificationGateSatisfied: _ => true,
-                gateReadyCandidateProjector: projector);
+                gateReadyCandidateProjector: projector,
+                runAcceptanceCohort: (selection, goals, policy) =>
+                {
+                    cohortCalls++;
+                    var identity = AcceptanceCohortIdentity.Create(
+                        selection.BindMembers(),
+                        mainRevision,
+                        "dddddddddddddddddddddddddddddddddddddddd",
+                        "manifest-v1");
+                    var receipt = new AcceptanceCohortReceipt(
+                        $"receipt-{identity.Value}",
+                        identity,
+                        AcceptanceCohortGateOutcome.Passed,
+                        DateTimeOffset.UtcNow,
+                        10,
+                        [],
+                        ValidForLanding: true);
+                    sharedReceiptId = receipt.ReceiptId;
+                    return new ConductorAcceptanceCohortRunResult(
+                        receipt,
+                        goals.Where(goal => selection.Members.Any(member => member.GoalId == goal.Id)).ToDictionary(
+                            goal => goal.Id.Value,
+                            goal => new ConductorAdvanceResult(
+                                goal.Id.Value,
+                                goal.Id.Value[..8],
+                                policy.Name,
+                                new ConductorAdvanceOutcome.Executed(
+                                    GoalLifecycleState.Verified,
+                                    $"shared receipt {receipt.ReceiptId}")),
+                            StringComparer.Ordinal),
+                        $"outcome=passed receipt={receipt.ReceiptId}");
+                });
 
             var summary = new ConductorBatchLoop(
                 conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
@@ -1586,8 +1625,10 @@ public sealed class ConductorBatchLoopTests
                 .ToArray();
 
             Assert.Equal(2, summary.Advanced);
-            Assert.Equal(2, acceptanceCalls.Count);
-            Assert.Equal(2, landed.Count);
+            Assert.Equal(1, cohortCalls);
+            Assert.Empty(acceptanceCalls);
+            Assert.Empty(landed);
+            Assert.NotNull(sharedReceiptId);
             Assert.Equal(statusesBefore, new[] { first.Status, second.Status });
             var receipt = Assert.Single(cohortEvents);
             Assert.Null(receipt.GoalId);

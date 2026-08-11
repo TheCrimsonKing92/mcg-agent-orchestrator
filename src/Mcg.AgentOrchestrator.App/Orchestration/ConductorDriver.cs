@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.SubscriptionPlanning;
 using Mcg.AgentOrchestrator.Core;
@@ -96,6 +97,16 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, IReadOnlyList<string>> _getLandingFileScopes;
     private readonly Func<Goal, bool> _isVerificationGateSatisfied;
     private readonly GateReadyCandidateProjector? _gateReadyCandidateProjector;
+    private readonly AgentOrchestratorKernel? _cohortKernel;
+    private readonly OrchestratorWorkspace? _cohortWorkspace;
+    private readonly IGoalAcceptanceVerifier? _cohortAcceptanceVerifier;
+    private readonly IGoalLifecycleEventWriter? _cohortEventWriter;
+    private readonly CohortAcceptanceStore? _cohortAcceptanceStore;
+    private readonly Func<
+        ConductorAcceptanceCohortSelection,
+        IReadOnlyList<Goal>,
+        ConductorAutonomyPolicy,
+        ConductorAcceptanceCohortRunResult>? _runAcceptanceCohortOverride;
     private readonly Func<Goal, int> _getAcceptanceSlotCount;
     private readonly Func<int> _getWorkerAdmissionCapacity;
     private readonly Func<bool> _hasGateReadyGoal;
@@ -150,6 +161,13 @@ internal sealed class ConductorDriver
             dir,
             conductEventLogWriter: new ConductEventLogWriter(workspace.ConductEventsLogPath));
         var eventWriter = new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory);
+        _cohortKernel = kernel;
+        _cohortWorkspace = workspace;
+        _cohortAcceptanceVerifier = acceptanceVerifier;
+        _cohortEventWriter = eventWriter;
+        _cohortAcceptanceStore = new CohortAcceptanceStore(
+            Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+        _ = _cohortAcceptanceStore.RecoverPreparedLandings(dir);
         kernel.SetEventWriter(eventWriter);
         _tryBuildAwaitingClarificationEscalationReason = goal =>
             GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
@@ -853,7 +871,12 @@ internal sealed class ConductorDriver
         Action<GoalId, TaskId, string>? recordFindingEvidenceRun = null,
         Func<Goal, AcceptanceGateEngineSettings>? getFindingEvidenceEngineSettings = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
-        GateReadyCandidateProjector? gateReadyCandidateProjector = null)
+        GateReadyCandidateProjector? gateReadyCandidateProjector = null,
+        Func<
+            ConductorAcceptanceCohortSelection,
+            IReadOnlyList<Goal>,
+            ConductorAutonomyPolicy,
+            ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
@@ -938,6 +961,7 @@ internal sealed class ConductorDriver
         _getLandingFileScopes = getLandingFileScopes ?? InferRecordedFileScopes;
         _isVerificationGateSatisfied = isVerificationGateSatisfied ?? (_ => false);
         _gateReadyCandidateProjector = gateReadyCandidateProjector;
+        _runAcceptanceCohortOverride = runAcceptanceCohort;
         _getAcceptanceSlotCount = getAcceptanceSlotCount ?? (_ => ConductorBatchLoop.DefaultParallelAcceptanceCapacity);
         _getWorkerAdmissionCapacity = getWorkerAdmissionCapacity ?? (() => ConductorBatchLoop.WorkerAdmissionCapacity);
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
@@ -2329,6 +2353,319 @@ internal sealed class ConductorDriver
 
     private static GateReadyCandidateProjectionResult.Excluded ExcludedGateReadyCandidate(
         GateReadyCandidateExclusionReason reason) => new(reason);
+
+    internal bool AcceptanceCohortsEnabled =>
+        _runAcceptanceCohortOverride is not null ||
+        (_cohortKernel is not null &&
+         _cohortWorkspace is not null &&
+         _cohortAcceptanceVerifier is not null &&
+         _cohortAcceptanceStore is not null);
+
+    internal GoalId? SelectForcedCohortCandidate(IReadOnlyList<Goal> orderedGoals)
+    {
+        if (_cohortAcceptanceStore is null) return null;
+        return orderedGoals.FirstOrDefault(goal =>
+            _cohortAcceptanceStore.ReadOvertakeCount(goal.Id) >=
+            ConductorBatchLoop.ParallelAcceptanceBoundedOvertakeLimit)?.Id;
+    }
+
+    internal IReadOnlySet<string> ReadSuppressedCohortPairs() =>
+        _cohortAcceptanceStore?.ReadSuppressedPairs() ?? new HashSet<string>(StringComparer.Ordinal);
+
+    internal void RecordCohortAdmissionFairness(
+        IReadOnlyList<Goal> orderedGoals,
+        ConductorAcceptanceCohortSelection selection)
+    {
+        if (_cohortAcceptanceStore is null || orderedGoals.Count == 0) return;
+        var admitted = selection.Members.Select(member => member.GoalId).ToHashSet();
+        foreach (var member in admitted) _cohortAcceptanceStore.ResetOvertake(member);
+        var oldest = orderedGoals[0].Id;
+        if (!admitted.Contains(oldest)) _cohortAcceptanceStore.RecordOvertake(oldest);
+    }
+
+    internal void ResetCohortFairness(GoalId goalId) =>
+        _cohortAcceptanceStore?.ResetOvertake(goalId);
+
+    internal ConductorAcceptanceCohortRunResult RunAcceptanceCohort(
+        ConductorAcceptanceCohortSelection selection,
+        IReadOnlyList<Goal> orderedGoals,
+        ConductorAutonomyPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(orderedGoals);
+        if (_runAcceptanceCohortOverride is not null)
+        {
+            return _runAcceptanceCohortOverride(selection, orderedGoals, policy);
+        }
+        if (_cohortKernel is null ||
+            _cohortWorkspace is null ||
+            _cohortAcceptanceVerifier is null ||
+            _cohortAcceptanceStore is null)
+        {
+            throw new InvalidOperationException("Production acceptance cohort dependencies are unavailable.");
+        }
+
+        var goalsById = orderedGoals.ToDictionary(goal => goal.Id);
+        var goals = selection.Members.Select(member =>
+            goalsById.TryGetValue(member.GoalId, out var goal)
+                ? goal
+                : throw new InvalidOperationException($"Selected cohort goal {member.GoalId.Value} is not in the current Ready batch.")).ToArray();
+        var bindings = selection.BindMembers();
+        using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+            _cohortWorkspace.ExecutionDirectory,
+            selection.Members[0].MainRevision,
+            bindings);
+        var manifestIdentity = GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path);
+        var identity = AcceptanceCohortIdentity.Create(
+            bindings,
+            selection.Members[0].MainRevision,
+            integration.TreeRevision,
+            manifestIdentity);
+        var receipt = _cohortAcceptanceStore.TryReadReceipt(identity.Value);
+        AcceptanceVerificationResult? verification = null;
+
+        if (receipt is null)
+        {
+            var gateClock = Stopwatch.StartNew();
+            AcceptanceCohortGateOutcome outcome;
+            IReadOnlyList<string> failedChecks;
+            try
+            {
+                verification = _cohortAcceptanceVerifier.RunAsync(
+                    integration.Path,
+                    goalId: null,
+                    changedFiles: bindings.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                    cancellationToken: CancellationToken.None).GetAwaiter().GetResult();
+                outcome = ClassifyCohortVerification(verification);
+                failedChecks = verification.Checks?
+                    .Where(check => !check.Passed && !check.Advisory)
+                    .Select(check => check.Name)
+                    .ToArray() ?? [];
+            }
+            catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
+                DotnetBuildSlotsBusyException or BuildLockBlockedException or
+                OperationCanceledException or IOException or InvalidDataException)
+            {
+                outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
+                failedChecks = [$"infrastructure:{ex.GetType().Name}:{BoundCohortDetail(ex.Message)}"];
+            }
+            gateClock.Stop();
+            receipt = new AcceptanceCohortReceipt(
+                $"cohort-receipt-v1-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
+                identity,
+                outcome,
+                DateTimeOffset.UtcNow,
+                checked((long)gateClock.Elapsed.TotalMilliseconds),
+                failedChecks,
+                ValidForLanding: outcome == AcceptanceCohortGateOutcome.Passed);
+            receipt = _cohortAcceptanceStore.SaveGateReceipt(receipt);
+        }
+
+        integration.AssertGoalBranchesUnchanged();
+        if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
+            receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable)
+        {
+            var first = RunCohortPartition(bindings[0], 0);
+            var second = RunCohortPartition(bindings[1], 1);
+            var attribution = ConductorAcceptanceCohortAttribution.Classify(first.Outcome, second.Outcome);
+            receipt = _cohortAcceptanceStore.SaveAttribution(identity.Value, attribution, [first, second]);
+            _cohortAcceptanceStore.SuppressPair(
+                ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
+                identity.Value);
+            if (attribution == AcceptanceCohortAttributionOutcome.FirstMemberFailed)
+            {
+                _cohortAcceptanceStore.RecordOvertake(bindings[1].GoalId);
+            }
+            else if (attribution == AcceptanceCohortAttributionOutcome.SecondMemberFailed)
+            {
+                _cohortAcceptanceStore.RecordOvertake(bindings[0].GoalId);
+            }
+        }
+
+        if (receipt.Outcome == AcceptanceCohortGateOutcome.Passed)
+        {
+            for (var index = 0; index < goals.Length; index++)
+            {
+                if (ProjectGateReadyCandidate(goals[index], policy) is not GateReadyCandidateProjectionResult.Ready live ||
+                    !live.Projection.Equals(selection.Members[index]))
+                {
+                    receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+                    return CohortHeld(goals, policy, receipt, "post-gate binding changed; both goals returned to Ready projection");
+                }
+            }
+            integration.AssertGoalBranchesUnchanged();
+            var landing = LandingExecutor.ExecuteCohort(
+                _cohortKernel,
+                goals,
+                _cohortWorkspace,
+                receipt,
+                integration.CommitRevision,
+                _cohortAcceptanceStore,
+                policy,
+                _cohortEventWriter,
+                LandingMutationBlocker);
+            if (!landing.MainAdvanced)
+            {
+                receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+                return CohortHeld(goals, policy, receipt, landing.Message);
+            }
+
+            foreach (var goal in goals)
+            {
+                var landingResult = new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    $"cohort/{identity.Value}",
+                    true,
+                    landing.Message,
+                    landing.CommitRevision,
+                    selection.Members.SelectMany(member => member.LandingPaths).ToArray());
+                SuccessfulLandingSink?.Invoke(new ConductorLandingReceipt(
+                    goal.Id.Value,
+                    landingResult.ChangedFiles ?? [],
+                    landingResult.MergeCommitSha));
+                _afterSuccessfulLanding(goal, landingResult);
+            }
+            return new ConductorAcceptanceCohortRunResult(
+                receipt,
+                goals.ToDictionary(
+                    goal => goal.Id.Value,
+                    goal => MakeResult(
+                        goal.Id.Value,
+                        goal.Id.Value[..8],
+                        policy,
+                        new ConductorAdvanceOutcome.Executed(
+                            GoalLifecycleState.Verified,
+                            $"Landed by shared cohort receipt {receipt.ReceiptId}.")),
+                    StringComparer.Ordinal),
+                $"outcome=passed receipt={receipt.ReceiptId} tree={identity.CombinedTreeRevision} gateMs={receipt.GateElapsedMilliseconds}");
+        }
+
+        return CohortHeld(
+            goals,
+            policy,
+            receipt,
+            receipt.Outcome == AcceptanceCohortGateOutcome.Failed
+                ? $"deterministic RED; attribution={receipt.Attribution}"
+                : $"cohort infrastructure outcome={receipt.Outcome}; no attribution or landing");
+
+        AcceptanceCohortPartitionReceipt RunCohortPartition(
+            AcceptanceCohortMemberBinding member,
+            int memberOrdinal)
+        {
+            var clock = Stopwatch.StartNew();
+            string? treeRevision = null;
+            string partitionManifest = identity.ManifestIdentity;
+            IReadOnlyList<string> testResultPaths = [];
+            AcceptanceCohortGateOutcome outcome;
+            try
+            {
+                using var partition = GoalWorktrees.CreateAcceptancePartitionWorkspace(
+                    _cohortWorkspace.ExecutionDirectory,
+                    identity.ObservedMainRevision,
+                    member);
+                treeRevision = partition.TreeRevision;
+                partitionManifest = GoalWorktrees.ComputeAcceptanceManifestIdentity(partition.Path);
+                var result = _cohortAcceptanceVerifier.RunAsync(
+                    partition.Path,
+                    member.GoalId,
+                    member.LandingPaths,
+                    cancellationToken: CancellationToken.None).GetAwaiter().GetResult();
+                testResultPaths = result.TestResultPaths ?? [];
+                partition.AssertGoalBranchesUnchanged();
+                outcome = ClassifyCohortVerification(result);
+            }
+            catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
+                DotnetBuildSlotsBusyException or BuildLockBlockedException or
+                OperationCanceledException or IOException or InvalidDataException or InvalidOperationException)
+            {
+                outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
+            }
+            clock.Stop();
+            var receiptId = CreateCohortPartitionReceiptId(
+                member,
+                identity.ObservedMainRevision,
+                treeRevision,
+                partitionManifest);
+            return new AcceptanceCohortPartitionReceipt(
+                receiptId,
+                member.GoalId,
+                memberOrdinal,
+                member.CandidateRevision,
+                identity.ObservedMainRevision,
+                treeRevision,
+                partitionManifest,
+                outcome,
+                checked((long)clock.Elapsed.TotalMilliseconds),
+                testResultPaths);
+        }
+    }
+
+    private static string CreateCohortPartitionReceiptId(
+        AcceptanceCohortMemberBinding member,
+        string mainRevision,
+        string? treeRevision,
+        string manifestIdentity)
+    {
+        var payload = string.Join('\n',
+            "cohort-partition-v1",
+            member.GoalId.Value,
+            member.CandidateRevision,
+            mainRevision,
+            treeRevision ?? "unavailable",
+            manifestIdentity);
+        return $"cohort-partition-v1-{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))}";
+    }
+
+    internal static AcceptanceCohortGateOutcome ClassifyCohortVerification(AcceptanceVerificationResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.Skipped || result.ExitCode is null)
+        {
+            return AcceptanceCohortGateOutcome.InfrastructureFailure;
+        }
+        if (result.TestResultPaths is { Count: > 0 })
+        {
+            foreach (var path in result.TestResultPaths)
+            {
+                if (!File.Exists(path)) return AcceptanceCohortGateOutcome.InfrastructureFailure;
+                try { _ = XDocument.Load(path, LoadOptions.None); }
+                catch { return AcceptanceCohortGateOutcome.InfrastructureFailure; }
+            }
+        }
+        else if (result.Passed)
+        {
+            return AcceptanceCohortGateOutcome.InfrastructureFailure;
+        }
+        return result.Passed && result.ExitCode == 0
+            ? AcceptanceCohortGateOutcome.Passed
+            : AcceptanceCohortGateOutcome.Failed;
+    }
+
+    private static ConductorAcceptanceCohortRunResult CohortHeld(
+        IReadOnlyList<Goal> goals,
+        ConductorAutonomyPolicy policy,
+        AcceptanceCohortReceipt receipt,
+        string detail) => new(
+            receipt,
+            goals.ToDictionary(
+                goal => goal.Id.Value,
+                goal => MakeResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    policy,
+                    new ConductorAdvanceOutcome.Held(
+                        GoalLifecycleState.Verified,
+                        $"Acceptance cohort {receipt.Identity.Value}: {detail}")),
+                StringComparer.Ordinal),
+            $"outcome={receipt.Outcome} receipt={receipt.ReceiptId} attribution={receipt.Attribution} detail={BoundCohortDetail(detail)}");
+
+    private static string BoundCohortDetail(string value)
+    {
+        var singleLine = value.Replace('\r', ' ').Replace('\n', ' ').Replace('\t', ' ');
+        return singleLine.Length <= 256 ? singleLine : singleLine[..256];
+    }
 
     internal ConductorParallelAcceptanceRunResult RunParallelLandingAcceptance(
         ConductorParallelAcceptanceCandidate candidate,

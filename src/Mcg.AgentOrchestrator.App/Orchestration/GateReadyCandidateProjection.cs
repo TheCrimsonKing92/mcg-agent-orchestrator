@@ -14,6 +14,7 @@ internal enum GateReadyCandidateExclusionReason
     RiskNotAutoPromotable,
     ScopeResolutionFailed,
     ScopeEmpty,
+    ResourcesEmpty,
     MergeConflict,
     MergeIndeterminate
 }
@@ -128,6 +129,10 @@ internal sealed class GateReadyCandidateProjection : IEquatable<GateReadyCandida
 
     public GoalId GoalId { get; }
     public string BranchRevision => MergeEvidence.BranchRevision;
+    // The Ready projection binds the exact verified candidate. Today the authoritative candidate
+    // is the immutable goal-branch tip; keeping the concept explicit prevents cohort receipts from
+    // later substituting mutable branch names or advisory prose for the tested commit.
+    public string CandidateRevision => MergeEvidence.BranchRevision;
     public string MainRevision => MergeEvidence.MainRevision;
     public GoalLifecycleState LifecycleState { get; }
     public GateReadyVerificationState VerificationState { get; }

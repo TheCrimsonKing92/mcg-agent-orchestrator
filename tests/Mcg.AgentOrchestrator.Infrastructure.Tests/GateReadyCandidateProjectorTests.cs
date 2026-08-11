@@ -206,6 +206,14 @@ public sealed class GateReadyCandidateProjectorTests
     };
 
     [Fact]
+    public void NonEmptyPathsWithoutAuthoritativeResourceKeys_AreExcluded()
+    {
+        AssertExcluded(
+            new Harness(scope: ["docs/cohort.md"]).Projector.Project(ReadyInput()),
+            GateReadyCandidateExclusionReason.ResourcesEmpty);
+    }
+
+    [Fact]
     public void MergeConflict_IsTypedExclusion()
     {
         AssertExcluded(

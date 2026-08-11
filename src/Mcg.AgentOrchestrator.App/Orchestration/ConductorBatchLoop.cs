@@ -1865,6 +1865,7 @@ internal sealed class ConductorBatchLoop
             "POLICY_RELOAD_FAILED" => "policy-reload-failed",
             "POLICY_WARNING" => "policy-warning",
             "SPECULATIVE_COHORT_PLAN" => "speculative-cohort-plan",
+            "ACCEPTANCE_COHORT" => "acceptance-cohort",
             "SWEEP_BLOCKER" => "sweep-blocker",
             "SWEEP_ESCALATION" => "sweep-escalation",
             "SWEEP_REMEDY_ATTEMPT" => "sweep-remedy-attempt",
@@ -2653,10 +2654,48 @@ internal sealed class ConductorBatchLoop
         EmitProgress(speculativePlan.FormatReceipt(tick));
         var liveAttemptGoalIds = driver.ParallelAcceptanceAttemptCoordinator.GetLiveAttemptGoalIds(
             orderedEligible.Select(goal => goal.Id.Value));
+        var cohortEligible = orderedEligible
+            .Where(goal => !liveAttemptGoalIds.Contains(goal.Id.Value))
+            .ToArray();
+        var productionCandidates = speculativeCandidates
+            .Where(candidate => !liveAttemptGoalIds.Contains(candidate.GoalId.Value))
+            .ToArray();
+        if (driver.AcceptanceCohortsEnabled &&
+            cohortEligible.Length >= ConductorAcceptanceCohortSelector.CohortSize &&
+            !cohortEligible.Any(goal => IsAcceptanceEngineCircuitHoldRequired(
+                goal.Status,
+                _acceptanceEngineCircuit?.Read())))
+        {
+            var forcedCandidate = driver.SelectForcedCohortCandidate(cohortEligible);
+            var cohortSelection = ConductorAcceptanceCohortSelector.Select(
+                productionCandidates,
+                forcedCandidate,
+                driver.ReadSuppressedCohortPairs());
+            if (cohortSelection is not null)
+            {
+                driver.RecordCohortAdmissionFairness(cohortEligible, cohortSelection);
+                var cohortRun = driver.RunAcceptanceCohort(cohortSelection, cohortEligible, policy);
+                foreach (var pair in cohortRun.MemberResults)
+                {
+                    results[pair.Key] = new ParallelLandingOutcome(pair.Value, SlotIndex: 0);
+                }
+                RecordParallelAcceptanceProgress(
+                    $"ACCEPTANCE_COHORT tick={tick} members={string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]))} {cohortRun.Detail}",
+                    changedGoalLines);
+            }
+            else if (forcedCandidate is not null)
+            {
+                driver.ResetCohortFairness(forcedCandidate);
+            }
+        }
         var oldestWaiter = SelectOldestParallelAcceptanceWaiter(orderedEligible, liveAttemptGoalIds);
         var oldestServedThisTick = false;
         foreach (var goal in orderedEligible)
         {
+            if (results.ContainsKey(goal.Id.Value))
+            {
+                continue;
+            }
             try
             {
             var verificationGate = kernel.BuildVerificationGate(goal.Id);

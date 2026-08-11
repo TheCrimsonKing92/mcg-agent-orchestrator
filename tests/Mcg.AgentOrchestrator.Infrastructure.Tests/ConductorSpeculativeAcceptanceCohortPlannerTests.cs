@@ -67,6 +67,7 @@ public sealed class ConductorSpeculativeAcceptanceCohortPlannerTests
     [InlineData((int)GateReadyCandidateExclusionReason.RiskNotAutoPromotable)]
     [InlineData((int)GateReadyCandidateExclusionReason.ScopeResolutionFailed)]
     [InlineData((int)GateReadyCandidateExclusionReason.ScopeEmpty)]
+    [InlineData((int)GateReadyCandidateExclusionReason.ResourcesEmpty)]
     [InlineData((int)GateReadyCandidateExclusionReason.MergeConflict)]
     [InlineData((int)GateReadyCandidateExclusionReason.MergeIndeterminate)]
     public void UpstreamExclusion_IsPreservedExactly(int reasonValue)
