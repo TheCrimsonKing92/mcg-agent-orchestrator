@@ -1771,7 +1771,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var afterGoal = Xunit.Assert.Single(afterKernel.Goals);
         Xunit.Assert.Equal(beforeSnapshot, JsonSerializer.Serialize(afterKernel.ExportGoalSnapshot(afterGoal.Id)));
         Xunit.Assert.Equal(beforeOutbox, await reloadedRepository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
-        Xunit.Assert.Null(currentGoal);
+        Xunit.Assert.Equal(existingGoal.Id, currentGoal!.Id);
         Xunit.Assert.Contains("missing available agent role(s): Tester", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("No goal was created", exception.Message, StringComparison.Ordinal);
     }

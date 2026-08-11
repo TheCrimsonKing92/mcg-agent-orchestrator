@@ -256,12 +256,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var runObjective = ResolveBriefObjective(parts, "goal <objective> --run | goal --brief-file <path> --run | goal --text-file <path> --run");
                 var runObjectivePlan = BuildGoalObjectivePlan(context, runObjective, simple: false, goalPipelineRequest);
                 GoalObjectivePlanner.ThrowIfBlocked(runObjectivePlan);
-                PrintScopeCollisionAdvisory(context, runObjective);
-                var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
-                PrintClosedSourceBacklogWarning(runSourceBacklogLink);
                 var runAgents = ApplyRoleAgentOverrides(parts, context.Agents);
                 GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(runObjectivePlan, runAgents);
                 ConsoleViews.PrintGoalObjectivePlan(runObjectivePlan);
+                PrintScopeCollisionAdvisory(context, runObjective);
+                var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
+                PrintClosedSourceBacklogWarning(runSourceBacklogLink);
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                     context.Kernel,
                     runAgents,
@@ -280,12 +280,12 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             var goalObjective = ResolveBriefObjective(parts, "goal <objective> [--simple] [--from-backlog] [--run] | goal --brief-file <path> | goal --text-file <path>");
             var goalObjectivePlan = BuildGoalObjectivePlan(context, goalObjective, simple: false, goalPipelineRequest);
             GoalObjectivePlanner.ThrowIfBlocked(goalObjectivePlan);
-            PrintScopeCollisionAdvisory(context, goalObjective);
-            var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
-            PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
             var goalAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(goalObjectivePlan, goalAgents);
             ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+            PrintScopeCollisionAdvisory(context, goalObjective);
+            var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
+            PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                 context.Kernel,
                 goalAgents,
