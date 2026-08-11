@@ -11545,10 +11545,11 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, attempts);
     }
 
-    [Xunit.Theory(DisplayName = "TransientSqliteCheckpoint_BUSY_or_LOCKED_holds_one_goal_and_recovers_without_replaying_workspace_creation")]
+    [Xunit.Theory(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
     [Xunit.InlineData(5)]
     [Xunit.InlineData(6)]
-    public void TransientSqliteCheckpointBusyOrLockedHoldsOneGoalAndRecoversWithoutReplayingWorkspaceCreation(
+    public void TransientSqliteCheckpoint_HeldGoalRecoversWithoutRepeatingSideEffect(
         int sqliteErrorCode)
     {
         var kernel = new AgentOrchestratorKernel();
@@ -11631,8 +11632,9 @@ public sealed class ConductorBatchLoopTests
         Assert.Contains($"sqlite_extended_code={sqliteErrorCode}", recovered, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "TransientSqliteCheckpoint_controlled_writer_retains_conductor_lease_and_reaches_later_tick")]
-    public void TransientSqliteCheckpointControlledWriterRetainsConductorLeaseAndReachesLaterTick()
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void TransientSqliteCheckpoint_ControlledWriterKeepsLeaseAcrossTicks()
     {
         var root = CreateTempDirectory("mcg-checkpoint-controlled-writer");
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -11737,7 +11739,7 @@ public sealed class ConductorBatchLoopTests
             line.Contains("sqlite_code=5", StringComparison.Ordinal));
     }
 
-    [Xunit.Theory(DisplayName = "TransientSqliteCheckpoint_non_transient_failures_remain_fail_closed")]
+    [Xunit.Theory]
     [Xunit.InlineData(true)]
     [Xunit.InlineData(false)]
     public void TransientSqliteCheckpointNonTransientFailuresRemainFailClosed(bool sqliteCodeEight)
@@ -11756,6 +11758,149 @@ public sealed class ConductorBatchLoopTests
             checkpointGoalTick: (_, _) => throw exception));
 
         Assert.Same(exception, actual);
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void TransientSqliteCheckpoint_TerminalRecoveryEmitsBeforeExit()
+    {
+        var (kernel, goal) = SimpleGoal("terminal checkpoint recovery");
+        var checkpointCalls = 0;
+        BatchLoopSummary? summary = null;
+
+        var output = AsyncLocalConsoleRouter.Capture(() =>
+            summary = new ConductorBatchLoop().Run(
+                kernel,
+                MakeDriver(createWorkspace: _ => "/tmp/terminal-recovery"),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                checkpointGoalTick: (checkpointKernel, requested) =>
+                {
+                    checkpointCalls++;
+                    if (checkpointCalls == 1)
+                    {
+                        checkpointKernel.CancelGoal(goal.Id, "Terminal state awaits durability.");
+                        return requested.Select(goalId => new GoalSnapshotCheckpointResult(
+                            goalId.Value,
+                            GoalSnapshotCheckpointDisposition.Held,
+                            null,
+                            "state",
+                            "C:/fixture/state.db",
+                            $"loop:tick/TransactGoalStateAsync({goalId.Value[..8]})",
+                            SqliteErrorCode: 5,
+                            SqliteExtendedErrorCode: 5,
+                            AttemptCount: 3,
+                            ElapsedMilliseconds: 250)).ToArray();
+                    }
+
+                    checkpointKernel.EvictTerminalGoalAggregates(requested);
+                    return requested.Select(goalId => new GoalSnapshotCheckpointResult(
+                        goalId.Value,
+                        GoalSnapshotCheckpointDisposition.Durable,
+                        null,
+                        "state",
+                        "C:/fixture/state.db",
+                        $"loop:tick/TransactGoalStateAsync({goalId.Value[..8]})")).ToArray();
+                }));
+
+        Assert.NotNull(summary);
+        Assert.Equal(1, summary!.Ticks);
+        Assert.Equal(2, checkpointCalls);
+        Assert.Empty(kernel.Goals);
+        Assert.Contains("TICK_CHECKPOINT_RECOVERED", output, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public async Task TransientSqliteCheckpoint_HeldGoalDefersOperatorIntent()
+    {
+        var root = CreateTempDirectory("mcg-held-goal-intent");
+        var (kernel, goal) = SimpleGoal("defer held goal intent");
+        var task = goal.Tasks.Single();
+        var store = new SqliteOperatorIntentStore(
+            Path.Combine(root, "operator-intents.db"),
+            Path.Combine(root, "logs"));
+        var intent = new OperatorIntentRecord(
+            "held-goal-intent",
+            "held-goal-key",
+            OperatorIntentVerbs.Retry,
+            goal.Id.Value,
+            task.Id.Value,
+            JsonSerializer.Serialize(
+                new RetryOperatorIntentPayload("defer until durable", null),
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            [],
+            "operator",
+            "test",
+            "test",
+            DateTimeOffset.UtcNow);
+        var tickCount = 0;
+
+        var exception = Record.Exception(() => new ConductorBatchLoop(
+            operatorIntents: new OperatorIntentCoordinator(store)).Run(
+                kernel,
+                MakeDriver(createWorkspace: _ => root),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                onTick: _ =>
+                {
+                    tickCount++;
+                    if (tickCount == 1)
+                        store.EnqueueAsync(intent).GetAwaiter().GetResult();
+                },
+                checkpointGoalTick: (_, requested) => requested.Select(goalId =>
+                    new GoalSnapshotCheckpointResult(
+                        goalId.Value,
+                        GoalSnapshotCheckpointDisposition.Held,
+                        null,
+                        "state",
+                        "C:/fixture/state.db",
+                        $"loop:tick/TransactGoalStateAsync({goalId.Value[..8]})",
+                        SqliteErrorCode: 5,
+                        SqliteExtendedErrorCode: 5,
+                        AttemptCount: 3,
+                        ElapsedMilliseconds: 250)).ToArray()));
+
+        Assert.Null(exception);
+        var stored = await store.GetAsync(intent.Id);
+        Assert.NotNull(stored);
+        Assert.Equal(OperatorIntentStatus.Pending, stored!.Status);
+    }
+
+    [Xunit.Fact(Timeout = 30_000)]
+    [Xunit.Trait("Category", "CrossTick")]
+    public void TransientSqliteCheckpoint_LoadHoldRechecksThroughLoop()
+    {
+        var loadHeld = true;
+        var sweeps = 0;
+        var sleeps = 0;
+
+        var summary = new ConductorBatchLoop(
+            measuredSweep: _ =>
+            {
+                sweeps++;
+                if (sweeps == 2)
+                    loadHeld = false;
+                return new TerminalGoalSweepResult([]);
+            }).Run(
+                new AgentOrchestratorKernel(),
+                MakeDriver(),
+                ConductorAutonomyPolicy.Conservative,
+                NoStopPath(),
+                maxIterations: 2,
+                sleepFunc: _ =>
+                {
+                    sleeps++;
+                    return false;
+                },
+                hasTransientLoadHold: () => loadHeld);
+
+        Assert.Equal(2, sweeps);
+        Assert.Equal(1, sleeps);
+        Assert.Equal(0, summary.Ticks);
+        Assert.Equal("all-terminal", summary.StopReason);
     }
 
     [Xunit.Fact(DisplayName = "PersistGoalTick_FiresOneBatchForGoalsThatChangedDisposition")]

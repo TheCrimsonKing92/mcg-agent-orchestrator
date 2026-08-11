@@ -152,7 +152,8 @@ internal sealed class ConductorBatchLoop
         string? journalMode = null,
         string policySource = "preset",
         Func<ConductorPolicyResolution>? reloadPolicy = null,
-        Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick = null)
+        Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalTick = null,
+        Func<bool>? hasTransientLoadHold = null)
     {
         _consecutiveJanitorialFailures.Clear();
         var previousConductEventLogWriter = CurrentConductEventLogWriter.Value;
@@ -598,6 +599,13 @@ internal sealed class ConductorBatchLoop
                 {
                     if (!scopedGoalsById.TryGetValue(actionableGoalId, out var scopedGoal))
                     {
+                        if (checkpointHeldGoals.ContainsKey(actionableGoalId))
+                        {
+                            EmitProgress(
+                                $"OPERATOR_INTENT goal={ShortGoalId(actionableGoalId)} result=deferred reason=checkpoint-held");
+                            continue;
+                        }
+
                         var isOutsideScope = kernel.Goals.Any(goal => goal.Id.Value == actionableGoalId);
                         var evictedStatus = isOutsideScope ? null : _evictedGoalStatusLookup(actionableGoalId);
                         var reason = isOutsideScope
@@ -783,9 +791,10 @@ internal sealed class ConductorBatchLoop
                     onlyGoalId,
                     setAsideGoals,
                     transientRecheckableGoalIds: checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal));
-                if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0)
+                var transientLoadRecheckPending = hasTransientLoadHold?.Invoke() == true;
+                if ((keepAliveWhenIdle && watchInterval is not null) || recheckableBlockedGoals > 0 || transientLoadRecheckPending)
                 {
-                    if (recheckableBlockedGoals > 0)
+                    if (recheckableBlockedGoals > 0 || transientLoadRecheckPending)
                     {
                         blockedRecheckCycles++;
                         totalBlockedRechecks++;
@@ -834,10 +843,14 @@ internal sealed class ConductorBatchLoop
                     }
 
                     var configuredInterval = watchInterval ?? TimeSpan.FromSeconds(DefaultWatchIntervalSeconds);
-                    var idleInterval = ConsumeWatchInterval(configuredInterval, recheckableBlockedGoals);
+                    var idleInterval = ConsumeWatchInterval(
+                        configuredInterval,
+                        Math.Max(recheckableBlockedGoals, transientLoadRecheckPending ? 1 : 0));
                     EmitProgress(
-                        recheckableBlockedGoals > 0
-                            ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals} seconds={(int)idleInterval.TotalSeconds}"
+                        recheckableBlockedGoals > 0 || transientLoadRecheckPending
+                            ? $"BLOCKED_RECHECK_SLEEP goals={recheckableBlockedGoals}" +
+                              (transientLoadRecheckPending ? " loadHeld=true" : string.Empty) +
+                              $" seconds={(int)idleInterval.TotalSeconds}"
                             : $"IDLE_SLEEP seconds={(int)idleInterval.TotalSeconds}");
                     var idleSleep = sleepFunc is not null
                         ? (sleepFunc(idleInterval) ? WatchSleepResult.StopRequested : WatchSleepResult.FallbackElapsed)
@@ -871,6 +884,10 @@ internal sealed class ConductorBatchLoop
                 var remainingNonTerminalGoals = kernel.Goals.Count(goal =>
                     (onlyGoalId is null || goal.Id.Value == onlyGoalId) &&
                     !IsTerminalGoal(goal));
+                foreach (var line in preTickTimingLines)
+                {
+                    EmitProgress(line);
+                }
                 StopLoop(
                     remainingNonTerminalGoals == 0 ? "all-terminal" : "no-recheckable-work",
                     remainingNonTerminalGoals == 0 ? null : $"nonTerminalGoals={remainingNonTerminalGoals}");

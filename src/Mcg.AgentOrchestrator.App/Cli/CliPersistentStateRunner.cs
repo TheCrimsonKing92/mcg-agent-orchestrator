@@ -7,6 +7,21 @@ using Microsoft.Data.Sqlite;
 
 namespace Mcg.AgentOrchestrator.App.Cli;
 
+internal sealed record TransientSqliteLoadHold(
+    int SqliteErrorCode,
+    int SqliteExtendedErrorCode,
+    string AttemptCount,
+    string ElapsedMilliseconds,
+    string Operation)
+{
+    internal static TransientSqliteLoadHold From(SqliteException exception, string operation) => new(
+        exception.SqliteErrorCode,
+        exception.SqliteExtendedErrorCode,
+        exception.Data["Mcg.AttemptCount"]?.ToString() ?? "unknown",
+        exception.Data["Mcg.ElapsedMilliseconds"]?.ToString() ?? "unknown",
+        operation);
+}
+
 internal static class CliPersistentStateRunner
 {
     internal enum OperatorIntentSubmissionSource
@@ -828,10 +843,12 @@ internal static class CliPersistentStateRunner
                     .ToArray(),
                 workspace.ExecutionDirectory);
         var startupStopPath = Path.Combine(workspace.ExecutionDirectory, ConductorBatchLoop.StopFileName);
+        TransientSqliteLoadHold? initialConductLoopLoadHold = null;
         var kernel = LoadInitialConductLoopKernelWithTransientHold(
             LoadLoopKernel,
             workspace,
-            stopRequested: () => File.Exists(startupStopPath));
+            stopRequested: () => File.Exists(startupStopPath),
+            onHoldExhausted: hold => initialConductLoopLoadHold = hold);
         var tickBaselines = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
         TerminalGoalSweepResult? sweep = null;
         try
@@ -991,7 +1008,8 @@ internal static class CliPersistentStateRunner
             reloadResolvedParkedHumanWaitKernel: () => LoadConductLoopResolvedParkedHumanWaitKernel(stateRepository),
             reloadParkedGoalSafetyNetKernel: () => LoadConductLoopParkedGoalSafetyNetKernel(stateRepository),
             reloadKernelForGoals: LoadLoopKernelForGoals,
-            checkpointGoalKernel: CheckpointGoals);
+            checkpointGoalKernel: CheckpointGoals,
+            initialConductLoopLoadHold: initialConductLoopLoadHold);
 
         // A successful handoff has transferred the lease and authority to the successor. All incumbent
         // tick state was persisted before handoff; do not write once the successor owns the loop.
@@ -1022,20 +1040,25 @@ internal static class CliPersistentStateRunner
         OrchestratorWorkspace workspace,
         Func<bool>? stopRequested = null,
         Action<TimeSpan>? holdDelay = null,
-        TimeSpan? holdInterval = null)
+        TimeSpan? holdInterval = null,
+        int maxHoldRetries = 1,
+        Action<TransientSqliteLoadHold>? onHoldExhausted = null)
     {
         ArgumentNullException.ThrowIfNull(load);
         ArgumentNullException.ThrowIfNull(workspace);
         var delay = holdInterval ?? TimeSpan.FromSeconds(1);
         if (delay < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(holdInterval));
+        if (maxHoldRetries < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxHoldRetries));
 
         var eventWriter = new ConductEventLogWriter(workspace.ConductEventsLogPath);
+        var maxLoadAttempts = checked(maxHoldRetries + 1);
         int? lastSqliteErrorCode = null;
         int? lastSqliteExtendedErrorCode = null;
         string? lastAttempt = null;
         string? lastElapsedMilliseconds = null;
-        for (var holdCycle = 1; ; holdCycle++)
+        for (var holdCycle = 1; holdCycle <= maxLoadAttempts; holdCycle++)
         {
             try
             {
@@ -1054,8 +1077,9 @@ internal static class CliPersistentStateRunner
             }
             catch (SqliteException ex) when (SqliteOrchestratorStateRepository.IsTransientLock(ex))
             {
-                var attempt = ex.Data["Mcg.AttemptCount"]?.ToString() ?? "unknown";
-                var elapsed = ex.Data["Mcg.ElapsedMilliseconds"]?.ToString() ?? "unknown";
+                var hold = TransientSqliteLoadHold.From(ex, "loop:startup/load");
+                var attempt = hold.AttemptCount;
+                var elapsed = hold.ElapsedMilliseconds;
                 lastSqliteErrorCode = ex.SqliteErrorCode;
                 lastSqliteExtendedErrorCode = ex.SqliteExtendedErrorCode;
                 lastAttempt = attempt;
@@ -1069,11 +1093,60 @@ internal static class CliPersistentStateRunner
                 if (stopRequested?.Invoke() == true)
                     return new AgentOrchestratorKernel();
 
+                if (holdCycle == maxLoadAttempts)
+                {
+                    onHoldExhausted?.Invoke(hold);
+                    return new AgentOrchestratorKernel();
+                }
+
                 if (holdDelay is null)
                     Thread.Sleep(delay);
                 else
                     holdDelay(delay);
             }
+        }
+
+        throw new InvalidOperationException("The bounded startup load policy exhausted without returning a disposition.");
+    }
+
+    internal static bool TryReloadConductLoopKernel(
+        Func<AgentOrchestratorKernel> reload,
+        OrchestratorWorkspace workspace,
+        ConductEventLogWriter eventWriter,
+        ref TransientSqliteLoadHold? holdEpisode,
+        out AgentOrchestratorKernel? kernel)
+    {
+        ArgumentNullException.ThrowIfNull(reload);
+        ArgumentNullException.ThrowIfNull(workspace);
+        ArgumentNullException.ThrowIfNull(eventWriter);
+        try
+        {
+            kernel = reload();
+            if (holdEpisode is not null)
+            {
+                var recovered =
+                    $"TICK_LOAD_RECOVERED store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
+                    $"operation=loop:tick/reload sqlite_code={holdEpisode.SqliteErrorCode} " +
+                    $"sqlite_extended_code={holdEpisode.SqliteExtendedErrorCode} attempt=1 " +
+                    $"elapsed_ms={holdEpisode.ElapsedMilliseconds} disposition=recovered";
+                Console.WriteLine(recovered);
+                eventWriter.Append("tick-load-recovered", null, recovered);
+                holdEpisode = null;
+            }
+            return true;
+        }
+        catch (SqliteException ex) when (SqliteOrchestratorStateRepository.IsTransientLock(ex))
+        {
+            holdEpisode = TransientSqliteLoadHold.From(ex, "loop:tick/reload");
+            var held =
+                $"TICK_LOAD_HOLD store=state database={SanitizeConductToken(workspace.SqliteStatePath)} " +
+                $"operation={holdEpisode.Operation} sqlite_code={holdEpisode.SqliteErrorCode} " +
+                $"sqlite_extended_code={holdEpisode.SqliteExtendedErrorCode} attempt={holdEpisode.AttemptCount} " +
+                $"elapsed_ms={holdEpisode.ElapsedMilliseconds} disposition=exhausted-held holder=unknown";
+            Console.WriteLine(held);
+            eventWriter.Append("tick-load-hold", null, held);
+            kernel = null;
+            return false;
         }
     }
 

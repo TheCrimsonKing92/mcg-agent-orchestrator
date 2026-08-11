@@ -32,9 +32,12 @@ internal sealed class CliExecutionContext(
     Func<AcceptanceMergeGuardPreflightRequest, AcceptanceMergeGuardPreflightResult>? prepareAcceptanceMergeGuard = null,
     Action<Goal>? finalizeGoalCreation = null,
     CollaborationItemRaise? refinementCollaborationItemRaise = null,
-    Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null)
+    Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null,
+    TransientSqliteLoadHold? initialConductLoopLoadHold = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
+
+public TransientSqliteLoadHold? InitialConductLoopLoadHold { get; } = initialConductLoopLoadHold;
 
 public AgentOrchestratorKernel ReloadKernel() => reloadKernel?.Invoke() ?? Kernel;
 

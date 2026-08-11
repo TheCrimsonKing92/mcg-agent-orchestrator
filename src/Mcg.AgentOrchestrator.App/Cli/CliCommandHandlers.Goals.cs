@@ -1341,6 +1341,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var operatorIntents = OperatorIntentCoordinator.CreateDefault(context.Workspace);
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
                 var parkedGoalSafetyNetTick = 0;
+                var scheduledLoadHold = context.InitialConductLoopLoadHold;
                 TerminalGoalSweepResult reconcileSweep(AgentOrchestratorKernel loopKernel)
                 {
                     loopReaper.BeginRefreshCycle();
@@ -1356,39 +1357,35 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                         var trackedGoalIdSet = trackedGoalIds.ToHashSet(StringComparer.Ordinal);
                         var actionableGoalIds = operatorIntents.ListActionableGoalIds()
                             .ToHashSet(StringComparer.Ordinal);
-                        var reloadedKernel = context.ReloadKernel(trackedGoalIds);
-                        loopKernel.MarkKnownDependencyGoalStatuses(reloadedKernel.KnownDependencyGoalStatuses);
-                        loopKernel.MarkKnownCompletedDependencyGoals(reloadedKernel.KnownCompletedDependencyGoals);
-                        var snapshot = reloadedKernel.ExportSnapshot();
-                        foreach (var persistedGoal in snapshot.Goals.Where(goal =>
-                                     trackedGoalIdSet.Contains(goal.Id) &&
-                                     GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status)))
+                        if (CliPersistentStateRunner.TryReloadConductLoopKernel(
+                                () => context.ReloadKernel(trackedGoalIds),
+                                context.Workspace,
+                                conductEventLogWriter,
+                                ref scheduledLoadHold,
+                                out var reloadedKernel))
                         {
-                            evictedGoalStatuses[persistedGoal.Id] = persistedGoal.Status;
-                        }
+                            loopKernel.MarkKnownDependencyGoalStatuses(reloadedKernel!.KnownDependencyGoalStatuses);
+                            loopKernel.MarkKnownCompletedDependencyGoals(reloadedKernel.KnownCompletedDependencyGoals);
+                            var snapshot = reloadedKernel.ExportSnapshot();
+                            foreach (var persistedGoal in snapshot.Goals.Where(goal =>
+                                         trackedGoalIdSet.Contains(goal.Id) &&
+                                         GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status)))
+                            {
+                                evictedGoalStatuses[persistedGoal.Id] = persistedGoal.Status;
+                            }
 
-                        loopKernel.RefreshTrackedGoals(snapshot);
-                        loopKernel.IngestNewGoals(snapshot);
-                        foreach (var (goalId, status) in evictedGoalStatuses)
-                        {
-                            context.EventWriter.AppendGoalEvictedFromConductor(
-                                new GoalId(goalId),
-                                status,
-                                actionableGoalIds.Contains(goalId)
-                                    ? "operator-intent-forced-reload"
-                                    : "scheduled-reload");
+                            loopKernel.RefreshTrackedGoals(snapshot);
+                            loopKernel.IngestNewGoals(snapshot);
+                            foreach (var (goalId, status) in evictedGoalStatuses)
+                            {
+                                context.EventWriter.AppendGoalEvictedFromConductor(
+                                    new GoalId(goalId),
+                                    status,
+                                    actionableGoalIds.Contains(goalId)
+                                        ? "operator-intent-forced-reload"
+                                        : "scheduled-reload");
+                            }
                         }
-                    }
-                    catch (SqliteException ex) when (SqliteOrchestratorStateRepository.IsTransientLock(ex))
-                    {
-                        var attempt = ex.Data["Mcg.AttemptCount"]?.ToString() ?? "unknown";
-                        var elapsed = ex.Data["Mcg.ElapsedMilliseconds"]?.ToString() ?? "unknown";
-                        var line =
-                            $"TICK_LOAD_HOLD store=state database={context.Workspace.SqliteStatePath.Replace(' ', '_')} " +
-                            $"operation=loop:tick/reload sqlite_code={ex.SqliteErrorCode} sqlite_extended_code={ex.SqliteExtendedErrorCode} " +
-                            $"attempt={attempt} elapsed_ms={elapsed} disposition=exhausted-held holder=unknown";
-                        Console.WriteLine(line);
-                        conductEventLogWriter.Append("tick-load-hold", null, line);
                     }
                     catch { /* non-transient dynamic pickup remains best-effort under the existing policy */ }
 
@@ -1505,7 +1502,8 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     reloadPolicy: loopPolicyName is null
                         ? () => ResolveConductorPolicy(null, context.Workspace.OrchestratorDirectory)
                         : null,
-                    checkpointGoalTick: context.CheckpointGoals);
+                    checkpointGoalTick: context.CheckpointGoals,
+                    hasTransientLoadHold: () => scheduledLoadHold is not null);
                 if (!string.IsNullOrWhiteSpace(continuityExitArtifactPath))
                 {
                     ConductorContinuityExitArtifact.Write(

@@ -167,7 +167,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.InRange(stopwatch.Elapsed, TimeSpan.FromMilliseconds(150), TimeSpan.FromSeconds(2));
     }
 
-    [Xunit.Fact(DisplayName = "TransientSqliteCheckpoint_controlled_writer_recovers_with_exact_retry_receipts")]
+    [Xunit.Fact]
     public async Task TransientSqliteCheckpointControlledWriterRecoversWithExactRetryReceipts()
     {
         var db = TempDb();
@@ -234,7 +234,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(2, receipts[1]["attemptCount"]?.GetValue<int>());
     }
 
-    [Xunit.Fact(DisplayName = "TransientSqliteCheckpoint_retry_exhaustion_returns_typed_hold")]
+    [Xunit.Fact]
     public async Task TransientSqliteCheckpointRetryExhaustionReturnsTypedHold()
     {
         var db = TempDb();

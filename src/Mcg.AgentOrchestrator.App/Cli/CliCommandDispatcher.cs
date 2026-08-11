@@ -38,7 +38,8 @@ public static bool ExecuteCommand(
     Action<Goal>? finalizeGoalCreation = null,
     IGoalLifecycleEventWriter? eventWriter = null,
     CollaborationItemRaise? refinementCollaborationItemRaise = null,
-    Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null)
+    Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null,
+    TransientSqliteLoadHold? initialConductLoopLoadHold = null)
 {
     eventWriter ??= new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel);
     kernel.SetEventWriter(eventWriter);
@@ -68,7 +69,8 @@ public static bool ExecuteCommand(
         prepareAcceptanceMergeGuard: prepareAcceptanceMergeGuard,
         finalizeGoalCreation: finalizeGoalCreation,
         refinementCollaborationItemRaise: refinementCollaborationItemRaise,
-        checkpointGoalKernel: checkpointGoalKernel)
+        checkpointGoalKernel: checkpointGoalKernel,
+        initialConductLoopLoadHold: initialConductLoopLoadHold)
     {
         EventWriter = eventWriter,
         AcceptanceVerifier = acceptanceVerifier ?? new GoalAcceptanceVerifier(),
