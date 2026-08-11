@@ -80,6 +80,7 @@ public sealed class WorkerProfileTests
 
     Assert.Contains("--oss --local-provider ollama", codexOss.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("--model {subscriptionModelName}", codexOss.CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("--sandbox {sandboxMode}", codexOss.CommandTemplate, StringComparison.Ordinal);
     Assert.True(WorkerProfileDiagnostics.EvaluatePatchCapability(codexOss.CommandTemplate).IsPatchCapable);
 }
 

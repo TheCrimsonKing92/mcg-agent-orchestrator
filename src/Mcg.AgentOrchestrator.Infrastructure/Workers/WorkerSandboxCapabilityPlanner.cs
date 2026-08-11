@@ -12,7 +12,8 @@ public static class WorkerSandboxCapabilityPlanner
         WorkerProfile profile,
         string workingDirectory,
         bool allowGitReference = false,
-        WorkerSandboxOptions? sandboxOptions = null)
+        WorkerSandboxOptions? sandboxOptions = null,
+        Func<string, bool>? commandExists = null)
     {
         if (task.RequiredRole is not (AgentRole.Developer or AgentRole.Tester))
         {
@@ -31,7 +32,8 @@ public static class WorkerSandboxCapabilityPlanner
             profile,
             provider,
             allowGitReference,
-            sandboxOptions ?? WorkerSandboxOptions.FromEnvironment());
+            sandboxOptions ?? WorkerSandboxOptions.FromEnvironment(),
+            commandExists);
         if (targetRisk is not null)
         {
             return targetRisk;
@@ -49,13 +51,26 @@ public static class WorkerSandboxCapabilityPlanner
         WorkerProfile profile,
         IWorkerProvider provider,
         bool allowGitReference,
-        WorkerSandboxOptions sandboxOptions)
+        WorkerSandboxOptions sandboxOptions,
+        Func<string, bool>? commandExists)
     {
         var text = $"{goal.Objective}\n{task.Description}\n{task.VerificationPlan}".ToLowerInvariant();
-        if (text.Contains(".agents/skills", StringComparison.Ordinal) ||
-            text.Contains(".agents\\skills", StringComparison.Ordinal))
+        var targetsRepoScopedSkill = text.Contains(".agents/skills", StringComparison.Ordinal) ||
+            text.Contains(".agents\\skills", StringComparison.Ordinal);
+        // Git metadata is always conductor-owned. Evaluate this before any positive target-specific
+        // capability result so a combined repo-skill/.git request cannot bypass even a vetted
+        // read-only Git-reference override.
+        if ((!allowGitReference || targetsRepoScopedSkill) && ContainsGitDirectoryReference(text))
         {
-            if (CanWriteRepoScopedSkillTarget(profile, provider, sandboxOptions, out var detail))
+            return new WorkerSandboxCapabilityResult(
+                false,
+                "blocked",
+                "Task appears to target .git internals, which are outside the worker writable sandbox.");
+        }
+
+        if (targetsRepoScopedSkill)
+        {
+            if (CanWriteRepoScopedSkillTarget(profile, provider, sandboxOptions, commandExists, out var detail))
             {
                 return new WorkerSandboxCapabilityResult(
                     true,
@@ -66,7 +81,7 @@ public static class WorkerSandboxCapabilityPlanner
             return new WorkerSandboxCapabilityResult(
                 false,
                 "blocked",
-                "Task appears to target repo-scoped .agents/skills files, but this profile lacks an authorized patch-capable, OS-confined worktree mode; Git metadata and commit authority remain with the orchestrator.");
+                detail);
         }
 
         if (text.Contains("skill.md", StringComparison.Ordinal))
@@ -75,17 +90,6 @@ public static class WorkerSandboxCapabilityPlanner
                 false,
                 "blocked",
                 "Task appears to target a SKILL.md file; include the exact .agents/skills path and use a full-permission profile if this is intentional.");
-        }
-
-        // The .git block is a conservative guard against a worker trying to write the git object DB.
-        // It false-positives on tasks that merely reference .git read-only (e.g. resolving the repo
-        // root). allowGitReference is the operator's vetted override for exactly that case.
-        if (!allowGitReference && ContainsGitDirectoryReference(text))
-        {
-            return new WorkerSandboxCapabilityResult(
-                false,
-                "blocked",
-                "Task appears to target .git internals, which are outside the worker writable sandbox.");
         }
 
         return null;
@@ -111,16 +115,40 @@ public static class WorkerSandboxCapabilityPlanner
         WorkerProfile profile,
         IWorkerProvider provider,
         WorkerSandboxOptions sandboxOptions,
+        Func<string, bool>? commandExists,
         out string detail)
     {
-        var commandTemplate = profile.CommandTemplate;
-        var claudeCompatible = (provider.Identity.Kind is ProviderKind.Unknown or ProviderKind.AnthropicClaudeCli) &&
-            (commandTemplate.Contains("--permission-mode bypassPermissions", StringComparison.OrdinalIgnoreCase) ||
-             commandTemplate.Contains("--permission-mode {permissionMode}", StringComparison.OrdinalIgnoreCase) ||
-             commandTemplate.Contains("--dangerously-skip-permissions", StringComparison.OrdinalIgnoreCase));
-        detail = claudeCompatible
-            ? "Task targets repo-scoped .agents/skills files; profile uses the existing full-permission Claude-compatible worker mode."
-            : string.Empty;
-        return claudeCompatible;
+        if (!sandboxOptions.Enabled)
+        {
+            detail = "Repository-scoped skill writes require the orchestrator OS worker sandbox.";
+            return false;
+        }
+
+        if (provider.Identity.Kind is not (
+            ProviderKind.AnthropicClaudeCli or
+            ProviderKind.OpenAICodexCli or
+            ProviderKind.OpenAICodexSpark or
+            ProviderKind.OpenAICodexOssCli))
+        {
+            detail = "Repository-scoped skill writes require a typed Codex or Claude CLI provider.";
+            return false;
+        }
+
+        var launcher = WorkerProfileDiagnostics.EvaluateRealLauncher(profile, provider, commandExists);
+        if (!launcher.IsRealLauncher)
+        {
+            detail = launcher.Detail;
+            return false;
+        }
+
+        var patchCapability = WorkerProfileDiagnostics.EvaluatePatchCapability(profile, provider);
+        if (!patchCapability.IsPatchCapable)
+        {
+            detail = patchCapability.Detail;
+            return false;
+        }
+
+        detail = $"Task targets repo-scoped .agents/skills files; the patch-capable {provider.Identity.Kind} launcher is confined by the orchestrator OS worker sandbox.";
+        return true;
     }
 }

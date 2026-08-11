@@ -177,7 +177,8 @@ public static class WorkerProfileDispatcher
         string? dispatchLane = null,
         string? modelSelectionReason = null,
         ReviewRetryCapReceipt? reviewRetryCap = null,
-        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         EnsureTaskNeedsExecution(task, allowPendingRecordedDispatchRefresh);
         EnsureSubscriptionRetryWindowHasPassed(task, dispatchedAt);
@@ -261,7 +262,7 @@ public static class WorkerProfileDispatcher
                 ArtifactTooLargeErrorCode,
                 findings);
         }
-        var dispatchVariables = BuildDispatchVariables(task.RequiredRole, workingDirectory, variables);
+        var dispatchVariables = BuildDispatchVariables(task.RequiredRole, workingDirectory, variables, sandboxOptions);
         var workerProviderKind = DefaultProviders.ResolveProfile(profile.Name).Identity.Kind;
         var commandTemplate = BuildDispatchCommandTemplate(profile, workerProviderKind, dispatchVariables);
         var preparation = WorkerCommandTemplate.Prepare(
@@ -441,9 +442,10 @@ public static class WorkerProfileDispatcher
         CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
     {
         EnsureTaskNeedsExecution(task);
+        var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
 
         var agent = ResolveAssignedAgent(kernel, goal, task, agents);
-        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandboxOptions, commandExists);
+        var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists);
         roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
         var profile = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
             ? profiles.GetRequired(overrideProfile)
@@ -473,7 +475,7 @@ public static class WorkerProfileDispatcher
             modelOverride,
             allowGitReference,
             claudeAuthProbe,
-            sandboxOptions,
+            sandbox,
             commandExists);
         ThrowIfPreflightBlocked(preflight);
         return PrepareTask(
@@ -505,7 +507,8 @@ public static class WorkerProfileDispatcher
                     goal,
                     reviewAutoRetryStopRound ?? ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
                 : null,
-            citedPriorEvidenceResolver: citedPriorEvidenceResolver);
+            citedPriorEvidenceResolver: citedPriorEvidenceResolver,
+            sandboxOptions: sandbox);
     }
 
     public static WorkerSubscriptionPreflightResult PreflightSubscriptionTask(
@@ -528,8 +531,9 @@ public static class WorkerProfileDispatcher
         try
         {
             EnsureTaskNeedsExecution(task);
+            var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
             var agent = ResolveAssignedAgent(null, goal, task, agents);
-            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandboxOptions, commandExists);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists);
             roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);
             profileName = modelOverride?.ProfileName is { Length: > 0 } overrideProfile
                 ? overrideProfile
@@ -538,7 +542,6 @@ public static class WorkerProfileDispatcher
             findings.Add($"profile: {profile.Name}");
             findings.Add($"dispatch-lane: {roleSelection.DispatchLane ?? profile.Name}");
             findings.Add($"model-selection: {roleSelection.Reason}");
-            var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
             AddClaudeLowIntegrityAuthFinding(findings, task.RequiredRole, DefaultProviders.ResolveProfile(profile.Name), sandbox, claudeAuthProbe);
             var effectiveModelName = modelOverride?.ModelName is { Length: > 0 } overrideModel
                 ? overrideModel
@@ -583,7 +586,8 @@ public static class WorkerProfileDispatcher
                 profile,
                 workingDirectory,
                 allowGitReference,
-                sandbox);
+                sandbox,
+                commandExists);
             findings.Add($"capability: {capability.Status} - {capability.Detail}");
             if (!capability.Allowed)
             {
@@ -1092,13 +1096,20 @@ public static class WorkerProfileDispatcher
         // here — so it is redundant under the sandbox. Relaxing it lets the conductor autonomously
         // dispatch tasks whose briefs legitimately mention .git (e.g. repo-root resolution goals)
         // instead of dropping them from the ready batch and escalating a generic "no ready tasks".
-        var sandboxConfinesWrites = WorkerSandboxOptions.FromEnvironment().Enabled;
+        var sandbox = WorkerSandboxOptions.FromEnvironment();
+        var sandboxConfinesWrites = sandbox.Enabled;
 
         var results = new List<WorkerProfileDispatchResult>();
         var blocked = new List<ReadyBlockedDiagnostic>();
         foreach (var selection in selections)
         {
-            var roleSelection = ResolveEffectiveSubscriptionModelSelection(selection.Agent, goal, selection.Task, profiles: profiles, commandExists: commandExists);
+            var roleSelection = ResolveEffectiveSubscriptionModelSelection(
+                selection.Agent,
+                goal,
+                selection.Task,
+                profiles: profiles,
+                sandboxOptions: sandbox,
+                commandExists: commandExists);
             roleSelection = ApplyReasoningEffortPolicy(selection.Agent, goal, selection.Task, roleSelection);
             var profile = ResolveSubscriptionProfile(selection.Agent, roleSelection, profiles);
             var resolvedModelName = ResolveEffectiveSubscriptionModelName(selection.Agent, roleSelection);
@@ -1108,6 +1119,7 @@ public static class WorkerProfileDispatcher
             var preflight = PreflightSubscriptionTask(
                 goal, selection.Task, agents, profiles, workingDirectory, dispatchedAt,
                 allowGitReference: sandboxConfinesWrites,
+                sandboxOptions: sandbox,
                 commandExists: commandExists);
             if (!preflight.Allowed)
             {
@@ -1152,7 +1164,8 @@ public static class WorkerProfileDispatcher
                         goal,
                         reviewAutoRetryStopRound ?? ConductorAutonomyPolicy.Default.ReviewAutoRetryStopRound)
                     : null,
-                citedPriorEvidenceResolver: citedPriorEvidenceResolver));
+                citedPriorEvidenceResolver: citedPriorEvidenceResolver,
+                sandboxOptions: sandbox));
         }
 
         return new WorkerProfileReadyBatchResult(results, blocked);
@@ -2152,13 +2165,14 @@ public static class WorkerProfileDispatcher
     public static Dictionary<string, string?> BuildDispatchVariables(
         AgentRole role,
         string workingDirectory,
-        IReadOnlyDictionary<string, string?>? variables)
+        IReadOnlyDictionary<string, string?>? variables,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         var isWriteCapable = role == AgentRole.Developer || role == AgentRole.Tester;
         // When the OS worker sandbox is active, Codex's nested sandbox is disabled so it does not run
         // the expensive Windows sandbox setup helper. MIC remains the enforcement boundary: file roles
         // receive a Low writable worktree, while read-only Codex roles keep the worktree Medium.
-        var osSandbox = WorkerSandboxOptions.FromEnvironment().Enabled;
+        var osSandbox = (sandboxOptions ?? WorkerSandboxOptions.FromEnvironment()).Enabled;
         var merged = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
         {
             ["workingDirectory"] = workingDirectory,
@@ -2217,7 +2231,7 @@ public static class WorkerProfileDispatcher
                     "sandboxMode",
                     "workingDirectory"),
             ProviderKind.OpenAICodexOssCli =>
-                HasKeys(variables, "subscriptionModelName", "workingDirectory"),
+                HasKeys(variables, "subscriptionModelName", "sandboxMode", "workingDirectory"),
             ProviderKind.AnthropicClaudeCli =>
                 HasKeys(variables, "subscriptionModelName", "permissionMode"),
             ProviderKind.OllamaQwenCodeCli =>

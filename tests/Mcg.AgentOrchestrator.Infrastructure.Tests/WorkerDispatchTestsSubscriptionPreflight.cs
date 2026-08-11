@@ -201,11 +201,13 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        DateTimeOffset.Parse("2026-06-13T12:00:00Z")));
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+        sandboxOptions: sandbox,
+        commandExists: _ => true));
 
     Assert.False(preflight.Allowed);
     Assert.Equal("blocked", preflight.CapabilityStatus);
-    Assert.Contains(".agents/skills", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
+    Assert.Contains("orchestrator OS worker sandbox", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.False(Directory.Exists(promptRoot));
     Assert.True(task.LastDispatch is null);
@@ -265,23 +267,20 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.True(task.LastDispatch is null);
 }
 
-    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_blocks_Codex_repo_skills_regardless_of_sandbox_state")]
-    [Xunit.InlineData(false, "1", "blocked")]
-    [Xunit.InlineData(true, "0", "blocked")]
-    public void WorkerProfileDispatcherPreflightBlocksCodexRepoSkillsRegardlessOfSandboxState(
+    [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_uses_explicit_OS_sandbox_for_Codex_repo_skills_without_starting_worker")]
+    [Xunit.InlineData(false, "1", false, "blocked")]
+    [Xunit.InlineData(true, "0", true, "repo-skill-write")]
+    public void WorkerProfileDispatcherPreflightUsesExplicitOsSandboxForCodexRepoSkillsWithoutStartingWorker(
         bool explicitSandboxEnabled,
         string ambientSandboxValue,
+        bool expectedAllowed,
         string expectedCapabilityStatus)
     {
         var previousSandbox = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
         try
         {
             Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, ambientSandboxValue);
-            var workingDirectory = CreateTempDirectory();
-            File.WriteAllText(Path.Combine(workingDirectory, ".git"), "gitdir: ..");
-            WriteSkill(workingDirectory, "dotnet-windows-build-hygiene");
-            WriteSkill(workingDirectory, "skill-authoring");
-            WriteSkill(workingDirectory, "verification-before-completion");
+            var root = CreateSeededDispatchRepository();
             var kernel = new AgentOrchestratorKernel();
             var task = new TaskSpec(
                 TaskId.New(),
@@ -294,8 +293,11 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
                 AgentRole.Developer,
                 new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"),
+                IsProviderRoutingConstrained: true);
             kernel.ActivateGoal(goal.Id, [agent]);
+            var workingDirectory = GoalWorktrees.Ensure(root, goal.Id);
+            var statusBefore = ReadGit(workingDirectory, ["status", "--short"]);
             var sandbox = new WorkerSandboxOptions(
                 explicitSandboxEnabled,
                 WorkerSandboxOptions.DefaultAccount,
@@ -308,12 +310,18 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
                 WorkerProfileCatalog.Default(),
                 workingDirectory,
                 DateTimeOffset.Parse("2026-08-10T12:00:00Z"),
-                sandboxOptions: sandbox);
+                sandboxOptions: sandbox,
+                commandExists: _ => true);
 
+            Assert.Equal(expectedAllowed, preflight.Allowed);
+            Assert.Equal("codex-cli", preflight.ProfileName);
             Assert.Equal(expectedCapabilityStatus, preflight.CapabilityStatus);
             Assert.Contains(
                 preflight.Findings,
                 finding => finding.Contains($"capability: {expectedCapabilityStatus}", StringComparison.Ordinal));
+            Assert.Null(task.LastDispatch);
+            Assert.Null(task.LastProcess);
+            Assert.Equal(statusBefore, ReadGit(workingDirectory, ["status", "--short"]));
         }
         finally
         {

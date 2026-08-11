@@ -25,7 +25,10 @@ public static class ProviderCommandBuilder
                 reasoningEffort,
                 resolvedSandboxMode,
                 workingDirectory),
-            ProviderKind.OpenAICodexOssCli => BuildCodexOss(modelAlias, workingDirectory),
+            ProviderKind.OpenAICodexOssCli => BuildCodexOss(
+                modelAlias,
+                resolvedSandboxMode,
+                workingDirectory),
             ProviderKind.AnthropicClaudeCli => BuildClaude(
                 modelAlias,
                 resolvedPermissionMode,
@@ -69,6 +72,7 @@ public static class ProviderCommandBuilder
 
     private static IReadOnlyList<string> BuildCodexOss(
         string modelAlias,
+        string resolvedSandboxMode,
         string? workingDirectory)
     {
         var command = new List<string>
@@ -82,7 +86,7 @@ public static class ProviderCommandBuilder
             "--model",
             Expand(modelAlias),
             "--sandbox",
-            "workspace-write"
+            Expand(resolvedSandboxMode)
         };
         AddWorkingDirectory(command, workingDirectory);
         return command;
