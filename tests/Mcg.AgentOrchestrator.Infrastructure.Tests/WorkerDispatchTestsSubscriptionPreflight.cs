@@ -207,7 +207,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
 
     Assert.False(preflight.Allowed);
     Assert.Equal("blocked", preflight.CapabilityStatus);
-    Assert.Contains(".agents/skills", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
+    Assert.Contains("orchestrator OS worker sandbox", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.False(Directory.Exists(promptRoot));
     Assert.True(task.LastDispatch is null);
