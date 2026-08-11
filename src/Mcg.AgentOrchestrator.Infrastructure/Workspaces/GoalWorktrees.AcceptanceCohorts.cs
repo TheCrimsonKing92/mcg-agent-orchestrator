@@ -3,6 +3,28 @@ using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
+public enum AcceptanceCohortMaterializationFailureKind
+{
+    StaleBinding,
+    MergeConflict,
+    WorkspaceFailure,
+    ManifestUnavailable
+}
+
+public sealed class AcceptanceCohortMaterializationException : InvalidOperationException
+{
+    public AcceptanceCohortMaterializationException(
+        AcceptanceCohortMaterializationFailureKind kind,
+        string message,
+        Exception? innerException = null)
+        : base(message, innerException)
+    {
+        Kind = kind;
+    }
+
+    public AcceptanceCohortMaterializationFailureKind Kind { get; }
+}
+
 public sealed class AcceptanceCohortWorkspace : IDisposable
 {
     private readonly string _executionDirectory;
@@ -133,7 +155,8 @@ public static partial class GoalWorktrees
         var liveMain = ResolveRequiredRef(root, "refs/heads/main");
         if (!liveMain.Equals(normalizedMain, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException(
+            throw new AcceptanceCohortMaterializationException(
+                AcceptanceCohortMaterializationFailureKind.StaleBinding,
                 $"Cohort main revision is stale: bound={normalizedMain}, live={liveMain}.");
         }
 
@@ -144,7 +167,8 @@ public static partial class GoalWorktrees
             if (!branch.Equals(member.BranchRevision, StringComparison.Ordinal) ||
                 !branch.Equals(member.CandidateRevision, StringComparison.Ordinal))
             {
-                throw new InvalidOperationException(
+                throw new AcceptanceCohortMaterializationException(
+                    AcceptanceCohortMaterializationFailureKind.StaleBinding,
                     $"Cohort member {member.GoalId.Value[..8]} is stale before materialization.");
             }
             branchRevisions.Add(member.GoalId, branch);
@@ -155,14 +179,16 @@ public static partial class GoalWorktrees
         var workspacePath = System.IO.Path.Combine(
             worktreeRoot,
             $"cohort-{members[0].GoalId.Value[..8]}-{members[1].GoalId.Value[..8]}-{Guid.NewGuid():N}");
-        var added = GitCli.Run(root, "worktree", "add", "--detach", workspacePath, normalizedMain);
-        if (added.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"Failed to create cohort worktree: {added.Error}");
-        }
-
         try
         {
+            var added = GitCli.Run(root, "worktree", "add", "--detach", workspacePath, normalizedMain);
+            if (added.ExitCode != 0)
+            {
+                throw new AcceptanceCohortMaterializationException(
+                    AcceptanceCohortMaterializationFailureKind.WorkspaceFailure,
+                    $"Failed to create cohort worktree: {added.Error}");
+            }
+
             foreach (var member in members)
             {
                 var merge = GitCli.Run(
@@ -172,7 +198,8 @@ public static partial class GoalWorktrees
                     "merge", "--no-ff", "--no-edit", member.CandidateRevision);
                 if (merge.ExitCode != 0)
                 {
-                    throw new InvalidOperationException(
+                    throw new AcceptanceCohortMaterializationException(
+                        AcceptanceCohortMaterializationFailureKind.MergeConflict,
                         $"Failed to materialize cohort member {member.GoalId.Value[..8]}: {merge.Error}");
                 }
             }
@@ -188,9 +215,19 @@ public static partial class GoalWorktrees
             result.AssertGoalBranchesUnchanged();
             return result;
         }
-        catch
+        catch (Exception materializationFailure)
         {
-            RemoveAcceptanceCohortWorkspace(root, workspacePath);
+            try
+            {
+                RemoveAcceptanceCohortWorkspace(root, workspacePath);
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new AcceptanceCohortMaterializationException(
+                    AcceptanceCohortMaterializationFailureKind.WorkspaceFailure,
+                    $"Cohort materialization failed and its disposable workspace could not be removed: {cleanupFailure.Message}",
+                    new AggregateException(materializationFailure, cleanupFailure));
+            }
             throw;
         }
     }

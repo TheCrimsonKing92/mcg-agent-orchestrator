@@ -11,7 +11,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     [Fact]
     public void DisposableWorkspace_MaterializesOrderedCombinedTree_WithoutMutatingGoalBranches()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateAcceptanceCohortRepository();
         try
         {
             Directory.CreateDirectory(Path.Combine(repo, "config"));
@@ -55,7 +55,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     [Fact]
     public void ConflictingMaterialization_CleansWorkspace_AndLeavesBothBranchesUnchanged()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateAcceptanceCohortRepository();
         try
         {
             var main = RunGitOutput(repo, "rev-parse", "main").Trim();
@@ -67,8 +67,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 Bind(second.GoalId, second.Revision, "seed.txt", "resource:second")
             };
 
-            Assert.Throws<InvalidOperationException>(() =>
+            var failure = Assert.Throws<AcceptanceCohortMaterializationException>(() =>
                 GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings));
+            Assert.Equal(AcceptanceCohortMaterializationFailureKind.MergeConflict, failure.Kind);
 
             Assert.Equal(first.Revision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(first.GoalId)}").Trim());
             Assert.Equal(second.Revision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(second.GoalId)}").Trim());
@@ -106,7 +107,12 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var store = new CohortAcceptanceStore(databasePath);
 
             Assert.Equal(receipt, store.SaveGateReceipt(receipt));
-            Assert.Equal(receipt, store.SaveGateReceipt(receipt));
+            var reloadedReceipt = store.SaveGateReceipt(receipt);
+            Assert.Equal(receipt.ReceiptId, reloadedReceipt.ReceiptId);
+            Assert.Equal(receipt.Identity, reloadedReceipt.Identity);
+            Assert.Equal(receipt.Outcome, reloadedReceipt.Outcome);
+            Assert.Equal(receipt.FailedChecks, reloadedReceipt.FailedChecks);
+            Assert.Equal(receipt.ValidForLanding, reloadedReceipt.ValidForLanding);
             store.PrepareLanding(receipt, new string('e', 40));
             var coverage = store.FinalizeLanding(identity.Value, receipt.ReceiptId);
             store.RecordOvertake(first.GoalId);
@@ -143,7 +149,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     [Fact]
     public void ExactTestedCombinedCommit_LandsOnce_AndBothGoalsShareReceiptCoverage()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateAcceptanceCohortRepository();
         try
         {
             Directory.CreateDirectory(Path.Combine(repo, "config"));
@@ -209,7 +215,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     [Fact]
     public void PostGateMainMovement_LandsNeitherMember_AndCreatesNoCoverage()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateAcceptanceCohortRepository();
         try
         {
             Directory.CreateDirectory(Path.Combine(repo, "config"));
@@ -326,7 +332,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     [Fact]
     public void PreparedLanding_RecoversCoverageOnlyAfterExactCommitIsReachableFromMain()
     {
-        var repo = CreateSeededRepository();
+        var repo = CreateAcceptanceCohortRepository();
         try
         {
             var firstGoal = new GoalId("11111111111111111111111111111111");
@@ -370,6 +376,193 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         {
             DeleteDirectory(repo);
         }
+    }
+
+    [Fact]
+    public void MaterializationStaleBinding_PersistsTypedOutcome_CleansWorkspace_AndReturnsOrdinaryFallback()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First materialization member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second materialization member", repo);
+            var firstRevision = CreateWorktreeCandidate(repo, firstGoal.Id, "src/Mcg.AgentOrchestrator.Infrastructure/First.cs", "first");
+            var secondRevision = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var verifier = new FakeAcceptanceVerifier(
+                result: null,
+                exception: new InvalidOperationException("The gate must not run after materialization fails."));
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                verifier,
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default());
+            var selection = ProjectSelection(driver, firstGoal, secondGoal);
+
+            File.WriteAllText(Path.Combine(repo, "main-moved.txt"), "new main");
+            RunGit(repo, "add", "main-moved.txt");
+            RunGit(repo, "commit", "-m", "Move main before cohort materialization");
+
+            var result = driver.RunAcceptanceCohort(
+                selection,
+                [firstGoal, secondGoal],
+                ConductorAutonomyPolicy.Permissive);
+
+            Assert.Null(result.Receipt);
+            Assert.Empty(result.MemberResults);
+            Assert.Contains("outcome=materialization-failure", result.Detail, StringComparison.Ordinal);
+            Assert.Contains("fallback=ordinary", result.Detail, StringComparison.Ordinal);
+            Assert.Equal(0, verifier.RunCount);
+            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+            Assert.Equal(firstRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(firstGoal.Id)}").Trim());
+            Assert.Equal(secondRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(secondGoal.Id)}").Trim());
+
+            using var connection = new SqliteConnection($"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT outcome FROM cohort_materialization_failures;";
+            Assert.Equal("StaleBinding", Assert.IsType<string>(command.ExecuteScalar()));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void RetryableLandingHold_PreservesPassingReceipt_AndLaterRelandsIdenticalState()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First retryable landing member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second retryable landing member", repo);
+            var firstRevision = CreateWorktreeCandidate(repo, firstGoal.Id, "src/Mcg.AgentOrchestrator.Infrastructure/First.cs", "first");
+            var secondRevision = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var verifier = new FakeAcceptanceVerifier(
+                result: null,
+                exception: new InvalidOperationException("An identical-state landing retry must reuse its exact gate receipt."));
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var driver = new ConductorDriver(
+                kernel,
+                workspace,
+                verifier,
+                AgentCatalog.Default().Agents,
+                WorkerProfileCatalog.Default());
+            var selection = ProjectSelection(driver, firstGoal, secondGoal);
+            var bindings = selection.BindMembers();
+            var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
+            AcceptanceCohortIdentity identity;
+            using (var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                       repo,
+                       selection.Members[0].MainRevision,
+                       bindings))
+            {
+                identity = AcceptanceCohortIdentity.Create(
+                    bindings,
+                    selection.Members[0].MainRevision,
+                    integration.TreeRevision,
+                    GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
+            }
+            _ = store.SaveGateReceipt(new AcceptanceCohortReceipt(
+                "retryable-hold-receipt",
+                identity,
+                AcceptanceCohortGateOutcome.Passed,
+                DateTimeOffset.UtcNow,
+                100,
+                [],
+                ValidForLanding: true));
+
+            driver.LandingMutationBlocker = () => "operator-controlled landing pause";
+            var held = driver.RunAcceptanceCohort(
+                selection,
+                [firstGoal, secondGoal],
+                ConductorAutonomyPolicy.Permissive);
+
+            Assert.Equal(AcceptanceCohortGateOutcome.Passed, held.Receipt?.Outcome);
+            Assert.True(held.Receipt?.ValidForLanding);
+            Assert.All(held.MemberResults.Values, result => Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome));
+            Assert.Equal(identity.ObservedMainRevision, RunGitOutput(repo, "rev-parse", "main").Trim());
+
+            driver.LandingMutationBlocker = null;
+            var landed = driver.RunAcceptanceCohort(
+                selection,
+                [firstGoal, secondGoal],
+                ConductorAutonomyPolicy.Permissive);
+
+            Assert.Equal(AcceptanceCohortGateOutcome.Passed, landed.Receipt?.Outcome);
+            Assert.True(landed.Receipt?.ValidForLanding);
+            Assert.All(landed.MemberResults.Values, result => Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome));
+            Assert.Equal(identity.CombinedTreeRevision, RunGitOutput(repo, "rev-parse", "main^{tree}").Trim());
+            Assert.Equal(0, verifier.RunCount);
+            Assert.Equal(firstRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(firstGoal.Id)}").Trim());
+            Assert.Equal(secondRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(secondGoal.Id)}").Trim());
+            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    private static void AddAcceptanceManifest(string repo)
+    {
+        Directory.CreateDirectory(Path.Combine(repo, "config"));
+        File.WriteAllText(Path.Combine(repo, "config", "acceptance-manifest.json"), "{}");
+        RunGit(repo, "add", "config/acceptance-manifest.json");
+        RunGit(repo, "commit", "-m", "Add manifest");
+    }
+
+    private static string CreateAcceptanceCohortRepository()
+    {
+        var repo = CreateSeededRepository();
+        RunGit(repo, "branch", "-M", "main");
+        return repo;
+    }
+
+    private static string CreateWorktreeCandidate(
+        string repo,
+        GoalId goalId,
+        string relativePath,
+        string contents)
+    {
+        var worktree = GoalWorktrees.Ensure(repo, goalId);
+        var path = Path.Combine(worktree, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, contents);
+        RunGit(worktree, "add", relativePath);
+        RunGit(worktree, "commit", "-m", $"Candidate {goalId.Value[..8]}");
+        return RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+    }
+
+    private static ConductorAcceptanceCohortSelection ProjectSelection(
+        ConductorDriver driver,
+        Goal first,
+        Goal second)
+    {
+        var members = new[] { first, second }
+            .Select(goal =>
+            {
+                var worktree = Assert.IsType<string>(GoalWorktrees.TryResolve(driver.ExecutionDirectory, goal.Id));
+                var revisions = ConductorGitRevisionReader.ReadRequiredPair(worktree);
+                Assert.False(string.IsNullOrWhiteSpace(revisions.BranchRevision));
+                Assert.False(string.IsNullOrWhiteSpace(revisions.MainRevision));
+                var result = driver.ProjectGateReadyCandidate(goal, ConductorAutonomyPolicy.Permissive);
+                var ready = result as GateReadyCandidateProjectionResult.Ready;
+                Assert.True(
+                    ready is not null,
+                    result is GateReadyCandidateProjectionResult.Excluded excluded
+                        ? $"Expected Ready projection for {goal.Id.Value[..8]}, but got {excluded.Reason}."
+                        : $"Expected Ready projection for {goal.Id.Value[..8]}.");
+                return ready.Projection;
+            })
+            .ToArray();
+        return new ConductorAcceptanceCohortSelection(members, []);
     }
 
     private static (GoalId GoalId, string Revision) CreateCandidate(

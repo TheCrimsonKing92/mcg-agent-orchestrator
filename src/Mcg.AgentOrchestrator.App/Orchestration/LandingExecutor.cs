@@ -14,11 +14,21 @@ public sealed record LandingResult(
     string? MergeCommitSha = null,
     IReadOnlyList<string>? ChangedFiles = null);
 
+internal enum AcceptanceCohortLandingOutcome
+{
+    Advanced,
+    StateInvalidated,
+    RetryableHold
+}
+
 internal sealed record AcceptanceCohortLandingResult(
-    bool MainAdvanced,
+    AcceptanceCohortLandingOutcome Outcome,
     string Message,
     string? CommitRevision = null,
-    IReadOnlyList<AcceptanceCohortCoverage>? Coverage = null);
+    IReadOnlyList<AcceptanceCohortCoverage>? Coverage = null)
+{
+    public bool MainAdvanced => Outcome == AcceptanceCohortLandingOutcome.Advanced;
+}
 
 internal static class LandingExecutor
 {
@@ -242,13 +252,17 @@ internal static class LandingExecutor
         var blockReason = mutationBlocker?.Invoke();
         if (!string.IsNullOrWhiteSpace(blockReason))
         {
-            return new AcceptanceCohortLandingResult(false, $"Landing held at mutation boundary: {blockReason}");
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Landing held at mutation boundary: {blockReason}");
         }
 
         var liveMain = GoalWorktrees.ResolveRequiredRef(executionDirectory, "refs/heads/main");
         if (!liveMain.Equals(receipt.Identity.ObservedMainRevision, StringComparison.Ordinal))
         {
-            return new AcceptanceCohortLandingResult(false, "Cohort receipt invalidated because main changed after the gate.");
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.StateInvalidated,
+                "Cohort receipt invalidated because main changed after the gate.");
         }
         var commit = AcceptanceCohortMemberBinding.NormalizeRevision(
             combinedCommitRevision,
@@ -272,7 +286,7 @@ internal static class LandingExecutor
                 !liveBranch.Equals(member.CandidateRevision, StringComparison.Ordinal))
             {
                 return new AcceptanceCohortLandingResult(
-                    false,
+                    AcceptanceCohortLandingOutcome.StateInvalidated,
                     $"Cohort receipt invalidated because goal {member.GoalId.Value[..8]} changed after the gate.");
             }
         }
@@ -286,7 +300,7 @@ internal static class LandingExecutor
         if (ownership.RequiresOperatorApproval && !policy.AllowsAutonomousHighRiskOwnership)
         {
             return new AcceptanceCohortLandingResult(
-                false,
+                AcceptanceCohortLandingOutcome.RetryableHold,
                 "Cohort landing requires operator approval for ownership-protected paths.");
         }
 
@@ -312,7 +326,9 @@ internal static class LandingExecutor
                     goal,
                     $"cohort landing mutation blocked after intent write: {blockReason}");
             }
-            return new AcceptanceCohortLandingResult(false, $"Landing held at mutation boundary: {blockReason}");
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Landing held at mutation boundary: {blockReason}");
         }
 
         var currentIntegration = RunGit(
@@ -324,7 +340,7 @@ internal static class LandingExecutor
             if (RunGit(executionDirectory, "merge-base", "--is-ancestor", integrationRevision, liveMain).ExitCode != 0)
             {
                 return new AcceptanceCohortLandingResult(
-                    false,
+                    AcceptanceCohortLandingOutcome.RetryableHold,
                     "Cohort landing held because the integration branch contains state not present on bound main.");
             }
             var advanceIntegration = RunGit(
@@ -336,7 +352,7 @@ internal static class LandingExecutor
             if (advanceIntegration.ExitCode != 0)
             {
                 return new AcceptanceCohortLandingResult(
-                    false,
+                    AcceptanceCohortLandingOutcome.RetryableHold,
                     $"Cohort integration ref update failed: {advanceIntegration.Error}");
             }
         }
@@ -350,7 +366,7 @@ internal static class LandingExecutor
             if (createIntegration.ExitCode != 0)
             {
                 return new AcceptanceCohortLandingResult(
-                    false,
+                    AcceptanceCohortLandingOutcome.RetryableHold,
                     $"Cohort integration ref creation failed: {createIntegration.Error}");
             }
         }
@@ -365,7 +381,9 @@ internal static class LandingExecutor
                     goal,
                     $"cohort fast-forward failed: {merge.Error}");
             }
-            return new AcceptanceCohortLandingResult(false, $"Cohort fast-forward failed: {merge.Error}");
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Cohort fast-forward failed: {merge.Error}");
         }
 
         var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);
@@ -383,7 +401,7 @@ internal static class LandingExecutor
             StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
         }
         return new AcceptanceCohortLandingResult(
-            true,
+            AcceptanceCohortLandingOutcome.Advanced,
             $"Landed exact tested cohort tree for {goals[0].Id.Value[..8]},{goals[1].Id.Value[..8]}.",
             commit,
             coverage);

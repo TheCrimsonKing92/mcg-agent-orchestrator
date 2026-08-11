@@ -2411,11 +2411,37 @@ internal sealed class ConductorDriver
                 ? goal
                 : throw new InvalidOperationException($"Selected cohort goal {member.GoalId.Value} is not in the current Ready batch.")).ToArray();
         var bindings = selection.BindMembers();
-        using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
-            _cohortWorkspace.ExecutionDirectory,
-            selection.Members[0].MainRevision,
-            bindings);
-        var manifestIdentity = GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path);
+        AcceptanceCohortWorkspace integration;
+        try
+        {
+            integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                _cohortWorkspace.ExecutionDirectory,
+                selection.Members[0].MainRevision,
+                bindings);
+        }
+        catch (AcceptanceCohortMaterializationException ex)
+        {
+            return MaterializationFallback(ex.Kind, ex.Message);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return MaterializationFallback(
+                AcceptanceCohortMaterializationFailureKind.WorkspaceFailure,
+                ex.Message);
+        }
+
+        using var integrationScope = integration;
+        string manifestIdentity;
+        try
+        {
+            manifestIdentity = GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return MaterializationFallback(
+                AcceptanceCohortMaterializationFailureKind.ManifestUnavailable,
+                ex.Message);
+        }
         var identity = AcceptanceCohortIdentity.Create(
             bindings,
             selection.Members[0].MainRevision,
@@ -2506,7 +2532,10 @@ internal sealed class ConductorDriver
                 LandingMutationBlocker);
             if (!landing.MainAdvanced)
             {
-                receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+                if (landing.Outcome == AcceptanceCohortLandingOutcome.StateInvalidated)
+                {
+                    receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+                }
                 return CohortHeld(goals, policy, receipt, landing.Message);
             }
 
@@ -2549,6 +2578,21 @@ internal sealed class ConductorDriver
             receipt.Outcome == AcceptanceCohortGateOutcome.Failed
                 ? $"deterministic RED; attribution={receipt.Attribution}"
                 : $"cohort infrastructure outcome={receipt.Outcome}; no attribution or landing");
+
+        ConductorAcceptanceCohortRunResult MaterializationFallback(
+            AcceptanceCohortMaterializationFailureKind outcome,
+            string detail)
+        {
+            var failure = _cohortAcceptanceStore.SaveMaterializationFailure(
+                bindings,
+                selection.Members[0].MainRevision,
+                outcome,
+                BoundCohortDetail(detail));
+            return new ConductorAcceptanceCohortRunResult(
+                Receipt: null,
+                new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
+                $"outcome=materialization-failure kind={failure.Outcome} attempt={failure.AttemptId} fallback=ordinary detail={BoundCohortDetail(failure.Detail)}");
+        }
 
         AcceptanceCohortPartitionReceipt RunCohortPartition(
             AcceptanceCohortMemberBinding member,

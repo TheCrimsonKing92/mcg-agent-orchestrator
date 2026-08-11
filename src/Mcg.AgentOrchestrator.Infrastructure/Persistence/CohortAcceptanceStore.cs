@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 using Microsoft.Data.Sqlite;
@@ -9,6 +11,12 @@ public sealed record AcceptanceCohortCoverage(
     string CohortId,
     string ReceiptId,
     bool Landed);
+
+public sealed record AcceptanceCohortMaterializationFailure(
+    string AttemptId,
+    AcceptanceCohortMaterializationFailureKind Outcome,
+    DateTimeOffset RecordedAt,
+    string Detail);
 
 public sealed class CohortAcceptanceStore
 {
@@ -92,6 +100,71 @@ public sealed class CohortAcceptanceStore
     {
         using var connection = Open();
         return ReadReceipt(connection, cohortId, transaction: null);
+    }
+
+    public AcceptanceCohortMaterializationFailure SaveMaterializationFailure(
+        IReadOnlyList<AcceptanceCohortMemberBinding> members,
+        string observedMainRevision,
+        AcceptanceCohortMaterializationFailureKind outcome,
+        string detail)
+    {
+        ArgumentNullException.ThrowIfNull(members);
+        if (members.Count != 2 || members[0].GoalId == members[1].GoalId)
+        {
+            throw new ArgumentException(
+                "A cohort materialization failure requires exactly two distinct ordered members.",
+                nameof(members));
+        }
+        if (!Enum.IsDefined(outcome))
+        {
+            throw new ArgumentOutOfRangeException(nameof(outcome));
+        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(detail);
+        var main = AcceptanceCohortMemberBinding.NormalizeRevision(
+            observedMainRevision,
+            nameof(observedMainRevision));
+        var payload = string.Join('\n',
+            "cohort-materialization-v1",
+            members[0].GoalId.Value,
+            members[0].BranchRevision,
+            members[0].CandidateRevision,
+            members[1].GoalId.Value,
+            members[1].BranchRevision,
+            members[1].CandidateRevision,
+            main);
+        var attemptId = $"cohort-materialization-v1-{Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(payload)))}";
+        var failure = new AcceptanceCohortMaterializationFailure(
+            attemptId,
+            outcome,
+            DateTimeOffset.UtcNow,
+            detail.Length <= 512 ? detail : detail[..512]);
+
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR IGNORE INTO cohort_materialization_failures(
+                attempt_id, first_goal_id, first_branch_revision, first_candidate_revision,
+                second_goal_id, second_branch_revision, second_candidate_revision,
+                main_revision, outcome, detail, recorded_at)
+            VALUES (
+                $attempt, $firstGoal, $firstBranch, $firstCandidate,
+                $secondGoal, $secondBranch, $secondCandidate,
+                $main, $outcome, $detail, $recorded);
+            """;
+        command.Parameters.AddWithValue("$attempt", failure.AttemptId);
+        command.Parameters.AddWithValue("$firstGoal", members[0].GoalId.Value);
+        command.Parameters.AddWithValue("$firstBranch", members[0].BranchRevision);
+        command.Parameters.AddWithValue("$firstCandidate", members[0].CandidateRevision);
+        command.Parameters.AddWithValue("$secondGoal", members[1].GoalId.Value);
+        command.Parameters.AddWithValue("$secondBranch", members[1].BranchRevision);
+        command.Parameters.AddWithValue("$secondCandidate", members[1].CandidateRevision);
+        command.Parameters.AddWithValue("$main", main);
+        command.Parameters.AddWithValue("$outcome", failure.Outcome.ToString());
+        command.Parameters.AddWithValue("$detail", failure.Detail);
+        command.Parameters.AddWithValue("$recorded", failure.RecordedAt.ToUniversalTime().ToString("O"));
+        command.ExecuteNonQuery();
+        return failure;
     }
 
     public AcceptanceCohortReceipt SaveAttribution(
@@ -416,6 +489,18 @@ public sealed class CohortAcceptanceStore
                 pair_fingerprint TEXT PRIMARY KEY,
                 cohort_id TEXT NOT NULL,
                 created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS cohort_materialization_failures(
+                attempt_id TEXT PRIMARY KEY,
+                first_goal_id TEXT NOT NULL,
+                first_branch_revision TEXT NOT NULL,
+                first_candidate_revision TEXT NOT NULL,
+                second_goal_id TEXT NOT NULL,
+                second_branch_revision TEXT NOT NULL,
+                second_candidate_revision TEXT NOT NULL,
+                main_revision TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                recorded_at TEXT NOT NULL);
             """;
         command.ExecuteNonQuery();
     }
