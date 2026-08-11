@@ -2301,6 +2301,76 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
+    public async Task DeclarationLookingTextInsideRawStringIsNotResolvedAsTestMethod()
+    {
+        const string offendingToken = "FullyQualifiedName~SelectionProbeTests.SelectsOneMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """"
+                    sealed class SelectionProbeTests
+                    {
+                        private const string Fixture = """
+                            [Xunit.Fact]
+                            public void SelectsOneMethod() { }
+                            """;
+                    }
+                    """");
+            });
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task UnreadableFocusedEvidenceSourceIsTypedAsApparatusFailure()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string offendingToken = "FullyQualifiedName~LockedSelectionProbeTests.SelectsOneMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "LockedSelectionProbeTests.cs"),
+                    """
+                    sealed class LockedSelectionProbeTests
+                    {
+                        [Xunit.Fact]
+                        public void SelectsOneMethod() { }
+                    }
+                    """);
+            },
+            holdWorkspaceResource: root => File.Open(
+                Path.Combine(
+                    root,
+                    "tests",
+                    "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                    "LockedSelectionProbeTests.cs"),
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None));
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.SourceDiscoveryFailure, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
     public async Task InvocationNameIsNotResolvedAsTestMethod()
     {
         const string offendingToken = "FullyQualifiedName~GoalAcceptanceVerifierTests.WriteAllText";
@@ -2971,7 +3041,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         List<TimeSpan>? observedTimeouts = null,
         Action<string>? configureWorkspace = null,
         int? executedTestCount = null,
-        int testExitCode = 0)
+        int testExitCode = 0,
+        Func<string, IDisposable?>? holdWorkspaceResource = null)
     {
         var calls = new List<string[]>();
         var root = CreateManifestWorkspace("""
@@ -2989,6 +3060,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var goalId = new GoalId(Guid.NewGuid().ToString("N"));
         try
         {
+            using var workspaceResource = holdWorkspaceResource?.Invoke(root);
             var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
             {
                 calls.Add(args);
@@ -7425,7 +7497,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var destinationPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
         File.WriteAllText(
             destinationPath,
-            $"<TestRun><ResultSummary><Counters total=\"{executedTestCount}\" /></ResultSummary></TestRun>");
+            $"<TestRun><ResultSummary><Counters total=\"{Math.Max(1, executedTestCount.Value)}\" executed=\"{executedTestCount}\" /></ResultSummary></TestRun>");
     }
 
     private static void WriteMtpTrx(string[] args, string? sourcePath)

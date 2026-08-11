@@ -9,6 +9,8 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Mcg.AgentOrchestrator.Core;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -46,7 +48,8 @@ public enum FocusedEvidenceRejectionCode
     UnsafeFilter,
     OversizedFilter,
     UnsupportedToken,
-    UnresolvableSelection
+    UnresolvableSelection,
+    SourceDiscoveryFailure
 }
 
 public sealed record FocusedEvidenceRejection(
@@ -1528,29 +1531,48 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 }
             }
 
-            if (!TryNormalizeFocusedEvidenceFilter(
-                    expression,
-                    allowMappedProject: hasExplicitProject,
-                    worktreePath,
-                    project,
-                    out var filter,
-                    out var targetCount,
-                    out rejection))
+            FocusedEvidenceFilter? filter;
+            int targetCount;
+            try
             {
+                if (!TryNormalizeFocusedEvidenceFilter(
+                        expression,
+                        allowMappedProject: hasExplicitProject,
+                        worktreePath,
+                        project,
+                        out filter,
+                        out targetCount,
+                        out rejection))
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                rejection = BuildFocusedEvidenceSourceDiscoveryRejection(expression, ex);
                 return false;
             }
 
             totalTargets += targetCount;
             if (filter is not null && IsInfrastructureTestProject(project))
             {
-                if (!TryExpandExtractedFocusedEvidenceProjects(
-                        worktreePath,
-                        engineSettings,
-                        project,
-                        filter,
-                        out var projectArms,
-                        out rejection))
+                IReadOnlyList<(string Project, FocusedEvidenceFilter Filter)> projectArms;
+                try
                 {
+                    if (!TryExpandExtractedFocusedEvidenceProjects(
+                            worktreePath,
+                            engineSettings,
+                            project,
+                            filter,
+                            out projectArms,
+                            out rejection))
+                    {
+                        return false;
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    rejection = BuildFocusedEvidenceSourceDiscoveryRejection(filter.OriginalToken, ex);
                     return false;
                 }
 
@@ -1748,26 +1770,49 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return [];
         }
 
-        var simpleName = className.Split('.').Last();
-        var declaration = new Regex(
-            $@"\b(?:class|record|struct)\s+{Regex.Escape(simpleName)}\b",
-            RegexOptions.CultureInvariant);
         return Directory.EnumerateFiles(projectDirectory, "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(segment =>
                 segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
                 segment.Equals("obj", StringComparison.OrdinalIgnoreCase)))
-            .Where(path =>
-            {
-                try
-                {
-                    return declaration.IsMatch(File.ReadAllText(path));
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                {
-                    return false;
-                }
-            })
+            .Where(path => ParseCSharpRoot(path)
+                .DescendantNodes()
+                .OfType<TypeDeclarationSyntax>()
+                .Any(declaration => FocusedEvidenceTypeMatches(declaration, className)))
             .ToArray();
+    }
+
+    private static FocusedEvidenceRejection BuildFocusedEvidenceSourceDiscoveryRejection(
+        string originalToken,
+        Exception exception) =>
+        new(
+            FocusedEvidenceRejectionCode.SourceDiscoveryFailure,
+            originalToken,
+            $"focused evidence source discovery failed: {exception.GetType().Name}: {exception.Message}");
+
+    private static CompilationUnitSyntax ParseCSharpRoot(string path) =>
+        CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path).GetCompilationUnitRoot();
+
+    private static bool FocusedEvidenceTypeMatches(TypeDeclarationSyntax declaration, string className)
+    {
+        var requestedName = className.Trim();
+        if (declaration.Identifier.ValueText.Equals(requestedName, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var namespaceNames = declaration.Ancestors()
+            .OfType<BaseNamespaceDeclarationSyntax>()
+            .Reverse()
+            .Select(item => item.Name.ToString());
+        var containingTypeNames = declaration.Ancestors()
+            .OfType<TypeDeclarationSyntax>()
+            .Reverse()
+            .Select(item => item.Identifier.ValueText);
+        var qualifiedName = string.Join(
+            '.',
+            namespaceNames.Concat(containingTypeNames).Append(declaration.Identifier.ValueText));
+        return qualifiedName.Equals(requestedName, StringComparison.Ordinal) ||
+            qualifiedName.EndsWith('.' + requestedName, StringComparison.Ordinal);
     }
 
     internal static bool TryResolveFocusedEvidenceProject(
@@ -2079,79 +2124,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IReadOnlyList<string> classFiles,
         string className)
     {
-        var methodNames = new List<string>();
-        var simpleClassName = className.Split('.').Last();
-        foreach (var path in classFiles)
+        return classFiles
+            .SelectMany(path => ParseCSharpRoot(path)
+                .DescendantNodes()
+                .OfType<TypeDeclarationSyntax>())
+            .Where(declaration => FocusedEvidenceTypeMatches(declaration, className))
+            .SelectMany(declaration => declaration.Members.OfType<MethodDeclarationSyntax>())
+            .Where(method => method.AttributeLists
+                .SelectMany(list => list.Attributes)
+                .Any(attribute => IsFocusedEvidenceTestAttribute(attribute.Name.ToString())))
+            .Select(method => method.Identifier.ValueText)
+            .ToArray();
+    }
+
+    private static bool IsFocusedEvidenceTestAttribute(string attributeName)
+    {
+        var simpleName = attributeName.Split('.').Last();
+        if (simpleName.EndsWith("Attribute", StringComparison.Ordinal))
         {
-            string[] lines;
-            try
-            {
-                lines = File.ReadAllLines(path);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                continue;
-            }
-
-            var hasTestAttribute = false;
-            var targetClassIndent = -1;
-            foreach (var rawLine in lines)
-            {
-                var typeDeclaration = Regex.Match(
-                    rawLine,
-                    @"^(?<indent>\s*)(?:(?:public|protected|internal|private|static|abstract|sealed|partial)\s+)*(?:class|struct|record(?:\s+class|\s+struct)?)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\b",
-                    RegexOptions.CultureInvariant);
-                if (typeDeclaration.Success)
-                {
-                    var declarationIndent = typeDeclaration.Groups["indent"].Length;
-                    if (targetClassIndent >= 0 && declarationIndent <= targetClassIndent)
-                    {
-                        break;
-                    }
-
-                    if (typeDeclaration.Groups["name"].Value.Equals(
-                            simpleClassName,
-                            StringComparison.Ordinal))
-                    {
-                        targetClassIndent = declarationIndent;
-                    }
-
-                    continue;
-                }
-
-                if (targetClassIndent < 0)
-                {
-                    continue;
-                }
-
-                var line = rawLine.Trim();
-                if (TestAttrPattern.IsMatch(line))
-                {
-                    hasTestAttribute = true;
-                    var attributeEnd = line.IndexOf(']');
-                    line = attributeEnd >= 0 ? line[(attributeEnd + 1)..].Trim() : string.Empty;
-                }
-
-                if (!hasTestAttribute || line.Length == 0 || line.StartsWith("[", StringComparison.Ordinal) ||
-                    line.StartsWith("//", StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                var declaration = Regex.Match(
-                    line,
-                    @"^(?:(?:public|protected|internal|private|static|abstract|virtual|override|sealed|new|unsafe|async|partial|extern)\s+)*(?:global::)?[A-Za-z_][A-Za-z0-9_.]*(?:\s*<[^()\r\n]+>)?(?:\[\])?\??\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^()\r\n]+>)?\s*\(",
-                    RegexOptions.CultureInvariant);
-                if (declaration.Success)
-                {
-                    methodNames.Add(declaration.Groups["name"].Value);
-                }
-
-                hasTestAttribute = false;
-            }
+            simpleName = simpleName[..^"Attribute".Length];
         }
 
-        return methodNames;
+        return simpleName is "Fact" or "Theory";
     }
 
     private static string FormatReceiptPaths(IReadOnlyList<string> paths) =>
@@ -6717,12 +6711,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         "Counters",
                         StringComparison.Ordinal));
                 if (int.TryParse(
-                        counters?.Attribute("total")?.Value,
+                        counters?.Attribute("executed")?.Value,
                         System.Globalization.NumberStyles.None,
                         System.Globalization.CultureInfo.InvariantCulture,
-                        out var total))
+                        out var executed))
                 {
-                    return total;
+                    return executed;
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)

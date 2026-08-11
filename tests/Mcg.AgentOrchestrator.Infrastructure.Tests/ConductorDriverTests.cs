@@ -3666,6 +3666,95 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
+    public void ReviewerStructuredRequestPreservesExactFilterTokenWhitespace()
+    {
+        const string originalToken = "  FullyQualifiedName~MissingSelectionTests.MissingMethod  ";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "The exact structured token must reach typed executor rejection.",
+            id: "exact-structured-token",
+            classes: [originalToken]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        string? observedRequest = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                observedRequest = request;
+                return new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: false,
+                    Passed: false,
+                    Summary: "selection rejected",
+                    Checks: [],
+                    Rejection: new FocusedEvidenceRejection(
+                        FocusedEvidenceRejectionCode.UnresolvableSelection,
+                        originalToken,
+                        "selection rejected"));
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal("Infrastructure.Tests:" + originalToken, observedRequest);
+        var outcome = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == "exact-structured-token")
+            .EvidenceOutcome;
+        Assert.Equal(FindingEvidenceNotHonouredReason.UnparseableSelection, outcome?.Reason);
+        Assert.Contains(originalToken, outcome?.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void SourceDiscoveryFailureUsesTypedSelectionApparatusDisposition()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "Unreadable source is an apparatus failure, not an invalid selector.",
+            id: "source-discovery-apparatus",
+            classes: ["FullyQualifiedName~ConductorDriverTests.MissingMethod"]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
+                request,
+                Accepted: false,
+                Passed: false,
+                Summary: "source discovery failed",
+                Checks: [],
+                Rejection: new FocusedEvidenceRejection(
+                    FocusedEvidenceRejectionCode.SourceDiscoveryFailure,
+                    " FullyQualifiedName~ConductorDriverTests.MissingMethod",
+                    "source discovery failed")),
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        var outcome = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == "source-discovery-apparatus")
+            .EvidenceOutcome;
+        Assert.False(outcome?.Honoured);
+        Assert.Equal(FindingEvidenceNotHonouredReason.SelectionApparatusFailure, outcome?.Reason);
+    }
+
+    [Xunit.Fact]
     public void FindingEvidenceRawLengthCannotBeTrimmedBelowBound()
     {
         var (kernel, goal) = SoftwareGoal();

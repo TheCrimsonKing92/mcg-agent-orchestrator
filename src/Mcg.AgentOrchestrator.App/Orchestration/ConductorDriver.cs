@@ -1739,9 +1739,14 @@ internal sealed class ConductorDriver
 
         if (!evidence.Accepted)
         {
-            var reason = evidence.Rejection?.Code == FocusedEvidenceRejectionCode.UnsupportedProject
-                ? FindingEvidenceNotHonouredReason.UnsupportedProject
-                : FindingEvidenceNotHonouredReason.UnparseableSelection;
+            var reason = evidence.Rejection?.Code switch
+            {
+                FocusedEvidenceRejectionCode.UnsupportedProject =>
+                    FindingEvidenceNotHonouredReason.UnsupportedProject,
+                FocusedEvidenceRejectionCode.SourceDiscoveryFailure =>
+                    FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
+                _ => FindingEvidenceNotHonouredReason.UnparseableSelection
+            };
             var detail = evidence.Rejection is null
                 ? evidence.Summary
                 : $"{evidence.Rejection.Detail}; offending_filter='{evidence.Rejection.OffendingToken}'";
@@ -1925,7 +1930,7 @@ internal sealed class ConductorDriver
             }
 
             var canonicalProject = GoalAcceptanceVerifier.ProjectLabel(resolvedProject);
-            selections.Add(new FindingEvidenceSelection(canonicalProject, testClass));
+            selections.Add(new FindingEvidenceSelection(canonicalProject, originalTestClass));
         }
 
         var distinct = selections
@@ -1938,8 +1943,16 @@ internal sealed class ConductorDriver
             "; ",
             distinct
                 .GroupBy(selection => selection.TestProject, StringComparer.Ordinal)
-                .Select(group => $"{group.Key}: {string.Join(',', group.Select(selection => selection.TestClass))}"));
+                .Select(FormatFindingEvidenceSelectionGroup));
         return true;
+    }
+
+    private static string FormatFindingEvidenceSelectionGroup(
+        IGrouping<string, FindingEvidenceSelection> group)
+    {
+        var filter = string.Join(',', group.Select(selection => selection.TestClass));
+        var separator = filter.Length > 0 && char.IsWhiteSpace(filter[0]) ? ":" : ": ";
+        return group.Key + separator + filter;
     }
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
