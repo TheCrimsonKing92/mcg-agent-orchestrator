@@ -3476,7 +3476,7 @@ public sealed class ConductorDriverTests
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                Assert.Equal("Infrastructure.Tests: ConductorDriverTests", request);
+                Assert.Equal("Infrastructure.Tests:ConductorDriverTests", request);
                 return new FocusedEvidenceRunResult(request, true, true, "focused request passed", []);
             },
             retryTask: (goalId, taskId, message) =>
@@ -3608,7 +3608,7 @@ public sealed class ConductorDriverTests
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
-                Assert.Equal($"{canonicalProject}: ConductorDriverTests", request);
+                Assert.Equal($"{canonicalProject}:ConductorDriverTests", request);
                 return new FocusedEvidenceRunResult(request, true, true, "project form accepted", []);
             },
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
@@ -3657,7 +3657,7 @@ public sealed class ConductorDriverTests
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(
-            "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests",
+            "Infrastructure.Tests:FullyQualifiedName~ConductorDriverTests",
             observedRequest);
         Assert.Equal(
             "FullyQualifiedName~ConductorDriverTests",
@@ -3708,6 +3708,135 @@ public sealed class ConductorDriverTests
         Assert.Equal("Infrastructure.Tests:" + originalToken, observedRequest);
         var outcome = reviewer.VerificationHistory.Last().MergedReviewFindings!
             .Single(item => item.StableId == "exact-structured-token")
+            .EvidenceOutcome;
+        Assert.Equal(FindingEvidenceNotHonouredReason.UnparseableSelection, outcome?.Reason);
+        Assert.Contains(originalToken, outcome?.Detail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ReviewerStructuredRequestKeepsMultipleFqnSelectionsExecutorValid()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "Each structured selection must remain a complete executor item.",
+            id: "multiple-fqn-selections",
+            classes:
+            [
+                "FullyQualifiedName~GoalAcceptanceVerifierTests",
+                "FullyQualifiedName~ConductorDriverTests"
+            ]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        string? observedRequest = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                observedRequest = request;
+                return new FocusedEvidenceRunResult(request, true, true, "selections accepted", []);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(
+            "Infrastructure.Tests:FullyQualifiedName~ConductorDriverTests; " +
+            "Infrastructure.Tests:FullyQualifiedName~GoalAcceptanceVerifierTests",
+            observedRequest);
+    }
+
+    [Xunit.Fact]
+    public void ReviewerStructuredRequestRoundTripsSystemEmittedCompositeFilter()
+    {
+        var emitted = ConductorDriver.BuildPreReviewEvidenceContext(
+            "abc1234",
+            ["src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"]);
+        var emittedRequest = Assert.IsType<string>(emitted.FocusedRequest);
+        var separator = emittedRequest.IndexOf(':', StringComparison.Ordinal);
+        var project = emittedRequest[..separator];
+        var originalFilter = emittedRequest[(separator + 1)..].TrimStart();
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "The planner-emitted composite filter must round-trip unchanged.",
+            id: "system-composite-round-trip",
+            project: project,
+            classes: [originalFilter]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        string? observedRequest = null;
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                observedRequest = request;
+                return new FocusedEvidenceRunResult(request, true, true, "composite accepted", []);
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Contains("|", originalFilter, StringComparison.Ordinal);
+        Assert.Contains("Category!=HostIntegration", originalFilter, StringComparison.Ordinal);
+        Assert.Equal(project + ":" + originalFilter, observedRequest);
+    }
+
+    [Xunit.Fact]
+    public void ReviewerStructuredRequestPreservesUnpaddedExactFilterToken()
+    {
+        const string originalToken = "FullyQualifiedName~ConductorDriverTests.MissingMethod";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var finding = EvidenceFindingWithRequest(
+            "An unresolvable token must retain its exact spelling.",
+            id: "unpadded-exact-token",
+            classes: [originalToken]);
+        FailReviewerNeedsWork(kernel, goal, reviewer, "focused evidence required", findings: [finding]);
+        var driver = MakeDriver(
+            getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
+            runFocusedEvidence: (_, request) =>
+            {
+                Assert.Equal("Infrastructure.Tests:" + originalToken, request);
+                return new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: false,
+                    Passed: false,
+                    Summary: "selection rejected",
+                    Checks: [],
+                    Rejection: new FocusedEvidenceRejection(
+                        FocusedEvidenceRejectionCode.UnresolvableSelection,
+                        originalToken,
+                        "selection rejected"));
+            },
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+                kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind),
+            recordFindingEvidenceOutcome: (goalId, taskId, stableId, outcome, receipt) =>
+                kernel.RecordFindingEvidenceOutcome(goalId, taskId, stableId, outcome, receipt));
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        var outcome = reviewer.VerificationHistory.Last().MergedReviewFindings!
+            .Single(item => item.StableId == "unpadded-exact-token")
             .EvidenceOutcome;
         Assert.Equal(FindingEvidenceNotHonouredReason.UnparseableSelection, outcome?.Reason);
         Assert.Contains(originalToken, outcome?.Detail, StringComparison.Ordinal);
@@ -3890,7 +4019,8 @@ public sealed class ConductorDriverTests
             {
                 focusedRuns++;
                 Assert.Equal(
-                    "Infrastructure.Tests: ConductorDriverTests,GoalAcceptanceVerifierTests",
+                    "Infrastructure.Tests:ConductorDriverTests; " +
+                    "Infrastructure.Tests:GoalAcceptanceVerifierTests",
                     request);
                 return DualArmFindingEvidence(request, FindingEvidenceArmDisposition.Red);
             },
@@ -4048,8 +4178,8 @@ public sealed class ConductorDriverTests
 
         Assert.Equal(
             [
-                "Infrastructure.Tests: FocusedEvidence1Tests",
-                "Infrastructure.Tests: FocusedEvidence2Tests"
+                "Infrastructure.Tests:FocusedEvidence1Tests",
+                "Infrastructure.Tests:FocusedEvidence2Tests"
             ],
             requests);
         // Each request ran a two-arm experiment, but the cap counted the two experiment identities,
@@ -4166,7 +4296,7 @@ public sealed class ConductorDriverTests
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal("Infrastructure.SecondModule.Tests: SecondModuleTests", request);
+        Assert.Equal("Infrastructure.SecondModule.Tests:SecondModuleTests", request);
         var recorded = reviewer.VerificationHistory.Last().MergedReviewFindings!;
         Assert.True(recorded.Single(item => item.StableId == "second-extracted-project").EvidenceOutcome?.Honoured);
     }

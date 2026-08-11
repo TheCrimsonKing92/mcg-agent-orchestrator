@@ -41,8 +41,11 @@ internal sealed class ConductorDriver
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex EvidenceClassNamePattern = new(
-        @"^(?:FullyQualifiedName~)?[A-Za-z_][A-Za-z0-9_.+`]*$",
+    private static readonly Regex EvidenceBareClassNamePattern = new(
+        @"^[A-Za-z_][A-Za-z0-9_.+`]*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex EvidenceFilterTokenPattern = new(
+        @"^(?:FullyQualifiedName(?:!~|~)[A-Za-z_][A-Za-z0-9_.]*|Category\s*!=\s*[A-Za-z_][A-Za-z0-9_.-]*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private const int MaxFindingEvidenceFilterLength = 1024;
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
@@ -1909,7 +1912,7 @@ internal sealed class ConductorDriver
             if (string.IsNullOrWhiteSpace(project) ||
                 string.IsNullOrWhiteSpace(testClass) ||
                 originalTestClass.Length > MaxFindingEvidenceFilterLength ||
-                !EvidenceClassNamePattern.IsMatch(testClass))
+                !IsSupportedFindingEvidenceFilter(testClass))
             {
                 refusalDetail =
                     $"Every evidence selection requires a bounded valid test_project and test_class; " +
@@ -1941,19 +1944,60 @@ internal sealed class ConductorDriver
         normalized = new FindingEvidenceRequest(distinct);
         executorRequest = string.Join(
             "; ",
-            distinct
-                .GroupBy(selection => selection.TestProject, StringComparer.Ordinal)
-                .Select(FormatFindingEvidenceSelectionGroup));
+            distinct.Select(FormatFindingEvidenceSelection));
         return true;
     }
 
-    private static string FormatFindingEvidenceSelectionGroup(
-        IGrouping<string, FindingEvidenceSelection> group)
+    private static bool IsSupportedFindingEvidenceFilter(string filter)
     {
-        var filter = string.Join(',', group.Select(selection => selection.TestClass));
-        var separator = filter.Length > 0 && char.IsWhiteSpace(filter[0]) ? ":" : ": ";
-        return group.Key + separator + filter;
+        if (EvidenceBareClassNamePattern.IsMatch(filter))
+        {
+            return true;
+        }
+
+        var parenthesisDepth = 0;
+        foreach (var character in filter)
+        {
+            if (character == '(')
+            {
+                parenthesisDepth++;
+            }
+            else if (character == ')' && --parenthesisDepth < 0)
+            {
+                return false;
+            }
+        }
+        if (parenthesisDepth != 0)
+        {
+            return false;
+        }
+
+        var tokens = Regex.Split(filter, @"[&|]");
+        if (tokens.Length == 0 || tokens.Any(string.IsNullOrWhiteSpace))
+        {
+            return false;
+        }
+
+        var hasPositiveSelection = false;
+        foreach (var rawToken in tokens)
+        {
+            var token = rawToken.Trim().Trim('(', ')').Trim();
+            if (token.Length == 0 ||
+                token.Contains('(') ||
+                token.Contains(')') ||
+                !EvidenceFilterTokenPattern.IsMatch(token))
+            {
+                return false;
+            }
+
+            hasPositiveSelection |= token.Contains("FullyQualifiedName~", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return hasPositiveSelection;
     }
+
+    private static string FormatFindingEvidenceSelection(FindingEvidenceSelection selection) =>
+        selection.TestProject + ":" + selection.TestClass;
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
         string.Join("|", request.Selections.Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
