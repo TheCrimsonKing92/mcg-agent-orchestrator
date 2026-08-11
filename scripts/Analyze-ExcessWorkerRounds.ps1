@@ -166,7 +166,7 @@ function Get-JournalFacts([string]$Path, [datetimeoffset]$Cutoff) {
         if ($operation -eq 'conductor:acceptance' -and $status -eq 'Begin') { $gates++ }
         $isFailedDispatch = $operation -in @('conductor:dispatch', 'conductor:dispatch-start') -and $status -eq 'Failed'
         if ($isFailedDispatch -and
-            $detail -match '(?i)(?:^|[; ])(?:reason|outcome(?:_rule|Rule)?)=(?:preflight-blocked|preflight-failure|provider-(?:authentication|connectivity|model-rejection|neutral-progress-stall|rate-limit|sandbox-launch-1312)|subscription-limit|silent-launch-failure|rate-limited)(?:[; :,]|$)') {
+            $detail -match '(?i)(?:^|[; ])reason=(?:preflight-blocked|preflight-failure|subscription-preflight|provider-(?:authentication|connectivity|model-rejection|neutral-progress-stall|rate-limit|sandbox-launch-1312)|subscription-limit|silent-launch-failure|rate-limited)(?:[; :,]|$)') {
             [void]$categories.Add('provider/preflight')
         }
     }

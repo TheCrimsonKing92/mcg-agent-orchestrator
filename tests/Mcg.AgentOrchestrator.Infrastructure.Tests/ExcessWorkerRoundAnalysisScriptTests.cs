@@ -156,6 +156,40 @@ public sealed class ExcessWorkerRoundAnalysisScriptTests
     }
 
     [Xunit.Fact]
+    public async Task SubscriptionPreflightReadyBlockedReason_IsProviderEvidence()
+    {
+        using var fixture = await AnalysisFixture.CreateAsync();
+        File.AppendAllText(
+            fixture.FirstJournalPath,
+            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"No tasks dispatched; assigned tasks were excluded from the ready batch: task 1 aaaaaaaa000000000000000000000000 provider=codex-cli reason=subscription-preflight: blocked: subscription retry is cooling down\"}\n");
+        fixture.RefreshFirstJournalDigest();
+
+        var result = fixture.Run("subscription-preflight-positive");
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        var rows = ReadCsv(Path.Combine(fixture.Root, "subscription-preflight-positive", "excess-worker-rounds.csv"));
+        var row = Xunit.Assert.Single(rows, candidate => candidate["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
+        Xunit.Assert.Contains("provider/preflight", row["failureFindingCategories"], StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task TaskOutcomeTokens_WithoutReadyBlockedReason_AreNotProviderEvidence()
+    {
+        using var fixture = await AnalysisFixture.CreateAsync();
+        File.AppendAllText(
+            fixture.FirstJournalPath,
+            "{\"operation\":\"conductor:dispatch\",\"status\":\"Failed\",\"at\":\"2026-07-06T04:32:00+00:00\",\"detail\":\"task-outcome outcomeRule=provider-rate-limit outcome=preflight-blocked\"}\n");
+        fixture.RefreshFirstJournalDigest();
+
+        var result = fixture.Run("task-outcome-negative");
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        var rows = ReadCsv(Path.Combine(fixture.Root, "task-outcome-negative", "excess-worker-rounds.csv"));
+        var row = Xunit.Assert.Single(rows, candidate => candidate["goal"].StartsWith("aaaa1111", StringComparison.Ordinal));
+        Xunit.Assert.DoesNotContain("provider/preflight", row["failureFindingCategories"], StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public async Task JournalFacts_AreCutoffBoundAndUntimestampedRowsAreIgnored()
     {
         using var fixture = await AnalysisFixture.CreateAsync();
