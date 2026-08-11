@@ -485,7 +485,7 @@ public sealed class FundamentalAliasTests
         Xunit.Assert.Contains("## Add smoke test coverage", output);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_goal_from_backlog_forwards_pipeline_value_to_creation")]
+    [Xunit.Fact]
     public void CliGoalFromBacklogForwardsPipelineValueToCreation()
     {
         var root = CreateTempDirectory();

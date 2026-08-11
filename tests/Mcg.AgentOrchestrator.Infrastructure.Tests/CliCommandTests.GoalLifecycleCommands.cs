@@ -11,7 +11,7 @@ using System.Text.Json;
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 {
-    [Xunit.Fact(DisplayName = "Cli_goal_pipeline_value_has_help_split_and_normalization_parity")]
+    [Xunit.Fact]
     public void CliGoalPipelineValueHasHelpSplitAndNormalizationParity()
     {
         var interactive = CliArgumentParser.SplitCommand(
@@ -26,7 +26,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("--pipeline <auto|five-role>", CliCommandHelp.GoalUsage, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_goal_brief_file_forces_five_role_and_rejects_simple_conflict")]
+    [Xunit.Fact]
     public void CliGoalBriefFileForcesFiveRoleAndRejectsSimpleConflict()
     {
         var root = CreateTempDirectory();
@@ -72,7 +72,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("cannot be combined with a simple-goal", exception.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Cli_goal_pipeline_rejects_missing_unknown_and_conflicting_values")]
+    [Xunit.Fact]
     public void CliGoalPipelineRejectsMissingUnknownAndConflictingValues()
     {
         var root = CreateTempDirectory();

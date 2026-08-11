@@ -93,6 +93,38 @@ internal static class GoalLifecycleCommands
             $"Requested intake pipeline 'five-role' cannot be satisfied; missing available agent role(s): {string.Join(", ", missingRoles)}. No goal was created.");
     }
 
+    public static void EnsureRequestedPipelineMatchesPersistedGoal(
+        GoalObjectivePlan requestedPlan,
+        Goal persistedGoal)
+    {
+        if (!requestedPlan.PipelineDecision.IsOverride)
+        {
+            return;
+        }
+
+        var requestedRoles = requestedPlan.TaskBoundaries
+            .Select(boundary => boundary.Role)
+            .ToArray();
+        var persistedRoles = persistedGoal.Tasks
+            .Select(task => task.RequiredRole)
+            .ToArray();
+        var persistedSelectionSource = ResolvePersistedPipelineSelectionSource(persistedGoal);
+        if (requestedRoles.SequenceEqual(persistedRoles) &&
+            requestedPlan.PipelineDecision.SelectionSource.Equals(persistedSelectionSource, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Existing goal {persistedGoal.Id.Value[..8]} does not match the explicitly requested intake pipeline. " +
+            $"Requested workflow='{requestedPlan.PipelineDecision.Workflow}', " +
+            $"selectionSource='{requestedPlan.PipelineDecision.SelectionSource}', " +
+            $"orderedRoles=[{FormatRoles(requestedRoles)}]; " +
+            $"persisted workflow='{DescribePipeline(persistedRoles)}', " +
+            $"selectionSource='{persistedSelectionSource}', " +
+            $"orderedRoles=[{FormatRoles(persistedRoles)}]. Existing goal was not reused.");
+    }
+
     public static Goal CreateAndActivateSimpleGoal(AgentOrchestratorKernel kernel, IReadOnlyList<AgentDefinition> agents, string objective)
     {
         var plan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.DeveloperOnly, kernel.BuildTaskDurationStats());
@@ -200,6 +232,50 @@ internal static class GoalLifecycleCommands
         var source = plan.PipelineDecision.IsOverride ? "override" : "auto";
         return $"Intake pipeline decision ({source}): {plan.PipelineDecision.Workflow}; reasons: {string.Join("; ", plan.PipelineDecision.Reasons)}; risk labels: {string.Join(", ", plan.RiskLabels)}.";
     }
+
+    private static string ResolvePersistedPipelineSelectionSource(Goal goal)
+    {
+        var message = goal.Timeline
+            .LastOrDefault(evt =>
+                evt.Kind == ProgressKind.GoalPolicyDecision &&
+                evt.Message.StartsWith("Intake pipeline decision (", StringComparison.Ordinal))
+            ?.Message;
+        if (message?.StartsWith("Intake pipeline decision (override):", StringComparison.Ordinal) == true)
+        {
+            return "explicitly-required";
+        }
+
+        if (message?.StartsWith("Intake pipeline decision (auto):", StringComparison.Ordinal) == true)
+        {
+            return "automatic";
+        }
+
+        return "unrecorded";
+    }
+
+    private static string DescribePipeline(IReadOnlyList<AgentRole> roles)
+    {
+        if (roles.SequenceEqual([AgentRole.Developer]))
+        {
+            return "developer-only";
+        }
+
+        if (roles.SequenceEqual([AgentRole.Developer, AgentRole.Reviewer]))
+        {
+            return "developer-reviewer";
+        }
+
+        if (roles.SequenceEqual(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer]))
+        {
+            return "five-role";
+        }
+
+        return "custom";
+    }
+
+    private static string FormatRoles(IEnumerable<AgentRole> roles) =>
+        string.Join(", ", roles.Select(role => role.ToString()));
 
     internal static void RecordCapabilityWarnings(
         AgentOrchestratorKernel kernel,

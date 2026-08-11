@@ -117,7 +117,7 @@ public sealed class GoalRefinementTests
             evt.Message.Contains("Intake pipeline decision (override): developer-only", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "GoalIntakePipelineRequest_parser_accepts_documented_values_case_insensitively")]
+    [Xunit.Fact]
     public void GoalIntakePipelineRequestParserAcceptsDocumentedValuesCaseInsensitively()
     {
         Xunit.Assert.Equal(GoalIntakePipelineRequest.Auto, GoalIntakePipelineRequestParser.Parse("AUTO"));
@@ -129,7 +129,7 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Contains("auto, five-role", exception.Message, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_forced_five_role_uses_displayed_plan_and_persists_exact_order")]
+    [Xunit.Fact]
     public void GoalLifecycleCommandsForcedFiveRoleUsesDisplayedPlanAndPersistsExactOrder()
     {
         const string objective = "Update security token handling in src/Mcg.AgentOrchestrator.App/AuthPolicy.cs with focused tests.";
@@ -151,7 +151,7 @@ public sealed class GoalRefinementTests
             evt.Message.Contains("Intake pipeline decision (override): five-role", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_unsatisfied_forced_pipeline_fails_before_goal_mutation")]
+    [Xunit.Fact]
     public void GoalLifecycleCommandsUnsatisfiedForcedPipelineFailsBeforeGoalMutation()
     {
         var kernel = new AgentOrchestratorKernel();
@@ -168,6 +168,28 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Empty(kernel.Goals);
         Xunit.Assert.Contains("missing available agent role(s): Tester", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("No goal was created", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void RequestedPipelineReuseRequiresExplicitPersistedSource()
+    {
+        const string objective = "Design the implementation and verification approach for a new operator workflow.";
+        var automaticPlan = GoalObjectivePlanner.Build(objective);
+        var requestedPlan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.FiveRole);
+        var kernel = new AgentOrchestratorKernel();
+        var existingGoal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            automaticPlan);
+
+        Xunit.Assert.Equal(GoalIntakePipeline.FiveRole, automaticPlan.PipelineDecision.Pipeline);
+        Xunit.Assert.False(automaticPlan.PipelineDecision.IsOverride);
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(requestedPlan, existingGoal));
+
+        Xunit.Assert.Contains("Requested workflow='five-role'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("persisted workflow='five-role'", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("selectionSource='automatic'", exception.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "GoalObjectivePlanner_classifies_meta_commentary_by_actionable_work")]

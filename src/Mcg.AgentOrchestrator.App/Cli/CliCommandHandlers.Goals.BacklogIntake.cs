@@ -338,8 +338,16 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             {
                 if (reusedBatchGoal is not null)
                 {
+                    if (batchGoalPlan is not null)
+                    {
+                        GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(batchGoalPlan, reusedBatchGoal);
+                    }
                     context.CurrentGoal = reusedBatchGoal;
                     Console.WriteLine($"Backlog slice '{batchItem.Heading}' already has goal {reusedBatchGoal.Id.Value[..8]}; no new goal created.");
+                    if (batchGoalPlan?.PipelineDecision.IsOverride == true)
+                    {
+                        ConsoleViews.PrintGoalObjectivePlan(batchGoalPlan);
+                    }
                 }
                 continue;
             }
@@ -436,8 +444,16 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     {
         if (existingGoal is not null)
         {
+            if (goalObjectivePlan is not null)
+            {
+                GoalLifecycleCommands.EnsureRequestedPipelineMatchesPersistedGoal(goalObjectivePlan, existingGoal);
+            }
             context.CurrentGoal = existingGoal;
             Console.WriteLine($"Backlog slice already has goal {existingGoal.Id.Value[..8]}; no new goal created.");
+            if (goalObjectivePlan?.PipelineDecision.IsOverride == true)
+            {
+                ConsoleViews.PrintGoalObjectivePlan(goalObjectivePlan);
+            }
             ConsoleViews.PrintGoal(existingGoal);
         }
         return false;
