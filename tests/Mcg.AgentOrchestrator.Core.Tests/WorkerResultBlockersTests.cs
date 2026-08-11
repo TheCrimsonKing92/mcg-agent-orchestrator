@@ -3,6 +3,47 @@ using System.Text.Json;
 
 public sealed class WorkerResultBlockersTests
 {
+    [Xunit.Fact]
+    public void TryFindBlockers_MultipleFindings_ReturnsEveryTokenInOrder()
+    {
+        const string output = """
+            Needs work:
+            - src/ReceiptWriter.cs:42 blocking violates AC-2 - receipt is written too early
+            - src/Schema.cs:18 blocking violates AC-5 - schema version is stale
+            no other blocking findings exist in this diff
+            WORKER_RESULT:
+            blockers: src/ReceiptWriter.cs:42 blocking violates AC-2 - receipt is written too early; src/Schema.cs:18 blocking violates AC-5 - schema version is stale
+            findings: [{"stable_id":"receipt-order","state":"open","severity":"blocking","category":"correctness","location":{"file":"src/ReceiptWriter.cs","region":"Write"},"description":"Violates AC-2: receipt is written too early."},{"stable_id":"schema-version","state":"open","severity":"blocking","category":"spec-compliance","location":{"file":"src/Schema.cs","region":"Version"},"description":"Violates AC-5: schema version is stale."}]
+            criteria_verdicts: [{"criterion_index":1,"verdict":"not-met","evidence":"src/ReceiptWriter.cs:42"},{"criterion_index":4,"verdict":"not-met","evidence":"src/Schema.cs:18"}]
+            verdict: needs-work
+            END_WORKER_RESULT
+            """;
+
+        Assert.True(WorkerResultBlockers.TryFindBlockers(output, out var blockers));
+        Assert.Equal(
+            [
+                "src/ReceiptWriter.cs:42 blocking violates AC-2 - receipt is written too early",
+                "src/Schema.cs:18 blocking violates AC-5 - schema version is stale"
+            ],
+            blockers);
+    }
+
+    [Xunit.Fact]
+    public void TryFindBlockers_SingleFinding_PreservesExistingRawValue()
+    {
+        const string output = """
+            WORKER_RESULT:
+            blockers: src/ReceiptWriter.cs:42 blocking violates AC-2 - receipt is written too early
+            verdict: needs-work
+            END_WORKER_RESULT
+            """;
+
+        Assert.True(WorkerResultBlockers.TryFindBlocker(output, out var rawBlocker));
+        Assert.Equal("src/ReceiptWriter.cs:42 blocking violates AC-2 - receipt is written too early", rawBlocker);
+        Assert.True(WorkerResultBlockers.TryFindBlockers(output, out var blockers));
+        Assert.Equal([rawBlocker], blockers);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerResultBlockers_parses_blocked_at_cap_with_open_blocker")]
     public void WorkerResultBlockersParsesBlockedAtCapWithOpenBlocker()
     {

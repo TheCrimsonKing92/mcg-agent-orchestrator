@@ -1420,6 +1420,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("### 1. Spec compliance (do this first)", prompt, StringComparison.Ordinal);
     Assert.Contains("### 2. Code quality (only after section 1)", prompt, StringComparison.Ordinal);
     Assert.Contains("criteria_verdicts:", prompt, StringComparison.Ordinal);
+    Assert.Contains("complete candidate diff supplied for the current round", prompt, StringComparison.Ordinal);
+    Assert.Contains("enumerate every blocking finding", prompt, StringComparison.Ordinal);
+    Assert.Contains("no other blocking findings exist in this diff", prompt, StringComparison.Ordinal);
     Assert.Contains("git diff --name-only main...HEAD", prompt, StringComparison.Ordinal);
     Assert.Contains("git diff main...HEAD", prompt, StringComparison.Ordinal);
     Assert.Contains("Merge-tree status: clean against current main", prompt, StringComparison.Ordinal);

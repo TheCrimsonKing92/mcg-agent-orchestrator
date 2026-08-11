@@ -40,14 +40,17 @@ public sealed class AgentOutputDirectivesTests
             line =>
                 line.StartsWith("blockers:", StringComparison.Ordinal) &&
                 line.Contains("none - token first when verdict is pass", StringComparison.Ordinal) &&
+                line.Contains("semicolon-delimited token", StringComparison.Ordinal) &&
+                line.Contains("file:line", StringComparison.Ordinal) &&
+                line.Contains("violated acceptance criterion", StringComparison.Ordinal) &&
                 line.Contains("blank is invalid", StringComparison.Ordinal) &&
                 line.Contains("advisory findings belong only in findings", StringComparison.Ordinal));
         Assert.Contains(
-            "When no open blocking findings remain, use `verdict: pass` and `blockers: none` even when open advisory findings remain",
+            "With none, use `verdict: pass` and `blockers: none`; advisories belong only in `findings`",
             SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer),
             StringComparison.Ordinal);
         Assert.Contains(
-            "When none remain, use `verdict: pass` and `blockers: none` even with open advisories",
+            "With none, use `verdict: pass` and `blockers: none`; advisories belong only in `findings`",
             SdlcRolePromptRequirements.BuildPlainText(AgentRole.Reviewer, TaskComplexity.Simple),
             StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -84,6 +87,26 @@ public sealed class AgentOutputDirectivesTests
             StringComparison.Ordinal);
         Assert.DoesNotContain("not-verifiable-from-diff", complex, StringComparison.Ordinal);
         Assert.DoesNotContain("not-verifiable-from-diff", compact, StringComparison.Ordinal);
+        const string attestationInstructionStart = "End needs-work verdict prose";
+        const string exactAttestationInstruction =
+            "End needs-work verdict prose with this exact standalone line immediately before WORKER_RESULT: `no other blocking findings exist in this diff`. Keep it outside `blockers`.";
+        foreach (var requirements in new[] { complex, compact })
+        {
+            Assert.Contains("complete candidate diff supplied for the current round", requirements, StringComparison.Ordinal);
+            Assert.Contains("enumerate every blocking finding", requirements, StringComparison.Ordinal);
+            Assert.Contains("file:line", requirements, StringComparison.Ordinal);
+            Assert.Contains("severity `blocking`", requirements, StringComparison.Ordinal);
+            Assert.Contains("violated acceptance criterion", requirements, StringComparison.Ordinal);
+            var attestationRequirement = Assert.Single(
+                requirements.Split(Environment.NewLine),
+                line => line.Contains(attestationInstructionStart, StringComparison.Ordinal));
+            Assert.Equal(
+                exactAttestationInstruction,
+                attestationRequirement[attestationRequirement.IndexOf(attestationInstructionStart, StringComparison.Ordinal)..]);
+            Assert.Contains("REVIEW DEFECT", requirements, StringComparison.Ordinal);
+            Assert.Contains("demonstrably present in an earlier reviewed complete candidate diff", requirements, StringComparison.Ordinal);
+            Assert.Contains("violated criterion index, normalized file path, line/region, then stable_id", requirements, StringComparison.Ordinal);
+        }
         Assert.True(
             complex.Length <= SdlcRolePromptRequirements.ReviewerComplexRequirementsMaxChars,
             $"Complex Reviewer requirements grew from {preChangeComplexChars} to {complex.Length} chars.");
