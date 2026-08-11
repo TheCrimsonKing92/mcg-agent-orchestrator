@@ -1488,6 +1488,22 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.True(lifecycleAttempts >= 2);
         Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
 
+        CreateVersion7StateOutboxFixture(workspace.SqliteStatePath);
+        Xunit.Assert.False(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
+        var deliveryError = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["goal-delivery-retry", created.Id.Value],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal)));
+        var missingColumn = Xunit.Assert.IsType<Microsoft.Data.Sqlite.SqliteException>(deliveryError.InnerException);
+        Xunit.Assert.Contains("no such column: quarantined_at", missingColumn.Message, StringComparison.Ordinal);
+        ProgramStartupLifecycle.EnsureStateDbInitialized(["conduct", "--loop"], workspace);
+        Xunit.Assert.True(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
+
         var collaborationBeforeRetry = await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
             .ListAsync(created.Id.Value);
         Xunit.Assert.NotEmpty(collaborationBeforeRetry);
@@ -2058,6 +2074,36 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(
             "wal",
             Convert.ToString(journalMode.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    [Xunit.Fact]
+    public void CliStartupReadCommandDoesNotMigratePublishedVersion7State()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        CreateVersion7StateOutboxFixture(workspace.SqliteStatePath);
+
+        var result = RunAppCli(root, ["goals"]);
+
+        Xunit.Assert.Equal(0, result.ExitCode);
+        Xunit.Assert.False(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
+        using (var unchanged = new Microsoft.Data.Sqlite.SqliteConnection(
+            $"Data Source={workspace.SqliteStatePath};Mode=ReadOnly;Pooling=False"))
+        {
+            unchanged.Open();
+            using var columns = unchanged.CreateCommand();
+            columns.CommandText = "SELECT group_concat(name, ',') FROM (SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid)";
+            Xunit.Assert.Equal(
+                "id,kind,payload_json,created_at",
+                Convert.ToString(columns.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
+            using var migrationCount = unchanged.CreateCommand();
+            migrationCount.CommandText = "SELECT COUNT(*) FROM schema_migrations";
+            Xunit.Assert.Equal(7L, migrationCount.ExecuteScalar());
+        }
+
+        ProgramStartupLifecycle.EnsureStateDbInitialized(["conduct", "--loop"], workspace);
+
+        Xunit.Assert.True(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
     }
 
 

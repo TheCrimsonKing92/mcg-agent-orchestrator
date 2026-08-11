@@ -201,6 +201,9 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Xunit.Assert.Equal(
             ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason", "processing_token", "processing_started_at"],
             QueryStrings(conn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
+        Xunit.Assert.Equal(
+            Enumerable.Range(1, 8).Select(number => number.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            QueryStrings(conn, "SELECT CAST(migration_number AS TEXT) FROM schema_migrations ORDER BY migration_number"));
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_roundtrips_snapshot_through_SQLite")]
@@ -1196,18 +1199,11 @@ public sealed class SqliteOrchestratorStateRepositoryTests
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_successor_preflight_allows_outbox_quarantine_column_migration")]
     public void SuccessorPreflightAllowsOutboxQuarantineColumnMigration()
     {
-        var db = TempDb();
-        _ = new SqliteOrchestratorStateRepository(db);
+        var db = TempDb(migrate: false);
+        CreateVersion7StateOutboxFixture(db);
 
-        using (var setupConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
-        {
-            setupConn.Open();
-            Exec(setupConn, "DROP INDEX ix_state_outbox_kind");
-            Exec(setupConn, "DROP TABLE state_outbox");
-            Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
-            Exec(setupConn, "CREATE INDEX ix_state_outbox_kind ON state_outbox(kind)");
-            Exec(setupConn, "DELETE FROM schema_migrations WHERE migration_number = 1");
-        }
+        Assert.False(StateDbMigrations.IsUpToDate(db));
+        Assert.True(StateDbMigrations.HasPublishedMigrations(db));
 
         Assert.Equal(
             SqliteOrchestratorStateRepository.CurrentSchemaVersion,
@@ -1220,33 +1216,43 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(
             ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason", "processing_token", "processing_started_at"],
             QueryStrings(checkConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
-
-        static void Exec(SqliteConnection connection, string sql)
-        {
-            using var command = connection.CreateCommand();
-            command.CommandText = sql;
-            command.ExecuteNonQuery();
-        }
+        Assert.True(StateDbMigrations.IsUpToDate(db));
     }
 
-    [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_migrates_legacy_outbox_without_index_before_drain")]
-    public async Task MigratesLegacyOutboxWithoutIndexBeforeDrain()
+    [Xunit.Fact]
+    public async Task Version7OutboxMigrationAddsLeaseColumnsAndDrainsExactlyOnce()
     {
-        var db = TempDb();
-        _ = new SqliteOrchestratorStateRepository(db);
+        var db = TempDb(migrate: false);
+        CreateVersion7StateOutboxFixture(db, includeOutboxIndex: false);
 
         using (var setupConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
         {
             setupConn.Open();
-            Exec(setupConn, "DROP INDEX ix_state_outbox_kind");
-            Exec(setupConn, "DROP TABLE state_outbox");
-            Exec(setupConn, "CREATE TABLE state_outbox (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)");
             Exec(setupConn, "INSERT INTO state_outbox (id, kind, payload_json, created_at) VALUES ('legacy-message', 'acceptance-retry-audit', '{}', '2026-07-26T00:00:00.0000000+00:00')");
-            Exec(setupConn, "DELETE FROM schema_migrations WHERE migration_number = 1");
+            Assert.Equal(
+                ["1", "2", "3", "4", "5", "6", "7"],
+                QueryStrings(setupConn, "SELECT CAST(migration_number AS TEXT) FROM schema_migrations ORDER BY migration_number"));
+            Assert.Equal(
+                ["id", "kind", "payload_json", "created_at"],
+                QueryStrings(setupConn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
         }
 
-        _ = StateDbMigrations.EnsureUpToDate(db);
+        Assert.False(StateDbMigrations.IsUpToDate(db));
         var repository = new SqliteOrchestratorStateRepository(db);
+        var deliveryCount = 0;
+        var missingColumn = await Assert.ThrowsAsync<SqliteException>(() =>
+            repository.TryProcessOutboxMessageAsync(
+                "legacy-message",
+                (_, _) =>
+                {
+                    deliveryCount++;
+                    return Task.FromResult(OrchestratorStateOutboxProcessingResult.Completed);
+                }));
+        Assert.Contains("no such column: quarantined_at", missingColumn.Message, StringComparison.Ordinal);
+        Assert.Equal(0, deliveryCount);
+
+        _ = StateDbMigrations.EnsureUpToDate(db);
+        _ = StateDbMigrations.EnsureUpToDate(db);
 
         using (var checkConn = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
         {
@@ -1257,11 +1263,26 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             Assert.Equal(
                 ["ix_state_outbox_kind"],
                 QueryStrings(checkConn, "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ix_state_outbox_kind'"));
+            Assert.Equal(
+                ["state-outbox-lease-columns"],
+                QueryStrings(checkConn, "SELECT name FROM schema_migrations WHERE migration_number = 8"));
         }
 
         Assert.True(await repository.TryProcessOutboxMessageAsync(
             "legacy-message",
-            (_, _) => Task.FromResult(OrchestratorStateOutboxProcessingResult.Completed)));
+            (_, _) =>
+            {
+                deliveryCount++;
+                return Task.FromResult(OrchestratorStateOutboxProcessingResult.Completed);
+            }));
+        Assert.False(await repository.TryProcessOutboxMessageAsync(
+            "legacy-message",
+            (_, _) =>
+            {
+                deliveryCount++;
+                return Task.FromResult(OrchestratorStateOutboxProcessingResult.Completed);
+            }));
+        Assert.Equal(1, deliveryCount);
         Assert.Empty(await repository.ListOutboxMessagesAsync("acceptance-retry-audit"));
 
         static void Exec(SqliteConnection connection, string sql)

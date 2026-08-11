@@ -297,6 +297,7 @@ public sealed class ConductorBatchLoopTests
     [Xunit.InlineData("status", null, false)]
     [Xunit.InlineData("backlog-show", null, false)]
     [Xunit.InlineData("operator-intent-status", "intent-id", false)]
+    [Xunit.InlineData("goal-delivery-retry", "goal-id", false)]
     public void StateDbStartupMigrationsRequireConductorAuthorityOrExplicitBacklogBootstrap(
         string command,
         string? argument,
