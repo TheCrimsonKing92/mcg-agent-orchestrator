@@ -90,6 +90,42 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void FailedMaterialization_CleanupFailurePersistsDebt()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        var previousRemover = AcceptanceCohortWorkspace.WorkspaceRemover;
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "seed.txt", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "seed.txt", "second");
+            AcceptanceCohortWorkspace.WorkspaceRemover = (_, _) =>
+                throw new InvalidOperationException("simulated pre-return cleanup failure");
+
+            var failure = Assert.Throws<AcceptanceCohortMaterializationException>(() =>
+                GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                    repo,
+                    main,
+                    [
+                        Bind(first.GoalId, first.Revision, "seed.txt", "resource:first"),
+                        Bind(second.GoalId, second.Revision, "seed.txt", "resource:second")
+                    ]));
+
+            Assert.Equal(AcceptanceCohortMaterializationFailureKind.WorkspaceFailure, failure.Kind);
+            var debt = Assert.Single(GoalWorktrees.ListCleanupDebt(repo), item =>
+                item.Reason == "cohort:worktree-remove-failed");
+            Assert.True(Directory.Exists(debt.Path));
+            AcceptanceCohortWorkspace.WorkspaceRemover = previousRemover;
+            GoalWorktrees.RemoveAcceptanceCohortWorkspace(repo, debt.Path);
+        }
+        finally
+        {
+            AcceptanceCohortWorkspace.WorkspaceRemover = previousRemover;
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void ConflictingMaterialization_CleansWorkspace_AndLeavesBothBranchesUnchanged()
     {
         var repo = CreateAcceptanceCohortRepository();
@@ -190,6 +226,50 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void Store_RejectsPassingReceiptWithoutAuthoritativeEvidence()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cohort-store-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var identity = AcceptanceCohortIdentity.Create(
+                [
+                    Bind(new GoalId("11111111111111111111111111111111"), new string('b', 40), "src/A.cs", "resource:a"),
+                    Bind(new GoalId("22222222222222222222222222222222"), new string('c', 40), "tests/B.cs", "resource:b")
+                ],
+                new string('a', 40),
+                new string('d', 40),
+                "manifest-v1");
+            var store = new CohortAcceptanceStore(Path.Combine(root, "cohort.db"));
+
+            var missingExit = new AcceptanceCohortReceipt(
+                "missing-exit", identity, AcceptanceCohortGateOutcome.Passed,
+                DateTimeOffset.UtcNow, 1, [], null, [Path.GetFullPath("missing-exit.trx")],
+                ValidForLanding: true);
+            var missingTrx = missingExit with
+            {
+                ReceiptId = "missing-trx",
+                GateExitCode = 0,
+                GateTestResultPaths = []
+            };
+            var unnormalizedTrx = missingTrx with
+            {
+                ReceiptId = "unnormalized-trx",
+                GateTestResultPaths = ["relative.trx"]
+            };
+
+            Assert.Throws<ArgumentException>(() => store.SaveGateReceipt(missingExit));
+            Assert.Throws<ArgumentException>(() => store.SaveGateReceipt(missingTrx));
+            Assert.Throws<ArgumentException>(() => store.SaveGateReceipt(unnormalizedTrx));
+            Assert.Null(store.TryReadReceipt(identity.Value));
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void ExactTestedCombinedCommit_LandsOnce_AndBothGoalsShareReceiptCoverage()
     {
         var repo = CreateAcceptanceCohortRepository();
@@ -226,6 +306,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 DateTimeOffset.UtcNow,
                 100,
                 [],
+                GateExitCode: 0,
+                GateTestResultPaths: [Path.GetFullPath("receipt-shared.trx")],
                 ValidForLanding: true));
 
             var result = LandingExecutor.ExecuteCohort(
@@ -292,6 +374,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 DateTimeOffset.UtcNow,
                 100,
                 [],
+                GateExitCode: 0,
+                GateTestResultPaths: [Path.GetFullPath("receipt-invalidated.trx")],
                 ValidForLanding: true));
 
             File.WriteAllText(Path.Combine(repo, "main-moved.txt"), "new main");
@@ -349,7 +433,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 bindings, main, integration.TreeRevision, GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
             var receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
                 "receipt-cas", identity, AcceptanceCohortGateOutcome.Passed, DateTimeOffset.UtcNow,
-                100, [], ValidForLanding: true));
+                100, [], 0, [Path.GetFullPath("receipt-cas.trx")], ValidForLanding: true));
             var moved = false;
             LandingExecutor.GitRunner = (workingDirectory, args) =>
             {
@@ -386,7 +470,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
-    public void DeterministicRed_PersistsBothExactPartitionReceiptsBeforeInteractionClassification()
+    public void DeterministicRed_PersistsPartitionsBeforeInteractionClassification()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cohort-attribution-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -404,7 +488,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 AcceptanceCohortGateOutcome.Failed,
                 DateTimeOffset.UtcNow,
                 100,
-                ["combined-check"]));
+                ["combined-check"],
+                GateExitCode: 1,
+                GateTestResultPaths: [Path.GetFullPath("combined-red.trx")]));
             var partitions = new[]
             {
                 new AcceptanceCohortPartitionReceipt(
@@ -462,6 +548,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 DateTimeOffset.UtcNow,
                 100,
                 [],
+                GateExitCode: 0,
+                GateTestResultPaths: [Path.GetFullPath("recoverable-receipt.trx")],
                 ValidForLanding: true));
             store.PrepareLanding(receipt, integration.CommitRevision);
 
@@ -587,7 +675,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
-    public void MaterializationStaleBinding_PersistsTypedOutcome_CleansWorkspace_AndReturnsOrdinaryFallback()
+    public void StaleMaterialization_PersistsOutcomeAndUsesOrdinaryFallback()
     {
         var repo = CreateAcceptanceCohortRepository();
         try
@@ -684,6 +772,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 DateTimeOffset.UtcNow,
                 100,
                 [],
+                GateExitCode: 0,
+                GateTestResultPaths: [Path.GetFullPath("retryable-hold-receipt.trx")],
                 ValidForLanding: true));
 
             driver.LandingMutationBlocker = () => "operator-controlled landing pause";
@@ -711,6 +801,71 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(firstRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(firstGoal.Id)}").Trim());
             Assert.Equal(secondRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(secondGoal.Id)}").Trim());
             Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void CachedPassWithoutEvidence_InvalidatesBeforeLanding()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        try
+        {
+            AddAcceptanceManifest(repo);
+            var kernel = new AgentOrchestratorKernel();
+            var firstGoal = CreateCompletedGoal(kernel, "First cached receipt member", repo);
+            var secondGoal = CreateCompletedGoal(kernel, "Second cached receipt member", repo);
+            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/First.cs", "first");
+            _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var verifier = FakeAcceptanceVerifier.Throws(
+                new InvalidOperationException("An invalid cached pass must not be reused or rerun in place."));
+            var driver = new ConductorDriver(
+                kernel, workspace, verifier, AgentCatalog.Default().Agents, WorkerProfileCatalog.Default());
+            var selection = ProjectSelection(driver, firstGoal, secondGoal);
+            var bindings = selection.BindMembers();
+            AcceptanceCohortIdentity identity;
+            using (var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                       repo, selection.Members[0].MainRevision, bindings))
+            {
+                identity = AcceptanceCohortIdentity.Create(
+                    bindings,
+                    selection.Members[0].MainRevision,
+                    integration.TreeRevision,
+                    GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
+            }
+            var databasePath = Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db");
+            var store = new CohortAcceptanceStore(databasePath);
+            _ = store.SaveGateReceipt(new AcceptanceCohortReceipt(
+                "legacy-cached-pass",
+                identity,
+                AcceptanceCohortGateOutcome.Passed,
+                DateTimeOffset.UtcNow,
+                100,
+                [],
+                GateExitCode: 0,
+                GateTestResultPaths: [Path.GetFullPath("legacy-cached-pass.trx")],
+                ValidForLanding: true));
+            using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE cohort_receipts SET gate_exit_code=NULL, gate_test_result_paths_json='[]';";
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+
+            var result = driver.RunAcceptanceCohort(
+                selection, [firstGoal, secondGoal], ConductorAutonomyPolicy.Permissive);
+
+            Assert.Equal(AcceptanceCohortGateOutcome.Invalidated, result.Receipt?.Outcome);
+            Assert.False(result.Receipt?.ValidForLanding);
+            Assert.Empty(result.MemberResults);
+            Assert.Contains("lacks successful exit", result.Detail, StringComparison.Ordinal);
+            Assert.Equal(0, verifier.RunCount);
+            Assert.Equal(identity.ObservedMainRevision, RunGitOutput(repo, "rev-parse", "main").Trim());
         }
         finally
         {
@@ -803,7 +958,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 AcceptanceCohortGateOutcome.InfrastructureFailure,
                 DateTimeOffset.UtcNow,
                 100,
-                ["infrastructure:runner-loss"]));
+                ["infrastructure:runner-loss"],
+                GateExitCode: null,
+                GateTestResultPaths: []));
 
             var result = driver.RunAcceptanceCohort(
                 selection, [firstGoal, secondGoal], ConductorAutonomyPolicy.Permissive);

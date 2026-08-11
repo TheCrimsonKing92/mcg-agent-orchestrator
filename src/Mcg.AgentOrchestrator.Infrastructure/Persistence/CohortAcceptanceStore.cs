@@ -38,6 +38,13 @@ public sealed class CohortAcceptanceStore
         {
             throw new ArgumentException("A shared cohort receipt must reference exactly two members.", nameof(receipt));
         }
+        if ((receipt.Outcome == AcceptanceCohortGateOutcome.Passed || receipt.ValidForLanding) &&
+            !receipt.HasAuthoritativeLandingEvidence)
+        {
+            throw new ArgumentException(
+                "A passing cohort receipt requires exit code zero and normalized bound TRX evidence.",
+                nameof(receipt));
+        }
 
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
@@ -73,7 +80,7 @@ public sealed class CohortAcceptanceStore
             command.Parameters.AddWithValue("$exitCode", (object?)receipt.GateExitCode ?? DBNull.Value);
             command.Parameters.AddWithValue(
                 "$testResultPaths",
-                JsonSerializer.Serialize(receipt.GateTestResultPaths ?? []));
+                JsonSerializer.Serialize(receipt.GateTestResultPaths));
             command.ExecuteNonQuery();
         }
 
@@ -276,6 +283,11 @@ public sealed class CohortAcceptanceStore
     public void PrepareLanding(AcceptanceCohortReceipt receipt, string combinedCommitRevision)
     {
         ArgumentNullException.ThrowIfNull(receipt);
+        if (!receipt.HasAuthoritativeLandingEvidence)
+        {
+            throw new InvalidOperationException(
+                "Cohort landing cannot be prepared without authoritative positive gate evidence.");
+        }
         var commit = AcceptanceCohortMemberBinding.NormalizeRevision(
             combinedCommitRevision,
             nameof(combinedCommitRevision));
@@ -318,6 +330,17 @@ public sealed class CohortAcceptanceStore
         var recovered = new List<string>();
         foreach (var intent in prepared)
         {
+            var receipt = TryReadReceipt(intent.CohortId);
+            if (receipt is null ||
+                !receipt.ReceiptId.Equals(intent.ReceiptId, StringComparison.Ordinal) ||
+                !receipt.HasAuthoritativeLandingEvidence)
+            {
+                if (receipt is not null)
+                {
+                    _ = InvalidateLanding(intent.CohortId);
+                }
+                continue;
+            }
             if (GitCli.Run(
                     executionDirectory,
                     "merge-base", "--is-ancestor", intent.Commit, "refs/heads/main").ExitCode != 0)
@@ -334,19 +357,13 @@ public sealed class CohortAcceptanceStore
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
-        using (var validate = connection.CreateCommand())
+        var authoritativeReceipt = ReadReceipt(connection, cohortId, transaction);
+        if (authoritativeReceipt is null ||
+            !authoritativeReceipt.ReceiptId.Equals(receiptId, StringComparison.Ordinal) ||
+            !authoritativeReceipt.HasAuthoritativeLandingEvidence)
         {
-            validate.Transaction = transaction;
-            validate.CommandText = """
-                SELECT COUNT(*) FROM cohort_receipts
-                WHERE cohort_id=$cohort AND receipt_id=$receipt AND outcome='Passed' AND valid_for_landing=1;
-                """;
-            validate.Parameters.AddWithValue("$cohort", cohortId);
-            validate.Parameters.AddWithValue("$receipt", receiptId);
-            if (Convert.ToInt32(validate.ExecuteScalar()) != 1)
-            {
-                throw new InvalidOperationException("Cohort landing cannot finalize without its exact valid passing receipt.");
-            }
+            throw new InvalidOperationException(
+                "Cohort landing cannot finalize without its exact authoritative passing receipt.");
         }
 
         using (var update = connection.CreateCommand())
@@ -631,8 +648,8 @@ public sealed class CohortAcceptanceStore
             throw new InvalidDataException($"Stored cohort identity {cohortId} failed canonical reconstruction.");
         }
         return new AcceptanceCohortReceipt(
-            receiptId, identity, outcome, completed, elapsed, failed, attribution, valid,
-            gateExitCode, gateTestResultPaths);
+            receiptId, identity, outcome, completed, elapsed, failed, gateExitCode,
+            gateTestResultPaths, attribution, valid);
     }
 
     private static IReadOnlyList<AcceptanceCohortCoverage> ReadCoverage(

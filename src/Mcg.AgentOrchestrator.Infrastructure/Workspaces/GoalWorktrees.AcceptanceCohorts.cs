@@ -113,13 +113,13 @@ public static partial class GoalWorktrees
         var workspacePath = System.IO.Path.Combine(
             worktreeRoot,
             $"cohort-partition-{member.GoalId.Value[..8]}-{Guid.NewGuid():N}");
-        var added = GitCli.Run(root, "worktree", "add", "--detach", workspacePath, normalizedMain);
-        if (added.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"Failed to create attribution worktree: {added.Error}");
-        }
         try
         {
+            var added = GitCli.Run(root, "worktree", "add", "--detach", workspacePath, normalizedMain);
+            if (added.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"Failed to create attribution worktree: {added.Error}");
+            }
             var merge = GitCli.Run(
                 workspacePath,
                 "-c", "user.name=mcg-orchestrator",
@@ -139,9 +139,13 @@ public static partial class GoalWorktrees
             result.AssertGoalBranchesUnchanged();
             return result;
         }
-        catch
+        catch (Exception materializationFailure)
         {
-            RemoveAcceptanceCohortWorkspace(root, workspacePath);
+            RemoveFailedMaterializationWorkspace(
+                root,
+                workspacePath,
+                "Acceptance partition",
+                materializationFailure);
             throw;
         }
     }
@@ -227,17 +231,11 @@ public static partial class GoalWorktrees
         }
         catch (Exception materializationFailure)
         {
-            try
-            {
-                RemoveAcceptanceCohortWorkspace(root, workspacePath);
-            }
-            catch (Exception cleanupFailure)
-            {
-                throw new AcceptanceCohortMaterializationException(
-                    AcceptanceCohortMaterializationFailureKind.WorkspaceFailure,
-                    $"Cohort materialization failed and its disposable workspace could not be removed: {cleanupFailure.Message}",
-                    new AggregateException(materializationFailure, cleanupFailure));
-            }
+            RemoveFailedMaterializationWorkspace(
+                root,
+                workspacePath,
+                "Cohort",
+                materializationFailure);
             throw;
         }
     }
@@ -275,4 +273,24 @@ public static partial class GoalWorktrees
 
     internal static void RecordAcceptanceCohortCleanupNeeded(string workspacePath) =>
         RecordCleanupNeeded(workspacePath, "cohort:worktree-remove-failed", hooks: GoalWorktreeCleanupHooks.Default);
+
+    private static void RemoveFailedMaterializationWorkspace(
+        string executionDirectory,
+        string workspacePath,
+        string workspaceKind,
+        Exception materializationFailure)
+    {
+        try
+        {
+            AcceptanceCohortWorkspace.WorkspaceRemover(executionDirectory, workspacePath);
+        }
+        catch (Exception cleanupFailure)
+        {
+            RecordAcceptanceCohortCleanupNeeded(workspacePath);
+            throw new AcceptanceCohortMaterializationException(
+                AcceptanceCohortMaterializationFailureKind.WorkspaceFailure,
+                $"{workspaceKind} materialization failed and its disposable workspace could not be removed: {cleanupFailure.Message}",
+                new AggregateException(materializationFailure, cleanupFailure));
+        }
+    }
 }

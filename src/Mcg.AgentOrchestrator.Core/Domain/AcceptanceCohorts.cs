@@ -232,7 +232,36 @@ public sealed record AcceptanceCohortReceipt(
     DateTimeOffset CompletedAt,
     long GateElapsedMilliseconds,
     IReadOnlyList<string> FailedChecks,
+    int? GateExitCode,
+    IReadOnlyList<string> GateTestResultPaths,
     AcceptanceCohortAttributionOutcome Attribution = AcceptanceCohortAttributionOutcome.NotApplicable,
-    bool ValidForLanding = false,
-    int? GateExitCode = null,
-    IReadOnlyList<string>? GateTestResultPaths = null);
+    bool ValidForLanding = false)
+{
+    public bool HasAuthoritativeLandingEvidence =>
+        Outcome == AcceptanceCohortGateOutcome.Passed &&
+        ValidForLanding &&
+        GateExitCode == 0 &&
+        HasNormalizedTestResultPaths(GateTestResultPaths);
+
+    private static bool HasNormalizedTestResultPaths(IReadOnlyList<string>? paths)
+    {
+        if (paths is not { Count: > 0 } || paths.Any(string.IsNullOrWhiteSpace))
+        {
+            return false;
+        }
+
+        try
+        {
+            var normalized = paths
+                .Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return paths.SequenceEqual(normalized, StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+}

@@ -8,7 +8,7 @@ public sealed class ConductorAcceptanceCohortTests
     private const string MainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     [Fact]
-    public void Selector_EnumeratesPairsLexicographically_AndDoesNotLetOldestConflictHideLaterPair()
+    public void Selector_EnumeratesPairsLexically_WithoutConflictMaskingLaterPair()
     {
         var oldest = Ready("11111111111111111111111111111111", "src", "resource:oldest");
         var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
@@ -192,6 +192,33 @@ public sealed class ConductorAcceptanceCohortTests
         }
     }
 
+    [Theory]
+    [InlineData("Error")]
+    [InlineData("Aborted")]
+    [InlineData("Timeout")]
+    [InlineData("NotExecuted")]
+    public void NonVerdictTrxOutcome_IsInfrastructureFailure(string outcome)
+    {
+        var trx = Path.Combine(Path.GetTempPath(), $"cohort-nonverdict-{Guid.NewGuid():N}.trx");
+        try
+        {
+            File.WriteAllText(trx, TrxWithOutcome(outcome));
+
+            Assert.Equal(
+                AcceptanceCohortGateOutcome.InfrastructureFailure,
+                ConductorDriver.ClassifyCohortVerification(new AcceptanceVerificationResult(
+                    Passed: true,
+                    Skipped: false,
+                    ExitCode: 0,
+                    OutputTail: null,
+                    TestResultPaths: [trx])));
+        }
+        finally
+        {
+            if (File.Exists(trx)) File.Delete(trx);
+        }
+    }
+
     private static string ValidPassingTrx() => """
         <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
           <Results>
@@ -199,6 +226,17 @@ public sealed class ConductorAcceptanceCohortTests
           </Results>
           <ResultSummary outcome="Completed">
             <Counters total="1" executed="1" passed="1" failed="0" />
+          </ResultSummary>
+        </TestRun>
+        """;
+
+    private static string TrxWithOutcome(string outcome) => $"""
+        <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+          <Results>
+            <UnitTestResult testId="1" testName="NonVerdict" outcome="{outcome}" />
+          </Results>
+          <ResultSummary outcome="Completed">
+            <Counters total="1" executed="1" passed="0" failed="0" />
           </ResultSummary>
         </TestRun>
         """;

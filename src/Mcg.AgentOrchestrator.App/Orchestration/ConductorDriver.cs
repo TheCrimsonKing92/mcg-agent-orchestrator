@@ -2451,6 +2451,15 @@ internal sealed class ConductorDriver
         var receipt = _cohortAcceptanceStore.TryReadReceipt(identity.Value);
         AcceptanceVerificationResult? verification = null;
 
+        if (receipt is { Outcome: AcceptanceCohortGateOutcome.Passed } &&
+            !receipt.HasAuthoritativeLandingEvidence)
+        {
+            receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+            return CohortFallback(
+                receipt,
+                "cached passing receipt lacks successful exit and normalized TRX evidence; both goals returned to Ready projection fallback=ordinary");
+        }
+
         if (receipt is null)
         {
             var gateClock = Stopwatch.StartNew();
@@ -2493,9 +2502,9 @@ internal sealed class ConductorDriver
                 DateTimeOffset.UtcNow,
                 checked((long)gateClock.Elapsed.TotalMilliseconds),
                 failedChecks,
-                ValidForLanding: outcome == AcceptanceCohortGateOutcome.Passed,
                 GateExitCode: gateExitCode,
-                GateTestResultPaths: gateTestResultPaths);
+                GateTestResultPaths: gateTestResultPaths,
+                ValidForLanding: outcome == AcceptanceCohortGateOutcome.Passed);
             receipt = _cohortAcceptanceStore.SaveGateReceipt(receipt);
         }
 
@@ -2605,7 +2614,7 @@ internal sealed class ConductorDriver
                     StringComparer.Ordinal),
                 $"outcome=passed receipt={receipt.ReceiptId} tree={identity.CombinedTreeRevision} gateMs={receipt.GateElapsedMilliseconds} " +
                 $"gateExit={receipt.GateExitCode?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} " +
-                $"trxCount={receipt.GateTestResultPaths?.Count ?? 0}");
+                $"trxCount={receipt.GateTestResultPaths.Count}");
         }
 
         return CohortHeld(
@@ -2777,7 +2786,7 @@ internal sealed class ConductorDriver
             unitResults.Length == executed &&
             passedResults == passed &&
             failedResults == failed &&
-            passed + failed <= executed;
+            passed + failed == executed;
     }
 
     private static bool TryReadNonNegativeCounter(XElement counters, string name, out int value)

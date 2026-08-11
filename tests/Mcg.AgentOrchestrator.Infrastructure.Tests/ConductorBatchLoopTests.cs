@@ -1528,7 +1528,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal([passing.Id.Value], landed);
     }
 
-    [Xunit.Fact(DisplayName = "ProductionCohort_runs_one_shared_gate_and_bypasses_ordinary_member_gates")]
+    [Xunit.Fact]
     public void ProductionCohortRunsOneSharedGateAndBypassesOrdinaryMemberGates()
     {
         var root = CreateTempDirectory("mcg-speculative-cohort-advisory");
@@ -1593,6 +1593,8 @@ public sealed class ConductorBatchLoopTests
                         DateTimeOffset.UtcNow,
                         10,
                         [],
+                        GateExitCode: 0,
+                        GateTestResultPaths: [Path.GetFullPath("production-cohort.trx")],
                         ValidForLanding: true);
                     sharedReceiptId = receipt.ReceiptId;
                     return new ConductorAcceptanceCohortRunResult(
@@ -1640,6 +1642,64 @@ public sealed class ConductorBatchLoopTests
         {
             TryDeleteDirectory(root);
         }
+    }
+
+    [Xunit.Fact]
+    public void IncompatibleCohortCandidates_UseOrdinaryAcceptance()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateVerifiedSimpleGoal(kernel, "Update first overlapping source");
+        var second = CreateVerifiedSimpleGoal(kernel, "Update second overlapping source");
+        var acceptanceCalls = new List<string>();
+        var landed = new List<string>();
+        var cohortCalls = 0;
+        var sharedPath = "src/Mcg.AgentOrchestrator.App/Orchestration/Shared.cs";
+        var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(
+                goalId.Value.PadRight(40, 'b')[..40],
+                mainRevision),
+            _ => new GateReadyLandingScopeObservation(true, [sharedPath]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (goal, _) =>
+            {
+                acceptanceCalls.Add(goal.Id.Value);
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            land: goal =>
+            {
+                landed.Add(goal.Id.Value);
+                return new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "ok");
+            },
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            getLandingFileScopes: _ => [sharedPath],
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            runAcceptanceCohort: (_, _, _) =>
+            {
+                cohortCalls++;
+                throw new InvalidOperationException("Incompatible candidates must not enter a production cohort.");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(2, summary.Advanced);
+        Assert.Equal(0, cohortCalls);
+        Assert.Equal(2, acceptanceCalls.Count);
+        Assert.Equal(2, landed.Count);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_slot_path_unmet_acceptance_retries_with_concrete_feedback")]

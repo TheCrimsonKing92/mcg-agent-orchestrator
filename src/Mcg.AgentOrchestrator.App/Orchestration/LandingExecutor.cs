@@ -243,9 +243,10 @@ internal static class LandingExecutor
         {
             throw new ArgumentException("Cohort landing requires exactly two distinct bound goals.", nameof(goals));
         }
-        if (receipt.Outcome != AcceptanceCohortGateOutcome.Passed || !receipt.ValidForLanding)
+        if (!receipt.HasAuthoritativeLandingEvidence)
         {
-            throw new InvalidOperationException("Only an exact valid passing cohort receipt can authorize landing.");
+            throw new InvalidOperationException(
+                "Only an exact passing cohort receipt with successful exit and normalized TRX evidence can authorize landing.");
         }
 
         var executionDirectory = workspace.ExecutionDirectory;
