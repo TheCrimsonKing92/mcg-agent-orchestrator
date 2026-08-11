@@ -11612,12 +11612,12 @@ public sealed class ConductorBatchLoopTests
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
-            maxIterations: 2,
+            maxIterations: 3,
             onTick: ticks.Add,
             sleepFunc: _ => false,
             checkpointGoalTick: Checkpoint);
 
-        Assert.Equal(2, summary.Ticks);
+        Assert.Equal(3, summary.Ticks);
         Assert.True(lease.IsHeld);
         Assert.Equal(1, workspaceCreates[goalA.Id.Value]);
         Assert.Equal(1, workspaceCreates[goalB.Id.Value]);
