@@ -890,7 +890,7 @@ internal static class CliPersistentStateRunner
 
         void PersistGoals(AgentOrchestratorKernel checkpoint, IReadOnlyCollection<GoalId> changedGoalIds)
         {
-            var requests = BuildCheckpointRequests(checkpoint, changedGoalIds);
+            var requests = BuildCheckpointRequests(checkpoint, changedGoalIds, containTransientBaselineLoads: false, out _);
             if (requests.Length == 0) return;
 
             var results = stateRepository.SaveGoalSnapshotsWithMergeAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
@@ -901,9 +901,13 @@ internal static class CliPersistentStateRunner
             AgentOrchestratorKernel checkpoint,
             IReadOnlyCollection<GoalId> changedGoalIds)
         {
-            var requests = BuildCheckpointRequests(checkpoint, changedGoalIds);
+            var requests = BuildCheckpointRequests(
+                checkpoint,
+                changedGoalIds,
+                containTransientBaselineLoads: true,
+                out var baselineLoadHolds);
             if (requests.Length == 0)
-                return [];
+                return baselineLoadHolds;
 
             if (!stateRepository.SupportsGoalCheckpointContainment)
             {
@@ -911,13 +915,13 @@ internal static class CliPersistentStateRunner
                     .GetAwaiter()
                     .GetResult();
                 ApplyDurableResults(checkpoint, legacyResults);
-                return legacyResults.Select(result => new GoalSnapshotCheckpointResult(
+                return baselineLoadHolds.Concat(legacyResults.Select(result => new GoalSnapshotCheckpointResult(
                     result.GoalId,
                     GoalSnapshotCheckpointDisposition.Durable,
                     result,
                     "state",
                     "unknown",
-                    "legacy-checkpoint")).ToArray();
+                    "legacy-checkpoint"))).ToArray();
             }
 
             var results = stateRepository.CheckpointGoalSnapshotsAsync(requests, CancellationToken.None).GetAwaiter().GetResult();
@@ -926,37 +930,22 @@ internal static class CliPersistentStateRunner
                 results.Where(result => result.IsDurable && result.SaveResult is not null)
                     .Select(result => result.SaveResult!)
                     .ToArray());
-            return results;
+            return baselineLoadHolds.Concat(results).ToArray();
         }
 
         GoalSnapshotSaveRequest[] BuildCheckpointRequests(
             AgentOrchestratorKernel checkpoint,
-            IReadOnlyCollection<GoalId> changedGoalIds)
-        {
-            if (changedGoalIds.Count == 0) return [];
-
-            var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
-            var checkpointSnapshot = checkpoint.ExportSnapshot();
-            var humanInputByGoal = checkpointSnapshot.HumanInputRequests
-                .Where(request => changed.Contains(request.GoalId))
-                .GroupBy(request => request.GoalId, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => (IReadOnlyList<HumanInputRequestSnapshot>)group.ToArray(), StringComparer.Ordinal);
-            return checkpointSnapshot.Goals
-                .Where(goal => changed.Contains(goal.Id))
-                .Select(goal =>
-                {
-                    var baseline = tickBaselines.TryGetValue(goal.Id, out var known)
-                        ? known
-                        : stateRepository.LoadGoalAsync(new GoalId(goal.Id), CancellationToken.None)
-                            .GetAwaiter()
-                            .GetResult() ?? goal;
-                    return new GoalSnapshotSaveRequest(
-                        baseline,
-                        goal,
-                        humanInputByGoal.GetValueOrDefault(goal.Id, []));
-                })
-                .ToArray();
-        }
+            IReadOnlyCollection<GoalId> changedGoalIds,
+            bool containTransientBaselineLoads,
+            out IReadOnlyList<GoalSnapshotCheckpointResult> baselineLoadHolds)
+            => BuildConductLoopCheckpointRequests(
+                checkpoint,
+                changedGoalIds,
+                tickBaselines,
+                stateRepository,
+                workspace.SqliteStatePath,
+                containTransientBaselineLoads,
+                out baselineLoadHolds);
 
         void ApplyDurableResults(AgentOrchestratorKernel checkpoint, IReadOnlyList<GoalSnapshotSaveResult> results)
         {
@@ -1017,6 +1006,82 @@ internal static class CliPersistentStateRunner
             _ = CheckpointGoals(kernel, kernel.Goals.Select(goal => goal.Id).ToArray());
         currentGoal = loopCurrentGoal;
         return shouldSave;
+    }
+
+    internal static GoalSnapshotSaveRequest[] BuildConductLoopCheckpointRequests(
+        AgentOrchestratorKernel checkpoint,
+        IReadOnlyCollection<GoalId> changedGoalIds,
+        IReadOnlyDictionary<string, GoalSnapshot> tickBaselines,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        string databasePath,
+        bool containTransientBaselineLoads,
+        out IReadOnlyList<GoalSnapshotCheckpointResult> baselineLoadHolds)
+    {
+        if (changedGoalIds.Count == 0)
+        {
+            baselineLoadHolds = [];
+            return [];
+        }
+
+        var changed = changedGoalIds.Select(id => id.Value).ToHashSet(StringComparer.Ordinal);
+        var checkpointSnapshot = checkpoint.ExportSnapshot();
+        var humanInputByGoal = checkpointSnapshot.HumanInputRequests
+            .Where(request => changed.Contains(request.GoalId))
+            .GroupBy(request => request.GoalId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<HumanInputRequestSnapshot>)group.ToArray(),
+                StringComparer.Ordinal);
+        var requests = new List<GoalSnapshotSaveRequest>(changedGoalIds.Count);
+        var holds = new List<GoalSnapshotCheckpointResult>();
+        foreach (var goal in checkpointSnapshot.Goals.Where(goal => changed.Contains(goal.Id)))
+        {
+            GoalSnapshot baseline;
+            if (tickBaselines.TryGetValue(goal.Id, out var known))
+            {
+                baseline = known;
+            }
+            else
+            {
+                try
+                {
+                    baseline = stateRepository.LoadGoalAsync(new GoalId(goal.Id), CancellationToken.None)
+                        .GetAwaiter()
+                        .GetResult() ?? goal;
+                }
+                catch (SqliteException ex) when (
+                    containTransientBaselineLoads &&
+                    SqliteOrchestratorStateRepository.IsTransientLock(ex))
+                {
+                    var operation = $"loop:tick/LoadGoalAsync({goal.Id[..8]})";
+                    var hold = TransientSqliteLoadHold.From(ex, operation);
+                    holds.Add(new GoalSnapshotCheckpointResult(
+                        goal.Id,
+                        GoalSnapshotCheckpointDisposition.Held,
+                        SaveResult: null,
+                        Store: "state",
+                        DatabasePath: databasePath,
+                        Operation: operation,
+                        SqliteErrorCode: hold.SqliteErrorCode,
+                        SqliteExtendedErrorCode: hold.SqliteExtendedErrorCode,
+                        AttemptCount: int.TryParse(hold.AttemptCount, out var attempt) ? attempt : 1,
+                        ElapsedMilliseconds: double.TryParse(
+                            hold.ElapsedMilliseconds,
+                            System.Globalization.NumberStyles.Float,
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            out var elapsed) ? elapsed : 0));
+                    continue;
+                }
+            }
+
+            requests.Add(new GoalSnapshotSaveRequest(
+                baseline,
+                goal,
+                humanInputByGoal.GetValueOrDefault(goal.Id, [])));
+        }
+
+        baselineLoadHolds = holds;
+        return requests.ToArray();
     }
 
     private static void EmitPreLoopJanitorialFailure(OrchestratorWorkspace workspace, Exception ex)

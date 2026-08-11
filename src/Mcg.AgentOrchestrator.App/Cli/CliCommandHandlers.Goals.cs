@@ -1342,7 +1342,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var evictedGoalStatuses = new Dictionary<string, GoalStatus>(StringComparer.Ordinal);
                 var parkedGoalSafetyNetTick = 0;
                 var scheduledLoadHold = context.InitialConductLoopLoadHold;
-                TerminalGoalSweepResult reconcileSweep(AgentOrchestratorKernel loopKernel)
+                TerminalGoalSweepResult reconcileSweep(
+                    AgentOrchestratorKernel loopKernel,
+                    IReadOnlySet<string> checkpointHeldGoalIds)
                 {
                     loopReaper.BeginRefreshCycle();
                     // Refresh tracked goals from persisted state before every tick, then ingest newly
@@ -1364,18 +1366,34 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                                 ref scheduledLoadHold,
                                 out var reloadedKernel))
                         {
-                            loopKernel.MarkKnownDependencyGoalStatuses(reloadedKernel!.KnownDependencyGoalStatuses);
-                            loopKernel.MarkKnownCompletedDependencyGoals(reloadedKernel.KnownCompletedDependencyGoals);
+                            loopKernel.MarkKnownDependencyGoalStatuses(
+                                reloadedKernel!.KnownDependencyGoalStatuses.Where(pair =>
+                                    !checkpointHeldGoalIds.Contains(pair.Key.Value)));
+                            loopKernel.MarkKnownCompletedDependencyGoals(
+                                reloadedKernel.KnownCompletedDependencyGoals.Where(goalId =>
+                                    !checkpointHeldGoalIds.Contains(goalId.Value)));
                             var snapshot = reloadedKernel.ExportSnapshot();
                             foreach (var persistedGoal in snapshot.Goals.Where(goal =>
                                          trackedGoalIdSet.Contains(goal.Id) &&
+                                         !checkpointHeldGoalIds.Contains(goal.Id) &&
                                          GoalStatusSemantics.ExcludesFromConductorWorkingSet(goal.Status)))
                             {
                                 evictedGoalStatuses[persistedGoal.Id] = persistedGoal.Status;
                             }
 
-                            loopKernel.RefreshTrackedGoals(snapshot);
-                            loopKernel.IngestNewGoals(snapshot);
+                            RefreshTrackedGoalsPreservingCheckpointHolds(
+                                loopKernel,
+                                snapshot,
+                                checkpointHeldGoalIds);
+                            loopKernel.IngestNewGoals(snapshot with
+                            {
+                                Goals = snapshot.Goals
+                                    .Where(goal => !checkpointHeldGoalIds.Contains(goal.Id))
+                                    .ToArray(),
+                                HumanInputRequests = snapshot.HumanInputRequests
+                                    .Where(request => !checkpointHeldGoalIds.Contains(request.GoalId))
+                                    .ToArray()
+                            });
                             foreach (var (goalId, status) in evictedGoalStatuses)
                             {
                                 context.EventWriter.AppendGoalEvictedFromConductor(
@@ -1463,7 +1481,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ? new FileSystemWatcherConductorWakeSignal(context.Workspace.LogDirectory)
                     : null;
                 var loopSummary = new ConductorBatchLoop(
-                    measuredSweep: reconcileSweep,
+                    measuredSweepWithCheckpointHolds: reconcileSweep,
                     reapGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.CancelRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     detachGoalRunningDispatches: (loopKernel, loopGoal) => loopReaper.DetachRunningProcessesForGoal(loopKernel, loopGoal.Id),
                     recoverInterruptedDispatches: loopKernel => loopReaper.RequeueInterruptedDispatches(
@@ -1643,6 +1661,28 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return null;
     }
 }
+
+    internal static int RefreshTrackedGoalsPreservingCheckpointHolds(
+        AgentOrchestratorKernel loopKernel,
+        OrchestratorSnapshot snapshot,
+        IReadOnlySet<string> checkpointHeldGoalIds)
+    {
+        ArgumentNullException.ThrowIfNull(loopKernel);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(checkpointHeldGoalIds);
+        if (checkpointHeldGoalIds.Count == 0)
+            return loopKernel.RefreshTrackedGoals(snapshot);
+
+        return loopKernel.RefreshTrackedGoals(snapshot with
+        {
+            Goals = snapshot.Goals
+                .Where(goal => !checkpointHeldGoalIds.Contains(goal.Id))
+                .ToArray(),
+            HumanInputRequests = snapshot.HumanInputRequests
+                .Where(request => !checkpointHeldGoalIds.Contains(request.GoalId))
+                .ToArray()
+        });
+    }
 
 private static string FormatRevisionTaskIds(IReadOnlyList<TaskId> taskIds) =>
     taskIds.Count == 0

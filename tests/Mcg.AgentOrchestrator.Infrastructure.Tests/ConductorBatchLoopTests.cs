@@ -11559,7 +11559,8 @@ public sealed class ConductorBatchLoopTests
         var workspaceCreates = new Dictionary<string, int>(StringComparer.Ordinal);
         var checkpointCalls = new List<string[]>();
         var ticks = new List<BatchTickSummary>();
-        var firstBatch = true;
+        var heldAttempts = 0;
+        var sweepHeldGoalIds = new List<string[]>();
         var leaseDirectory = Path.Combine(Path.GetTempPath(), $"mcg-checkpoint-lease-{Guid.NewGuid():N}");
         Directory.CreateDirectory(leaseDirectory);
         using var lease = ConductorLoopLeaseController.Acquire(leaseDirectory);
@@ -11578,8 +11579,7 @@ public sealed class ConductorBatchLoopTests
         {
             Assert.True(lease.IsHeld);
             checkpointCalls.Add(requested.Select(goalId => goalId.Value).ToArray());
-            var holdA = firstBatch && requested.Any(goalId => goalId == goalA.Id);
-            firstBatch = false;
+            var holdA = requested.Any(goalId => goalId == goalA.Id) && ++heldAttempts <= 2;
             return requested.Select(goalId => holdA && goalId == goalA.Id
                 ? new GoalSnapshotCheckpointResult(
                     goalId.Value,
@@ -11602,13 +11602,19 @@ public sealed class ConductorBatchLoopTests
                 .ToArray();
         }
 
-        var summary = new ConductorBatchLoop().Run(
+        var summary = new ConductorBatchLoop(
+            measuredSweepWithCheckpointHolds: (_, heldGoalIds) =>
+            {
+                sweepHeldGoalIds.Add(heldGoalIds.ToArray());
+                return new TerminalGoalSweepResult([]);
+            }).Run(
             kernel,
             driver,
             ConductorAutonomyPolicy.Conservative,
             NoStopPath(),
             maxIterations: 2,
             onTick: ticks.Add,
+            sleepFunc: _ => false,
             checkpointGoalTick: Checkpoint);
 
         Assert.Equal(2, summary.Ticks);
@@ -11617,6 +11623,7 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal(1, workspaceCreates[goalB.Id.Value]);
         Assert.Contains(checkpointCalls, batch => batch.Contains(goalB.Id.Value));
         Assert.Contains(checkpointCalls, batch => batch.Length == 1 && batch[0] == goalA.Id.Value);
+        Assert.Contains(sweepHeldGoalIds, heldGoalIds => heldGoalIds.Contains(goalA.Id.Value));
         var lines = ticks.SelectMany(tick => tick.ProgressLines ?? []).ToArray();
         var hold = Assert.Single(lines, line => line.StartsWith("TICK_CHECKPOINT_HOLD ", StringComparison.Ordinal));
         Assert.Contains($"sqlite_code={sqliteErrorCode}", hold, StringComparison.Ordinal);

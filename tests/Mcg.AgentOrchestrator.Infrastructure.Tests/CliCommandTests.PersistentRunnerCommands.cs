@@ -13,6 +13,111 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 {
+    [Xunit.Fact]
+    public void TransientSqliteCheckpointNewGoalBaselineLoadIsContainedPerGoal()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var heldGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "newly ingested held goal");
+        var unrelatedGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "unrelated durable goal");
+        var repository = new InMemoryTransactionalStateRepository(kernel)
+        {
+            BeforeNextLoadGoalAsync = _ =>
+            {
+                var exception = new SqliteException("busy baseline load", 5);
+                exception.Data["Mcg.AttemptCount"] = 4;
+                exception.Data["Mcg.ElapsedMilliseconds"] = 375d;
+                throw exception;
+            }
+        };
+        var snapshots = kernel.ExportSnapshot().Goals.ToDictionary(goal => goal.Id, StringComparer.Ordinal);
+        var baselines = new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal)
+        {
+            [unrelatedGoal.Id.Value] = snapshots[unrelatedGoal.Id.Value]
+        };
+
+        var requests = CliPersistentStateRunner.BuildConductLoopCheckpointRequests(
+            kernel,
+            [heldGoal.Id, unrelatedGoal.Id],
+            baselines,
+            repository,
+            "C:/fixture/state.db",
+            containTransientBaselineLoads: true,
+            out var holds);
+
+        var hold = Xunit.Assert.Single(holds);
+        Xunit.Assert.Equal(heldGoal.Id.Value, hold.GoalId);
+        Xunit.Assert.Equal(GoalSnapshotCheckpointDisposition.Held, hold.Disposition);
+        Xunit.Assert.Equal(5, hold.SqliteErrorCode);
+        Xunit.Assert.Equal(4, hold.AttemptCount);
+        Xunit.Assert.Equal(375d, hold.ElapsedMilliseconds);
+        Xunit.Assert.Contains("LoadGoalAsync", hold.Operation, StringComparison.Ordinal);
+        Xunit.Assert.Equal(unrelatedGoal.Id.Value, Xunit.Assert.Single(requests).Current.Id);
+    }
+
+    [Xunit.Fact]
+    public void TransientSqliteCheckpointNewGoalBaselineLoadNonTransientFailureRemainsFailClosed()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "newly ingested readonly goal");
+        var repository = new InMemoryTransactionalStateRepository(kernel)
+        {
+            BeforeNextLoadGoalAsync = _ => throw new SqliteException("readonly baseline load", 8)
+        };
+
+        var exception = Xunit.Assert.Throws<SqliteException>(() =>
+            CliPersistentStateRunner.BuildConductLoopCheckpointRequests(
+                kernel,
+                [goal.Id],
+                new Dictionary<string, GoalSnapshot>(StringComparer.Ordinal),
+                repository,
+                "C:/fixture/state.db",
+                containTransientBaselineLoads: true,
+                out _));
+
+        Xunit.Assert.Equal(8, exception.SqliteErrorCode);
+    }
+
+    [Xunit.Fact]
+    public void TransientSqliteCheckpointHeldPendingSnapshotSurvivesScheduledRefresh()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            AgentCatalog.Default().Agents,
+            "held pending refresh goal");
+        var durableSnapshot = kernel.ExportSnapshot();
+        var task = goal.Tasks.Single();
+        kernel.RecordTaskDispatch(
+            goal.Id,
+            task.Id,
+            new TaskDispatchRecord("fixture", "fixture", "C:/fixture", DateTimeOffset.UtcNow));
+
+        var heldRefreshes = CliCommandHandlers.RefreshTrackedGoalsPreservingCheckpointHolds(
+            kernel,
+            durableSnapshot,
+            new HashSet<string>([goal.Id.Value], StringComparer.Ordinal));
+
+        Xunit.Assert.Equal(0, heldRefreshes);
+        Xunit.Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+
+        var recoveredRefreshes = CliCommandHandlers.RefreshTrackedGoalsPreservingCheckpointHolds(
+            kernel,
+            durableSnapshot,
+            new HashSet<string>(StringComparer.Ordinal));
+
+        Xunit.Assert.Equal(1, recoveredRefreshes);
+        Xunit.Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(5)]
     [Xunit.InlineData(6)]

@@ -46,7 +46,7 @@ internal sealed class ConductorBatchLoop
     internal const string SelfRelaunchEnabledEnvironmentVariable = "MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED";
     internal const bool DefaultSelfRelaunchEnabled = false;
 
-    private readonly Func<AgentOrchestratorKernel, TerminalGoalSweepResult?> _sweep;
+    private readonly Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?> _sweep;
     private readonly Action<AgentOrchestratorKernel, Goal> _reapGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel, Goal> _detachGoalRunningDispatches;
     private readonly Action<AgentOrchestratorKernel> _recoverInterruptedDispatches;
@@ -95,13 +95,19 @@ internal sealed class ConductorBatchLoop
         Func<string, GoalStatus?>? evictedGoalStatusLookup = null,
         ConductorLifecycleRecorder? lifecycleRecorder = null,
         Func<double>? writeJitter = null,
-        TimeSpan? blockedRecheckHeartbeatInterval = null)
+        TimeSpan? blockedRecheckHeartbeatInterval = null,
+        Func<AgentOrchestratorKernel, IReadOnlySet<string>, TerminalGoalSweepResult?>? measuredSweepWithCheckpointHolds = null)
     {
-        _sweep = measuredSweep ?? (kernel =>
+        _sweep = measuredSweepWithCheckpointHolds is not null
+            ? measuredSweepWithCheckpointHolds
+            : measuredSweep is not null
+                ? (kernel, _) => measuredSweep(kernel)
+                : (kernel, _) => InvokeLegacySweep(kernel);
+        TerminalGoalSweepResult? InvokeLegacySweep(AgentOrchestratorKernel kernel)
         {
             sweep?.Invoke(kernel);
             return null;
-        });
+        }
         _reapGoalRunningDispatches = reapGoalRunningDispatches ?? ((_, _) => { });
         _detachGoalRunningDispatches = detachGoalRunningDispatches ?? _reapGoalRunningDispatches;
         _recoverInterruptedDispatches = recoverInterruptedDispatches ?? (_ => { });
@@ -425,7 +431,10 @@ internal sealed class ConductorBatchLoop
                 }
             }
             var sweepClock = Stopwatch.StartNew();
-            var sweepResult = RunJanitorialPhase("sweep", nextTick, () => _sweep(kernel));
+            var sweepResult = RunJanitorialPhase(
+                "sweep",
+                nextTick,
+                () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
             foreach (var sweepEvent in sweepResult?.Events ?? [])
             {
                 EmitProgress(sweepEvent);
@@ -857,7 +866,10 @@ internal sealed class ConductorBatchLoop
                         : SleepUntilNextTick(idleInterval, stopFilePath, wakeSignal, GetRunningDispatchExitCodePaths(kernel, onlyGoalId));
                     if (idleSleep == WatchSleepResult.WakeSignaled)
                     {
-                        RunJanitorialPhase("idle-wake-sweep", nextTick, () => _sweep(kernel));
+                        RunJanitorialPhase(
+                            "idle-wake-sweep",
+                            nextTick,
+                            () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
                         RunJanitorialPhase("idle-wake-recover-interrupted-dispatches", nextTick, () =>
                         {
                             _recoverInterruptedDispatches(kernel);
@@ -1467,7 +1479,10 @@ internal sealed class ConductorBatchLoop
 
                 if (sleepResult == WatchSleepResult.WakeSignaled)
                 {
-                    RunJanitorialPhase("wake-sweep", totalTicks, () => _sweep(kernel));
+                    RunJanitorialPhase(
+                        "wake-sweep",
+                        totalTicks,
+                        () => _sweep(kernel, checkpointHeldGoals.Keys.ToHashSet(StringComparer.Ordinal)));
                     RunJanitorialPhase("wake-recover-interrupted-dispatches", totalTicks, () =>
                     {
                         _recoverInterruptedDispatches(kernel);
