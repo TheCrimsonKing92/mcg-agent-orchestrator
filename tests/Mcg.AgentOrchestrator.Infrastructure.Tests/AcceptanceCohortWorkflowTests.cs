@@ -568,7 +568,11 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var kernel = new AgentOrchestratorKernel();
             var firstGoal = CreateCompletedGoal(kernel, "First RED cohort member", repo);
             var secondGoal = CreateCompletedGoal(kernel, "Second RED cohort member", repo);
-            _ = CreateWorktreeCandidate(repo, firstGoal.Id, "src/First.cs", "first");
+            _ = CreateWorktreeCandidate(
+                repo,
+                firstGoal.Id,
+                "src/Mcg.AgentOrchestrator.Infrastructure/First.cs",
+                "first");
             _ = CreateWorktreeCandidate(repo, secondGoal.Id, "tests/Second.cs", "second");
             var failingTrx = WriteFailingTrx(repo, "combined-red.trx");
             var firstPassingTrx = WritePassingTrx(repo, "first-green.trx");
