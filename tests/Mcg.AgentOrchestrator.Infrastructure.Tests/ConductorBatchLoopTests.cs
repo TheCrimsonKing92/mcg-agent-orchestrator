@@ -11561,6 +11561,8 @@ public sealed class ConductorBatchLoopTests
         var ticks = new List<BatchTickSummary>();
         var heldAttempts = 0;
         var sweepHeldGoalIds = new List<string[]>();
+        var databasePath = "C:/fixture/a-deliberately-long-database-directory/state.db";
+        var operation = $"loop:tick/TransactGoalStateAsync({goalA.Id.Value})";
         var leaseDirectory = Path.Combine(Path.GetTempPath(), $"mcg-checkpoint-lease-{Guid.NewGuid():N}");
         Directory.CreateDirectory(leaseDirectory);
         using var lease = ConductorLoopLeaseController.Acquire(leaseDirectory);
@@ -11586,8 +11588,8 @@ public sealed class ConductorBatchLoopTests
                     GoalSnapshotCheckpointDisposition.Held,
                     null,
                     "state",
-                    "C:/fixture/state.db",
-                    $"loop:tick/TransactGoalStateAsync({goalId.Value[..8]})",
+                    databasePath,
+                    operation,
                     sqliteErrorCode,
                     sqliteErrorCode,
                     AttemptCount: 3,
@@ -11597,8 +11599,8 @@ public sealed class ConductorBatchLoopTests
                     GoalSnapshotCheckpointDisposition.Durable,
                     null,
                     "state",
-                    "C:/fixture/state.db",
-                    $"loop:tick/TransactGoalStateAsync({goalId.Value[..8]})"))
+                    databasePath,
+                    operation))
                 .ToArray();
         }
 
@@ -11628,13 +11630,15 @@ public sealed class ConductorBatchLoopTests
         var hold = Assert.Single(lines, line => line.StartsWith("TICK_CHECKPOINT_HOLD ", StringComparison.Ordinal));
         Assert.Contains($"sqlite_code={sqliteErrorCode}", hold, StringComparison.Ordinal);
         Assert.Contains("store=state", hold, StringComparison.Ordinal);
-        Assert.Contains("database=C:/fixture/state.db", hold, StringComparison.Ordinal);
-        Assert.Contains("operation=loop:tick/TransactGoalStateAsync", hold, StringComparison.Ordinal);
+        Assert.Contains($"database={databasePath}", hold, StringComparison.Ordinal);
+        Assert.Contains($"operation={operation}", hold, StringComparison.Ordinal);
         Assert.Contains("attempt=3", hold, StringComparison.Ordinal);
         Assert.Contains("elapsed_ms=250", hold, StringComparison.Ordinal);
         Assert.Contains("disposition=exhausted-held", hold, StringComparison.Ordinal);
         Assert.Contains("holder=unknown", hold, StringComparison.Ordinal);
         var recovered = Assert.Single(lines, line => line.StartsWith("TICK_CHECKPOINT_RECOVERED ", StringComparison.Ordinal));
+        Assert.Contains($"database={databasePath}", recovered, StringComparison.Ordinal);
+        Assert.Contains($"operation={operation}", recovered, StringComparison.Ordinal);
         Assert.Contains($"sqlite_code={sqliteErrorCode}", recovered, StringComparison.Ordinal);
         Assert.Contains($"sqlite_extended_code={sqliteErrorCode}", recovered, StringComparison.Ordinal);
     }

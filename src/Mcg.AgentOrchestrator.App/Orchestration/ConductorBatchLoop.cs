@@ -2066,7 +2066,7 @@ internal sealed class ConductorBatchLoop
                 {
                     var line =
                         $"TICK_CHECKPOINT_RECOVERED tick={tick} kind={kind} goal={goal} store={Sanitize(heldOutcome.Store)} " +
-                        $"database={Sanitize(heldOutcome.DatabasePath)} operation={Sanitize(heldOutcome.Operation)} " +
+                        $"database={SanitizeReceiptToken(heldOutcome.DatabasePath)} operation={SanitizeReceiptToken(heldOutcome.Operation)} " +
                         $"sqlite_code={heldOutcome.SqliteErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
                         $"sqlite_extended_code={heldOutcome.SqliteExtendedErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
                         $"attempt={outcome.AttemptCount} elapsed_ms={heldOutcome.ElapsedMilliseconds.ToString("0.###", CultureInfo.InvariantCulture)} disposition=recovered";
@@ -2084,7 +2084,7 @@ internal sealed class ConductorBatchLoop
             var disposition = firstHoldReceipt ? "exhausted-held" : "still-held";
             var holdLine =
                 $"{eventName} tick={tick} kind={kind} goal={goal} store={Sanitize(outcome.Store)} " +
-                $"database={Sanitize(outcome.DatabasePath)} operation={Sanitize(outcome.Operation)} " +
+                $"database={SanitizeReceiptToken(outcome.DatabasePath)} operation={SanitizeReceiptToken(outcome.Operation)} " +
                 $"sqlite_code={outcome.SqliteErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
                 $"sqlite_extended_code={outcome.SqliteExtendedErrorCode?.ToString(CultureInfo.InvariantCulture) ?? "none"} " +
                 $"attempt={outcome.AttemptCount} elapsed_ms={outcome.ElapsedMilliseconds.ToString("0.###", CultureInfo.InvariantCulture)} " +
@@ -2579,6 +2579,9 @@ internal sealed class ConductorBatchLoop
         var s = value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
         return s.Length > 40 ? s[..40] : s;
     }
+
+    private static string SanitizeReceiptToken(string value) =>
+        value.Replace(' ', '_').Replace('\t', '_').Replace('\n', '_').Replace('\r', '_');
 
     internal static string SanitizeReason(string value)
     {
