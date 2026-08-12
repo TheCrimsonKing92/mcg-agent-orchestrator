@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -756,6 +757,35 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Equal("owner-handle.exe", LockAttribution.HandleExecutableForTests);
             Assert.Equal(TimeSpan.FromMilliseconds(321), LockAttribution.HandleProbeTimeoutForTests);
             Assert.True(LockAttribution.DisableRestartManagerForTests);
+
+            var testHooksField = typeof(LockAttribution).GetField(
+                "_testHooks",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.NotNull(testHooksField);
+            var activeHookState = testHooksField.GetValue(null);
+            Assert.NotNull(activeHookState);
+            var ownerField = activeHookState.GetType().GetField(
+                "<Owner>k__BackingField",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(ownerField);
+            var activeOwner = ownerField.GetValue(activeHookState);
+            Assert.NotNull(activeOwner);
+
+            ownerField.SetValue(activeHookState, new object());
+            try
+            {
+                var restorationFailure = Assert.Throws<InvalidOperationException>(ownerScope.Dispose);
+                Assert.Equal(
+                    "LockAttribution test hook override restoration is out of order or owned by another scope.",
+                    restorationFailure.Message);
+                Assert.Equal("owner-handle.exe", LockAttribution.HandleExecutableForTests);
+                Assert.Equal(TimeSpan.FromMilliseconds(321), LockAttribution.HandleProbeTimeoutForTests);
+                Assert.True(LockAttribution.DisableRestartManagerForTests);
+            }
+            finally
+            {
+                ownerField.SetValue(activeHookState, activeOwner);
+            }
 
             ownerScope.Dispose();
             ownerScope.Dispose();
