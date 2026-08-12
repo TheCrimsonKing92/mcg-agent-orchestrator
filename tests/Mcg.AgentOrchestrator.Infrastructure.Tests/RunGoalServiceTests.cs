@@ -13,13 +13,42 @@ public sealed class RunGoalServiceTests
         var seen = 0;
         return async (_, ct) =>
         {
-            while (Directory.EnumerateFiles(logDirectory, "*.exit.txt").Count() <= seen)
+            Directory.CreateDirectory(logDirectory);
+            while (true)
             {
-                ct.ThrowIfCancellationRequested();
-                await Task.Yield();
-            }
+                var current = Directory.EnumerateFiles(logDirectory, "*.exit.txt").Count();
+                if (current > seen)
+                {
+                    seen = current;
+                    return;
+                }
 
-            seen = Directory.EnumerateFiles(logDirectory, "*.exit.txt").Count();
+                var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var watcher = new FileSystemWatcher(logDirectory, "*.exit.txt")
+                {
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
+                    EnableRaisingEvents = true
+                };
+                FileSystemEventHandler signal = (_, _) => changed.TrySetResult();
+                RenamedEventHandler signalRename = (_, _) => changed.TrySetResult();
+                ErrorEventHandler signalError = (_, args) => changed.TrySetException(args.GetException());
+                watcher.Created += signal;
+                watcher.Changed += signal;
+                watcher.Renamed += signalRename;
+                watcher.Error += signalError;
+
+                // Close the create-before-subscribe race without polling. If no file exists yet, the next
+                // filesystem event releases the production loop while the cancellation token remains the
+                // unchanged fail-safe for a genuinely missing dispatch exit artifact.
+                current = Directory.EnumerateFiles(logDirectory, "*.exit.txt").Count();
+                if (current > seen)
+                {
+                    seen = current;
+                    return;
+                }
+
+                await changed.Task.WaitAsync(ct);
+            }
         };
     }
 
@@ -453,6 +482,13 @@ public sealed class RunGoalServiceTests
         Assert.Equal("alternate", task.LastDispatch!.WorkerName);
         Assert.Contains("heartbeat-ok", task.LastVerification!.StandardOutput, StringComparison.Ordinal);
         Assert.Equal(2, task.VerificationHistory.Count);
+        var redelegation = Assert.Single(goal.Timeline.Where(item => item.Kind == ProgressKind.TaskRedelegated));
+        Assert.Contains(stalled.Id.Value, redelegation.Message, StringComparison.Ordinal);
+        Assert.Contains(alternate.Id.Value, redelegation.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            goal.Timeline,
+            item => item.Kind == ProgressKind.TaskRetried &&
+                item.Message.Contains("heartbeat stall", StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_codex_websocket_connectivity_stops_when_no_alternate_exists")]

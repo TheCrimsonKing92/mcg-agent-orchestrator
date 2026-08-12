@@ -511,7 +511,9 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
     WriteSkill(root, "systematic-debugging");
     WriteSkill(root, "verification-before-completion");
     RunGit(root, ["add", "-A"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
-    RunGit(root, ["commit", "-m", "Seed"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+    // The fixture postcondition is a committed HEAD, not a particular commit count. Keep the bounded retry
+    // valid when an earlier attempt has already reached that state, as recorded by the shared-gate failure.
+    RunGit(root, ["commit", "--allow-empty", "-m", "Seed"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     return root;
 }
 

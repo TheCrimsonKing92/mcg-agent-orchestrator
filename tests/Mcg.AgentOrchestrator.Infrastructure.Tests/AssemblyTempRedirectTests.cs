@@ -3,6 +3,20 @@ using Mcg.AgentOrchestrator.Infrastructure;
 public sealed class AssemblyTempRedirectTests
 {
     [Fact]
+    public void ConcurrentTestHostsReceiveDistinctTempRoots()
+    {
+        var sharedRoot = Path.Combine("temp", "mcg-tests");
+
+        var roots = Enumerable.Range(100, 8)
+            .AsParallel()
+            .Select(processId => AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, processId))
+            .ToArray();
+
+        Assert.Equal(roots.Length, roots.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.All(roots, root => Assert.StartsWith(sharedRoot + Path.DirectorySeparatorChar, root, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void SkipsCandidateThatCannotCreateFiles()
     {
         var fileSystem = new RecordingTempRootFileSystem(failWrites: ["existing-but-denied"]);
