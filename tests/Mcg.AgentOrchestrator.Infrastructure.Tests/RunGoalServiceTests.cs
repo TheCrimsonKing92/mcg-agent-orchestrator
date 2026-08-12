@@ -488,7 +488,9 @@ public sealed class RunGoalServiceTests
         Assert.Contains(
             goal.Timeline,
             item => item.Kind == ProgressKind.TaskRetried &&
-                item.Message.Contains("heartbeat stall", StringComparison.OrdinalIgnoreCase));
+                item.Message.Contains(
+                    "provider-neutral heartbeat/progress stall evidence",
+                    StringComparison.OrdinalIgnoreCase));
     }
 
     [Xunit.Fact(DisplayName = "RunGoalService_auto_failover_codex_websocket_connectivity_stops_when_no_alternate_exists")]
