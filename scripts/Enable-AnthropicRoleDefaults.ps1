@@ -158,7 +158,9 @@ $sonnetRefiner = [pscustomobject][ordered]@{
         ReasoningEffort = $null
         MaxOutputTokens = $null
     }
-    Name = 'sonnet'
+    # Name is the registry lookup key. Keep the stable function identity and
+    # change only the provider/model binding.
+    Name = 'spec-refiner'
     Subscription = [pscustomobject][ordered]@{
         WorkerProfileName = 'claude-cli'
         ModelAlias = 'sonnet'
@@ -212,6 +214,7 @@ try {
         $primaryReviewer.ComplexModel.ModelName -ne 'claude-opus-5' -or
         $primaryReviewer.Subscription.ModelAlias -ne 'claude-opus-5' -or
         $refiners.Count -ne 1 -or
+        $refiners[0].Name -ne 'spec-refiner' -or
         $refiners[0].Subscription.ModelAlias -ne 'sonnet' -or
         $cheapJudges.Count -ne 1 -or
         ($cheapJudges[0] | ConvertTo-Json -Depth 20 -Compress) -cne $cheapJudgeBeforeJson) {
