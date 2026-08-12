@@ -305,7 +305,25 @@ internal static class LandingExecutor
                 "Cohort landing requires operator approval for ownership-protected paths.");
         }
 
-        store.PrepareLanding(receipt, commit);
+        var currentIntegration = RunGit(
+            executionDirectory,
+            "rev-parse", "--verify", "--quiet", $"refs/heads/{IntegrationBranchName}");
+        string? priorIntegrationRevision = null;
+        if (currentIntegration.ExitCode == 0 && !string.IsNullOrWhiteSpace(currentIntegration.Output))
+        {
+            priorIntegrationRevision = currentIntegration.Output.Trim();
+            if (RunGit(executionDirectory, "merge-base", "--is-ancestor", priorIntegrationRevision, liveMain).ExitCode != 0)
+            {
+                return new AcceptanceCohortLandingResult(
+                    AcceptanceCohortLandingOutcome.RetryableHold,
+                    "Cohort landing held because the integration branch contains state not present on bound main.");
+            }
+        }
+
+        // The prepared intent captures the exact integration ref predecessor before either ref moves.
+        // Recovery can therefore restore integration when the process exits before the main CAS, or
+        // replay post-main lifecycle effects when the tested commit is already reachable from main.
+        store.PrepareLanding(receipt, commit, priorIntegrationRevision);
         foreach (var goal in goals)
         {
             GoalOperationJournal.RecordLandingIntent(
@@ -332,19 +350,8 @@ internal static class LandingExecutor
                 $"Landing held at mutation boundary: {blockReason}");
         }
 
-        var currentIntegration = RunGit(
-            executionDirectory,
-            "rev-parse", "--verify", "--quiet", $"refs/heads/{IntegrationBranchName}");
-        string? priorIntegrationRevision = null;
-        if (currentIntegration.ExitCode == 0 && !string.IsNullOrWhiteSpace(currentIntegration.Output))
+        if (priorIntegrationRevision is not null)
         {
-            priorIntegrationRevision = currentIntegration.Output.Trim();
-            if (RunGit(executionDirectory, "merge-base", "--is-ancestor", priorIntegrationRevision, liveMain).ExitCode != 0)
-            {
-                return new AcceptanceCohortLandingResult(
-                    AcceptanceCohortLandingOutcome.RetryableHold,
-                    "Cohort landing held because the integration branch contains state not present on bound main.");
-            }
             var advanceIntegration = RunGit(
                 executionDirectory,
                 "update-ref",

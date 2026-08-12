@@ -14,8 +14,8 @@ public sealed class ConductorAcceptanceCohortTests
         var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
         var third = Ready("33333333333333333333333333333333", "src/Third.cs", "resource:third");
 
-        var selection = Assert.IsType<ConductorAcceptanceCohortSelection>(
-            ConductorAcceptanceCohortSelector.Select([oldest, second, third]));
+        var decision = ConductorAcceptanceCohortSelector.Select([oldest, second, third]);
+        var selection = Assert.IsType<ConductorAcceptanceCohortSelection>(decision.Selection);
 
         Assert.Equal([second.GoalId, third.GoalId], selection.Members.Select(member => member.GoalId));
         Assert.Equal(2, selection.Members.Count);
@@ -31,7 +31,7 @@ public sealed class ConductorAcceptanceCohortTests
         var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
 
         var selection = Assert.IsType<ConductorAcceptanceCohortSelection>(
-            ConductorAcceptanceCohortSelector.Select([first, second, forced], forced.GoalId));
+            ConductorAcceptanceCohortSelector.Select([first, second, forced], forced.GoalId).Selection);
 
         Assert.Equal([forced.GoalId, first.GoalId], selection.Members.Select(member => member.GoalId));
     }
@@ -43,7 +43,11 @@ public sealed class ConductorAcceptanceCohortTests
         var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
         var third = Ready("33333333333333333333333333333333", "src/Third.cs", "resource:third");
 
-        Assert.Null(ConductorAcceptanceCohortSelector.Select([forced, second, third], forced.GoalId));
+        var decision = ConductorAcceptanceCohortSelector.Select([forced, second, third], forced.GoalId);
+        Assert.Null(decision.Selection);
+        Assert.Equal(2, decision.Exclusions.Count);
+        Assert.All(decision.Exclusions, exclusion =>
+            Assert.Equal(ConductorAcceptanceCohortPairExclusionReason.LandingPathOverlap, exclusion.Reason));
     }
 
     [Fact]
@@ -57,7 +61,10 @@ public sealed class ConductorAcceptanceCohortTests
         var second = Ready("22222222222222222222222222222222", "src/Second.cs", "resource:second");
         var third = Ready("33333333333333333333333333333333", "tests/Third.cs", "resource:third");
 
-        Assert.Null(ConductorAcceptanceCohortSelector.Select([excludedForced, second, third], forcedGoal));
+        var decision = ConductorAcceptanceCohortSelector.Select([excludedForced, second, third], forcedGoal);
+        Assert.Null(decision.Selection);
+        var exclusion = Assert.Single(decision.Exclusions);
+        Assert.Equal(ConductorAcceptanceCohortPairExclusionReason.UpstreamExcluded, exclusion.Reason);
     }
 
     [Fact]
@@ -67,8 +74,16 @@ public sealed class ConductorAcceptanceCohortTests
         var sharedA = Ready("22222222222222222222222222222222", "src/Second.cs", "ownership:Shared");
         var sharedB = Ready("33333333333333333333333333333333", "tests/Third.cs", "OWNERSHIP:SHARED");
 
-        Assert.Null(ConductorAcceptanceCohortSelector.Select([empty, sharedA]));
-        Assert.Null(ConductorAcceptanceCohortSelector.Select([sharedA, sharedB]));
+        var emptyDecision = ConductorAcceptanceCohortSelector.Select([empty, sharedA]);
+        Assert.Null(emptyDecision.Selection);
+        Assert.Equal(
+            ConductorAcceptanceCohortPairExclusionReason.IncompleteResourceKeys,
+            Assert.Single(emptyDecision.Exclusions).Reason);
+        var overlapDecision = ConductorAcceptanceCohortSelector.Select([sharedA, sharedB]);
+        Assert.Null(overlapDecision.Selection);
+        Assert.Equal(
+            ConductorAcceptanceCohortPairExclusionReason.SerializedResourceOverlap,
+            Assert.Single(overlapDecision.Exclusions).Reason);
     }
 
     [Fact]

@@ -114,10 +114,34 @@ internal sealed class ConductorDriver
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
     private readonly bool _parallelAcceptanceEnabled;
+    private readonly List<(ConductorLandingReceipt Receipt, string CohortId, string ReceiptId)>
+        _pendingRecoveredLandingReceipts = [];
+    private Action<ConductorLandingReceipt>? _successfulLandingSink;
     private bool _buildServerShutdownRanThisTick;
 
     internal Action<string>? PhaseTimingSink { get; set; }
-    internal Action<ConductorLandingReceipt>? SuccessfulLandingSink { get; set; }
+    internal Action<ConductorLandingReceipt>? SuccessfulLandingSink
+    {
+        get => _successfulLandingSink;
+        set
+        {
+            _successfulLandingSink = value;
+            if (value is null || _pendingRecoveredLandingReceipts.Count == 0)
+            {
+                return;
+            }
+            foreach (var pending in _pendingRecoveredLandingReceipts)
+            {
+                value(pending.Receipt);
+            }
+            foreach (var pending in _pendingRecoveredLandingReceipts
+                         .DistinctBy(item => item.CohortId))
+            {
+                _cohortAcceptanceStore?.CompleteLandingEffects(pending.CohortId, pending.ReceiptId);
+            }
+            _pendingRecoveredLandingReceipts.Clear();
+        }
+    }
     internal Action<GoalId>? DispatchRecordWriteSucceededSink { get; set; }
     internal Func<string?>? LandingMutationBlocker { get; set; }
 
@@ -166,7 +190,6 @@ internal sealed class ConductorDriver
         _cohortEventWriter = eventWriter;
         _cohortAcceptanceStore = new CohortAcceptanceStore(
             Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
-        _ = _cohortAcceptanceStore.RecoverPreparedLandings(dir);
         kernel.SetEventWriter(eventWriter);
         _tryBuildAwaitingClarificationEscalationReason = goal =>
             GoalRefinementGate.TryBuildAwaitingClarificationEscalationReason(workspace, goal, eventWriter, out var reason)
@@ -777,6 +800,7 @@ internal sealed class ConductorDriver
                 _getLandingFileScopes(goal));
         _getFindingEvidenceEngineSettings = goal => AcceptanceGateEngineSettings.Load(
             GoalWorktrees.TryResolve(dir, goal.Id) ?? dir);
+        RecoverCohortLandingEffects(kernel, workspace, eventWriter, _cohortAcceptanceStore);
     }
 
     internal static LandingEscalationRecheckResult ClassifyPreLandingRebaseConflict(
@@ -2360,6 +2384,66 @@ internal sealed class ConductorDriver
          _cohortAcceptanceVerifier is not null &&
          _cohortAcceptanceStore is not null);
 
+    private void RecoverCohortLandingEffects(
+        AgentOrchestratorKernel kernel,
+        OrchestratorWorkspace workspace,
+        IGoalLifecycleEventWriter eventWriter,
+        CohortAcceptanceStore store)
+    {
+        foreach (var recovery in store.RecoverPreparedLandings(workspace.ExecutionDirectory))
+        {
+            var goalsById = kernel.Goals.ToDictionary(goal => goal.Id);
+            var goals = recovery.Receipt.Identity.Members
+                .Select(member => goalsById.TryGetValue(member.GoalId, out var goal) ? goal : null)
+                .ToArray();
+            if (goals.Any(goal => goal is null))
+            {
+                continue;
+            }
+
+            var changedFiles = recovery.Receipt.Identity.Members
+                .SelectMany(member => member.LandingPaths)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Order(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            foreach (var goal in goals.Cast<Goal>())
+            {
+                GoalOperationJournal.Completed(
+                    workspace.ExecutionDirectory,
+                    goal,
+                    "conductor:land",
+                    $"Recovered shared cohort receipt {recovery.Receipt.ReceiptId} after main advanced.");
+                eventWriter.AppendGoalLanded(
+                    goal.Id,
+                    $"cohort/{recovery.Receipt.Identity.Value}",
+                    GoalWorktrees.BranchName(goal.Id));
+                StateEffectProposalApplier.ApplyLandedProposals(
+                    kernel,
+                    goal,
+                    workspace,
+                    changedFiles,
+                    Console.WriteLine);
+                var landingResult = new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    $"cohort/{recovery.Receipt.Identity.Value}",
+                    MainAdvanced: true,
+                    "Recovered exact tested cohort landing after main advanced.",
+                    recovery.CombinedCommitRevision,
+                    changedFiles);
+                _pendingRecoveredLandingReceipts.Add((
+                    new ConductorLandingReceipt(
+                        goal.Id.Value,
+                        changedFiles,
+                        recovery.CombinedCommitRevision),
+                    recovery.Receipt.Identity.Value,
+                    recovery.Receipt.ReceiptId));
+                _afterSuccessfulLanding(goal, landingResult);
+            }
+        }
+    }
+
     internal GoalId? SelectForcedCohortCandidate(IReadOnlyList<Goal> orderedGoals)
     {
         if (_cohortAcceptanceStore is null) return null;
@@ -2377,9 +2461,8 @@ internal sealed class ConductorDriver
     {
         if (_cohortAcceptanceStore is null || orderedGoals.Count == 0) return;
         var admitted = selection.Members.Select(member => member.GoalId).ToHashSet();
-        foreach (var member in admitted) _cohortAcceptanceStore.ResetOvertake(member);
         var oldest = orderedGoals[0].Id;
-        if (!admitted.Contains(oldest)) _cohortAcceptanceStore.RecordOvertake(oldest);
+        _cohortAcceptanceStore.ApplyAdmissionFairness(admitted, oldest);
     }
 
     internal void ResetCohortFairness(GoalId goalId) =>
@@ -2455,9 +2538,9 @@ internal sealed class ConductorDriver
             !receipt.HasAuthoritativeLandingEvidence)
         {
             receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
-            return CohortFallback(
+            return CohortReprojection(
                 receipt,
-                "cached passing receipt lacks successful exit and extant coherent TRX evidence; both goals returned to Ready projection fallback=ordinary");
+                "cached passing receipt lacks successful exit and extant coherent TRX evidence; both goals held for fresh Ready projection and pair selection");
         }
 
         if (receipt is null)
@@ -2516,13 +2599,13 @@ internal sealed class ConductorDriver
         catch (InvalidOperationException ex)
         {
             receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
-            return CohortFallback(receipt, $"post-gate goal branch changed; fallback=ordinary detail={BoundCohortDetail(ex.Message)}");
+            return CohortReprojection(receipt, $"post-gate goal branch changed; fresh Ready projection required; detail={BoundCohortDetail(ex.Message)}");
         }
         if (receipt.Outcome is AcceptanceCohortGateOutcome.InfrastructureFailure or AcceptanceCohortGateOutcome.Invalidated)
         {
-            return CohortFallback(
+            return CohortReprojection(
                 receipt,
-                $"indeterminate cohort outcome={receipt.Outcome}; attribution=none fallback=ordinary");
+                $"indeterminate cohort outcome={receipt.Outcome}; attribution=none; fresh Ready projection required");
         }
         if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
             receipt.Attribution == AcceptanceCohortAttributionOutcome.NotApplicable)
@@ -2530,18 +2613,33 @@ internal sealed class ConductorDriver
             var first = RunCohortPartition(bindings[0], 0);
             var second = RunCohortPartition(bindings[1], 1);
             var attribution = ConductorAcceptanceCohortAttribution.Classify(first.Outcome, second.Outcome);
-            receipt = _cohortAcceptanceStore.SaveAttribution(identity.Value, attribution, [first, second]);
-            _cohortAcceptanceStore.SuppressPair(
+            var innocentGoalId = attribution switch
+            {
+                AcceptanceCohortAttributionOutcome.FirstMemberFailed => bindings[1].GoalId,
+                AcceptanceCohortAttributionOutcome.SecondMemberFailed => bindings[0].GoalId,
+                _ => (GoalId?)null
+            };
+            receipt = _cohortAcceptanceStore.SaveAttribution(
+                identity.Value,
+                attribution,
+                [first, second],
                 ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
-                identity.Value);
-            if (attribution == AcceptanceCohortAttributionOutcome.FirstMemberFailed)
+                innocentGoalId);
+        }
+        if (receipt.Outcome == AcceptanceCohortGateOutcome.Failed &&
+            receipt.Attribution != AcceptanceCohortAttributionOutcome.NotApplicable)
+        {
+            var innocentGoalId = receipt.Attribution switch
             {
-                _cohortAcceptanceStore.RecordOvertake(bindings[1].GoalId);
-            }
-            else if (attribution == AcceptanceCohortAttributionOutcome.SecondMemberFailed)
-            {
-                _cohortAcceptanceStore.RecordOvertake(bindings[0].GoalId);
-            }
+                AcceptanceCohortAttributionOutcome.FirstMemberFailed => bindings[1].GoalId,
+                AcceptanceCohortAttributionOutcome.SecondMemberFailed => bindings[0].GoalId,
+                _ => (GoalId?)null
+            };
+            _cohortAcceptanceStore.EnsureAttributionSideEffects(
+                identity.Value,
+                receipt.Attribution,
+                ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
+                innocentGoalId);
         }
 
         if (receipt.Outcome == AcceptanceCohortGateOutcome.Passed)
@@ -2552,7 +2650,7 @@ internal sealed class ConductorDriver
                     !live.Projection.Equals(selection.Members[index]))
                 {
                     receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
-                    return CohortFallback(receipt, "post-gate binding changed; both goals returned to Ready projection fallback=ordinary");
+                    return CohortReprojection(receipt, "post-gate binding changed; both goals held for fresh Ready projection and pair selection");
                 }
             }
             try
@@ -2562,7 +2660,7 @@ internal sealed class ConductorDriver
             catch (InvalidOperationException ex)
             {
                 receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
-                return CohortFallback(receipt, $"post-gate goal branch changed; fallback=ordinary detail={BoundCohortDetail(ex.Message)}");
+                return CohortReprojection(receipt, $"post-gate goal branch changed; fresh Ready projection required; detail={BoundCohortDetail(ex.Message)}");
             }
             var landing = LandingExecutor.ExecuteCohort(
                 _cohortKernel,
@@ -2579,7 +2677,7 @@ internal sealed class ConductorDriver
                 if (landing.Outcome == AcceptanceCohortLandingOutcome.StateInvalidated)
                 {
                     receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
-                    return CohortFallback(receipt, $"{landing.Message} fallback=ordinary");
+                    return CohortReprojection(receipt, $"{landing.Message} fresh Ready projection required");
                 }
                 return CohortHeld(goals, policy, receipt, landing.Message);
             }
@@ -2601,6 +2699,7 @@ internal sealed class ConductorDriver
                     landingResult.MergeCommitSha));
                 _afterSuccessfulLanding(goal, landingResult);
             }
+            _cohortAcceptanceStore.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
             return new ConductorAcceptanceCohortRunResult(
                 receipt,
                 goals.ToDictionary(
@@ -2692,12 +2791,9 @@ internal sealed class ConductorDriver
                 testResultPaths);
         }
 
-        ConductorAcceptanceCohortRunResult CohortFallback(
+        ConductorAcceptanceCohortRunResult CohortReprojection(
             AcceptanceCohortReceipt diagnosticReceipt,
-            string detail) => new(
-                diagnosticReceipt,
-                new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
-                $"outcome={diagnosticReceipt.Outcome} receipt={diagnosticReceipt.ReceiptId} {BoundCohortDetail(detail)}");
+            string detail) => CohortHeld(goals, policy, diagnosticReceipt, detail);
     }
 
     private static string CreateCohortPartitionReceiptId(

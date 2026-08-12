@@ -38,6 +38,10 @@ internal sealed record ConductorAcceptanceCohortSelection(
             member.MergeEvidence.Reason.ToString())).ToArray();
 }
 
+internal sealed record ConductorAcceptanceCohortSelectionResult(
+    ConductorAcceptanceCohortSelection? Selection,
+    IReadOnlyList<ConductorAcceptanceCohortPairExclusion> Exclusions);
+
 internal sealed record ConductorAcceptanceCohortRunResult(
     AcceptanceCohortReceipt? Receipt,
     IReadOnlyDictionary<string, ConductorAdvanceResult> MemberResults,
@@ -47,18 +51,27 @@ internal static class ConductorAcceptanceCohortSelector
 {
     internal const int CohortSize = 2;
 
-    internal static ConductorAcceptanceCohortSelection? Select(
+    internal static ConductorAcceptanceCohortSelectionResult Select(
         IReadOnlyList<ConductorSpeculativeAcceptanceCandidate> orderedCandidates,
         GoalId? forcedCandidate = null,
         IReadOnlySet<string>? suppressedPairFingerprints = null)
     {
         ArgumentNullException.ThrowIfNull(orderedCandidates);
         var ready = new List<GateReadyCandidateProjection>(orderedCandidates.Count);
+        var exclusions = new List<ConductorAcceptanceCohortPairExclusion>();
         foreach (var candidate in orderedCandidates)
         {
             ArgumentNullException.ThrowIfNull(candidate);
             if (candidate.ProjectionResult is not GateReadyCandidateProjectionResult.Ready projected)
             {
+                var evidence = candidate.ProjectionResult is GateReadyCandidateProjectionResult.Excluded excluded
+                    ? excluded.Reason.ToString()
+                    : candidate.ProjectionResult.GetType().Name;
+                exclusions.Add(new ConductorAcceptanceCohortPairExclusion(
+                    candidate.GoalId,
+                    candidate.GoalId,
+                    ConductorAcceptanceCohortPairExclusionReason.UpstreamExcluded,
+                    evidence));
                 continue;
             }
             if (projected.Projection.GoalId != candidate.GoalId)
@@ -75,7 +88,15 @@ internal static class ConductorAcceptanceCohortSelector
             var forcedIndex = ready.FindIndex(candidate => candidate.GoalId == forcedCandidate);
             if (forcedIndex < 0)
             {
-                return null;
+                return new ConductorAcceptanceCohortSelectionResult(
+                    Selection: null,
+                    Array.AsReadOnly((exclusions.Count > 0
+                        ? exclusions
+                        : [new ConductorAcceptanceCohortPairExclusion(
+                            forcedCandidate,
+                            forcedCandidate,
+                            ConductorAcceptanceCohortPairExclusionReason.UpstreamExcluded,
+                            "forced candidate has no current Ready projection")]).ToArray()));
             }
             else
             {
@@ -86,7 +107,6 @@ internal static class ConductorAcceptanceCohortSelector
             }
         }
 
-        var exclusions = new List<ConductorAcceptanceCohortPairExclusion>();
         var firstCandidateLimit = forcedCandidateIsReady ? Math.Min(1, ready.Count - 1) : ready.Count - 1;
         for (var firstIndex = 0; firstIndex < firstCandidateLimit; firstIndex++)
         {
@@ -97,15 +117,20 @@ internal static class ConductorAcceptanceCohortSelector
                 var exclusion = FindExclusion(first, second, suppressedPairFingerprints);
                 if (exclusion is null)
                 {
-                    return new ConductorAcceptanceCohortSelection(
-                        Array.AsReadOnly([first, second]),
-                        Array.AsReadOnly(exclusions.ToArray()));
+                    var frozenExclusions = Array.AsReadOnly(exclusions.ToArray());
+                    return new ConductorAcceptanceCohortSelectionResult(
+                        new ConductorAcceptanceCohortSelection(
+                            Array.AsReadOnly([first, second]),
+                            frozenExclusions),
+                        frozenExclusions);
                 }
                 exclusions.Add(exclusion);
             }
         }
 
-        return null;
+        return new ConductorAcceptanceCohortSelectionResult(
+            Selection: null,
+            Array.AsReadOnly(exclusions.ToArray()));
     }
 
     internal static string PairFingerprint(GateReadyCandidateProjection first, GateReadyCandidateProjection second) =>

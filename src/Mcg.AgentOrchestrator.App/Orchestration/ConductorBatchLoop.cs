@@ -2668,11 +2668,11 @@ internal sealed class ConductorBatchLoop
                 _acceptanceEngineCircuit?.Read())))
         {
             forcedCohortCandidate = driver.SelectForcedCohortCandidate(cohortEligible);
-            var cohortSelection = ConductorAcceptanceCohortSelector.Select(
+            var cohortDecision = ConductorAcceptanceCohortSelector.Select(
                 productionCandidates,
                 forcedCohortCandidate,
                 driver.ReadSuppressedCohortPairs());
-            if (cohortSelection is not null)
+            if (cohortDecision.Selection is { } cohortSelection)
             {
                 var cohortRun = driver.RunAcceptanceCohort(
                     cohortSelection,
@@ -2685,6 +2685,12 @@ internal sealed class ConductorBatchLoop
                 }
                 RecordParallelAcceptanceProgress(
                     $"ACCEPTANCE_COHORT tick={tick} members={string.Join(',', cohortSelection.Members.Select(member => member.GoalId.Value[..8]))} {cohortRun.Detail}",
+                    changedGoalLines);
+            }
+            else if (cohortDecision.Exclusions.Count > 0)
+            {
+                RecordParallelAcceptanceProgress(
+                    $"ACCEPTANCE_COHORT tick={tick} outcome=unpaired exclusions={FormatCohortPairExclusions(cohortDecision.Exclusions)} fallback=ordinary",
                     changedGoalLines);
             }
         }
@@ -3007,6 +3013,11 @@ internal sealed class ConductorBatchLoop
 
         return results;
     }
+
+    private static string FormatCohortPairExclusions(
+        IReadOnlyList<ConductorAcceptanceCohortPairExclusion> exclusions) =>
+        string.Join(',', exclusions.Select(exclusion =>
+            $"{exclusion.FirstGoalId.Value[..8]}:{exclusion.SecondGoalId.Value[..8]}:{exclusion.Reason}"));
 
     private static bool MarkParallelAcceptanceStarted(
         AgentOrchestratorKernel kernel,

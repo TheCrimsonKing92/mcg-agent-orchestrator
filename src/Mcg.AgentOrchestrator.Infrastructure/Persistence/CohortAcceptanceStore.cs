@@ -18,6 +18,11 @@ public sealed record AcceptanceCohortMaterializationFailure(
     DateTimeOffset RecordedAt,
     string Detail);
 
+public sealed record AcceptanceCohortLandingRecovery(
+    AcceptanceCohortReceipt Receipt,
+    string CombinedCommitRevision,
+    IReadOnlyList<AcceptanceCohortCoverage> Coverage);
+
 public sealed class CohortAcceptanceStore
 {
     private readonly string _databasePath;
@@ -189,7 +194,9 @@ public sealed class CohortAcceptanceStore
     public AcceptanceCohortReceipt SaveAttribution(
         string cohortId,
         AcceptanceCohortAttributionOutcome attribution,
-        IReadOnlyList<AcceptanceCohortPartitionReceipt> partitions)
+        IReadOnlyList<AcceptanceCohortPartitionReceipt> partitions,
+        string pairFingerprint,
+        GoalId? innocentGoalId)
     {
         ArgumentNullException.ThrowIfNull(partitions);
         if (partitions.Count != 2 ||
@@ -198,6 +205,7 @@ public sealed class CohortAcceptanceStore
         {
             throw new ArgumentException("Cohort attribution requires exactly two distinct ordered partition receipts.", nameof(partitions));
         }
+        ArgumentException.ThrowIfNullOrWhiteSpace(pairFingerprint);
 
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
@@ -236,6 +244,13 @@ public sealed class CohortAcceptanceStore
                 throw new InvalidOperationException("Attribution can update only one persisted deterministic RED cohort receipt.");
             }
         }
+        EnsureAttributionSideEffects(
+            connection,
+            transaction,
+            cohortId,
+            attribution,
+            pairFingerprint,
+            innocentGoalId);
         using (var count = connection.CreateCommand())
         {
             count.Transaction = transaction;
@@ -250,6 +265,26 @@ public sealed class CohortAcceptanceStore
             throw new InvalidOperationException("Cohort receipt disappeared during attribution persistence.");
         transaction.Commit();
         return receipt;
+    }
+
+    public void EnsureAttributionSideEffects(
+        string cohortId,
+        AcceptanceCohortAttributionOutcome attribution,
+        string pairFingerprint,
+        GoalId? innocentGoalId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cohortId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pairFingerprint);
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        EnsureAttributionSideEffects(
+            connection,
+            transaction,
+            cohortId,
+            attribution,
+            pairFingerprint,
+            innocentGoalId);
+        transaction.Commit();
     }
 
     public AcceptanceCohortReceipt InvalidateLanding(string cohortId)
@@ -280,7 +315,10 @@ public sealed class CohortAcceptanceStore
         return receipt;
     }
 
-    public void PrepareLanding(AcceptanceCohortReceipt receipt, string combinedCommitRevision)
+    public void PrepareLanding(
+        AcceptanceCohortReceipt receipt,
+        string combinedCommitRevision,
+        string? priorIntegrationRevision = null)
     {
         ArgumentNullException.ThrowIfNull(receipt);
         if (!receipt.HasAuthoritativeLandingEvidence)
@@ -291,43 +329,55 @@ public sealed class CohortAcceptanceStore
         var commit = AcceptanceCohortMemberBinding.NormalizeRevision(
             combinedCommitRevision,
             nameof(combinedCommitRevision));
+        var priorIntegration = string.IsNullOrWhiteSpace(priorIntegrationRevision)
+            ? null
+            : AcceptanceCohortMemberBinding.NormalizeRevision(
+                priorIntegrationRevision,
+                nameof(priorIntegrationRevision));
         using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO cohort_landing_intents(cohort_id, receipt_id, combined_commit_revision, state, updated_at)
-            VALUES ($cohort, $receipt, $commit, 'prepared', $updated)
+            INSERT INTO cohort_landing_intents(
+                cohort_id, receipt_id, combined_commit_revision, prior_integration_revision, state, updated_at)
+            VALUES ($cohort, $receipt, $commit, $priorIntegration, 'prepared', $updated)
             ON CONFLICT(cohort_id) DO UPDATE SET
                 receipt_id=excluded.receipt_id,
                 combined_commit_revision=excluded.combined_commit_revision,
+                prior_integration_revision=excluded.prior_integration_revision,
                 state='prepared',
                 updated_at=excluded.updated_at;
             """;
         command.Parameters.AddWithValue("$cohort", receipt.Identity.Value);
         command.Parameters.AddWithValue("$receipt", receipt.ReceiptId);
         command.Parameters.AddWithValue("$commit", commit);
+        command.Parameters.AddWithValue("$priorIntegration", (object?)priorIntegration ?? DBNull.Value);
         command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
         command.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<string> RecoverPreparedLandings(string executionDirectory)
+    public IReadOnlyList<AcceptanceCohortLandingRecovery> RecoverPreparedLandings(string executionDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionDirectory);
-        var prepared = new List<(string CohortId, string ReceiptId, string Commit)>();
+        var prepared = new List<(string CohortId, string ReceiptId, string Commit, string? PriorIntegration)>();
         using (var connection = Open())
         using (var command = connection.CreateCommand())
         {
             command.CommandText = """
-                SELECT cohort_id, receipt_id, combined_commit_revision
+                SELECT cohort_id, receipt_id, combined_commit_revision, prior_integration_revision
                 FROM cohort_landing_intents WHERE state='prepared' ORDER BY cohort_id;
                 """;
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                prepared.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+                prepared.Add((
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3)));
             }
         }
 
-        var recovered = new List<string>();
+        var recovered = new List<AcceptanceCohortLandingRecovery>();
         foreach (var intent in prepared)
         {
             var receipt = TryReadReceipt(intent.CohortId);
@@ -345,10 +395,14 @@ public sealed class CohortAcceptanceStore
                     executionDirectory,
                     "merge-base", "--is-ancestor", intent.Commit, "refs/heads/main").ExitCode != 0)
             {
+                if (RestoreIntegrationAfterInterruptedLanding(executionDirectory, intent))
+                {
+                    MarkLandingIntentState(intent.CohortId, intent.ReceiptId, "invalidated", expectedState: "prepared");
+                }
                 continue;
             }
-            _ = FinalizeLanding(intent.CohortId, intent.ReceiptId);
-            recovered.Add(intent.CohortId);
+            var coverage = FinalizeLanding(intent.CohortId, intent.ReceiptId);
+            recovered.Add(new AcceptanceCohortLandingRecovery(receipt, intent.Commit, coverage));
         }
         return recovered;
     }
@@ -376,17 +430,16 @@ public sealed class CohortAcceptanceStore
                 throw new InvalidOperationException("Cohort landing must finalize exactly two member coverage rows.");
             }
         }
-        using (var updateIntent = connection.CreateCommand())
+        using (var verifyIntent = connection.CreateCommand())
         {
-            updateIntent.Transaction = transaction;
-            updateIntent.CommandText = """
-                UPDATE cohort_landing_intents SET state='finalized', updated_at=$updated
+            verifyIntent.Transaction = transaction;
+            verifyIntent.CommandText = """
+                SELECT COUNT(*) FROM cohort_landing_intents
                 WHERE cohort_id=$cohort AND receipt_id=$receipt AND state='prepared';
                 """;
-            updateIntent.Parameters.AddWithValue("$cohort", cohortId);
-            updateIntent.Parameters.AddWithValue("$receipt", receiptId);
-            updateIntent.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
-            if (updateIntent.ExecuteNonQuery() != 1)
+            verifyIntent.Parameters.AddWithValue("$cohort", cohortId);
+            verifyIntent.Parameters.AddWithValue("$receipt", receiptId);
+            if (Convert.ToInt32(verifyIntent.ExecuteScalar()) != 1)
             {
                 throw new InvalidOperationException("Prepared cohort landing intent was missing during finalization.");
             }
@@ -395,6 +448,35 @@ public sealed class CohortAcceptanceStore
         var coverage = ReadCoverage(connection, cohortId, receiptId, transaction);
         transaction.Commit();
         return coverage;
+    }
+
+    public void CompleteLandingEffects(string cohortId, string receiptId) =>
+        MarkLandingIntentState(cohortId, receiptId, "finalized", expectedState: "prepared");
+
+    public void ApplyAdmissionFairness(
+        IReadOnlyCollection<GoalId> admittedGoalIds,
+        GoalId oldestEligibleGoalId)
+    {
+        ArgumentNullException.ThrowIfNull(admittedGoalIds);
+        if (admittedGoalIds.Count != 2 || admittedGoalIds.Distinct().Count() != 2)
+        {
+            throw new ArgumentException("Cohort admission fairness requires exactly two distinct admitted goals.", nameof(admittedGoalIds));
+        }
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        foreach (var goalId in admittedGoalIds)
+        {
+            using var reset = connection.CreateCommand();
+            reset.Transaction = transaction;
+            reset.CommandText = "DELETE FROM cohort_fairness WHERE goal_id=$goal;";
+            reset.Parameters.AddWithValue("$goal", goalId.Value);
+            reset.ExecuteNonQuery();
+        }
+        if (!admittedGoalIds.Contains(oldestEligibleGoalId))
+        {
+            IncrementOvertake(connection, transaction, oldestEligibleGoalId);
+        }
+        transaction.Commit();
     }
 
     public int ReadOvertakeCount(GoalId goalId)
@@ -457,6 +539,145 @@ public sealed class CohortAcceptanceStore
         return values;
     }
 
+    private static void EnsureAttributionSideEffects(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string cohortId,
+        AcceptanceCohortAttributionOutcome attribution,
+        string pairFingerprint,
+        GoalId? innocentGoalId)
+    {
+        var suppressionAlreadyExists = false;
+        using (var existingSuppression = connection.CreateCommand())
+        {
+            existingSuppression.Transaction = transaction;
+            existingSuppression.CommandText = "SELECT COUNT(*) FROM cohort_pair_suppressions WHERE pair_fingerprint=$fingerprint;";
+            existingSuppression.Parameters.AddWithValue("$fingerprint", pairFingerprint);
+            suppressionAlreadyExists = Convert.ToInt32(existingSuppression.ExecuteScalar()) == 1;
+        }
+        using var marker = connection.CreateCommand();
+        marker.Transaction = transaction;
+        marker.CommandText = """
+            INSERT OR IGNORE INTO cohort_attribution_effects(
+                cohort_id, attribution, pair_fingerprint, innocent_goal_id, applied_at)
+            VALUES ($cohort, $attribution, $fingerprint, $innocent, $applied);
+            """;
+        marker.Parameters.AddWithValue("$cohort", cohortId);
+        marker.Parameters.AddWithValue("$attribution", attribution.ToString());
+        marker.Parameters.AddWithValue("$fingerprint", pairFingerprint);
+        marker.Parameters.AddWithValue("$innocent", (object?)innocentGoalId?.Value ?? DBNull.Value);
+        marker.Parameters.AddWithValue("$applied", DateTimeOffset.UtcNow.ToString("O"));
+        if (marker.ExecuteNonQuery() == 0)
+        {
+            return;
+        }
+
+        using (var suppress = connection.CreateCommand())
+        {
+            suppress.Transaction = transaction;
+            suppress.CommandText = """
+                INSERT OR IGNORE INTO cohort_pair_suppressions(pair_fingerprint, cohort_id, created_at)
+                VALUES ($fingerprint, $cohort, $created);
+                """;
+            suppress.Parameters.AddWithValue("$fingerprint", pairFingerprint);
+            suppress.Parameters.AddWithValue("$cohort", cohortId);
+            suppress.Parameters.AddWithValue("$created", DateTimeOffset.UtcNow.ToString("O"));
+            suppress.ExecuteNonQuery();
+        }
+        if (innocentGoalId is not null &&
+            (!suppressionAlreadyExists || ReadOvertakeCount(connection, transaction, innocentGoalId) == 0))
+        {
+            IncrementOvertake(connection, transaction, innocentGoalId);
+        }
+    }
+
+    private static int ReadOvertakeCount(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        GoalId goalId)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT overtake_count FROM cohort_fairness WHERE goal_id=$goal;";
+        command.Parameters.AddWithValue("$goal", goalId.Value);
+        return command.ExecuteScalar() is long count ? checked((int)count) : 0;
+    }
+
+    private static void IncrementOvertake(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        GoalId goalId)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO cohort_fairness(goal_id, overtake_count, updated_at)
+            VALUES ($goal, 1, $updated)
+            ON CONFLICT(goal_id) DO UPDATE SET
+                overtake_count=cohort_fairness.overtake_count+1,
+                updated_at=excluded.updated_at;
+            """;
+        command.Parameters.AddWithValue("$goal", goalId.Value);
+        command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
+        command.ExecuteNonQuery();
+    }
+
+    private static bool RestoreIntegrationAfterInterruptedLanding(
+        string executionDirectory,
+        (string CohortId, string ReceiptId, string Commit, string? PriorIntegration) intent)
+    {
+        const string integrationRef = "refs/heads/integration";
+        var current = GitCli.Run(executionDirectory, "rev-parse", "--verify", "--quiet", integrationRef);
+        if (current.ExitCode != 0 ||
+            !current.Output.Trim().Equals(intent.Commit, StringComparison.Ordinal))
+        {
+            return true;
+        }
+        var rollback = intent.PriorIntegration is null
+            ? GitCli.Run(executionDirectory, "update-ref", "-d", integrationRef, intent.Commit)
+            : GitCli.Run(
+                executionDirectory,
+                "update-ref",
+                integrationRef,
+                intent.PriorIntegration,
+                intent.Commit);
+        return rollback.ExitCode == 0;
+    }
+
+    private void MarkLandingIntentState(
+        string cohortId,
+        string receiptId,
+        string state,
+        string? expectedState = null)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = expectedState is null
+            ? "UPDATE cohort_landing_intents SET state=$state, updated_at=$updated WHERE cohort_id=$cohort AND receipt_id=$receipt;"
+            : "UPDATE cohort_landing_intents SET state=$state, updated_at=$updated WHERE cohort_id=$cohort AND receipt_id=$receipt AND state=$expected;";
+        command.Parameters.AddWithValue("$cohort", cohortId);
+        command.Parameters.AddWithValue("$receipt", receiptId);
+        command.Parameters.AddWithValue("$state", state);
+        command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
+        if (expectedState is not null)
+        {
+            command.Parameters.AddWithValue("$expected", expectedState);
+        }
+        if (command.ExecuteNonQuery() == 1)
+        {
+            return;
+        }
+
+        using var read = connection.CreateCommand();
+        read.CommandText = "SELECT state FROM cohort_landing_intents WHERE cohort_id=$cohort AND receipt_id=$receipt;";
+        read.Parameters.AddWithValue("$cohort", cohortId);
+        read.Parameters.AddWithValue("$receipt", receiptId);
+        if (!string.Equals(read.ExecuteScalar() as string, state, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Cohort landing intent could not transition to '{state}'.");
+        }
+    }
+
     private SqliteConnection Open()
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder
@@ -509,12 +730,13 @@ public sealed class CohortAcceptanceStore
                 cohort_id TEXT PRIMARY KEY REFERENCES cohort_receipts(cohort_id) ON DELETE CASCADE,
                 receipt_id TEXT NOT NULL,
                 combined_commit_revision TEXT NOT NULL,
+                prior_integration_revision TEXT NULL,
                 state TEXT NOT NULL CHECK(state IN ('prepared','finalized','invalidated')),
                 updated_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS cohort_partition_receipts(
                 cohort_id TEXT NOT NULL REFERENCES cohort_receipts(cohort_id) ON DELETE CASCADE,
                 member_ordinal INTEGER NOT NULL CHECK(member_ordinal IN (0,1)),
-                receipt_id TEXT NOT NULL UNIQUE,
+                receipt_id TEXT NOT NULL,
                 goal_id TEXT NOT NULL,
                 candidate_revision TEXT NOT NULL,
                 main_revision TEXT NOT NULL,
@@ -532,6 +754,12 @@ public sealed class CohortAcceptanceStore
                 pair_fingerprint TEXT PRIMARY KEY,
                 cohort_id TEXT NOT NULL,
                 created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS cohort_attribution_effects(
+                cohort_id TEXT PRIMARY KEY REFERENCES cohort_receipts(cohort_id) ON DELETE CASCADE,
+                attribution TEXT NOT NULL,
+                pair_fingerprint TEXT NOT NULL,
+                innocent_goal_id TEXT NULL,
+                applied_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS cohort_materialization_failures(
                 attempt_id TEXT PRIMARY KEY,
                 first_goal_id TEXT NOT NULL,
@@ -552,6 +780,8 @@ public sealed class CohortAcceptanceStore
         EnsureColumn(connection, "cohort_members", "merge_reason", "TEXT NOT NULL DEFAULT 'NoConflictsDetected'");
         EnsureColumn(connection, "cohort_receipts", "gate_exit_code", "INTEGER NULL");
         EnsureColumn(connection, "cohort_receipts", "gate_test_result_paths_json", "TEXT NOT NULL DEFAULT '[]'");
+        EnsureColumn(connection, "cohort_landing_intents", "prior_integration_revision", "TEXT NULL");
+        EnsureReusablePartitionReceiptSchema(connection);
         using var invalidateLegacy = connection.CreateCommand();
         invalidateLegacy.CommandText = """
             UPDATE cohort_receipts
@@ -563,6 +793,43 @@ public sealed class CohortAcceptanceStore
             """;
         invalidateLegacy.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
         invalidateLegacy.ExecuteNonQuery();
+    }
+
+    private static void EnsureReusablePartitionReceiptSchema(SqliteConnection connection)
+    {
+        using var inspect = connection.CreateCommand();
+        inspect.CommandText = "SELECT sql FROM sqlite_master WHERE type='table' AND name='cohort_partition_receipts';";
+        var schema = inspect.ExecuteScalar() as string;
+        if (schema?.Contains("receipt_id TEXT NOT NULL UNIQUE", StringComparison.OrdinalIgnoreCase) != true)
+        {
+            return;
+        }
+
+        using var migrate = connection.CreateCommand();
+        migrate.CommandText = """
+            ALTER TABLE cohort_partition_receipts RENAME TO cohort_partition_receipts_legacy;
+            CREATE TABLE cohort_partition_receipts(
+                cohort_id TEXT NOT NULL REFERENCES cohort_receipts(cohort_id) ON DELETE CASCADE,
+                member_ordinal INTEGER NOT NULL CHECK(member_ordinal IN (0,1)),
+                receipt_id TEXT NOT NULL,
+                goal_id TEXT NOT NULL,
+                candidate_revision TEXT NOT NULL,
+                main_revision TEXT NOT NULL,
+                tree_revision TEXT NULL,
+                manifest_identity TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                elapsed_ms INTEGER NOT NULL,
+                test_result_paths_json TEXT NOT NULL,
+                PRIMARY KEY(cohort_id, member_ordinal));
+            INSERT INTO cohort_partition_receipts(
+                cohort_id, member_ordinal, receipt_id, goal_id, candidate_revision,
+                main_revision, tree_revision, manifest_identity, outcome, elapsed_ms, test_result_paths_json)
+            SELECT cohort_id, member_ordinal, receipt_id, goal_id, candidate_revision,
+                main_revision, tree_revision, manifest_identity, outcome, elapsed_ms, test_result_paths_json
+            FROM cohort_partition_receipts_legacy;
+            DROP TABLE cohort_partition_receipts_legacy;
+            """;
+        migrate.ExecuteNonQuery();
     }
 
     private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)
