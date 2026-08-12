@@ -110,7 +110,8 @@
         "estimatedSerialSeconds": 176.6,
         "exclusiveResourceKeys": [
           "xunit:DotnetBuildSlots",
-          "xunit:GoalAcceptanceVerifier"
+          "xunit:GoalAcceptanceVerifier",
+          "xunit:ProcessSpawning"
         ]
       }
     ],
