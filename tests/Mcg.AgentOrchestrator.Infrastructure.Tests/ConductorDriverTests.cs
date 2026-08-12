@@ -3369,7 +3369,7 @@ public sealed class ConductorDriverTests
             PassVerification(kernel, goal, task);
         }
 
-        var request = "Infrastructure.Tests: ConductorDriverTests";
+        var request = "Infrastructure.Tests:ConductorDriverTests";
         FailReviewerNeedsWork(kernel, goal, reviewer, "missing focused conductor evidence", request);
         var focusedRuns = 0;
         var retriedTaskIds = new List<TaskId>();
@@ -6279,16 +6279,21 @@ public sealed class ConductorDriverTests
 
         FailReviewerNeedsWork(kernel, goal, reviewer, "missing full test evidence", "Infrastructure.Tests: all");
         var retried = false;
+        var focusedRuns = 0;
         string? escalation = null;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
-            runFocusedEvidence: (_, request) => new FocusedEvidenceRunResult(
-                request,
-                Accepted: false,
-                Passed: false,
-                Summary: "unbounded evidence request rejected",
-                Checks: []),
+            runFocusedEvidence: (_, request) =>
+            {
+                focusedRuns++;
+                return new FocusedEvidenceRunResult(
+                    request,
+                    Accepted: false,
+                    Passed: false,
+                    Summary: "unbounded evidence request rejected",
+                    Checks: []);
+            },
             retryTask: (gid, tid, msg) =>
             {
                 retried = true;
@@ -6301,15 +6306,16 @@ public sealed class ConductorDriverTests
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
+        Assert.Equal(0, focusedRuns);
         Assert.True(retried);
         Assert.Null(escalation);
         var outcome = reviewer.VerificationHistory.Last().MergedReviewFindings!.Single().EvidenceOutcome;
         Assert.False(outcome?.Honoured);
-        Assert.Equal(FindingEvidenceNotHonouredReason.RunFailed, outcome?.Reason);
+        Assert.Equal(FindingEvidenceNotHonouredReason.UnparseableSelection, outcome?.Reason);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
-            evt.Message.Contains("reason=run-failed", StringComparison.Ordinal));
+            evt.Message.Contains("reason=unparseable-selection", StringComparison.Ordinal));
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
     }
 
