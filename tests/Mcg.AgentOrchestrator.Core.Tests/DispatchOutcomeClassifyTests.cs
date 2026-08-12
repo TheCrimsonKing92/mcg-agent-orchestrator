@@ -616,10 +616,25 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("evidence=ERROR: You've hit your usage limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
+    [Xunit.Theory(DisplayName = "Classify ignores standalone worker-authored limit lookalikes")]
+    [Xunit.InlineData("{\"event\":\"usage_limit_reached\",\"retry_after_seconds\":120}")]
+    [Xunit.InlineData("rate limit reached while describing a fixture")]
+    public void ClassifyIgnoresStandaloneWorkerAuthoredLimitLookalikes(string stderr)
+    {
+        var verification = Verification(1, "", stderr) with { ProviderFailureKind = ProviderFailureKind.RateLimit };
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitEvidence(verification));
+        Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=provider-rate-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "Classify preserves structured provider usage limit event")]
     public void ClassifyPreservesStructuredProviderUsageLimitEvent()
     {
-        const string stderr = "{\"event\":\"usage_limit_reached\",\"retry_after_seconds\":120}";
+        const string stderr = "ERROR: {\"event\":\"usage_limit_reached\",\"retry_after_seconds\":120}";
         var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);

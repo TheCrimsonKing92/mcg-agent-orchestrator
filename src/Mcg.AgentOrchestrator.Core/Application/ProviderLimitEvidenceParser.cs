@@ -59,21 +59,12 @@ public static partial class ProviderLimitEvidenceParser
             return false;
         }
 
-        if (TryParseStructuredLimitEvent(line))
-        {
-            return true;
-        }
-
-        if (!ContainsLimitText(line))
+        if (!IsProviderDiagnosticLine(line))
         {
             return false;
         }
 
-        return IsProviderDiagnosticLine(line) ||
-            line.StartsWith("rate limit", StringComparison.OrdinalIgnoreCase) ||
-            line.StartsWith("usage limit", StringComparison.OrdinalIgnoreCase) ||
-            line.StartsWith("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("you've hit your usage limit", StringComparison.OrdinalIgnoreCase);
+        return TryParseStructuredLimitEvent(line) || ContainsLimitText(line);
     }
 
     private static bool IsProviderDiagnosticLine(string line) =>
@@ -103,14 +94,15 @@ public static partial class ProviderLimitEvidenceParser
 
     private static bool TryParseStructuredLimitEvent(string line)
     {
-        if (line[0] != '{')
+        var jsonStart = line.IndexOf('{');
+        if (jsonStart < 0)
         {
             return false;
         }
 
         try
         {
-            using var document = JsonDocument.Parse(line);
+            using var document = JsonDocument.Parse(line[jsonStart..]);
             var root = document.RootElement;
             return HasLimitToken(root, "event") ||
                 HasLimitToken(root, "type") ||

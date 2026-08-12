@@ -89,6 +89,31 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Equal(ProviderFailureKind.Unknown, failureKind);
     }
 
+    [Xunit.Theory(DisplayName = "WorkerProvider_parse_outcome_ignores_standalone_worker_limit_lookalikes")]
+    [Xunit.InlineData("{\"event\":\"usage_limit_reached\",\"retry_after_seconds\":120}")]
+    [Xunit.InlineData("rate limit reached while describing a fixture")]
+    public void WorkerProviderParseOutcomeIgnoresStandaloneWorkerLimitLookalikes(string stderr)
+    {
+        var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.OpenAICodexCli);
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, string.Empty, stderr));
+
+        Assert.Equal(ProviderFailureKind.Unknown, failureKind);
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProvider_parse_outcome_preserves_structured_provider_limit_diagnostic")]
+    public void WorkerProviderParseOutcomePreservesStructuredProviderLimitDiagnostic()
+    {
+        var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.OpenAICodexCli);
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(
+            1,
+            string.Empty,
+            "ERROR: {\"event\":\"usage_limit_reached\",\"retry_after_seconds\":120}"));
+
+        Assert.Equal(ProviderFailureKind.RateLimit, failureKind);
+    }
+
     [Xunit.Theory(DisplayName = "WorkerProvider_parse_outcome_requires_launch_or_logon_context_for_sandbox_1312")]
     [Xunit.InlineData("git.exe: CreateProcessAsUserW failed 1312", ProviderFailureKind.Sandbox1312)]
     [Xunit.InlineData("ERROR_NO_SUCH_LOGON_SESSION", ProviderFailureKind.Sandbox1312)]
@@ -3898,6 +3923,8 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         File.WriteAllText(
             stderr,
             "{\"event\":\"sandbox-prep\",\"phase\":\"launch-preflight\",\"elapsedMs\":200}\n" +
+            "{\"event\":\"usage_limit_reached\",\"retry_after_seconds\":120}\n" +
+            "rate limit reached while describing a fixture\n" +
             "src/ProviderParser.cs:77: text.Contains(\"usage limit\", StringComparison.OrdinalIgnoreCase)\n" +
             "powershell.exe: ParserError: Missing closing quote in command argument.");
         File.WriteAllText(exit, "1");
