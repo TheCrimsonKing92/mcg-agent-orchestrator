@@ -42,6 +42,127 @@ public sealed class BuildLockBlockedException : IOException
     }
 }
 
+internal enum LockAttributionDiagnosticBranch
+{
+    InjectedAttribution,
+    RestartManager,
+    HandleProbe,
+    ProcessSnapshot
+}
+
+internal enum LockAttributionDiagnosticClassification
+{
+    InjectedAttribution,
+    InjectedEmpty,
+    RestartManagerAttribution,
+    HandleAttribution,
+    HandleTimeoutUnknown,
+    ProcessSnapshotAttribution,
+    ProcessSnapshotEmpty
+}
+
+internal sealed record LockAttributionDiagnosticEvent(string Stage, string Outcome);
+
+internal sealed record LockAttributionTestHookSnapshot(
+    string? AttributeOverride,
+    string? HandleExecutable,
+    TimeSpan? HandleProbeTimeout,
+    string? ConfigureHandleProbe,
+    bool DisableRestartManager);
+
+internal sealed record LockAttributionDiagnosticReceipt(
+    int ProcessId,
+    LockAttributionTestHookSnapshot Hooks,
+    LockAttributionDiagnosticBranch Branch,
+    string Source,
+    int HolderCount,
+    LockAttributionDiagnosticClassification Classification,
+    IReadOnlyList<LockAttributionDiagnosticEvent> Events)
+{
+    internal string Format() =>
+        $"LOCK_ATTRIBUTION_DIAGNOSTIC processId={ProcessId} " +
+        $"attributeOverride={Quote(Hooks.AttributeOverride)} " +
+        $"handleExecutable={Quote(Hooks.HandleExecutable)} " +
+        $"handleProbeTimeout={Quote(Hooks.HandleProbeTimeout?.ToString("c", System.Globalization.CultureInfo.InvariantCulture))} " +
+        $"configureHandleProbe={Quote(Hooks.ConfigureHandleProbe)} " +
+        $"disableRestartManager={Hooks.DisableRestartManager.ToString().ToLowerInvariant()} " +
+        $"branch={Branch} source={Quote(Source)} holderCount={HolderCount} classification={Classification} " +
+        $"events={Quote(string.Join('|', Events.Select(item => $"{item.Stage}:{item.Outcome}")))}";
+
+    private static string Quote(string? value) =>
+        $"\"{(value ?? "null").Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\r", "\\r", StringComparison.Ordinal).Replace("\n", "\\n", StringComparison.Ordinal)}\"";
+}
+
+internal sealed class LockAttributionDiagnosticCollector
+{
+    private readonly object _gate = new();
+    private readonly List<LockAttributionDiagnosticEvent> _events = [];
+    private LockAttributionTestHookSnapshot? _hooks;
+    private LockAttributionDiagnosticReceipt? _receipt;
+
+    internal LockAttributionDiagnosticReceipt Receipt
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _receipt ?? throw new InvalidOperationException("The LockAttribution diagnostic invocation has not completed.");
+            }
+        }
+    }
+
+    internal void Start(LockAttributionTestHookSnapshot hooks)
+    {
+        lock (_gate)
+        {
+            if (_hooks is not null || _receipt is not null)
+            {
+                throw new InvalidOperationException("A LockAttribution diagnostic collector can own only one invocation.");
+            }
+
+            _hooks = hooks;
+            _events.Add(new LockAttributionDiagnosticEvent("invocation", "started"));
+        }
+    }
+
+    internal void Record(string stage, string outcome)
+    {
+        lock (_gate)
+        {
+            if (_hooks is null || _receipt is not null)
+            {
+                throw new InvalidOperationException("LockAttribution diagnostic events require one active invocation.");
+            }
+
+            _events.Add(new LockAttributionDiagnosticEvent(stage, outcome));
+        }
+    }
+
+    internal void Complete(
+        LockAttributionDiagnosticBranch branch,
+        BuildLockAttribution attribution,
+        LockAttributionDiagnosticClassification classification)
+    {
+        lock (_gate)
+        {
+            if (_hooks is null || _receipt is not null)
+            {
+                throw new InvalidOperationException("LockAttribution diagnostics must complete exactly once.");
+            }
+
+            _events.Add(new LockAttributionDiagnosticEvent("attribution", "completed"));
+            _receipt = new LockAttributionDiagnosticReceipt(
+                Environment.ProcessId,
+                _hooks,
+                branch,
+                attribution.Source,
+                attribution.Holders.Count,
+                classification,
+                _events.ToArray());
+        }
+    }
+}
+
 internal static partial class LockAttribution
 {
     private static readonly Regex HandlePidPattern = new(@"\bpid:\s*(?<pid>\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -54,35 +175,90 @@ internal static partial class LockAttribution
     internal static Action<ProcessStartInfo, string>? ConfigureHandleProbeForTests { get; set; }
     internal static bool DisableRestartManagerForTests { get; set; }
 
-    public static BuildLockAttribution Attribute(string path, string? ownershipHint = null, string? phase = null, string? operation = null)
+    public static BuildLockAttribution Attribute(string path, string? ownershipHint = null, string? phase = null, string? operation = null) =>
+        AttributeCore(path, ownershipHint, phase, operation, diagnostics: null);
+
+    internal static BuildLockAttribution AttributeWithDiagnosticsForTests(
+        string path,
+        string? ownershipHint,
+        string? phase,
+        string? operation,
+        LockAttributionDiagnosticCollector diagnostics) =>
+        AttributeCore(path, ownershipHint, phase, operation, diagnostics);
+
+    private static BuildLockAttribution AttributeCore(
+        string path,
+        string? ownershipHint,
+        string? phase,
+        string? operation,
+        LockAttributionDiagnosticCollector? diagnostics)
     {
-        if (AttributeForTests?.Invoke(path, ownershipHint) is { } testAttribution)
+        var testHooks = TestHookState.Capture();
+        diagnostics?.Start(testHooks.ToDiagnosticSnapshot());
+
+        if (testHooks.Attribute is not null)
         {
-            var enriched = Enrich(testAttribution, phase, operation);
-            EmitReceipt(enriched);
-            return enriched;
+            var testAttribution = testHooks.Attribute(path, ownershipHint);
+            diagnostics?.Record("attribute-override", testAttribution is null ? "returned-null" : "returned-attribution");
+            if (testAttribution is not null)
+            {
+                return CompleteAttribution(
+                    testAttribution,
+                    phase,
+                    operation,
+                    LockAttributionDiagnosticBranch.InjectedAttribution,
+                    diagnostics);
+            }
+        }
+        else
+        {
+            diagnostics?.Record("attribute-override", "not-installed");
         }
 
         var fullPath = TryFullPath(path);
-        if (OperatingSystem.IsWindows() &&
-            !DisableRestartManagerForTests &&
-            TryAttributeWithRestartManager(fullPath, ownershipHint) is { } restartManagerAttribution)
+        if (OperatingSystem.IsWindows() && !testHooks.DisableRestartManager)
         {
-            var enriched = Enrich(restartManagerAttribution, phase, operation);
-            EmitReceipt(enriched);
-            return enriched;
+            var restartManagerAttribution = TryAttributeWithRestartManager(fullPath, ownershipHint);
+            diagnostics?.Record("restart-manager", restartManagerAttribution is null ? "no-attribution" : "returned-attribution");
+            if (restartManagerAttribution is not null)
+            {
+                return CompleteAttribution(
+                    restartManagerAttribution,
+                    phase,
+                    operation,
+                    LockAttributionDiagnosticBranch.RestartManager,
+                    diagnostics);
+            }
+        }
+        else
+        {
+            diagnostics?.Record("restart-manager", OperatingSystem.IsWindows() ? "disabled-for-tests" : "non-windows");
         }
 
-        if (OperatingSystem.IsWindows() && TryAttributeWithHandle(fullPath, ownershipHint) is { } handleAttribution)
+        if (OperatingSystem.IsWindows())
         {
-            var enriched = Enrich(handleAttribution, phase, operation);
-            EmitReceipt(enriched);
-            return enriched;
+            var handleAttribution = TryAttributeWithHandle(fullPath, ownershipHint, testHooks, diagnostics);
+            if (handleAttribution is not null)
+            {
+                return CompleteAttribution(
+                    handleAttribution,
+                    phase,
+                    operation,
+                    LockAttributionDiagnosticBranch.HandleProbe,
+                    diagnostics);
+            }
+        }
+        else
+        {
+            diagnostics?.Record("handle-probe", "non-windows");
         }
 
-        var fallback = Enrich(AttributeFromProcessSnapshot(fullPath, ownershipHint), phase, operation);
-        EmitReceipt(fallback);
-        return fallback;
+        return CompleteAttribution(
+            AttributeFromProcessSnapshot(fullPath, ownershipHint),
+            phase,
+            operation,
+            LockAttributionDiagnosticBranch.ProcessSnapshot,
+            diagnostics);
     }
 
     public static string? TryExtractLockedPath(string output)
@@ -132,6 +308,40 @@ internal static partial class LockAttribution
         {
             Phase = string.IsNullOrWhiteSpace(attribution.Phase) ? phase : attribution.Phase,
             Operation = string.IsNullOrWhiteSpace(attribution.Operation) ? operation : attribution.Operation
+        };
+
+    private static BuildLockAttribution CompleteAttribution(
+        BuildLockAttribution attribution,
+        string? phase,
+        string? operation,
+        LockAttributionDiagnosticBranch branch,
+        LockAttributionDiagnosticCollector? diagnostics)
+    {
+        var enriched = Enrich(attribution, phase, operation);
+        EmitReceipt(enriched);
+        diagnostics?.Complete(branch, enriched, Classify(branch, enriched));
+        return enriched;
+    }
+
+    private static LockAttributionDiagnosticClassification Classify(
+        LockAttributionDiagnosticBranch branch,
+        BuildLockAttribution attribution) =>
+        branch switch
+        {
+            LockAttributionDiagnosticBranch.InjectedAttribution when attribution.Holders.Count == 0 =>
+                LockAttributionDiagnosticClassification.InjectedEmpty,
+            LockAttributionDiagnosticBranch.InjectedAttribution =>
+                LockAttributionDiagnosticClassification.InjectedAttribution,
+            LockAttributionDiagnosticBranch.RestartManager =>
+                LockAttributionDiagnosticClassification.RestartManagerAttribution,
+            LockAttributionDiagnosticBranch.HandleProbe when
+                string.Equals(attribution.Source, "handle64-timeout", StringComparison.Ordinal) =>
+                LockAttributionDiagnosticClassification.HandleTimeoutUnknown,
+            LockAttributionDiagnosticBranch.HandleProbe =>
+                LockAttributionDiagnosticClassification.HandleAttribution,
+            LockAttributionDiagnosticBranch.ProcessSnapshot when attribution.Holders.Count == 0 =>
+                LockAttributionDiagnosticClassification.ProcessSnapshotEmpty,
+            _ => LockAttributionDiagnosticClassification.ProcessSnapshotAttribution
         };
 
     private static BuildLockAttribution? TryAttributeWithRestartManager(string path, string? ownershipHint)
@@ -215,11 +425,16 @@ internal static partial class LockAttribution
         }
     }
 
-    private static BuildLockAttribution? TryAttributeWithHandle(string path, string? ownershipHint)
+    private static BuildLockAttribution? TryAttributeWithHandle(
+        string path,
+        string? ownershipHint,
+        TestHookState testHooks,
+        LockAttributionDiagnosticCollector? diagnostics)
     {
-        var handle = ResolveHandleExecutable();
+        var handle = ResolveHandleExecutable(testHooks.HandleExecutable, diagnostics);
         if (handle is null)
         {
+            diagnostics?.Record("handle-probe", "executable-not-found");
             return null;
         }
 
@@ -238,19 +453,51 @@ internal static partial class LockAttribution
             process.StartInfo.ArgumentList.Add("-accepteula");
             process.StartInfo.ArgumentList.Add("-nobanner");
             process.StartInfo.ArgumentList.Add(path);
-            ConfigureHandleProbeForTests?.Invoke(process.StartInfo, path);
-            if (!process.Start())
+            testHooks.ConfigureHandleProbe?.Invoke(process.StartInfo, path);
+            diagnostics?.Record("handle-configure", testHooks.ConfigureHandleProbe is null ? "not-installed" : "invoked");
+            bool started;
+            try
             {
+                started = process.Start();
+            }
+            catch (Exception exception)
+            {
+                diagnostics?.Record("handle-process-start", $"failed-{exception.GetType().Name}");
                 return null;
             }
 
+            if (!started)
+            {
+                diagnostics?.Record("handle-process-start", "returned-false");
+                return null;
+            }
+
+            diagnostics?.Record("handle-process-start", "started");
             try { process.StandardInput.Close(); } catch { }
             var outputTask = process.StandardOutput.ReadToEndAsync();
             var errorTask = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(HandleProbeTimeoutForTests ?? HandleProbeTimeout))
+            if (!process.WaitForExit(testHooks.HandleProbeTimeout ?? HandleProbeTimeout))
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                try { process.WaitForExit(1000); } catch { }
+                diagnostics?.Record("handle-wait", "timed-out");
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                    diagnostics?.Record("handle-kill", "requested");
+                }
+                catch (Exception exception)
+                {
+                    diagnostics?.Record("handle-kill", $"failed-{exception.GetType().Name}");
+                }
+
+                try
+                {
+                    diagnostics?.Record("handle-reap", process.WaitForExit(1000) ? "exited" : "still-running");
+                }
+                catch (Exception exception)
+                {
+                    diagnostics?.Record("handle-reap", $"failed-{exception.GetType().Name}");
+                }
+
                 _ = Task.WhenAny(outputTask, Task.Delay(TimeSpan.FromSeconds(1)));
                 _ = Task.WhenAny(errorTask, Task.Delay(TimeSpan.FromSeconds(1)));
                 return new BuildLockAttribution(
@@ -259,12 +506,15 @@ internal static partial class LockAttribution
                     "handle64-timeout");
             }
 
+            diagnostics?.Record("handle-wait", $"exited-{process.ExitCode}");
             var output = outputTask.GetAwaiter().GetResult() + Environment.NewLine + errorTask.GetAwaiter().GetResult();
             var holders = ParseHandleOutput(output, ownershipHint);
+            diagnostics?.Record("handle-parse", holders.Count == 0 ? "empty" : $"holders-{holders.Count}");
             return holders.Count == 0 ? null : new BuildLockAttribution(path, holders, "handle64");
         }
-        catch
+        catch (Exception exception)
         {
+            diagnostics?.Record("handle-probe", $"failed-{exception.GetType().Name}");
             return null;
         }
     }
@@ -331,16 +581,20 @@ internal static partial class LockAttribution
             commandLine.Contains("MCG_ORCHESTRATOR_REPOSITORY_ROOT", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string? ResolveHandleExecutable()
+    private static string? ResolveHandleExecutable(
+        string? handleExecutableForTests,
+        LockAttributionDiagnosticCollector? diagnostics)
     {
-        if (!string.IsNullOrWhiteSpace(HandleExecutableForTests))
+        if (!string.IsNullOrWhiteSpace(handleExecutableForTests))
         {
-            return HandleExecutableForTests;
+            diagnostics?.Record("handle-resolve", "test-override");
+            return handleExecutableForTests;
         }
 
         var explicitPath = Environment.GetEnvironmentVariable("MCG_HANDLE64");
         if (!string.IsNullOrWhiteSpace(explicitPath) && File.Exists(explicitPath))
         {
+            diagnostics?.Record("handle-resolve", "environment");
             return explicitPath;
         }
 
@@ -351,6 +605,7 @@ internal static partial class LockAttribution
                 var candidate = Path.Combine(directory.Trim(), name);
                 if (File.Exists(candidate))
                 {
+                    diagnostics?.Record("handle-resolve", "path");
                     return candidate;
                 }
             }
@@ -363,12 +618,46 @@ internal static partial class LockAttribution
                 var candidate = Path.Combine(directory, name);
                 if (File.Exists(candidate))
                 {
+                    diagnostics?.Record("handle-resolve", "common-directory");
                     return candidate;
                 }
             }
         }
 
         return null;
+    }
+
+    private sealed record TestHookState(
+        Func<string, string?, BuildLockAttribution?>? Attribute,
+        string? HandleExecutable,
+        TimeSpan? HandleProbeTimeout,
+        Action<ProcessStartInfo, string>? ConfigureHandleProbe,
+        bool DisableRestartManager)
+    {
+        internal static TestHookState Capture() => new(
+            AttributeForTests,
+            HandleExecutableForTests,
+            HandleProbeTimeoutForTests,
+            ConfigureHandleProbeForTests,
+            DisableRestartManagerForTests);
+
+        internal LockAttributionTestHookSnapshot ToDiagnosticSnapshot() => new(
+            Describe(Attribute),
+            HandleExecutable,
+            HandleProbeTimeout,
+            Describe(ConfigureHandleProbe),
+            DisableRestartManager);
+
+        private static string? Describe(Delegate? value)
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            var declaringType = value.Method.DeclaringType?.FullName ?? "unknown";
+            return $"{declaringType}::{value.Method.Name}";
+        }
     }
 
     private static IEnumerable<string> CommonHandleDirectories()
