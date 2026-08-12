@@ -110,9 +110,8 @@ public static partial class GoalWorktrees
 
         var worktreeRoot = System.IO.Path.Combine(root, DirectoryName);
         Directory.CreateDirectory(worktreeRoot);
-        var workspacePath = System.IO.Path.Combine(
-            worktreeRoot,
-            $"cohort-partition-{Guid.NewGuid():N}");
+        var workspaceToken = Guid.NewGuid().ToString("N")[..12];
+        var workspacePath = System.IO.Path.Combine(worktreeRoot, $"p-{workspaceToken}");
         try
         {
             var added = GitCli.Run(root, "worktree", "add", "--detach", workspacePath, normalizedMain);
@@ -190,9 +189,8 @@ public static partial class GoalWorktrees
 
         var worktreeRoot = System.IO.Path.Combine(root, DirectoryName);
         Directory.CreateDirectory(worktreeRoot);
-        var workspacePath = System.IO.Path.Combine(
-            worktreeRoot,
-            $"cohort-{Guid.NewGuid():N}");
+        var workspaceToken = Guid.NewGuid().ToString("N")[..12];
+        var workspacePath = System.IO.Path.Combine(worktreeRoot, $"c-{workspaceToken}");
         try
         {
             var added = GitCli.Run(root, "worktree", "add", "--detach", workspacePath, normalizedMain);

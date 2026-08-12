@@ -53,6 +53,66 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
+    public void DisposableWorkspaces_UnderNestedGitWorktree_UseShortTokensAndCleanUp()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        var outerToken = Guid.NewGuid().ToString("N")[..8];
+        var outerWorktree = Path.Combine(
+            repo,
+            GoalWorktrees.DirectoryName,
+            $"w-{outerToken}");
+        try
+        {
+            var main = RunGitOutput(repo, "rev-parse", "main").Trim();
+            var first = CreateCandidate(repo, "11111111111111111111111111111111", "src/First.cs", "first");
+            var second = CreateCandidate(repo, "22222222222222222222222222222222", "tests/Second.cs", "second");
+            RunGit(repo, "worktree", "add", "--detach", outerWorktree, main);
+            Assert.True(File.Exists(Path.Combine(outerWorktree, ".git")));
+
+            string cohortWorkspace;
+            using (var workspace = GoalWorktrees.CreateAcceptanceCohortWorkspace(
+                outerWorktree,
+                main,
+                [
+                    Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first"),
+                    Bind(second.GoalId, second.Revision, "tests/Second.cs", "resource:second")
+                ]))
+            {
+                cohortWorkspace = workspace.Path;
+                Assert.Matches("^c-[0-9a-f]{12}$", Path.GetFileName(workspace.Path));
+                Assert.True(Directory.Exists(workspace.Path));
+                Assert.True(File.Exists(Path.Combine(workspace.Path, "src", "First.cs")));
+                Assert.True(File.Exists(Path.Combine(workspace.Path, "tests", "Second.cs")));
+            }
+
+            Assert.False(Directory.Exists(cohortWorkspace));
+
+            string partitionWorkspace;
+            using (var workspace = GoalWorktrees.CreateAcceptancePartitionWorkspace(
+                outerWorktree,
+                main,
+                Bind(first.GoalId, first.Revision, "src/First.cs", "resource:first")))
+            {
+                partitionWorkspace = workspace.Path;
+                Assert.Matches("^p-[0-9a-f]{12}$", Path.GetFileName(workspace.Path));
+                Assert.True(Directory.Exists(workspace.Path));
+                Assert.True(File.Exists(Path.Combine(workspace.Path, "src", "First.cs")));
+            }
+
+            Assert.False(Directory.Exists(partitionWorkspace));
+            AssertNoCohortWorkspaces(outerWorktree);
+        }
+        finally
+        {
+            if (Directory.Exists(outerWorktree))
+            {
+                RunGit(repo, "worktree", "remove", "--force", outerWorktree);
+            }
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
     public void DisposableWorkspace_CleanupFailurePersistsTypedDebt_AndCanBeRetried()
     {
         var repo = CreateAcceptanceCohortRepository();
@@ -146,7 +206,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 
             Assert.Equal(first.Revision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(first.GoalId)}").Trim());
             Assert.Equal(second.Revision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(second.GoalId)}").Trim());
-            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+            AssertNoCohortWorkspaces(repo);
         }
         finally
         {
@@ -639,7 +699,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(AcceptanceCohortAttributionOutcome.InteractionOnly, result.Receipt?.Attribution);
             Assert.All(result.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
             Assert.Equal(mainBefore, RunGitOutput(repo, "rev-parse", "main").Trim());
-            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+            AssertNoCohortWorkspaces(repo);
 
             var store = new CohortAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
@@ -930,7 +990,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 "Mcg.AgentOrchestrator.Infrastructure",
                 "First.cs")));
             Assert.True(File.Exists(Path.Combine(repo, "tests", "Second.cs")));
-            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+            AssertNoCohortWorkspaces(repo);
             using var connection = new SqliteConnection(
                 $"Data Source={Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db")}");
             connection.Open();
@@ -1035,7 +1095,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(0, verifier.RunCount);
             Assert.Equal(0, gateAdmissions);
             Assert.Equal(1, store.ReadOvertakeCount(firstGoal.Id));
-            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+            AssertNoCohortWorkspaces(repo);
             Assert.Equal(firstRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(firstGoal.Id)}").Trim());
             Assert.Equal(secondRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(secondGoal.Id)}").Trim());
 
@@ -1123,7 +1183,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(0, verifier.RunCount);
             Assert.Equal(firstRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(firstGoal.Id)}").Trim());
             Assert.Equal(secondRevision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(secondGoal.Id)}").Trim());
-            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+            AssertNoCohortWorkspaces(repo);
         }
         finally
         {
@@ -1246,7 +1306,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.All(result.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
             Assert.Contains("fresh Ready projection", result.Detail, StringComparison.Ordinal);
             Assert.Equal(1, verifier.RunCount);
-            Assert.Empty(Directory.EnumerateDirectories(Path.Combine(repo, GoalWorktrees.DirectoryName), "cohort-*"));
+            AssertNoCohortWorkspaces(repo);
         }
         finally
         {
@@ -1374,6 +1434,14 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         var repo = CreateSeededRepository();
         RunGit(repo, "branch", "-M", "main");
         return repo;
+    }
+
+    private static void AssertNoCohortWorkspaces(string repo)
+    {
+        var worktreeRoot = Path.Combine(repo, GoalWorktrees.DirectoryName);
+        Assert.Empty(Directory.EnumerateDirectories(worktreeRoot, "c-*"));
+        Assert.Empty(Directory.EnumerateDirectories(worktreeRoot, "p-*"));
+        Assert.Empty(Directory.EnumerateDirectories(worktreeRoot, "cohort-*"));
     }
 
     private static string CreateWorktreeCandidate(
