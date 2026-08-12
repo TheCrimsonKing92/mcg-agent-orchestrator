@@ -104,6 +104,20 @@ if ($claudeProfiles.Count -ne 1 -or
 
 $agents = Get-Content -LiteralPath $agentsPath -Raw | ConvertFrom-Json
 $modelFunctions = Get-Content -LiteralPath $modelFunctionsPath -Raw | ConvertFrom-Json
+
+# Keep inactive Anthropic alternates genuinely out of the old Sonnet 4.6
+# model family too. They remain Offline, but a later deliberate re-enable must
+# not resurrect stale model metadata or its subscription alias.
+foreach ($anthropicAgent in @($agents.Agents | Where-Object {
+    $_.Model.ProviderName -eq 'Anthropic'
+})) {
+    $anthropicAgent.Model.ModelName = 'claude-opus-5'
+    $anthropicAgent.ComplexModel.ModelName = 'claude-opus-5'
+    if ($null -ne $anthropicAgent.Subscription -and
+        $anthropicAgent.Subscription.WorkerProfileName -eq 'claude-cli') {
+        $anthropicAgent.Subscription.ModelAlias = 'claude-opus-5'
+    }
+}
 $cheapJudgesBefore = @($modelFunctions.Bindings | Where-Object {
     $_.Purpose -eq 'acceptance-judge' -and $_.Lane -eq 'CheapApi'
 })
@@ -233,7 +247,7 @@ try {
         specRefiner = 'Anthropic/sonnet alias (Sonnet 5 required)'
         cheapAcceptanceJudge = 'Unchanged'
         implementationRoleDefaults = 'OpenAI unchanged'
-        anthropicImplementationAlternates = 'Offline unchanged'
+        anthropicImplementationAlternates = 'Offline; stale Sonnet 4.6 metadata replaced with Opus 5'
         inFlightAssignments = 'Unchanged; only future role resolution uses the new defaults'
         backupDirectory = $backupRoot
         agentsSha256 = (Get-FileHash -LiteralPath $agentsPath -Algorithm SHA256).Hash
