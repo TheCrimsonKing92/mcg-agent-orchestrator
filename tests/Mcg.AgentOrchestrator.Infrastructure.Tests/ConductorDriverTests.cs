@@ -6287,12 +6287,17 @@ public sealed class ConductorDriverTests
             runFocusedEvidence: (_, request) =>
             {
                 focusedRuns++;
+                Assert.Equal("Infrastructure.Tests:all", request);
                 return new FocusedEvidenceRunResult(
                     request,
                     Accepted: false,
                     Passed: false,
                     Summary: "unbounded evidence request rejected",
-                    Checks: []);
+                    Checks: [],
+                    Rejection: new FocusedEvidenceRejection(
+                        FocusedEvidenceRejectionCode.UnsafeFilter,
+                        "all",
+                        "unbounded evidence request rejected"));
             },
             retryTask: (gid, tid, msg) =>
             {
@@ -6306,12 +6311,13 @@ public sealed class ConductorDriverTests
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(0, focusedRuns);
+        Assert.Equal(1, focusedRuns);
         Assert.True(retried);
         Assert.Null(escalation);
         var outcome = reviewer.VerificationHistory.Last().MergedReviewFindings!.Single().EvidenceOutcome;
         Assert.False(outcome?.Honoured);
         Assert.Equal(FindingEvidenceNotHonouredReason.UnparseableSelection, outcome?.Reason);
+        Assert.Contains("offending_filter='all'", outcome?.Detail, StringComparison.Ordinal);
         Assert.Contains(goal.Timeline, evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.FindingEvidenceRequestRecorded &&
