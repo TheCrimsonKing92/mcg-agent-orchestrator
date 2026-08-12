@@ -851,7 +851,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 
             Assert.Equal(2, recoveredReceipts.Count);
             Assert.Equal(
-                [firstGoal.Id.Value, secondGoal.Id.Value],
+                new[] { firstGoal.Id.Value, secondGoal.Id.Value }.Order(StringComparer.Ordinal),
                 recoveredReceipts.Select(item => item.GoalId).Order(StringComparer.Ordinal));
             Assert.All(new[] { firstGoal, secondGoal }, goal =>
                 Assert.True(GoalOperationJournal.HasCompletedLandingEvidence(
