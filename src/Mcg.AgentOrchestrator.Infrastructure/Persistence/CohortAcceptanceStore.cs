@@ -43,17 +43,31 @@ public sealed class CohortAcceptanceStore
         {
             throw new ArgumentException("A shared cohort receipt must reference exactly two members.", nameof(receipt));
         }
+        using var connection = Open();
+        var existing = ReadReceipt(connection, receipt.Identity.Value, transaction: null);
+        if (existing is not null)
+        {
+            return existing;
+        }
+
         if ((receipt.Outcome == AcceptanceCohortGateOutcome.Passed || receipt.ValidForLanding) &&
-            !receipt.HasAuthoritativeLandingEvidence)
+            (receipt.GateExitCode != 0 ||
+             !AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(receipt.GateTestResultPaths)))
         {
             throw new ArgumentException(
                 "A passing cohort receipt requires exit code zero and normalized bound TRX evidence.",
                 nameof(receipt));
         }
 
-        using var connection = Open();
+        receipt = CaptureGateEvidence(receipt);
+        if ((receipt.Outcome == AcceptanceCohortGateOutcome.Passed || receipt.ValidForLanding) &&
+            !receipt.HasAuthoritativeLandingEvidence)
+        {
+            throw new InvalidDataException("Cohort gate evidence custody did not produce content-bound landing evidence.");
+        }
+
         using var transaction = connection.BeginTransaction();
-        var existing = ReadReceipt(connection, receipt.Identity.Value, transaction);
+        existing = ReadReceipt(connection, receipt.Identity.Value, transaction);
         if (existing is not null)
         {
             transaction.Commit();
@@ -67,9 +81,9 @@ public sealed class CohortAcceptanceStore
                 INSERT INTO cohort_receipts(
                     cohort_id, receipt_id, main_revision, combined_tree_revision, manifest_identity,
                     outcome, attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
-                    gate_exit_code, gate_test_result_paths_json)
+                    gate_exit_code, gate_test_result_paths_json, gate_evidence_artifacts_json)
                 VALUES ($cohort, $receipt, $main, $tree, $manifest, $outcome, $attribution, $valid, $completed, $elapsed, $failed,
-                    $exitCode, $testResultPaths);
+                    $exitCode, $testResultPaths, $evidenceArtifacts);
                 """;
             command.Parameters.AddWithValue("$cohort", receipt.Identity.Value);
             command.Parameters.AddWithValue("$receipt", receipt.ReceiptId);
@@ -86,6 +100,9 @@ public sealed class CohortAcceptanceStore
             command.Parameters.AddWithValue(
                 "$testResultPaths",
                 JsonSerializer.Serialize(receipt.GateTestResultPaths));
+            command.Parameters.AddWithValue(
+                "$evidenceArtifacts",
+                JsonSerializer.Serialize(receipt.GateEvidenceArtifacts));
             command.ExecuteNonQuery();
         }
 
@@ -287,19 +304,50 @@ public sealed class CohortAcceptanceStore
         transaction.Commit();
     }
 
-    public AcceptanceCohortReceipt InvalidateLanding(string cohortId)
+    public AcceptanceCohortReceipt InvalidateLanding(
+        string cohortId,
+        AcceptanceCohortInvalidationReason reason,
+        string detail)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cohortId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(detail);
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
+        var receipt = ReadReceipt(connection, cohortId, transaction) ??
+            throw new InvalidOperationException("Cohort receipt was missing during invalidation.");
+        var orderedBindings = receipt.Identity.Members.Select((member, ordinal) =>
+            $"{ordinal}:{member.GoalId.Value}:{member.BranchRevision}:{member.CandidateRevision}").ToArray();
+        var invalidatedAt = DateTimeOffset.UtcNow;
+        var invalidationPayload = string.Join('\n',
+            cohortId,
+            reason.ToString(),
+            receipt.Identity.ObservedMainRevision,
+            receipt.Identity.CombinedTreeRevision,
+            receipt.Identity.ManifestIdentity,
+            string.Join('\n', orderedBindings));
+        var invalidationId = $"cohort-invalidation-v1-{Convert.ToHexStringLower(
+            SHA256.HashData(Encoding.UTF8.GetBytes(invalidationPayload)))}";
         using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
-            command.CommandText = "UPDATE cohort_receipts SET outcome='Invalidated', valid_for_landing=0 WHERE cohort_id=$cohort;";
+            command.CommandText = """
+                INSERT INTO cohort_invalidations(
+                    invalidation_id, cohort_id, reason, detail, invalidated_at,
+                    observed_main_revision, combined_tree_revision, manifest_identity,
+                    ordered_member_bindings_json)
+                VALUES ($id, $cohort, $reason, $detail, $at, $main, $tree, $manifest, $members)
+                ON CONFLICT(invalidation_id) DO NOTHING;
+                """;
+            command.Parameters.AddWithValue("$id", invalidationId);
             command.Parameters.AddWithValue("$cohort", cohortId);
-            if (command.ExecuteNonQuery() != 1)
-            {
-                throw new InvalidOperationException("Cohort receipt was missing during invalidation.");
-            }
+            command.Parameters.AddWithValue("$reason", reason.ToString());
+            command.Parameters.AddWithValue("$detail", detail.Length <= 1024 ? detail : detail[..1024]);
+            command.Parameters.AddWithValue("$at", invalidatedAt.ToUniversalTime().ToString("O"));
+            command.Parameters.AddWithValue("$main", receipt.Identity.ObservedMainRevision);
+            command.Parameters.AddWithValue("$tree", receipt.Identity.CombinedTreeRevision);
+            command.Parameters.AddWithValue("$manifest", receipt.Identity.ManifestIdentity);
+            command.Parameters.AddWithValue("$members", JsonSerializer.Serialize(receipt.Identity.Members));
+            command.ExecuteNonQuery();
         }
         using (var invalidateIntent = connection.CreateCommand())
         {
@@ -309,7 +357,7 @@ public sealed class CohortAcceptanceStore
             invalidateIntent.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O"));
             invalidateIntent.ExecuteNonQuery();
         }
-        var receipt = ReadReceipt(connection, cohortId, transaction) ??
+        receipt = ReadReceipt(connection, cohortId, transaction) ??
             throw new InvalidOperationException("Cohort receipt disappeared during invalidation.");
         transaction.Commit();
         return receipt;
@@ -387,7 +435,10 @@ public sealed class CohortAcceptanceStore
             {
                 if (receipt is not null)
                 {
-                    _ = InvalidateLanding(intent.CohortId);
+                    _ = InvalidateLanding(
+                        intent.CohortId,
+                        AcceptanceCohortInvalidationReason.RecoveryEvidenceUnavailable,
+                        "Prepared cohort landing no longer has its exact authoritative receipt evidence.");
                 }
                 continue;
             }
@@ -694,6 +745,137 @@ public sealed class CohortAcceptanceStore
         return connection;
     }
 
+    private AcceptanceCohortReceipt CaptureGateEvidence(AcceptanceCohortReceipt receipt)
+    {
+        var attemptCustodyKey = string.Join(
+            ':',
+            receipt.ReceiptId,
+            receipt.CompletedAt.ToUniversalTime().Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            receipt.GateElapsedMilliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var receiptFolder = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(attemptCustodyKey)));
+        var custodyDirectory = Path.Combine(
+            _databasePath + ".artifacts",
+            receipt.Identity.Value,
+            receiptFolder);
+        Directory.CreateDirectory(custodyDirectory);
+
+        var artifacts = new List<AcceptanceCohortEvidenceArtifact>();
+        var custodyTrxPaths = new List<string>();
+        for (var index = 0; index < receipt.GateTestResultPaths.Count; index++)
+        {
+            var source = Path.GetFullPath(receipt.GateTestResultPaths[index]);
+            if (!File.Exists(source))
+            {
+                if (receipt.Outcome == AcceptanceCohortGateOutcome.Passed || receipt.ValidForLanding)
+                {
+                    throw new InvalidDataException($"Cohort TRX evidence disappeared before custody: {source}");
+                }
+                continue;
+            }
+
+            var target = Path.Combine(custodyDirectory, $"trx-{index:D3}.trx");
+            artifacts.Add(CopyContentBoundArtifact(source, target, "trx"));
+            custodyTrxPaths.Add(Path.GetFullPath(target));
+        }
+
+        var verdictBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            receipt.ReceiptId,
+            CohortId = receipt.Identity.Value,
+            Outcome = receipt.Outcome.ToString(),
+            receipt.CompletedAt,
+            receipt.GateElapsedMilliseconds,
+            FailedChecks = receipt.FailedChecks.ToArray(),
+            receipt.GateExitCode,
+            GateTestResultSha256 = artifacts
+                .Where(artifact => artifact.Kind.Equals("trx", StringComparison.Ordinal))
+                .Select(artifact => artifact.Sha256)
+                .ToArray()
+        });
+        artifacts.Add(WriteContentBoundArtifact(
+            Path.Combine(custodyDirectory, "gate-verdict.json"),
+            verdictBytes,
+            "gate-verdict"));
+
+        return receipt with
+        {
+            GateTestResultPaths = custodyTrxPaths,
+            GateEvidenceArtifacts = artifacts
+        };
+    }
+
+    private static AcceptanceCohortEvidenceArtifact CopyContentBoundArtifact(
+        string source,
+        string target,
+        string kind)
+    {
+        using var sourceStream = File.OpenRead(source);
+        var expectedHash = Convert.ToHexStringLower(SHA256.HashData(sourceStream));
+        sourceStream.Position = 0;
+        try
+        {
+            using var targetStream = new FileStream(
+                target,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.Read,
+                bufferSize: 64 * 1024,
+                FileOptions.SequentialScan);
+            sourceStream.CopyTo(targetStream);
+            targetStream.Flush(flushToDisk: true);
+        }
+        catch (IOException) when (File.Exists(target))
+        {
+            using var existing = File.OpenRead(target);
+            var existingHash = Convert.ToHexStringLower(SHA256.HashData(existing));
+            if (!existingHash.Equals(expectedHash, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException($"Immutable cohort evidence target already contains different content: {target}");
+            }
+        }
+
+        return new AcceptanceCohortEvidenceArtifact(
+            kind,
+            Path.GetFullPath(target),
+            expectedHash,
+            new FileInfo(target).Length);
+    }
+
+    private static AcceptanceCohortEvidenceArtifact WriteContentBoundArtifact(
+        string target,
+        byte[] content,
+        string kind)
+    {
+        var expectedHash = Convert.ToHexStringLower(SHA256.HashData(content));
+        try
+        {
+            using var stream = new FileStream(
+                target,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.Read,
+                bufferSize: 4096,
+                FileOptions.SequentialScan);
+            stream.Write(content);
+            stream.Flush(flushToDisk: true);
+        }
+        catch (IOException) when (File.Exists(target))
+        {
+            using var existing = File.OpenRead(target);
+            var existingHash = Convert.ToHexStringLower(SHA256.HashData(existing));
+            if (!existingHash.Equals(expectedHash, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException($"Immutable cohort evidence target already contains different content: {target}");
+            }
+        }
+
+        return new AcceptanceCohortEvidenceArtifact(
+            kind,
+            Path.GetFullPath(target),
+            expectedHash,
+            content.LongLength);
+    }
+
     private static void EnsureSchema(SqliteConnection connection)
     {
         using var command = connection.CreateCommand();
@@ -711,7 +893,8 @@ public sealed class CohortAcceptanceStore
                 gate_elapsed_ms INTEGER NOT NULL,
                 failed_checks_json TEXT NOT NULL,
                 gate_exit_code INTEGER NULL,
-                gate_test_result_paths_json TEXT NOT NULL DEFAULT '[]');
+                gate_test_result_paths_json TEXT NOT NULL DEFAULT '[]',
+                gate_evidence_artifacts_json TEXT NOT NULL DEFAULT '[]');
             CREATE TABLE IF NOT EXISTS cohort_members(
                 cohort_id TEXT NOT NULL REFERENCES cohort_receipts(cohort_id) ON DELETE CASCADE,
                 member_ordinal INTEGER NOT NULL CHECK(member_ordinal IN (0,1)),
@@ -773,6 +956,18 @@ public sealed class CohortAcceptanceStore
                 outcome TEXT NOT NULL,
                 detail TEXT NOT NULL,
                 recorded_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS cohort_invalidations(
+                invalidation_id TEXT PRIMARY KEY,
+                cohort_id TEXT NOT NULL REFERENCES cohort_receipts(cohort_id) ON DELETE CASCADE,
+                reason TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                invalidated_at TEXT NOT NULL,
+                observed_main_revision TEXT NOT NULL,
+                combined_tree_revision TEXT NOT NULL,
+                manifest_identity TEXT NOT NULL,
+                ordered_member_bindings_json TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS ix_cohort_invalidations_cohort
+                ON cohort_invalidations(cohort_id, invalidated_at);
             """;
         command.ExecuteNonQuery();
         EnsureColumn(connection, "cohort_members", "risk_tier", "TEXT NOT NULL DEFAULT 'DocsOnly'");
@@ -781,13 +976,11 @@ public sealed class CohortAcceptanceStore
         EnsureColumn(connection, "cohort_members", "merge_reason", "TEXT NOT NULL DEFAULT 'NoConflictsDetected'");
         EnsureColumn(connection, "cohort_receipts", "gate_exit_code", "INTEGER NULL");
         EnsureColumn(connection, "cohort_receipts", "gate_test_result_paths_json", "TEXT NOT NULL DEFAULT '[]'");
+        EnsureColumn(connection, "cohort_receipts", "gate_evidence_artifacts_json", "TEXT NOT NULL DEFAULT '[]'");
         EnsureColumn(connection, "cohort_landing_intents", "prior_integration_revision", "TEXT NULL");
         EnsureReusablePartitionReceiptSchema(connection);
         using var invalidateLegacy = connection.CreateCommand();
         invalidateLegacy.CommandText = """
-            UPDATE cohort_receipts
-            SET outcome='Invalidated', valid_for_landing=0
-            WHERE cohort_id NOT LIKE 'cohort-v2-%';
             UPDATE cohort_landing_intents
             SET state='invalidated', updated_at=$updated
             WHERE cohort_id NOT LIKE 'cohort-v2-%' AND state='prepared';
@@ -862,7 +1055,7 @@ public sealed class CohortAcceptanceStore
         command.CommandText = """
             SELECT receipt_id, main_revision, combined_tree_revision, manifest_identity, outcome,
                    attribution, valid_for_landing, completed_at, gate_elapsed_ms, failed_checks_json,
-                   gate_exit_code, gate_test_result_paths_json
+                   gate_exit_code, gate_test_result_paths_json, gate_evidence_artifacts_json
             FROM cohort_receipts WHERE cohort_id=$cohort;
             """;
         command.Parameters.AddWithValue("$cohort", cohortId);
@@ -880,6 +1073,7 @@ public sealed class CohortAcceptanceStore
         var failed = JsonSerializer.Deserialize<string[]>(reader.GetString(9)) ?? [];
         int? gateExitCode = reader.IsDBNull(10) ? null : reader.GetInt32(10);
         var gateTestResultPaths = JsonSerializer.Deserialize<string[]>(reader.GetString(11)) ?? [];
+        var gateEvidenceArtifacts = JsonSerializer.Deserialize<AcceptanceCohortEvidenceArtifact[]>(reader.GetString(12)) ?? [];
         reader.Close();
 
         using var membersCommand = connection.CreateCommand();
@@ -905,6 +1099,7 @@ public sealed class CohortAcceptanceStore
                 membersReader.GetString(7),
                 membersReader.GetString(8)));
         }
+        membersReader.Close();
         if (members.Count != 2)
         {
             throw new InvalidDataException($"Cohort receipt {cohortId} does not have exactly two member rows.");
@@ -915,9 +1110,54 @@ public sealed class CohortAcceptanceStore
         {
             throw new InvalidDataException($"Stored cohort identity {cohortId} failed canonical reconstruction.");
         }
+        AcceptanceCohortInvalidation? invalidation = null;
+        using (var invalidationCommand = connection.CreateCommand())
+        {
+            invalidationCommand.Transaction = transaction;
+            invalidationCommand.CommandText = """
+                SELECT invalidation_id, reason, detail, invalidated_at, observed_main_revision,
+                       combined_tree_revision, manifest_identity, ordered_member_bindings_json
+                FROM cohort_invalidations
+                WHERE cohort_id=$cohort
+                ORDER BY invalidated_at DESC, invalidation_id DESC
+                LIMIT 1;
+                """;
+            invalidationCommand.Parameters.AddWithValue("$cohort", cohortId);
+            using var invalidationReader = invalidationCommand.ExecuteReader();
+            if (invalidationReader.Read())
+            {
+                invalidation = new AcceptanceCohortInvalidation(
+                    invalidationReader.GetString(0),
+                    cohortId,
+                    Enum.Parse<AcceptanceCohortInvalidationReason>(invalidationReader.GetString(1)),
+                    invalidationReader.GetString(2),
+                    DateTimeOffset.Parse(invalidationReader.GetString(3), System.Globalization.CultureInfo.InvariantCulture),
+                    invalidationReader.GetString(4),
+                    invalidationReader.GetString(5),
+                    invalidationReader.GetString(6),
+                    JsonSerializer.Deserialize<AcceptanceCohortMemberBinding[]>(invalidationReader.GetString(7)) ?? []);
+                var invalidationIdentity = AcceptanceCohortIdentity.Create(
+                    invalidation.OrderedMembers,
+                    invalidation.ObservedMainRevision,
+                    invalidation.CombinedTreeRevision,
+                    invalidation.ManifestIdentity);
+                if (!invalidation.ObservedMainRevision.Equals(identity.ObservedMainRevision, StringComparison.Ordinal) ||
+                    !invalidation.CombinedTreeRevision.Equals(identity.CombinedTreeRevision, StringComparison.Ordinal) ||
+                    !invalidation.ManifestIdentity.Equals(identity.ManifestIdentity, StringComparison.Ordinal) ||
+                    !invalidationIdentity.Value.Equals(identity.Value, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException($"Stored cohort invalidation {invalidation.InvalidationId} does not bind its receipt identity.");
+                }
+            }
+        }
+
         return new AcceptanceCohortReceipt(
             receiptId, identity, outcome, completed, elapsed, failed, gateExitCode,
-            gateTestResultPaths, attribution, valid);
+            gateTestResultPaths, attribution, valid)
+        {
+            GateEvidenceArtifacts = gateEvidenceArtifacts,
+            Invalidation = invalidation
+        };
     }
 
     private static IReadOnlyList<AcceptanceCohortCoverage> ReadCoverage(

@@ -2518,7 +2518,9 @@ internal sealed class ConductorDriver
         string manifestIdentity;
         try
         {
-            manifestIdentity = GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path);
+            manifestIdentity = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(
+                integration.Path,
+                bindings.SelectMany(member => member.LandingPaths).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -2534,10 +2536,38 @@ internal sealed class ConductorDriver
         var receipt = _cohortAcceptanceStore.TryReadReceipt(identity.Value);
         AcceptanceVerificationResult? verification = null;
 
+        if (receipt?.Invalidation is not null ||
+            receipt?.Outcome == AcceptanceCohortGateOutcome.Invalidated)
+        {
+            _cohortAcceptanceStore.SuppressPair(
+                ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
+                identity.Value);
+            return CohortOrdinaryFallback(
+                receipt,
+                "persisted cohort invalidation exhausted shared-receipt reuse; exact pair suppressed and routed to ordinary acceptance");
+        }
+
+        if (receipt?.Outcome == AcceptanceCohortGateOutcome.InfrastructureFailure)
+        {
+            receipt = _cohortAcceptanceStore.InvalidateLanding(
+                identity.Value,
+                AcceptanceCohortInvalidationReason.InfrastructureRetryExhausted,
+                "The exact cohort identity already has an indeterminate infrastructure attempt; bounded cohort reuse is exhausted.");
+            _cohortAcceptanceStore.SuppressPair(
+                ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
+                identity.Value);
+            return CohortOrdinaryFallback(
+                receipt,
+                "persisted infrastructure attempt exhausted bounded cohort reuse; exact pair suppressed and routed to ordinary acceptance");
+        }
+
         if (receipt is { Outcome: AcceptanceCohortGateOutcome.Passed } &&
             !receipt.HasAuthoritativeLandingEvidence)
         {
-            receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+            receipt = _cohortAcceptanceStore.InvalidateLanding(
+                identity.Value,
+                AcceptanceCohortInvalidationReason.EvidenceUnavailable,
+                "Cached passing receipt lacks successful exit or immutable content-bound coherent TRX evidence.");
             return CohortReprojection(
                 receipt,
                 "cached passing receipt lacks successful exit and extant coherent TRX evidence; both goals held for fresh Ready projection and pair selection");
@@ -2546,13 +2576,15 @@ internal sealed class ConductorDriver
         if (receipt is null)
         {
             var gateClock = Stopwatch.StartNew();
-            AcceptanceCohortGateOutcome outcome;
-            IReadOnlyList<string> failedChecks;
+            var outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
+            IReadOnlyList<string> failedChecks = [];
             int? gateExitCode = null;
             IReadOnlyList<string> gateTestResultPaths = [];
+            DotnetBuildEnvironmentLease? stableSlotLease = null;
+            var gateExecutionComplete = false;
             try
             {
-                using var stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(
+                stableSlotLease = _parallelAcceptanceAttemptCoordinator.AcquireCohortStableSlotLease(
                     identity.Value,
                     cancellationToken);
                 onGateAdmitted?.Invoke();
@@ -2570,26 +2602,45 @@ internal sealed class ConductorDriver
                     .Where(check => !check.Passed && !check.Advisory)
                     .Select(check => check.Name)
                     .ToArray() ?? [];
+                gateExecutionComplete = true;
+                gateClock.Stop();
+                receipt = _cohortAcceptanceStore.SaveGateReceipt(new AcceptanceCohortReceipt(
+                    $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
+                    identity,
+                    outcome,
+                    DateTimeOffset.UtcNow,
+                    checked((long)gateClock.Elapsed.TotalMilliseconds),
+                    failedChecks,
+                    GateExitCode: gateExitCode,
+                    GateTestResultPaths: gateTestResultPaths,
+                    ValidForLanding: outcome == AcceptanceCohortGateOutcome.Passed));
             }
-            catch (Exception ex) when (ex is AcceptanceInfrastructureDeferredException or
-                DotnetBuildSlotsBusyException or BuildLockBlockedException or
-                OperationCanceledException or IOException or InvalidDataException)
+            catch (Exception ex) when (!gateExecutionComplete && ex is (
+                AcceptanceInfrastructureDeferredException or DotnetBuildSlotsBusyException or
+                BuildLockBlockedException or OperationCanceledException or IOException or
+                InvalidDataException))
             {
                 outcome = AcceptanceCohortGateOutcome.InfrastructureFailure;
                 failedChecks = [$"infrastructure:{ex.GetType().Name}:{BoundCohortDetail(ex.Message)}"];
             }
-            gateClock.Stop();
-            receipt = new AcceptanceCohortReceipt(
-                $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
-                identity,
-                outcome,
-                DateTimeOffset.UtcNow,
-                checked((long)gateClock.Elapsed.TotalMilliseconds),
-                failedChecks,
-                GateExitCode: gateExitCode,
-                GateTestResultPaths: gateTestResultPaths,
-                ValidForLanding: outcome == AcceptanceCohortGateOutcome.Passed);
-            receipt = _cohortAcceptanceStore.SaveGateReceipt(receipt);
+            finally
+            {
+                stableSlotLease?.Dispose();
+            }
+            if (receipt is null)
+            {
+                gateClock.Stop();
+                receipt = _cohortAcceptanceStore.SaveGateReceipt(new AcceptanceCohortReceipt(
+                    $"cohort-receipt-v2-{identity.Value[(AcceptanceCohortIdentity.Version.Length + 1)..]}",
+                    identity,
+                    outcome,
+                    DateTimeOffset.UtcNow,
+                    checked((long)gateClock.Elapsed.TotalMilliseconds),
+                    failedChecks,
+                    GateExitCode: gateExitCode,
+                    GateTestResultPaths: gateTestResultPaths,
+                    ValidForLanding: false));
+            }
         }
 
         try
@@ -2598,7 +2649,10 @@ internal sealed class ConductorDriver
         }
         catch (InvalidOperationException ex)
         {
-            receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+            receipt = _cohortAcceptanceStore.InvalidateLanding(
+                identity.Value,
+                AcceptanceCohortInvalidationReason.GoalBranchChanged,
+                $"Post-gate goal branch changed: {BoundCohortDetail(ex.Message)}");
             return CohortReprojection(receipt, $"post-gate goal branch changed; fresh Ready projection required; detail={BoundCohortDetail(ex.Message)}");
         }
         if (receipt.Outcome is AcceptanceCohortGateOutcome.InfrastructureFailure or AcceptanceCohortGateOutcome.Invalidated)
@@ -2649,7 +2703,10 @@ internal sealed class ConductorDriver
                 if (ProjectGateReadyCandidate(goals[index], policy) is not GateReadyCandidateProjectionResult.Ready live ||
                     !live.Projection.Equals(selection.Members[index]))
                 {
-                    receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+                    receipt = _cohortAcceptanceStore.InvalidateLanding(
+                        identity.Value,
+                        AcceptanceCohortInvalidationReason.BindingChanged,
+                        $"Post-gate Ready projection changed for goal {goals[index].Id.Value}.");
                     return CohortReprojection(receipt, "post-gate binding changed; both goals held for fresh Ready projection and pair selection");
                 }
             }
@@ -2659,7 +2716,10 @@ internal sealed class ConductorDriver
             }
             catch (InvalidOperationException ex)
             {
-                receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+                receipt = _cohortAcceptanceStore.InvalidateLanding(
+                    identity.Value,
+                    AcceptanceCohortInvalidationReason.GoalBranchChanged,
+                    $"Post-gate goal branch changed: {BoundCohortDetail(ex.Message)}");
                 return CohortReprojection(receipt, $"post-gate goal branch changed; fresh Ready projection required; detail={BoundCohortDetail(ex.Message)}");
             }
             var landing = LandingExecutor.ExecuteCohort(
@@ -2676,7 +2736,10 @@ internal sealed class ConductorDriver
             {
                 if (landing.Outcome == AcceptanceCohortLandingOutcome.StateInvalidated)
                 {
-                    receipt = _cohortAcceptanceStore.InvalidateLanding(identity.Value);
+                    receipt = _cohortAcceptanceStore.InvalidateLanding(
+                        identity.Value,
+                        AcceptanceCohortInvalidationReason.LandingStateChanged,
+                        landing.Message);
                     return CohortReprojection(receipt, $"{landing.Message} fresh Ready projection required");
                 }
                 return CohortHeld(goals, policy, receipt, landing.Message);
@@ -2756,7 +2819,9 @@ internal sealed class ConductorDriver
                     identity.ObservedMainRevision,
                     member);
                 treeRevision = partition.TreeRevision;
-                partitionManifest = GoalWorktrees.ComputeAcceptanceManifestIdentity(partition.Path);
+                partitionManifest = _cohortAcceptanceVerifier.ComputeEffectivePlanIdentity(
+                    partition.Path,
+                    member.LandingPaths);
                 var result = _cohortAcceptanceVerifier.RunAsync(
                     partition.Path,
                     member.GoalId,
@@ -2794,6 +2859,15 @@ internal sealed class ConductorDriver
         ConductorAcceptanceCohortRunResult CohortReprojection(
             AcceptanceCohortReceipt diagnosticReceipt,
             string detail) => CohortHeld(goals, policy, diagnosticReceipt, detail);
+
+        ConductorAcceptanceCohortRunResult CohortOrdinaryFallback(
+            AcceptanceCohortReceipt diagnosticReceipt,
+            string detail) => new(
+                diagnosticReceipt,
+                new Dictionary<string, ConductorAdvanceResult>(StringComparer.Ordinal),
+                $"outcome={diagnosticReceipt.Outcome} receipt={diagnosticReceipt.ReceiptId} " +
+                $"invalidation={diagnosticReceipt.Invalidation?.Reason.ToString() ?? "legacy"} fallback=ordinary " +
+                $"detail={BoundCohortDetail(detail)}");
     }
 
     private static string CreateCohortPartitionReceiptId(

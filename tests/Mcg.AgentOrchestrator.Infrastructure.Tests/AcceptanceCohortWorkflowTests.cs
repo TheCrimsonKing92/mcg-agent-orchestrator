@@ -35,7 +35,12 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 combinedTree = workspace.TreeRevision;
                 Assert.True(File.Exists(Path.Combine(workspace.Path, "src", "First.cs")));
                 Assert.True(File.Exists(Path.Combine(workspace.Path, "tests", "Second.cs")));
-                Assert.StartsWith("manifest-sha256-", GoalWorktrees.ComputeAcceptanceManifestIdentity(workspace.Path), StringComparison.Ordinal);
+                Assert.StartsWith(
+                    "effective-manifest-sha256-",
+                    GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                        workspace.Path,
+                        bindings.SelectMany(member => member.LandingPaths).ToArray()),
+                    StringComparison.Ordinal);
                 Assert.Equal(first.Revision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(first.GoalId)}").Trim());
                 Assert.Equal(second.Revision, RunGitOutput(repo, "rev-parse", $"refs/heads/{GoalWorktrees.BranchName(second.GoalId)}").Trim());
                 Assert.Equal(combinedTree, RunGitOutput(workspace.Path, "rev-parse", "HEAD^{tree}").Trim());
@@ -241,7 +246,16 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 GateTestResultPaths: [WritePassingTrx(root, "cohort.trx")]);
             var store = new CohortAcceptanceStore(databasePath);
 
-            Assert.Equal(receipt, store.SaveGateReceipt(receipt));
+            var persistedReceipt = store.SaveGateReceipt(receipt);
+            Assert.True(persistedReceipt.HasAuthoritativeLandingEvidence);
+            Assert.NotEqual(receipt.GateTestResultPaths.Single(), persistedReceipt.GateTestResultPaths.Single());
+            Assert.All(persistedReceipt.GateEvidenceArtifacts, artifact =>
+            {
+                Assert.True(File.Exists(artifact.Path));
+                Assert.Equal(64, artifact.Sha256.Length);
+            });
+            File.WriteAllText(receipt.GateTestResultPaths.Single(), "later stable-slot output");
+            Assert.True(persistedReceipt.HasAuthoritativeLandingEvidence);
             var reloadedReceipt = store.SaveGateReceipt(receipt);
             Assert.Equal(receipt.ReceiptId, reloadedReceipt.ReceiptId);
             Assert.Equal(receipt.Identity, reloadedReceipt.Identity);
@@ -251,8 +265,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             Assert.Equal(receipt.FailedChecks, reloadedReceipt.FailedChecks);
             Assert.Equal(receipt.ValidForLanding, reloadedReceipt.ValidForLanding);
             Assert.Equal(0, reloadedReceipt.GateExitCode);
-            Assert.Equal(receipt.GateTestResultPaths!.ToArray(), reloadedReceipt.GateTestResultPaths!.ToArray());
-            store.PrepareLanding(receipt, new string('e', 40));
+            Assert.Equal(persistedReceipt.GateTestResultPaths.ToArray(), reloadedReceipt.GateTestResultPaths.ToArray());
+            Assert.Equal(persistedReceipt.GateEvidenceArtifacts.ToArray(), reloadedReceipt.GateEvidenceArtifacts.ToArray());
+            store.PrepareLanding(persistedReceipt, new string('e', 40));
             var coverage = store.FinalizeLanding(identity.Value, receipt.ReceiptId);
             store.CompleteLandingEffects(identity.Value, receipt.ReceiptId);
             store.RecordOvertake(first.GoalId);
@@ -389,7 +404,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 bindings,
                 main,
                 integration.TreeRevision,
-                GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
+                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                    integration.Path,
+                    bindings.SelectMany(member => member.LandingPaths).ToArray()));
             var receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
                 "receipt-shared",
                 identity,
@@ -457,7 +474,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 bindings,
                 boundMain,
                 integration.TreeRevision,
-                GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
+                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                    integration.Path,
+                    bindings.SelectMany(member => member.LandingPaths).ToArray()));
             var receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
                 "receipt-invalidated",
                 identity,
@@ -526,7 +545,12 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 $"refs/heads/{LandingExecutor.IntegrationBranchName}").Trim();
             using var integration = GoalWorktrees.CreateAcceptanceCohortWorkspace(repo, main, bindings);
             var identity = AcceptanceCohortIdentity.Create(
-                bindings, main, integration.TreeRevision, GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
+                bindings,
+                main,
+                integration.TreeRevision,
+                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                    integration.Path,
+                    bindings.SelectMany(member => member.LandingPaths).ToArray()));
             var receipt = store.SaveGateReceipt(new AcceptanceCohortReceipt(
                 "receipt-cas", identity, AcceptanceCohortGateOutcome.Passed, DateTimeOffset.UtcNow,
                 100, [], 0, [WritePassingTrx(repo, "receipt-cas.trx")], ValidForLanding: true));
@@ -876,7 +900,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 bindings,
                 main,
                 integration.TreeRevision,
-                GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
+                GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                    integration.Path,
+                    bindings.SelectMany(member => member.LandingPaths).ToArray()));
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var store = new CohortAcceptanceStore(
                 Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
@@ -1146,7 +1172,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                     bindings,
                     selection.Members[0].MainRevision,
                     integration.TreeRevision,
-                    GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
+                    GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                        integration.Path,
+                        bindings.SelectMany(member => member.LandingPaths).ToArray()));
             }
             _ = store.SaveGateReceipt(new AcceptanceCohortReceipt(
                 "retryable-hold-receipt",
@@ -1222,7 +1250,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                     bindings,
                     selection.Members[0].MainRevision,
                     integration.TreeRevision,
-                    GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
+                    GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                        integration.Path,
+                        bindings.SelectMany(member => member.LandingPaths).ToArray()));
             }
             var databasePath = Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db");
             var store = new CohortAcceptanceStore(databasePath);
@@ -1247,13 +1277,28 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var result = driver.RunAcceptanceCohort(
                 selection, [firstGoal, secondGoal], ConductorAutonomyPolicy.Permissive);
 
-            Assert.Equal(AcceptanceCohortGateOutcome.Invalidated, result.Receipt?.Outcome);
-            Assert.False(result.Receipt?.ValidForLanding);
+            Assert.Equal(AcceptanceCohortGateOutcome.Passed, result.Receipt?.Outcome);
+            Assert.Equal(AcceptanceCohortInvalidationReason.EvidenceUnavailable, result.Receipt?.Invalidation?.Reason);
+            Assert.False(result.Receipt?.HasAuthoritativeLandingEvidence);
             Assert.Equal(2, result.MemberResults.Count);
             Assert.All(result.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
             Assert.Contains("lacks successful exit", result.Detail, StringComparison.Ordinal);
             Assert.Equal(0, verifier.RunCount);
             Assert.Equal(identity.ObservedMainRevision, RunGitOutput(repo, "rev-parse", "main").Trim());
+            using var verifyConnection = new SqliteConnection($"Data Source={databasePath}");
+            verifyConnection.Open();
+            using var verifyCommand = verifyConnection.CreateCommand();
+            verifyCommand.CommandText = """
+                SELECT outcome, valid_for_landing,
+                       (SELECT COUNT(*) FROM cohort_invalidations WHERE cohort_id=$cohort)
+                FROM cohort_receipts WHERE cohort_id=$cohort;
+                """;
+            verifyCommand.Parameters.AddWithValue("$cohort", identity.Value);
+            using var verifyReader = verifyCommand.ExecuteReader();
+            Assert.True(verifyReader.Read());
+            Assert.Equal("Passed", verifyReader.GetString(0));
+            Assert.Equal(1, verifyReader.GetInt32(1));
+            Assert.Equal(1, verifyReader.GetInt32(2));
         }
         finally
         {
@@ -1301,7 +1346,8 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
             var result = driver.RunAcceptanceCohort(
                 selection, [firstGoal, secondGoal], ConductorAutonomyPolicy.Permissive);
 
-            Assert.Equal(AcceptanceCohortGateOutcome.Invalidated, result.Receipt?.Outcome);
+            Assert.Equal(AcceptanceCohortGateOutcome.Passed, result.Receipt?.Outcome);
+            Assert.Equal(AcceptanceCohortInvalidationReason.GoalBranchChanged, result.Receipt?.Invalidation?.Reason);
             Assert.Equal(2, result.MemberResults.Count);
             Assert.All(result.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
             Assert.Contains("fresh Ready projection", result.Detail, StringComparison.Ordinal);
@@ -1316,7 +1362,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
-    public void PersistedInfrastructureFailure_HoldsForFreshProjection()
+    public void PersistedInfrastructureFailure_UsesBoundedHoldThenOrdinaryFallback()
     {
         var repo = CreateAcceptanceCohortRepository();
         try
@@ -1346,7 +1392,9 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                     bindings,
                     selection.Members[0].MainRevision,
                     integration.TreeRevision,
-                    GoalWorktrees.ComputeAcceptanceManifestIdentity(integration.Path));
+                    GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                        integration.Path,
+                        bindings.SelectMany(member => member.LandingPaths).ToArray()));
             }
             var store = new CohortAcceptanceStore(Path.Combine(workspace.OrchestratorDirectory, "cohort-acceptance.db"));
             _ = store.SaveGateReceipt(new AcceptanceCohortReceipt(
@@ -1363,9 +1411,12 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 selection, [firstGoal, secondGoal], ConductorAutonomyPolicy.Permissive);
 
             Assert.Equal(AcceptanceCohortGateOutcome.InfrastructureFailure, result.Receipt?.Outcome);
-            Assert.Equal(2, result.MemberResults.Count);
-            Assert.All(result.MemberResults.Values, member => Assert.IsType<ConductorAdvanceOutcome.Held>(member.Outcome));
-            Assert.Contains("fresh Ready projection", result.Detail, StringComparison.Ordinal);
+            Assert.Equal(AcceptanceCohortInvalidationReason.InfrastructureRetryExhausted, result.Receipt?.Invalidation?.Reason);
+            Assert.Empty(result.MemberResults);
+            Assert.Contains("fallback=ordinary", result.Detail, StringComparison.Ordinal);
+            Assert.Contains(
+                ConductorAcceptanceCohortSelector.PairFingerprint(selection.Members[0], selection.Members[1]),
+                store.ReadSuppressedPairs());
             Assert.Equal(0, verifier.RunCount);
         }
         finally

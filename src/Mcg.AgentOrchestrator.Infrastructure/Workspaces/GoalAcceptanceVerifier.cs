@@ -143,6 +143,11 @@ public sealed record FocusedEvidenceCoverage(
 
 public interface IGoalAcceptanceVerifier
 {
+    string ComputeEffectivePlanIdentity(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles = null) =>
+        GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(worktreePath, changedFiles);
+
     Task<AcceptanceVerificationResult> RunAsync(
         string worktreePath,
         GoalId? goalId = null,
@@ -384,6 +389,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static AcceptanceGateEngineSettings EngineSettings =>
         CurrentGateEngineSettings.Value ?? new AcceptanceGateEngineSettings();
 
+    public static string ComputeEffectiveAcceptancePlanIdentity(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
+        using var engineScope = PushEngineSettings(engineSettings);
+        using var runEnvironmentScope = PushManagedRunEnvironmentScope();
+        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings);
+        return ComputeEffectiveAcceptanceManifestIdentity(plan.Checks);
+    }
+
     public async Task<AcceptanceVerificationResult> RunAsync(
         string worktreePath,
         GoalId? goalId = null,
@@ -413,33 +430,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             engineSettings.ResolveBuildServerShutdownTimeout(),
             cancellationToken).ConfigureAwait(false);
 
-        var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
         var shardCoreBudget =
             ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
         var shardConcurrencyBudget = Math.Min(
             engineSettings.MaxConcurrentShards,
             shardCoreBudget);
-        var infrastructureTestLanes = engineSettings.InfrastructureTestLanes;
-        var policyShardPlan = BuildPolicyShardPlan(changedFiles);
-
-        // Apply policy-required checks from the change scope. Focused project checks replace
-        // matching unfiltered project checks so a narrow App change does not still run the full
-        // Infrastructure project suite from the tracked manifest.
-        var policyRequiredChecks = BuildRequiredPolicyChecks(changedFiles);
-        var policyEffectiveChecks = BuildPolicyEffectiveChecks(
-            manifest.Checks,
-            changedFiles,
-            policyRequiredChecks,
-            policyShardPlan,
-            infrastructureTestLanes);
-        var structuralCoverageApplies = StructuralCoverageApplies(engineSettings, changedFiles);
-        var structurallyCompleteChecks = structuralCoverageApplies
-            ? EnsureTrustedStructuralCoverageExecutionChecks(
-                policyEffectiveChecks,
-                manifest.Checks,
-                worktreePath)
-            : policyEffectiveChecks;
-        var effectiveChecks = ExpandBroadInfrastructureChecks(structurallyCompleteChecks, infrastructureTestLanes);
+        var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings);
+        var manifest = effectivePlan.Manifest;
+        var infrastructureTestLanes = effectivePlan.InfrastructureTestLanes;
+        var policyShardPlan = effectivePlan.PolicyShardPlan;
+        var policyRequiredChecks = effectivePlan.PolicyRequiredChecks;
+        var structuralCoverageApplies = effectivePlan.StructuralCoverageApplies;
+        var effectiveChecks = effectivePlan.Checks;
         var partitionVerdictCache = CreatePartitionVerdictCacheContext(
             worktreePath,
             goalId,
@@ -2313,6 +2315,43 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             changedFiles.Count == 0 ||
             !RepositoryChangeClassifier.Classify(changedFiles).IsDocsOnly);
 
+    private static EffectiveGatePlan CreateEffectiveGatePlan(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles,
+        AcceptanceGateEngineSettings engineSettings)
+    {
+        var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
+        var infrastructureTestLanes = engineSettings.InfrastructureTestLanes;
+        var policyShardPlan = BuildPolicyShardPlan(changedFiles);
+
+        // This is the single owner of the environment- and scope-expanded gate plan. Cohort
+        // identity, partition-cache identity, and execution all hash or consume this exact plan.
+        var policyRequiredChecks = BuildRequiredPolicyChecks(changedFiles);
+        var policyEffectiveChecks = BuildPolicyEffectiveChecks(
+            manifest.Checks,
+            changedFiles,
+            policyRequiredChecks,
+            policyShardPlan,
+            infrastructureTestLanes);
+        var structuralCoverageApplies = StructuralCoverageApplies(engineSettings, changedFiles);
+        var structurallyCompleteChecks = structuralCoverageApplies
+            ? EnsureTrustedStructuralCoverageExecutionChecks(
+                policyEffectiveChecks,
+                manifest.Checks,
+                worktreePath)
+            : policyEffectiveChecks;
+        var effectiveChecks = ExpandBroadInfrastructureChecks(
+            structurallyCompleteChecks,
+            infrastructureTestLanes);
+        return new EffectiveGatePlan(
+            manifest,
+            effectiveChecks,
+            infrastructureTestLanes,
+            policyShardPlan,
+            policyRequiredChecks,
+            structuralCoverageApplies);
+    }
+
     private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(IReadOnlyList<string>? changedFiles)
     {
         if (changedFiles is null || changedFiles.Count == 0)
@@ -3016,8 +3055,35 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             check.Runner,
             check.EstimatedSerialSeconds,
             ExclusiveResourceKeys = check.ExclusiveResourceKeys.ToArray()
-        });
-        var canonicalJson = JsonSerializer.Serialize(canonicalChecks);
+        }).ToArray();
+        var settings = EngineSettings;
+        var canonicalPlan = new
+        {
+            Checks = canonicalChecks,
+            Engine = new
+            {
+                settings.MaxConcurrentShards,
+                settings.EnforceStructuralCoverage,
+                settings.PartitionVerdictFullRerunEveryN,
+                settings.OutputCaptureLimitBytes,
+                Timeouts = new
+                {
+                    settings.Timeouts.DefaultMinutes,
+                    settings.Timeouts.BuildServerShutdownMinutes,
+                    settings.Timeouts.DiscoveryMinutes
+                },
+                MtpInvocations = settings.MtpInvocations
+                    .OrderBy(invocation => invocation.Project, StringComparer.OrdinalIgnoreCase)
+                    .Select(invocation => new
+                    {
+                        invocation.Project,
+                        invocation.ExecutablePathTemplate,
+                        Arguments = invocation.Arguments.ToArray()
+                    })
+                    .ToArray()
+            }
+        };
+        var canonicalJson = JsonSerializer.Serialize(canonicalPlan);
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonicalJson));
         return $"effective-manifest-sha256-{Convert.ToHexStringLower(hash)}";
     }
@@ -8071,6 +8137,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         try { return File.Exists(path) ? new FileInfo(path).Length : 0L; }
         catch { return 0L; }
     }
+
+    private sealed record EffectiveGatePlan(
+        AcceptanceManifest Manifest,
+        IReadOnlyList<AcceptanceManifestCheck> Checks,
+        IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes,
+        PolicyShardPlan PolicyShardPlan,
+        IReadOnlyList<AcceptanceManifestCheck> PolicyRequiredChecks,
+        bool StructuralCoverageApplies);
 
     private sealed record PolicyShardPlan(
         bool Applies,

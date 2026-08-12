@@ -605,7 +605,46 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_manifest_change_invalidates_all_partition_verdicts")]
+    [Xunit.Fact]
+    public void EffectivePlanIdentityBindsScopeAndEnvironmentExpansion()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "checks": [{
+                "name": "infrastructure tests",
+                "type": "dotnet-test",
+                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+              }]
+            }
+            """);
+        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        try
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            var scoped = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
+            var differentScope = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                ["src/Mcg.AgentOrchestrator.Core/Domain/AcceptanceCohorts.cs"]);
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "0");
+            var full = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
+
+            Xunit.Assert.StartsWith("effective-manifest-sha256-", scoped, StringComparison.Ordinal);
+            Xunit.Assert.NotEqual(scoped, differentScope);
+            Xunit.Assert.NotEqual(scoped, full);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previous);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
     public async Task GoalAcceptanceVerifierManifestChangeInvalidatesAllPartitionVerdicts()
     {
         var root = CreateWorkspace("""

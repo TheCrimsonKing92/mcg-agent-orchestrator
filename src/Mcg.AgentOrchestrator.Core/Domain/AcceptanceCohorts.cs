@@ -214,6 +214,33 @@ public enum AcceptanceCohortAttributionOutcome
     Indeterminate
 }
 
+public enum AcceptanceCohortInvalidationReason
+{
+    EvidenceUnavailable,
+    GoalBranchChanged,
+    BindingChanged,
+    LandingStateChanged,
+    InfrastructureRetryExhausted,
+    RecoveryEvidenceUnavailable
+}
+
+public sealed record AcceptanceCohortEvidenceArtifact(
+    string Kind,
+    string Path,
+    string Sha256,
+    long Length);
+
+public sealed record AcceptanceCohortInvalidation(
+    string InvalidationId,
+    string CohortId,
+    AcceptanceCohortInvalidationReason Reason,
+    string Detail,
+    DateTimeOffset InvalidatedAt,
+    string ObservedMainRevision,
+    string CombinedTreeRevision,
+    string ManifestIdentity,
+    IReadOnlyList<AcceptanceCohortMemberBinding> OrderedMembers);
+
 public sealed record AcceptanceCohortPartitionReceipt(
     string ReceiptId,
     GoalId GoalId,
@@ -238,15 +265,50 @@ public sealed record AcceptanceCohortReceipt(
     AcceptanceCohortAttributionOutcome Attribution = AcceptanceCohortAttributionOutcome.NotApplicable,
     bool ValidForLanding = false)
 {
+    public IReadOnlyList<AcceptanceCohortEvidenceArtifact> GateEvidenceArtifacts { get; init; } = [];
+
+    public AcceptanceCohortInvalidation? Invalidation { get; init; }
+
     public bool HasAuthoritativeLandingEvidence =>
         Outcome == AcceptanceCohortGateOutcome.Passed &&
         ValidForLanding &&
+        Invalidation is null &&
         GateExitCode == 0 &&
-        AcceptanceCohortGateEvidence.HasCoherentTrxEvidence(GateTestResultPaths);
+        AcceptanceCohortGateEvidence.HasContentBoundEvidence(
+            GateTestResultPaths,
+            GateEvidenceArtifacts);
 }
 
 public static class AcceptanceCohortGateEvidence
 {
+    public static bool HasContentBoundEvidence(
+        IReadOnlyList<string>? testResultPaths,
+        IReadOnlyList<AcceptanceCohortEvidenceArtifact>? artifacts)
+    {
+        if (!HasCoherentTrxEvidence(testResultPaths) ||
+            artifacts is not { Count: > 1 })
+        {
+            return false;
+        }
+
+        var trxArtifacts = artifacts
+            .Where(artifact => artifact.Kind.Equals("trx", StringComparison.Ordinal))
+            .OrderBy(artifact => artifact.Path, StringComparer.Ordinal)
+            .ToArray();
+        var normalizedTrxPaths = testResultPaths!
+            .Select(Path.GetFullPath)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (trxArtifacts.Length != normalizedTrxPaths.Length ||
+            !trxArtifacts.Select(artifact => artifact.Path).SequenceEqual(normalizedTrxPaths, StringComparer.Ordinal) ||
+            !artifacts.Any(artifact => artifact.Kind.Equals("gate-verdict", StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        return artifacts.All(IsContentBoundArtifact);
+    }
+
     public static bool HasCoherentTrxEvidence(IReadOnlyList<string>? paths)
     {
         if (!HasNormalizedTestResultPaths(paths))
@@ -275,6 +337,37 @@ public static class AcceptanceCohortGateEvidence
         }
 
         return true;
+    }
+
+    private static bool IsContentBoundArtifact(AcceptanceCohortEvidenceArtifact artifact)
+    {
+        if (string.IsNullOrWhiteSpace(artifact.Kind) ||
+            string.IsNullOrWhiteSpace(artifact.Path) ||
+            !Path.IsPathFullyQualified(artifact.Path) ||
+            artifact.Length < 0 ||
+            artifact.Sha256.Length != 64 ||
+            artifact.Sha256.Any(character => !Uri.IsHexDigit(character)) ||
+            !File.Exists(artifact.Path))
+        {
+            return false;
+        }
+
+        try
+        {
+            var info = new FileInfo(artifact.Path);
+            if (info.Length != artifact.Length)
+            {
+                return false;
+            }
+
+            using var stream = File.OpenRead(artifact.Path);
+            var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream));
+            return hash.Equals(artifact.Sha256, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static bool HasNormalizedTestResultPaths(IReadOnlyList<string>? paths)

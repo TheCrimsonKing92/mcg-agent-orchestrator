@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -236,17 +235,6 @@ public static partial class GoalWorktrees
                 materializationFailure);
             throw;
         }
-    }
-
-    public static string ComputeAcceptanceManifestIdentity(string workspacePath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(workspacePath);
-        var manifestPath = System.IO.Path.Combine(workspacePath, "config", "acceptance-manifest.json");
-        if (!File.Exists(manifestPath))
-        {
-            throw new InvalidOperationException($"Acceptance manifest is missing from cohort workspace: {manifestPath}");
-        }
-        return $"manifest-sha256-{Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(manifestPath)))}";
     }
 
     internal static string ResolveRequiredRef(string workingDirectory, string reference)
