@@ -204,9 +204,6 @@ public static class DispatchFailureClassifier
     private static readonly Regex ResetsInPattern = new(
         @"\bresets?\s+in\s*:?\s*(?:(?<hours>\d+)\s*h(?:ours?)?)?\s*(?:(?<minutes>\d+)\s*m(?:in(?:ute)?s?)?)?\s*(?:(?<seconds>\d+)\s*s(?:ec(?:ond)?s?)?)?",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    private static readonly Regex Http429StatusPattern = new(
-        @"\b(?:429\s+Too\s+Many\s+Requests|HTTP(?:/\d(?:\.\d)?)?\s+429|(?:http(?:\s+status)?|status(?:\s+code)?|response(?:\s+status)?|error(?:\s+code)?)\s*[:=]?\s*429)\b",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex CommitShaPattern = new(
         @"\b[0-9a-f]{7,64}\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -815,6 +812,24 @@ public static class DispatchFailureClassifier
                 BuildOrchestratorAuthoredFailureEvidenceSummary(authoredFailure.Description, verification)));
         }
 
+        if (verification.ExitCode != 0 && HasScriptingFailureEvidence(verification))
+        {
+            return BuildOutcome(
+                TaskOutcomeRules.RealFailure,
+                task,
+                verification,
+                workerResultPresent,
+                hasCommittedChanges,
+                new DispatchOutcome(
+                DispatchOutcomeKind.UnknownFailure,
+                exitCode,
+                hasZeroByteOutput,
+                null,
+                null,
+                RecoveryRecommendation.AutoRetry,
+                BuildRealFailureEvidenceSummary(verification)));
+        }
+
         return BuildOutcome(
             TaskOutcomeRules.UnknownFailure,
             task,
@@ -1254,6 +1269,28 @@ public static class DispatchFailureClassifier
             : $"unknown-failure stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
     }
 
+    private static string BuildRealFailureEvidenceSummary(TaskVerificationRecord verification)
+    {
+        var substantiveLines = GetSubstantiveStandardErrorLines(verification)
+            .TakeLast(3)
+            .ToArray();
+
+        return substantiveLines.Length == 0
+            ? BuildEvidenceSummary(verification)
+            : $"real-failure stderr-tail: {TruncateEvidence(string.Join(" | ", substantiveLines))}";
+    }
+
+    private static bool HasScriptingFailureEvidence(TaskVerificationRecord verification) =>
+        GetSubstantiveStandardErrorLines(verification).Any(IsScriptingFailureLine);
+
+    private static bool IsScriptingFailureLine(string line) =>
+        line.Contains("ParserError", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("CommandNotFoundException", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("NativeCommandError", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("is not recognized as the name of a cmdlet", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("The string is missing the terminator", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("Unexpected token", StringComparison.OrdinalIgnoreCase);
+
     private static IEnumerable<string> GetStandardErrorEvidenceLines(TaskVerificationRecord verification)
     {
         foreach (var line in EnumerateEvidenceLines(verification, includeStandardOutput: false, includeStandardError: true))
@@ -1353,11 +1390,24 @@ public static class DispatchFailureClassifier
 
     private static bool ContainsPreflightFailureText(string text)
     {
-        return text.Contains("Low Integrity", StringComparison.OrdinalIgnoreCase) ||
+        var hasPreflightContext =
+            text.Contains("Low Integrity", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("integrity label", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("icacls", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("CreateProcessAsUser", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("preflight", StringComparison.OrdinalIgnoreCase);
+
+        var hasFailureEvidence =
+            text.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("failure", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("denied", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("cannot", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("exception", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("1312", StringComparison.OrdinalIgnoreCase);
+
+        return hasPreflightContext && hasFailureEvidence;
     }
 
     private static bool HasVerificationEvidence(string standardOutput, string standardError)
@@ -1909,43 +1959,10 @@ public static class DispatchFailureClassifier
         return true;
     }
 
-    private static bool TryGetRecoverableSubscriptionLimitLine(TaskVerificationRecord verification, out string line)
-    {
-        foreach (var candidate in GetProviderSignalLines(verification))
-        {
-            if (IsRecoverableSubscriptionLimitText(candidate))
-            {
-                line = candidate;
-                return true;
-            }
-        }
-
-        line = string.Empty;
-        return false;
-    }
-
-    private static bool IsRecoverableSubscriptionLimitText(string text)
-    {
-        return (text.Contains("usage limit", StringComparison.OrdinalIgnoreCase) &&
-                (text.Contains("try again", StringComparison.OrdinalIgnoreCase) ||
-                 text.Contains("purchase more credits", StringComparison.OrdinalIgnoreCase) ||
-                 text.Contains("resets in", StringComparison.OrdinalIgnoreCase))) ||
-            text.Contains("reached your usage limit", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("rate-limit", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("rate-limited", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("ratelimit", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("rate limit exceeded", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("rate limit reached", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("too many requests", StringComparison.OrdinalIgnoreCase) ||
-            Http429StatusPattern.IsMatch(text) ||
-            text.Contains("retry after", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("try again later due to capacity", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("try again later due to usage", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool TryGetRecoverableSubscriptionLimitLine(TaskVerificationRecord verification, out string line) =>
+        ProviderLimitEvidenceParser.TryGetEvidenceLine(
+            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true),
+            out line);
 
     private static bool TryGetRelativeRetryAfter(string output, out TimeSpan retryAfter)
     {
@@ -2116,7 +2133,7 @@ public static class DispatchFailureClassifier
             }
 
             if (IsProviderErrorLine(rawLine) ||
-                IsProviderLimitFooterLine(rawLine))
+                ProviderLimitEvidenceParser.IsProviderLimitEvidenceLine(rawLine))
             {
                 yield return rawLine;
             }
@@ -2223,40 +2240,6 @@ public static class DispatchFailureClassifier
         return line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase) ||
             line.Contains(" : ERROR:", StringComparison.Ordinal) ||
             CodexCliDiagnosticPrefix.IsMatch(line);
-    }
-
-    private static bool IsProviderLimitFooterLine(string line)
-    {
-        if (line.Length == 0 ||
-            char.IsWhiteSpace(line[0]) ||
-            LooksLikeSourceLocationEcho(line) ||
-            !IsRecoverableSubscriptionLimitText(line))
-        {
-            return false;
-        }
-
-        return line.StartsWith("rate limit", StringComparison.OrdinalIgnoreCase) ||
-            line.StartsWith("usage limit", StringComparison.OrdinalIgnoreCase) ||
-            line.StartsWith("quota exceeded", StringComparison.OrdinalIgnoreCase) ||
-            line.Contains("you've hit your usage limit", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool LooksLikeSourceLocationEcho(string line)
-    {
-        var firstColon = line.IndexOf(':');
-        if (firstColon <= 0)
-        {
-            return false;
-        }
-
-        var prefix = line[..firstColon];
-        return prefix.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
-            prefix.EndsWith(".fs", StringComparison.OrdinalIgnoreCase) ||
-            prefix.EndsWith(".vb", StringComparison.OrdinalIgnoreCase) ||
-            prefix.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase) ||
-            prefix.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) ||
-            prefix.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
-            prefix.EndsWith(".md", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsDirtyDispatchGuardFailure(TaskVerificationRecord verification)

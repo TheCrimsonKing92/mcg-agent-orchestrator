@@ -74,6 +74,21 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(ProviderFailureKind.Unknown, failureKind);
 }
 
+    [Xunit.Fact(DisplayName = "WorkerProvider_parse_outcome_ignores_limit_strings_in_worker_source_output")]
+    public void WorkerProviderParseOutcomeIgnoresLimitStringsInWorkerSourceOutput()
+    {
+        var provider = WorkerProviderCatalog.Default().Resolve(ProviderKind.OpenAICodexCli);
+        const string stderr =
+            "src/ProviderParser.cs:77: text.Contains(\"usage limit\", StringComparison.OrdinalIgnoreCase)\n" +
+            "src/ProviderParser.cs:78: text.Contains(\"rate limit\", StringComparison.OrdinalIgnoreCase)\n" +
+            "src/ProviderParser.cs:79: text.Contains(\"429\", StringComparison.OrdinalIgnoreCase)\n" +
+            "powershell.exe: ParserError: Missing closing quote in command argument.";
+
+        var failureKind = provider.ParseOutcome(new WorkerProviderOutcome(1, string.Empty, stderr));
+
+        Assert.Equal(ProviderFailureKind.Unknown, failureKind);
+    }
+
     [Xunit.Theory(DisplayName = "WorkerProvider_parse_outcome_requires_launch_or_logon_context_for_sandbox_1312")]
     [Xunit.InlineData("git.exe: CreateProcessAsUserW failed 1312", ProviderFailureKind.Sandbox1312)]
     [Xunit.InlineData("ERROR_NO_SUCH_LOGON_SESSION", ProviderFailureKind.Sandbox1312)]
@@ -3859,6 +3874,51 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal("rate-limited", record.Classification);
     Assert.True(record.Reason.Contains("usage limit", StringComparison.OrdinalIgnoreCase));
 }
+
+    [Xunit.Fact(DisplayName = "DispatchDiagnostic_launch_preflight_and_worker_limit_text_yields_real_failure_without_start")]
+    public void DispatchDiagnosticLaunchPreflightAndWorkerLimitTextYieldsRealFailureWithoutStart()
+    {
+        var root = CreateTempDirectory();
+        var stdout = Path.Combine(root, "abc12345-def67890-20260623.out.log");
+        var stderr = Path.Combine(root, "abc12345-def67890-20260623.err.log");
+        var exit = Path.Combine(root, "abc12345-def67890-20260623.exit.txt");
+        var clock = new TestClock(DateTimeOffset.Parse("2026-06-23T10:00:00Z"));
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Test false provider-limit diagnostic",
+            [new TaskSpec(TaskId.New(), "Plan the work", AgentRole.Planner)]);
+        var agent = new AgentDefinition(
+            new AgentId("test-planner"),
+            "Test Planner",
+            AgentRole.Planner,
+            new ModelProfile("OpenAI", "gpt-5", ModelCapability.Text, SubscriptionMode.ApiKey));
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var task = goal.Tasks.Single();
+        File.WriteAllText(stdout, string.Empty);
+        File.WriteAllText(
+            stderr,
+            "{\"event\":\"sandbox-prep\",\"phase\":\"launch-preflight\",\"elapsedMs\":200}\n" +
+            "src/ProviderParser.cs:77: text.Contains(\"usage limit\", StringComparison.OrdinalIgnoreCase)\n" +
+            "powershell.exe: ParserError: Missing closing quote in command argument.");
+        File.WriteAllText(exit, "1");
+        kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("local", "echo done", root, clock.UtcNow));
+        kernel.RecordTaskProcessStarted(
+            goal.Id,
+            task.Id,
+            new TaskProcessRecord(999999, "echo done", root, stdout, stderr, exit, clock.UtcNow, null, null));
+        var spy = new CaptureDiagnosticWriter();
+
+        new BackgroundDispatchRunner(clock, isStillRunning: _ => false, diagnosticWriter: spy)
+            .RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        var record = Assert.Single(spy.Records);
+        Assert.Equal("failed", record.Classification);
+        Assert.DoesNotContain("rate", record.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ProviderFailureKind.Unknown, task.LastVerification!.ProviderFailureKind);
+        var classified = DispatchFailureClassifier.Classify(task, task.LastVerification);
+        Assert.Contains("rule=real-failure", classified.ClassifierReceipt, StringComparison.Ordinal);
+        Assert.Null(task.SubscriptionRetryAfter);
+    }
 
     [Xunit.Fact(DisplayName = "DispatchDiagnostic_exception_in_writer_does_not_propagate_to_caller")]
     public void DispatchDiagnosticExceptionInWriterDoesNotPropagateToCaller()

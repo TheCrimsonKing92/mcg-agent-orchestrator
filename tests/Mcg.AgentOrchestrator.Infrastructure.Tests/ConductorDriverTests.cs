@@ -6835,6 +6835,99 @@ public sealed class ConductorDriverTests
         Assert.Equal(WorkTaskStatus.Assigned, task.Status);
     }
 
+    [Xunit.Fact(DisplayName = "ConductorDriver_scripting_failure_after_launch_preflight_retries_immediately_on_criterion_budget")]
+    public void ConductorDriverScriptingFailureAfterLaunchPreflightRetriesImmediatelyOnCriterionBudget()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        const string failedCommand = "powershell.exe -Command & { while ($true) { Write-Output 'broken } }";
+        DispatchTask(kernel, goal, task, failedCommand);
+        const string stderr =
+            "{\"event\":\"sandbox-prep\",\"phase\":\"launch-preflight\",\"elapsedMs\":200}\n" +
+            "src/ProviderParser.cs:77: text.Contains(\"usage limit\", StringComparison.OrdinalIgnoreCase)\n" +
+            "Worker inspected the classifier and prepared a focused change.\n" +
+            "powershell.exe: ParserError: The string is missing the terminator: '.";
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                failedCommand,
+                "C:\\tmp",
+                1,
+                string.Empty,
+                stderr,
+                DateTimeOffset.UtcNow,
+                ProviderFailureKind: ProviderFailureKind.RateLimit));
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Null(task.SubscriptionRetryAfter);
+        Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitHistory(task));
+
+        var retried = false;
+        var dispatched = false;
+        var retryMessage = string.Empty;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
+            retryTask: (gid, tid, msg) =>
+            {
+                retried = true;
+                retryMessage = msg;
+                return kernel.RetryTask(gid, tid, msg);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.True(retried);
+        Assert.True(dispatched);
+        Assert.Equal(1, task.CriterionRetryCount);
+        Assert.Equal(1, goal.AutomaticAcceptanceRetryCount);
+        Assert.Contains(failedCommand, retryMessage, StringComparison.Ordinal);
+        Assert.Contains("ParserError", retryMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("subscription", retryMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_scripting_failure_escalates_after_criterion_budget_exhausted")]
+    public void ConductorDriverScriptingFailureEscalatesAfterCriterionBudgetExhausted()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["first bounded retry"]);
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, ["second bounded retry"]);
+        const string failedCommand = "powershell.exe -Command broken";
+        DispatchTask(kernel, goal, task, failedCommand);
+        kernel.RecordDispatchExecutionResult(
+            goal.Id,
+            task.Id,
+            new TaskVerificationRecord(
+                failedCommand,
+                "C:\\tmp",
+                1,
+                string.Empty,
+                "powershell.exe: ParserError: Unexpected token '}' in expression.",
+                DateTimeOffset.UtcNow));
+
+        var retried = false;
+        var dispatched = false;
+        var escalationMessage = string.Empty;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            dispatchAndStart: _ => { dispatched = true; return DispatchStartOutcome.Started(); },
+            retryTask: (gid, tid, msg) => { retried = true; return kernel.RetryTask(gid, tid, msg); },
+            writeEscalation: (_, _, message) => { escalationMessage = message; },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
+        Assert.False(dispatched);
+        Assert.Contains("exhausted bounded real-failure retries (2/2)", escalationMessage, StringComparison.Ordinal);
+        Assert.Contains("ParserError", escalationMessage, StringComparison.Ordinal);
+        Assert.True(result.Outcome is ConductorAdvanceOutcome.Escalated);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_sandbox_preflight_budget_exhaustion_escalates_after_bounded_retries")]
     public void ConductorDriverSandboxPreflightBudgetExhaustionEscalatesAfterBoundedRetries()
     {

@@ -1146,6 +1146,53 @@ internal sealed class ConductorDriver
                 return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
 
+            var realFailureTask = goal.Tasks.FirstOrDefault(t =>
+            {
+                if (t.Status != WorkTaskStatus.Failed || t.LastVerification is not { } latest)
+                {
+                    return false;
+                }
+
+                var outcome = DispatchFailureClassifier.Classify(t, latest);
+                var classification = TaskOutcomeClassifier.Classify(
+                    WorkTaskStatus.Failed,
+                    TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
+                return outcome.RecoveryRecommendation == RecoveryRecommendation.AutoRetry &&
+                    classification.Class == TaskOutcomeClass.RealFailure;
+            });
+            if (realFailureTask is not null)
+            {
+                var verification = realFailureTask.LastVerification!;
+                var outcome = DispatchFailureClassifier.Classify(realFailureTask, verification);
+                if (goal.AutomaticAcceptanceRetryCount >= policy.MaxCriterionRetries)
+                {
+                    return Escalate(
+                        goal,
+                        goalPrefix,
+                        policy,
+                        state,
+                        $"Task {realFailureTask.Id.Value[..8]} exhausted bounded real-failure retries " +
+                        $"({goal.AutomaticAcceptanceRetryCount}/{policy.MaxCriterionRetries}); " +
+                        $"failed command: {verification.Command}; failure evidence: {outcome.EvidenceSummary}");
+                }
+
+                var retryFeedback = new[]
+                {
+                    $"Failed command: {verification.Command}",
+                    $"Failure evidence: {outcome.EvidenceSummary}"
+                };
+                var retryCount = _recordCriterionRetryFeedback(
+                    goal.Id,
+                    realFailureTask.Id,
+                    retryFeedback);
+                var retryNote =
+                    $"Auto-retry real worker/command failure for task {realFailureTask.Id.Value[..8]} " +
+                    $"(attempt {retryCount}/{policy.MaxCriterionRetries}); " +
+                    string.Join("; ", retryFeedback);
+                _retryTask(goal.Id, realFailureTask.Id, retryNote, null);
+                return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
+            }
+
             var flakedTask = goal.Tasks.FirstOrDefault(t =>
                 t.Status == WorkTaskStatus.Failed &&
                 t.LastVerification is { } latest && DispatchFailureClassifier.Classify(t, latest).Kind is
