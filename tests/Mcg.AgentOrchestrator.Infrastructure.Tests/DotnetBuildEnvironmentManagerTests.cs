@@ -626,107 +626,67 @@ public sealed class DotnetBuildEnvironmentManagerTests
     [Xunit.Fact(DisplayName = "LockAttribution_handle_probe_timeout_returns_unknown_without_wedging")]
     public void LockAttributionHandleProbeTimeoutReturnsUnknownWithoutWedging()
     {
-        ConfigureTimeoutProbeForTests();
+        using var hookScope = ConfigureTimeoutProbeForTests();
+        var diagnostics = new LockAttributionDiagnosticCollector();
+        var attribution = LockAttribution.AttributeWithDiagnosticsForTests(
+            Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.dll"),
+            null,
+            "artifact-prep",
+            "prepare-artifacts",
+            diagnostics);
+        var receipt = diagnostics.Receipt;
+        Console.WriteLine(receipt.Format());
 
-        try
-        {
-            var diagnostics = new LockAttributionDiagnosticCollector();
-            var attribution = LockAttribution.AttributeWithDiagnosticsForTests(
-                Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.dll"),
-                null,
-                "artifact-prep",
-                "prepare-artifacts",
-                diagnostics);
-            var receipt = diagnostics.Receipt;
-            Console.WriteLine(receipt.Format());
-
-            var holder = Assert.Single(attribution.Holders);
-            Assert.Equal("handle64-timeout", attribution.Source);
-            Assert.Null(holder.ProcessId);
-            Assert.Equal("unknown-probe-timeout", holder.ProcessName);
-            Assert.Equal("artifact-prep", attribution.Phase);
-            Assert.Equal("prepare-artifacts", attribution.Operation);
-            Assert.Null(receipt.Hooks.AttributeOverride);
-            Assert.NotNull(receipt.Hooks.HandleExecutable);
-            Assert.Equal(TimeSpan.FromMilliseconds(200), receipt.Hooks.HandleProbeTimeout);
-            Assert.NotNull(receipt.Hooks.ConfigureHandleProbe);
-            Assert.False(receipt.Hooks.DisableRestartManager);
-            Assert.Equal(LockAttributionDiagnosticBranch.HandleProbe, receipt.Branch);
-            Assert.Equal(LockAttributionDiagnosticClassification.HandleTimeoutUnknown, receipt.Classification);
-            Assert.Contains(receipt.Events, item => item is { Stage: "handle-configure", Outcome: "invoked" });
-            Assert.Contains(receipt.Events, item => item is { Stage: "handle-process-start", Outcome: "started" });
-            Assert.Contains(receipt.Events, item => item is { Stage: "handle-wait", Outcome: "timed-out" });
-            Assert.Contains(receipt.Events, item => item.Stage == "handle-kill");
-            Assert.Contains(receipt.Events, item => item.Stage == "handle-reap");
-        }
-        finally
-        {
-            ClearLockAttributionTestHooks();
-        }
+        var holder = Assert.Single(attribution.Holders);
+        Assert.Equal("handle64-timeout", attribution.Source);
+        Assert.Null(holder.ProcessId);
+        Assert.Equal("unknown-probe-timeout", holder.ProcessName);
+        Assert.Equal("artifact-prep", attribution.Phase);
+        Assert.Equal("prepare-artifacts", attribution.Operation);
+        Assert.Null(receipt.Hooks.AttributeOverride);
+        Assert.NotNull(receipt.Hooks.HandleExecutable);
+        Assert.Equal(TimeSpan.FromMilliseconds(200), receipt.Hooks.HandleProbeTimeout);
+        Assert.NotNull(receipt.Hooks.ConfigureHandleProbe);
+        Assert.False(receipt.Hooks.DisableRestartManager);
+        Assert.Equal(LockAttributionDiagnosticBranch.HandleProbe, receipt.Branch);
+        Assert.Equal(LockAttributionDiagnosticClassification.HandleTimeoutUnknown, receipt.Classification);
+        Assert.Contains(receipt.Events, item => item is { Stage: "handle-configure", Outcome: "invoked" });
+        Assert.Contains(receipt.Events, item => item is { Stage: "handle-process-start", Outcome: "started" });
+        Assert.Contains(receipt.Events, item => item is { Stage: "handle-wait", Outcome: "timed-out" });
+        Assert.Contains(receipt.Events, item => item.Stage == "handle-kill");
+        Assert.Contains(receipt.Events, item => item.Stage == "handle-reap");
     }
 
     [Xunit.Fact]
     public void LockAttributionIntentionalEmptyOverlapSelectsInjectedBranch()
     {
-        ConfigureTimeoutProbeForTests();
-        using var timeoutHooksReady = new ManualResetEventSlim();
-        using var emptyOverrideInstalled = new ManualResetEventSlim();
+        using var hookScope = LockAttribution.OverrideTestHooksForTests(
+            attribute: (path, _) => new BuildLockAttribution(path, [], "intentional-empty-override"));
         var diagnostics = new LockAttributionDiagnosticCollector();
-        Task<BuildLockAttribution>? attributionTask = null;
+        var attribution = LockAttribution.AttributeWithDiagnosticsForTests(
+            Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.dll"),
+            null,
+            "artifact-prep",
+            "intentional-empty-overlap",
+            diagnostics);
+        var receipt = diagnostics.Receipt;
+        Console.WriteLine(receipt.Format());
 
-        try
-        {
-            attributionTask = Task.Run(() =>
-            {
-                timeoutHooksReady.Set();
-                if (!emptyOverrideInstalled.Wait(TimeSpan.FromSeconds(10)))
-                {
-                    throw new TimeoutException("The intentional empty override was not installed.");
-                }
-
-                return LockAttribution.AttributeWithDiagnosticsForTests(
-                    Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.dll"),
-                    null,
-                    "artifact-prep",
-                    "intentional-empty-overlap",
-                    diagnostics);
-            });
-
-            Assert.True(timeoutHooksReady.Wait(TimeSpan.FromSeconds(10)), "The timeout-hook flow did not reach its event gate.");
-            LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "intentional-empty-override");
-            emptyOverrideInstalled.Set();
-
-            Assert.True(attributionTask.Wait(TimeSpan.FromSeconds(10)), "The attributed flow did not finish after the override gate opened.");
-            var attribution = attributionTask.GetAwaiter().GetResult();
-            var receipt = diagnostics.Receipt;
-            Console.WriteLine(receipt.Format());
-
-            Assert.Empty(attribution.Holders);
-            Assert.Equal("intentional-empty-override", attribution.Source);
-            Assert.NotNull(receipt.Hooks.AttributeOverride);
-            Assert.Equal(LockAttributionDiagnosticBranch.InjectedAttribution, receipt.Branch);
-            Assert.Equal(LockAttributionDiagnosticClassification.InjectedEmpty, receipt.Classification);
-            Assert.Contains(receipt.Events, item => item is { Stage: "attribute-override", Outcome: "returned-attribution" });
-            Assert.DoesNotContain(receipt.Events, item => item.Stage == "handle-process-start");
-        }
-        finally
-        {
-            emptyOverrideInstalled.Set();
-            if (attributionTask is not null)
-            {
-                try { attributionTask.Wait(TimeSpan.FromSeconds(10)); } catch { }
-            }
-
-            ClearLockAttributionTestHooks();
-        }
+        Assert.Empty(attribution.Holders);
+        Assert.Equal("intentional-empty-override", attribution.Source);
+        Assert.NotNull(receipt.Hooks.AttributeOverride);
+        Assert.Equal(LockAttributionDiagnosticBranch.InjectedAttribution, receipt.Branch);
+        Assert.Equal(LockAttributionDiagnosticClassification.InjectedEmpty, receipt.Classification);
+        Assert.Contains(receipt.Events, item => item is { Stage: "attribute-override", Outcome: "returned-attribution" });
+        Assert.DoesNotContain(receipt.Events, item => item.Stage == "handle-process-start");
     }
 
     [Xunit.Fact]
     public void LockAttributionClearedOverrideRestoresTimeoutBranch()
     {
         var injectedDiagnostics = new LockAttributionDiagnosticCollector();
-        LockAttribution.AttributeForTests = (path, _) => new BuildLockAttribution(path, [], "intentional-empty-override");
-        try
+        using (LockAttribution.OverrideTestHooksForTests(
+            attribute: (path, _) => new BuildLockAttribution(path, [], "intentional-empty-override")))
         {
             var injected = LockAttribution.AttributeWithDiagnosticsForTests(
                 Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.dll"),
@@ -738,32 +698,90 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Equal(LockAttributionDiagnosticClassification.InjectedEmpty, injectedDiagnostics.Receipt.Classification);
             Console.WriteLine(injectedDiagnostics.Receipt.Format());
         }
-        finally
-        {
-            ClearLockAttributionTestHooks();
-        }
 
-        ConfigureTimeoutProbeForTests();
+        using var timeoutScope = ConfigureTimeoutProbeForTests();
+        var timeoutDiagnostics = new LockAttributionDiagnosticCollector();
+        var timeout = LockAttribution.AttributeWithDiagnosticsForTests(
+            Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.dll"),
+            null,
+            "artifact-prep",
+            "sequence-after-clear",
+            timeoutDiagnostics);
+        var receipt = timeoutDiagnostics.Receipt;
+        Console.WriteLine(receipt.Format());
+
+        Assert.Single(timeout.Holders);
+        Assert.Null(receipt.Hooks.AttributeOverride);
+        Assert.Equal(LockAttributionDiagnosticBranch.HandleProbe, receipt.Branch);
+        Assert.Equal(LockAttributionDiagnosticClassification.HandleTimeoutUnknown, receipt.Classification);
+    }
+
+    [Xunit.Fact]
+    public void LockAttributionCompleteOverrideRejectsCompetingMutationAndRestoresPriorStateOnce()
+    {
+        Func<string, string?, BuildLockAttribution?> priorAttribute =
+            (path, _) => new BuildLockAttribution(path, [], "prior-override");
+        LockAttribution.AttributeForTests = priorAttribute;
+        var ownerScope = LockAttribution.OverrideTestHooksForTests(
+            attribute: (path, _) => new BuildLockAttribution(path, [], "owner-override"),
+            handleExecutable: "owner-handle.exe",
+            handleProbeTimeout: TimeSpan.FromMilliseconds(321),
+            configureHandleProbe: static (_, _) => { },
+            disableRestartManager: true);
+        using var ownerInstalled = new ManualResetEventSlim();
+        using var competitorFinished = new ManualResetEventSlim();
+        InvalidOperationException? mutationFailure = null;
+        InvalidOperationException? scopeFailure = null;
+
         try
         {
-            var timeoutDiagnostics = new LockAttributionDiagnosticCollector();
-            var timeout = LockAttribution.AttributeWithDiagnosticsForTests(
-                Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.dll"),
-                null,
-                "artifact-prep",
-                "sequence-after-clear",
-                timeoutDiagnostics);
-            var receipt = timeoutDiagnostics.Receipt;
-            Console.WriteLine(receipt.Format());
+            var competitor = Task.Run(() =>
+            {
+                Assert.True(ownerInstalled.Wait(TimeSpan.FromSeconds(10)), "The owning hook scope was not installed.");
+                mutationFailure = Assert.Throws<InvalidOperationException>(() =>
+                    LockAttribution.HandleExecutableForTests = null);
+                scopeFailure = Assert.Throws<InvalidOperationException>(() =>
+                {
+                    using var ignored = LockAttribution.OverrideTestHooksForTests();
+                });
+                competitorFinished.Set();
+            });
 
-            Assert.Single(timeout.Holders);
-            Assert.Null(receipt.Hooks.AttributeOverride);
-            Assert.Equal(LockAttributionDiagnosticBranch.HandleProbe, receipt.Branch);
-            Assert.Equal(LockAttributionDiagnosticClassification.HandleTimeoutUnknown, receipt.Classification);
+            ownerInstalled.Set();
+            Assert.True(competitorFinished.Wait(TimeSpan.FromSeconds(10)), "The competing hook operations did not finish.");
+            competitor.GetAwaiter().GetResult();
+
+            Assert.Equal("LockAttribution test hooks are owned by an active override scope.", mutationFailure!.Message);
+            Assert.Equal("LockAttribution test hooks already have an active override owner.", scopeFailure!.Message);
+            Assert.Equal("owner-handle.exe", LockAttribution.HandleExecutableForTests);
+            Assert.Equal(TimeSpan.FromMilliseconds(321), LockAttribution.HandleProbeTimeoutForTests);
+            Assert.True(LockAttribution.DisableRestartManagerForTests);
+
+            ownerScope.Dispose();
+            ownerScope.Dispose();
+            Assert.Same(priorAttribute, LockAttribution.AttributeForTests);
+            Assert.Null(LockAttribution.HandleExecutableForTests);
+            Assert.Null(LockAttribution.HandleProbeTimeoutForTests);
+            Assert.Null(LockAttribution.ConfigureHandleProbeForTests);
+            Assert.False(LockAttribution.DisableRestartManagerForTests);
+
+            Action throwFromScope = () =>
+            {
+                using var exceptionScope = LockAttribution.OverrideTestHooksForTests(
+                    handleExecutable: "exception-scope-handle.exe");
+                throw new InvalidOperationException("scope body failed");
+            };
+            var bodyFailure = Assert.Throws<InvalidOperationException>(throwFromScope);
+            Assert.Equal("scope body failed", bodyFailure.Message);
+            Assert.Same(priorAttribute, LockAttribution.AttributeForTests);
+            Assert.Null(LockAttribution.HandleExecutableForTests);
         }
         finally
         {
-            ClearLockAttributionTestHooks();
+            ownerInstalled.Set();
+            competitorFinished.Set();
+            ownerScope.Dispose();
+            LockAttribution.AttributeForTests = null;
         }
     }
 
@@ -4116,28 +4134,18 @@ public sealed class DotnetBuildEnvironmentManagerTests
         return "powershell";
     }
 
-    private static void ConfigureTimeoutProbeForTests()
-    {
-        LockAttribution.HandleExecutableForTests = ResolvePowerShell();
-        LockAttribution.HandleProbeTimeoutForTests = TimeSpan.FromMilliseconds(200);
-        LockAttribution.ConfigureHandleProbeForTests = (startInfo, _) =>
-        {
-            startInfo.ArgumentList.Clear();
-            startInfo.ArgumentList.Add("-NoProfile");
-            startInfo.ArgumentList.Add("-NonInteractive");
-            startInfo.ArgumentList.Add("-Command");
-            startInfo.ArgumentList.Add("Start-Sleep -Seconds 60");
-        };
-    }
-
-    private static void ClearLockAttributionTestHooks()
-    {
-        LockAttribution.AttributeForTests = null;
-        LockAttribution.HandleExecutableForTests = null;
-        LockAttribution.HandleProbeTimeoutForTests = null;
-        LockAttribution.ConfigureHandleProbeForTests = null;
-        LockAttribution.DisableRestartManagerForTests = false;
-    }
+    private static IDisposable ConfigureTimeoutProbeForTests() =>
+        LockAttribution.OverrideTestHooksForTests(
+            handleExecutable: ResolvePowerShell(),
+            handleProbeTimeout: TimeSpan.FromMilliseconds(200),
+            configureHandleProbe: static (startInfo, _) =>
+            {
+                startInfo.ArgumentList.Clear();
+                startInfo.ArgumentList.Add("-NoProfile");
+                startInfo.ArgumentList.Add("-NonInteractive");
+                startInfo.ArgumentList.Add("-Command");
+                startInfo.ArgumentList.Add("Start-Sleep -Seconds 60");
+            });
 
     private static string? ResolveHandleExecutableForTests()
     {

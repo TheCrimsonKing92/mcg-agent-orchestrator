@@ -168,12 +168,67 @@ internal static partial class LockAttribution
     private static readonly Regex HandlePidPattern = new(@"\bpid:\s*(?<pid>\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex HandleNamePattern = new(@"^(?<name>[^:\s]+)\s+pid:\s*\d+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly TimeSpan HandleProbeTimeout = TimeSpan.FromSeconds(10);
+    private static readonly object TestHookGate = new();
+    private static TestHookState _testHooks = TestHookState.Empty;
 
-    internal static Func<string, string?, BuildLockAttribution?>? AttributeForTests { get; set; }
-    internal static string? HandleExecutableForTests { get; set; }
-    internal static TimeSpan? HandleProbeTimeoutForTests { get; set; }
-    internal static Action<ProcessStartInfo, string>? ConfigureHandleProbeForTests { get; set; }
-    internal static bool DisableRestartManagerForTests { get; set; }
+    internal static Func<string, string?, BuildLockAttribution?>? AttributeForTests
+    {
+        get => TestHookState.Capture().Attribute;
+        set => UpdateUnownedTestHooks(state => state with { Attribute = value });
+    }
+
+    internal static string? HandleExecutableForTests
+    {
+        get => TestHookState.Capture().HandleExecutable;
+        set => UpdateUnownedTestHooks(state => state with { HandleExecutable = value });
+    }
+
+    internal static TimeSpan? HandleProbeTimeoutForTests
+    {
+        get => TestHookState.Capture().HandleProbeTimeout;
+        set => UpdateUnownedTestHooks(state => state with { HandleProbeTimeout = value });
+    }
+
+    internal static Action<ProcessStartInfo, string>? ConfigureHandleProbeForTests
+    {
+        get => TestHookState.Capture().ConfigureHandleProbe;
+        set => UpdateUnownedTestHooks(state => state with { ConfigureHandleProbe = value });
+    }
+
+    internal static bool DisableRestartManagerForTests
+    {
+        get => TestHookState.Capture().DisableRestartManager;
+        set => UpdateUnownedTestHooks(state => state with { DisableRestartManager = value });
+    }
+
+    internal static IDisposable OverrideTestHooksForTests(
+        Func<string, string?, BuildLockAttribution?>? attribute = null,
+        string? handleExecutable = null,
+        TimeSpan? handleProbeTimeout = null,
+        Action<ProcessStartInfo, string>? configureHandleProbe = null,
+        bool disableRestartManager = false)
+    {
+        var owner = new object();
+        lock (TestHookGate)
+        {
+            var prior = TestHookState.Capture();
+            if (prior.Owner is not null)
+            {
+                throw new InvalidOperationException("LockAttribution test hooks already have an active override owner.");
+            }
+
+            Volatile.Write(
+                ref _testHooks,
+                new TestHookState(
+                    attribute,
+                    handleExecutable,
+                    handleProbeTimeout,
+                    configureHandleProbe,
+                    disableRestartManager,
+                    owner));
+            return new TestHookScope(owner, prior);
+        }
+    }
 
     public static BuildLockAttribution Attribute(string path, string? ownershipHint = null, string? phase = null, string? operation = null) =>
         AttributeCore(path, ownershipHint, phase, operation, diagnostics: null);
@@ -627,19 +682,31 @@ internal static partial class LockAttribution
         return null;
     }
 
+    private static void UpdateUnownedTestHooks(Func<TestHookState, TestHookState> update)
+    {
+        lock (TestHookGate)
+        {
+            var current = TestHookState.Capture();
+            if (current.Owner is not null)
+            {
+                throw new InvalidOperationException("LockAttribution test hooks are owned by an active override scope.");
+            }
+
+            Volatile.Write(ref _testHooks, update(current));
+        }
+    }
+
     private sealed record TestHookState(
         Func<string, string?, BuildLockAttribution?>? Attribute,
         string? HandleExecutable,
         TimeSpan? HandleProbeTimeout,
         Action<ProcessStartInfo, string>? ConfigureHandleProbe,
-        bool DisableRestartManager)
+        bool DisableRestartManager,
+        object? Owner)
     {
-        internal static TestHookState Capture() => new(
-            AttributeForTests,
-            HandleExecutableForTests,
-            HandleProbeTimeoutForTests,
-            ConfigureHandleProbeForTests,
-            DisableRestartManagerForTests);
+        internal static TestHookState Empty { get; } = new(null, null, null, null, false, null);
+
+        internal static TestHookState Capture() => Volatile.Read(ref _testHooks);
 
         internal LockAttributionTestHookSnapshot ToDiagnosticSnapshot() => new(
             Describe(Attribute),
@@ -657,6 +724,31 @@ internal static partial class LockAttribution
 
             var declaringType = value.Method.DeclaringType?.FullName ?? "unknown";
             return $"{declaringType}::{value.Method.Name}";
+        }
+    }
+
+    private sealed class TestHookScope(object owner, TestHookState prior) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            lock (TestHookGate)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                var current = TestHookState.Capture();
+                if (!ReferenceEquals(current.Owner, owner))
+                {
+                    throw new InvalidOperationException("LockAttribution test hook override restoration is out of order or owned by another scope.");
+                }
+
+                Volatile.Write(ref _testHooks, prior);
+                _disposed = true;
+            }
         }
     }
 
