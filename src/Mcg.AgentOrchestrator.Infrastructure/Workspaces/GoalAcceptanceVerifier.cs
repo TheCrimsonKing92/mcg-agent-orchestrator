@@ -939,22 +939,28 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 : FindingEvidenceArmDisposition.Inconclusive;
     }
 
-    private static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(
+    internal static FindingEvidenceOutcomeReason ClassifyFocusedEvidenceExperiment(
         FocusedEvidenceArmRunResult candidate,
-        FocusedEvidenceArmRunResult baseline) =>
-        candidate.Disposition switch
+        FocusedEvidenceArmRunResult baseline)
+    {
+        if (candidate.Disposition == FindingEvidenceArmDisposition.ApparatusFailure ||
+            baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure)
         {
-            FindingEvidenceArmDisposition.ApparatusFailure => FindingEvidenceOutcomeReason.ApparatusFailure,
+            return FindingEvidenceOutcomeReason.ApparatusFailure;
+        }
+
+        return candidate.Disposition switch
+        {
             FindingEvidenceArmDisposition.Red => FindingEvidenceOutcomeReason.CandidateRed,
             FindingEvidenceArmDisposition.Inconclusive => FindingEvidenceOutcomeReason.CandidateInconclusive,
             _ => baseline.Disposition switch
             {
-                FindingEvidenceArmDisposition.ApparatusFailure => FindingEvidenceOutcomeReason.ApparatusFailure,
                 FindingEvidenceArmDisposition.Green => FindingEvidenceOutcomeReason.VacuousEvidence,
                 FindingEvidenceArmDisposition.Red => FindingEvidenceOutcomeReason.ValidEvidence,
                 _ => FindingEvidenceOutcomeReason.BaselineInconclusive
             }
         };
+    }
 
     private static void EmitFocusedEvidenceArmStarted(FindingEvidenceArm arm, string sha) =>
         EmitFocusedEvidenceDiagnostic(

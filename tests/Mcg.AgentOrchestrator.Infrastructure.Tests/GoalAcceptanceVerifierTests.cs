@@ -2502,6 +2502,26 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
+    public void FocusedEvidence_BaselineApparatusFailureOverridesCandidateRed()
+    {
+        var outcome = GoalAcceptanceVerifier.ClassifyFocusedEvidenceExperiment(
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Candidate, FindingEvidenceArmDisposition.Red),
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Baseline, FindingEvidenceArmDisposition.ApparatusFailure));
+
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, outcome);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_BaselineApparatusFailureOverridesCandidateInconclusive()
+    {
+        var outcome = GoalAcceptanceVerifier.ClassifyFocusedEvidenceExperiment(
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Candidate, FindingEvidenceArmDisposition.Inconclusive),
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Baseline, FindingEvidenceArmDisposition.ApparatusFailure));
+
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, outcome);
+    }
+
+    [Xunit.Fact]
     public async Task FocusedEvidence_TwoReceiptTargetsAcrossProjects_PreserveFocusedChecks()
     {
         var (result, calls) = await RunMappedEvidenceAsync(
@@ -3098,6 +3118,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             DeleteDirectoryWithRetry(root);
         }
     }
+
+    private static FocusedEvidenceArmRunResult CreateFocusedEvidenceArm(
+        FindingEvidenceArm arm,
+        FindingEvidenceArmDisposition disposition) =>
+        new(
+            arm,
+            $"{arm.ToString().ToLowerInvariant()}-sha",
+            disposition,
+            Accepted: true,
+            Passed: disposition == FindingEvidenceArmDisposition.Green,
+            Summary: disposition.ToString(),
+            Checks: []);
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_rejects_unbounded_focused_evidence_request")]
     public async Task GoalAcceptanceVerifierRejectsUnboundedFocusedEvidenceRequest()
