@@ -604,8 +604,8 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_combines_reused_and_fresh_partition_TRX")]
-    public async Task GoalAcceptanceVerifierStructuralCoverageCombinesReusedAndFreshPartitionTrx()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_manifest_change_invalidates_all_partition_verdicts")]
+    public async Task GoalAcceptanceVerifierManifestChangeInvalidatesAllPartitionVerdicts()
     {
         var root = CreateWorkspace("""
             {
@@ -682,11 +682,12 @@ public sealed class AcceptanceGateEngineSettingsTests
             var second = await verifier.RunAsync(root, goalId);
 
             Xunit.Assert.True(second.Passed);
-            Xunit.Assert.Equal(3, partitionExecutions);
+            Xunit.Assert.Equal(4, partitionExecutions);
             var cacheReceipt = Xunit.Assert.Single(
                 second.Checks!,
                 check => check.Name == "infrastructure partition verdict cache");
-            Xunit.Assert.Contains("partition_id=alpha,source_attempt_id=attempt-one", cacheReceipt.ResultSummary);
+            Xunit.Assert.DoesNotContain("source_attempt_id=attempt-one", cacheReceipt.ResultSummary);
+            Xunit.Assert.Contains("{partition_id=alpha,verdict=GREEN}", cacheReceipt.ResultSummary);
             Xunit.Assert.Contains("{partition_id=beta,verdict=GREEN}", cacheReceipt.ResultSummary);
             Xunit.Assert.Contains(second.Checks!, check =>
                 check.Name.StartsWith("structural test coverage", StringComparison.Ordinal) &&

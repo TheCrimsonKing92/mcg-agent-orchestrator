@@ -112,7 +112,7 @@ public static partial class GoalWorktrees
         Directory.CreateDirectory(worktreeRoot);
         var workspacePath = System.IO.Path.Combine(
             worktreeRoot,
-            $"cohort-partition-{member.GoalId.Value[..8]}-{Guid.NewGuid():N}");
+            $"cohort-partition-{Guid.NewGuid():N}");
         try
         {
             var added = GitCli.Run(root, "worktree", "add", "--detach", workspacePath, normalizedMain);
@@ -192,7 +192,7 @@ public static partial class GoalWorktrees
         Directory.CreateDirectory(worktreeRoot);
         var workspacePath = System.IO.Path.Combine(
             worktreeRoot,
-            $"cohort-{members[0].GoalId.Value[..8]}-{members[1].GoalId.Value[..8]}-{Guid.NewGuid():N}");
+            $"cohort-{Guid.NewGuid():N}");
         try
         {
             var added = GitCli.Run(root, "worktree", "add", "--detach", workspacePath, normalizedMain);

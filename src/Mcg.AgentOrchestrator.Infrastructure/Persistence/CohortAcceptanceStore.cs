@@ -684,7 +684,8 @@ public sealed class CohortAcceptanceStore
         {
             DataSource = _databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared
+            Cache = SqliteCacheMode.Shared,
+            Pooling = false
         }.ConnectionString);
         connection.Open();
         using var pragma = connection.CreateCommand();

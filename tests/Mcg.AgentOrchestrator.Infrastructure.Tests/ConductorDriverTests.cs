@@ -952,7 +952,7 @@ public sealed class ConductorDriverTests
                 Assert.Equal(goal.Id, goalId);
                 return new GateReadyLandingScopeObservation(
                     Succeeded: true,
-                    Files: ["src/Mcg.AgentOrchestrator.App/Feature.cs"]);
+                    Files: ["src/Mcg.AgentOrchestrator.Core/Feature.cs"]);
             },
             (goalId, observedBranch, observedMain) =>
             {
