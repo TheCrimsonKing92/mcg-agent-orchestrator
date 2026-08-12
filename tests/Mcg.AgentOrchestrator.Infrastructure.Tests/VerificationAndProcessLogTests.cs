@@ -812,7 +812,7 @@ public sealed class VerificationAndProcessLogTests
     var stderrPath = Path.Combine(root, "err.log");
     var exitPath = Path.Combine(root, "exit.txt");
     File.WriteAllText(stdoutPath, string.Empty);
-    File.WriteAllText(stderrPath, "Rate limit reached for gpt-5.5. Please try again in 42s.");
+    File.WriteAllText(stderrPath, "ERROR: You've hit your usage limit. Please try again in 42s.");
     File.WriteAllText(exitPath, "1");
 
     kernel.RecordTaskDispatch(
