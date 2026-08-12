@@ -41,9 +41,13 @@ internal sealed class ConductorDriver
     private static readonly Regex AcceptanceRetryEvidencePattern = new(
         @"error CS\d+|error MSB\d+|\[FAIL\]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex EvidenceClassNamePattern = new(
+    private static readonly Regex EvidenceBareClassNamePattern = new(
         @"^[A-Za-z_][A-Za-z0-9_.+`]*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex EvidenceFilterTokenPattern = new(
+        @"^(?:FullyQualifiedName(?:!~|~)[A-Za-z_][A-Za-z0-9_.]*|Category\s*!=\s*[A-Za-z_][A-Za-z0-9_.-]*)$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private const int MaxFindingEvidenceFilterLength = 1024;
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
@@ -1738,11 +1742,22 @@ internal sealed class ConductorDriver
 
         if (!evidence.Accepted)
         {
+            var reason = evidence.Rejection?.Code switch
+            {
+                FocusedEvidenceRejectionCode.UnsupportedProject =>
+                    FindingEvidenceNotHonouredReason.UnsupportedProject,
+                FocusedEvidenceRejectionCode.SourceDiscoveryFailure =>
+                    FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
+                _ => FindingEvidenceNotHonouredReason.UnparseableSelection
+            };
+            var detail = evidence.Rejection is null
+                ? evidence.Summary
+                : $"{evidence.Rejection.Detail}; offending_filter='{evidence.Rejection.OffendingToken}'";
             foreach (var finding in runnable.Findings)
             {
                 RecordNotHonoured(
-                    goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.RunFailed,
-                    evidence.Summary, telemetryCandidateSha);
+                    goal.Id, requestingTask, finding, reason,
+                    detail, telemetryCandidateSha);
             }
             decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "The focused evidence executor did not accept the request.");
             return true;
@@ -1776,6 +1791,42 @@ internal sealed class ConductorDriver
             evidence.IsValidEvidence,
             evidence.Summary,
             armReceipts);
+        if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure)
+        {
+            foreach (var finding in runnable.Findings)
+            {
+                _recordFindingEvidenceOutcome(
+                    goal.Id,
+                    requestingTask.Id,
+                    finding.StableId,
+                    new FindingEvidenceOutcome(
+                        Honoured: false,
+                        ReceiptId: receiptId,
+                        Reason: FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
+                        Detail: evidence.Summary,
+                        ResultReason: FindingEvidenceOutcomeReason.ApparatusFailure),
+                    receipt);
+                _recordFindingEvidenceRequest(
+                    goal.Id,
+                    requestingTask.Id,
+                    $"finding-evidence disposition=not-honoured; role={requestingTask.RequiredRole}; " +
+                    $"task_id={requestingTask.Id}; finding_id={finding.StableId}; candidate_sha={candidateSha}; " +
+                    $"receipt_id={receiptId}; reason=selection-apparatus-failure; " +
+                    $"detail={TrimForConductorMessage(evidence.Summary)}");
+                _recordFindingEvidenceRun(
+                    goal.Id,
+                    requestingTask.Id,
+                    $"finding-evidence apparatus-failure role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; " +
+                    $"finding_id={finding.StableId}; candidate_sha={candidateSha}; receipt_id={receiptId}; " +
+                    FormatFocusedEvidenceResult(evidence));
+            }
+
+            decision = BuildFindingEvidenceDeliveryRetry(
+                requestingTask,
+                "Focused evidence selected zero tests; its apparatus receipt was attached for correction and reissue.");
+            return true;
+        }
+
         foreach (var finding in runnable.Findings)
         {
             _recordFindingEvidenceOutcome(
@@ -1856,12 +1907,16 @@ internal sealed class ConductorDriver
                 return false;
             }
             var project = selection.TestProject?.Trim();
-            var testClass = selection.TestClass?.Trim();
+            var originalTestClass = selection.TestClass ?? string.Empty;
+            var testClass = originalTestClass.Trim();
             if (string.IsNullOrWhiteSpace(project) ||
                 string.IsNullOrWhiteSpace(testClass) ||
-                !EvidenceClassNamePattern.IsMatch(testClass))
+                originalTestClass.Length > MaxFindingEvidenceFilterLength ||
+                !IsSupportedFindingEvidenceFilter(testClass))
             {
-                refusalDetail = "Every evidence selection requires a valid test_project and test_class.";
+                refusalDetail =
+                    $"Every evidence selection requires a bounded valid test_project and test_class; " +
+                    $"offending_filter='{originalTestClass}'.";
                 return false;
             }
 
@@ -1878,7 +1933,7 @@ internal sealed class ConductorDriver
             }
 
             var canonicalProject = GoalAcceptanceVerifier.ProjectLabel(resolvedProject);
-            selections.Add(new FindingEvidenceSelection(canonicalProject, testClass));
+            selections.Add(new FindingEvidenceSelection(canonicalProject, originalTestClass));
         }
 
         var distinct = selections
@@ -1889,11 +1944,60 @@ internal sealed class ConductorDriver
         normalized = new FindingEvidenceRequest(distinct);
         executorRequest = string.Join(
             "; ",
-            distinct
-                .GroupBy(selection => selection.TestProject, StringComparer.Ordinal)
-                .Select(group => $"{group.Key}: {string.Join(',', group.Select(selection => selection.TestClass))}"));
+            distinct.Select(FormatFindingEvidenceSelection));
         return true;
     }
+
+    private static bool IsSupportedFindingEvidenceFilter(string filter)
+    {
+        if (EvidenceBareClassNamePattern.IsMatch(filter))
+        {
+            return true;
+        }
+
+        var parenthesisDepth = 0;
+        foreach (var character in filter)
+        {
+            if (character == '(')
+            {
+                parenthesisDepth++;
+            }
+            else if (character == ')' && --parenthesisDepth < 0)
+            {
+                return false;
+            }
+        }
+        if (parenthesisDepth != 0)
+        {
+            return false;
+        }
+
+        var tokens = Regex.Split(filter, @"[&|]");
+        if (tokens.Length == 0 || tokens.Any(string.IsNullOrWhiteSpace))
+        {
+            return false;
+        }
+
+        var hasPositiveSelection = false;
+        foreach (var rawToken in tokens)
+        {
+            var token = rawToken.Trim().Trim('(', ')').Trim();
+            if (token.Length == 0 ||
+                token.Contains('(') ||
+                token.Contains(')') ||
+                !EvidenceFilterTokenPattern.IsMatch(token))
+            {
+                return false;
+            }
+
+            hasPositiveSelection |= token.Contains("FullyQualifiedName~", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return hasPositiveSelection;
+    }
+
+    private static string FormatFindingEvidenceSelection(FindingEvidenceSelection selection) =>
+        selection.TestProject + ":" + selection.TestClass;
 
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
         string.Join("|", request.Selections.Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
@@ -2013,7 +2117,10 @@ internal sealed class ConductorDriver
         var summary = string.IsNullOrWhiteSpace(check.ResultSummary)
             ? string.Empty
             : $"; summary={TrimForConductorMessage(check.ResultSummary)}";
-        return $"{check.Name} passed={check.Passed} exit={check.ExitCode} {receipt}{summary}";
+        var executed = check.ExecutedTestCount is null
+            ? string.Empty
+            : $" executed={check.ExecutedTestCount}";
+        return $"{check.Name} passed={check.Passed} exit={check.ExitCode}{executed} {receipt}{summary}";
     }
 
     private static string FormatVerifyingRoleOutputArtifact(TaskSpec task)
@@ -2817,6 +2924,40 @@ internal sealed class ConductorDriver
                 [],
                 evidencePointer);
             return false;
+        }
+
+        if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure)
+        {
+            RecordPreReviewReceipt(
+                goal,
+                reviewerTask,
+                context,
+                round,
+                PreReviewEvidenceDisposition.MappingNeedsInput,
+                evidence.Checks,
+                [],
+                evidencePointer);
+            var apparatusDetail =
+                $"pre-review focused selection apparatus failure for candidate {context.CandidateSha}; " +
+                $"the run executed zero tests and is not candidate-failure evidence; pointer={evidencePointer ?? "none"}";
+            if (TryRoutePreReviewEvidenceToTester(
+                    goal,
+                    reviewerTask,
+                    goalPrefix,
+                    policy,
+                    apparatusDetail,
+                    out result))
+            {
+                return true;
+            }
+
+            result = Escalate(
+                goal,
+                goalPrefix,
+                policy,
+                fromState,
+                $"PRE_REVIEW_SELECTION_APPARATUS_FAILURE: {apparatusDetail}; no Tester task is available.");
+            return true;
         }
 
         var failingTests = ExtractFailingTestIdentities(evidence.Checks);

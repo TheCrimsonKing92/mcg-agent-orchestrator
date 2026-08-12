@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
 
 public sealed class TaskVerificationTests
@@ -439,6 +440,27 @@ public sealed class TaskVerificationTests
                 Assert.Equal(FindingEvidenceArmDisposition.Red, arm.Disposition);
                 Assert.Equal(["TaskVerificationTests.NegativeControl"], arm.FailingTestIdentities);
             });
+    }
+
+    [Xunit.Fact]
+    public void FindingEvidenceApparatusDispositionRoundTripsThroughWireConverters()
+    {
+        var armJson = JsonSerializer.Serialize(FindingEvidenceArmDisposition.ApparatusFailure);
+        var outcomeJson = JsonSerializer.Serialize(FindingEvidenceOutcomeReason.ApparatusFailure);
+        var refusalJson = JsonSerializer.Serialize(FindingEvidenceNotHonouredReason.SelectionApparatusFailure);
+
+        Assert.Equal("\"apparatus-failure\"", armJson);
+        Assert.Equal("\"apparatus-failure\"", outcomeJson);
+        Assert.Equal("\"selection-apparatus-failure\"", refusalJson);
+        Assert.Equal(
+            FindingEvidenceArmDisposition.ApparatusFailure,
+            JsonSerializer.Deserialize<FindingEvidenceArmDisposition>(armJson));
+        Assert.Equal(
+            FindingEvidenceOutcomeReason.ApparatusFailure,
+            JsonSerializer.Deserialize<FindingEvidenceOutcomeReason>(outcomeJson));
+        Assert.Equal(
+            FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
+            JsonSerializer.Deserialize<FindingEvidenceNotHonouredReason>(refusalJson));
     }
 
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]

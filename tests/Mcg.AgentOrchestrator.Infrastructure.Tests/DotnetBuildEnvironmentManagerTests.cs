@@ -2722,7 +2722,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         var scriptPath = Path.Combine(repoRoot, "scripts", "Invoke-IsolatedDotnet.ps1");
         var root = CreateTempDirectory();
         var sharedProfileRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            ResolveSharedLocalAppData(),
             "Temp",
             "Low",
             "f",
@@ -2923,7 +2923,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         var workDirectory = Path.Combine(root, "repo");
         var shimDirectory = Path.Combine(root, "shim");
         var sharedRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            ResolveSharedLocalAppData(),
             "Temp", "Low", "f", Guid.NewGuid().ToString("N")[..8]);
         var isolatedRoot = Path.Combine(sharedRoot, "isolated");
         Directory.CreateDirectory(workDirectory);
@@ -3007,7 +3007,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
         var workDirectory = Path.Combine(root, "repo");
         var shimDirectory = Path.Combine(root, "shim");
         var sharedRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            ResolveSharedLocalAppData(),
             "Temp", "Low", "f", Guid.NewGuid().ToString("N")[..8]);
         var isolatedRoot = Path.Combine(sharedRoot, "isolated");
         var heldSlots = new List<FileStream>();
@@ -3792,6 +3792,14 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 // Best effort.
             }
         }
+    }
+
+    private static string ResolveSharedLocalAppData()
+    {
+        var inherited = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        return string.IsNullOrWhiteSpace(inherited)
+            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+            : inherited;
     }
 
     private static string ResolveRepositoryRoot()

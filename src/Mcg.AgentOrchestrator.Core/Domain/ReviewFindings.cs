@@ -158,6 +158,7 @@ public enum FindingEvidenceArm
 public enum FindingEvidenceArmDisposition
 {
     Inconclusive,
+    ApparatusFailure,
     Green,
     Red
 }
@@ -170,6 +171,7 @@ public sealed class FindingEvidenceArmDispositionJsonConverter : JsonConverter<F
             {
                 "green" => FindingEvidenceArmDisposition.Green,
                 "red" => FindingEvidenceArmDisposition.Red,
+                "apparatus-failure" => FindingEvidenceArmDisposition.ApparatusFailure,
                 _ => FindingEvidenceArmDisposition.Inconclusive
             }
             : FindingEvidenceArmDisposition.Inconclusive;
@@ -179,6 +181,7 @@ public sealed class FindingEvidenceArmDispositionJsonConverter : JsonConverter<F
         {
             FindingEvidenceArmDisposition.Green => "green",
             FindingEvidenceArmDisposition.Red => "red",
+            FindingEvidenceArmDisposition.ApparatusFailure => "apparatus-failure",
             _ => "inconclusive"
         });
 }
@@ -189,6 +192,7 @@ public enum FindingEvidenceOutcomeReason
     Unknown,
     ValidEvidence,
     VacuousEvidence,
+    ApparatusFailure,
     CandidateRed,
     CandidateInconclusive,
     BaselineInconclusive
@@ -201,6 +205,7 @@ public sealed class FindingEvidenceOutcomeReasonJsonConverter : JsonConverter<Fi
         {
             ["valid-evidence"] = FindingEvidenceOutcomeReason.ValidEvidence,
             ["vacuous-evidence"] = FindingEvidenceOutcomeReason.VacuousEvidence,
+            ["apparatus-failure"] = FindingEvidenceOutcomeReason.ApparatusFailure,
             ["candidate-red"] = FindingEvidenceOutcomeReason.CandidateRed,
             ["candidate-inconclusive"] = FindingEvidenceOutcomeReason.CandidateInconclusive,
             ["baseline-inconclusive"] = FindingEvidenceOutcomeReason.BaselineInconclusive,
@@ -219,6 +224,7 @@ public sealed class FindingEvidenceOutcomeReasonJsonConverter : JsonConverter<Fi
     {
         FindingEvidenceOutcomeReason.ValidEvidence => "valid-evidence",
         FindingEvidenceOutcomeReason.VacuousEvidence => "vacuous-evidence",
+        FindingEvidenceOutcomeReason.ApparatusFailure => "apparatus-failure",
         FindingEvidenceOutcomeReason.CandidateRed => "candidate-red",
         FindingEvidenceOutcomeReason.CandidateInconclusive => "candidate-inconclusive",
         FindingEvidenceOutcomeReason.BaselineInconclusive => "baseline-inconclusive",
@@ -235,6 +241,7 @@ public enum FindingEvidenceNotHonouredReason
     PerRoundCap,
     CandidateShaMissing,
     ExecutorUnavailable,
+    SelectionApparatusFailure,
     RunFailed
 }
 
@@ -249,6 +256,7 @@ public sealed class FindingEvidenceNotHonouredReasonJsonConverter : JsonConverte
             ["per-round-cap"] = FindingEvidenceNotHonouredReason.PerRoundCap,
             ["candidate-sha-missing"] = FindingEvidenceNotHonouredReason.CandidateShaMissing,
             ["executor-unavailable"] = FindingEvidenceNotHonouredReason.ExecutorUnavailable,
+            ["selection-apparatus-failure"] = FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
             ["run-failed"] = FindingEvidenceNotHonouredReason.RunFailed
         };
 
@@ -267,6 +275,7 @@ public sealed class FindingEvidenceNotHonouredReasonJsonConverter : JsonConverte
         FindingEvidenceNotHonouredReason.PerRoundCap => "per-round-cap",
         FindingEvidenceNotHonouredReason.CandidateShaMissing => "candidate-sha-missing",
         FindingEvidenceNotHonouredReason.ExecutorUnavailable => "executor-unavailable",
+        FindingEvidenceNotHonouredReason.SelectionApparatusFailure => "selection-apparatus-failure",
         FindingEvidenceNotHonouredReason.RunFailed => "run-failed",
         _ => "unknown"
     };

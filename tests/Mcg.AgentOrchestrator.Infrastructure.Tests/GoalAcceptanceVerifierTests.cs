@@ -2225,6 +2225,302 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains(testCall, argument => argument.Contains(target, StringComparison.Ordinal)));
     }
 
+    [Xunit.Theory]
+    [Xunit.InlineData("GoalAcceptanceVerifierTests")]
+    [Xunit.InlineData("Infrastructure.Tests: GoalAcceptanceVerifierTests")]
+    [Xunit.InlineData("FullyQualifiedName~GoalAcceptanceVerifierTests")]
+    [Xunit.InlineData("Infrastructure.Tests: FullyQualifiedName~GoalAcceptanceVerifierTests")]
+    public async Task FocusedEvidenceAcceptsBareAndFullyQualifiedClassSpellings(string request)
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(request);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        AssertArgumentPair(testCall, "--filter-class", "*GoalAcceptanceVerifierTests*");
+        Assert.DoesNotContain("Infrastructure.Tests:", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task MethodQualifiedFocusedEvidenceUsesExactMethodSelector()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: FullyQualifiedName~SelectionProbeTests.SelectsOneMethod",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """
+                    sealed class SelectionProbeTests
+                    {
+                        [Xunit.Fact]
+                        public void SelectsOneMethod() { }
+                    }
+                    """);
+            });
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        AssertArgumentPair(
+            testCall,
+            "--filter-method",
+            "*SelectionProbeTests.SelectsOneMethod*");
+        Assert.DoesNotContain("--filter-class", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task MethodQualifiedFocusedEvidencePreservesContainsSemantics()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: FullyQualifiedName~SelectionProbeTests.SelectsOne",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """
+                    sealed class SelectionProbeTests
+                    {
+                        [Xunit.Fact]
+                        public void SelectsOneMethod() { }
+                    }
+                    """);
+            });
+
+        Assert.True(result.Accepted);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        AssertArgumentPair(testCall, "--filter-method", "*SelectionProbeTests.SelectsOne*");
+        Assert.DoesNotContain("--filter-class", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task DeclarationLookingTextInsideRawStringIsNotResolvedAsTestMethod()
+    {
+        const string offendingToken = "FullyQualifiedName~SelectionProbeTests.SelectsOneMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """"
+                    sealed class SelectionProbeTests
+                    {
+                        private const string Fixture = """
+                            [Xunit.Fact]
+                            public void SelectsOneMethod() { }
+                            """;
+                    }
+                    """");
+            });
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task UnreadableFocusedEvidenceSourceIsTypedAsApparatusFailure()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string offendingToken = "FullyQualifiedName~LockedSelectionProbeTests.SelectsOneMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "LockedSelectionProbeTests.cs"),
+                    """
+                    sealed class LockedSelectionProbeTests
+                    {
+                        [Xunit.Fact]
+                        public void SelectsOneMethod() { }
+                    }
+                    """);
+            },
+            holdWorkspaceResource: root => File.Open(
+                Path.Combine(
+                    root,
+                    "tests",
+                    "Mcg.AgentOrchestrator.Infrastructure.Tests",
+                    "LockedSelectionProbeTests.cs"),
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None));
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.SourceDiscoveryFailure, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task InvocationNameIsNotResolvedAsTestMethod()
+    {
+        const string offendingToken = "FullyQualifiedName~GoalAcceptanceVerifierTests.WriteAllText";
+        var (result, calls) = await RunMappedEvidenceAsync($"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task SiblingTestMethodIsNotResolvedForSelectedClass()
+    {
+        const string offendingToken = "FullyQualifiedName~SelectionProbeTests.SiblingMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}",
+            configureWorkspace: root =>
+            {
+                var directory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(
+                    Path.Combine(directory, "SelectionProbeTests.cs"),
+                    """
+                    sealed class SelectionProbeTests { }
+
+                    sealed class SiblingTests
+                    {
+                        [Xunit.Fact]
+                        public void SiblingMethod() { }
+                    }
+                    """);
+            });
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task UnsupportedFocusedEvidenceTokenIsTypedAndExactBeforeLaunch()
+    {
+        const string offendingToken = "Bogus == token";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: FullyQualifiedName~GoalAcceptanceVerifierTests|{offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.NotNull(result.Rejection);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnsupportedToken, result.Rejection.Code);
+        Assert.Equal(offendingToken, result.Rejection.OffendingToken);
+        Assert.Contains(offendingToken, result.Rejection.Detail, StringComparison.Ordinal);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task BareInvalidTokenPreservesOriginalWhitespace()
+    {
+        const string offendingToken = " Bogus == token ";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: GoalAcceptanceVerifierTests,{offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnsupportedToken, result.Rejection?.Code);
+        Assert.Equal(offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task UnresolvableMethodSelectionIsRejectedWithoutClassFallback()
+    {
+        const string offendingToken = "FullyQualifiedName~MissingTests.MissingMethod";
+        var (result, calls) = await RunMappedEvidenceAsync(
+            $"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.UnresolvableSelection, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task OversizedFocusedEvidenceTokenIsRejectedBeforeLaunch()
+    {
+        var offendingToken = "FullyQualifiedName~" + new string('A', 1025);
+        var (result, calls) = await RunMappedEvidenceAsync($"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.OversizedFilter, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Fact]
+    public async Task WhitespacePaddedTokenCannotBypassLengthLimit()
+    {
+        var offendingToken = "GoalAcceptanceVerifierTests" + new string(' ', 1024);
+        var (result, calls) = await RunMappedEvidenceAsync($"Infrastructure.Tests: {offendingToken}");
+
+        Assert.False(result.Accepted);
+        Assert.Equal(FocusedEvidenceRejectionCode.OversizedFilter, result.Rejection?.Code);
+        Assert.Equal(" " + offendingToken, result.Rejection?.OffendingToken);
+        Assert.Empty(calls);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(0)]
+    [Xunit.InlineData(8)]
+    public async Task FocusedEvidenceZeroExecutedTestsIsApparatusFailure(int exitCode)
+    {
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: GoalAcceptanceVerifierTests",
+            executedTestCount: 0,
+            testExitCode: exitCode);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, result.OutcomeReason);
+        var arm = Assert.Single(result.Arms!);
+        Assert.Equal(FindingEvidenceArmDisposition.ApparatusFailure, arm.Disposition);
+        var check = Assert.Single(result.Checks);
+        Assert.Equal(0, check.ExecutedTestCount);
+        Assert.Equal(
+            AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
+            check.FailureClassification);
+        Assert.Empty(check.FailingTestIdentities!);
+        Assert.Contains("executed 0 tests", check.OutputTail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_BaselineApparatusFailureOverridesCandidateRed()
+    {
+        var outcome = GoalAcceptanceVerifier.ClassifyFocusedEvidenceExperiment(
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Candidate, FindingEvidenceArmDisposition.Red),
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Baseline, FindingEvidenceArmDisposition.ApparatusFailure));
+
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, outcome);
+    }
+
+    [Xunit.Fact]
+    public void FocusedEvidence_BaselineApparatusFailureOverridesCandidateInconclusive()
+    {
+        var outcome = GoalAcceptanceVerifier.ClassifyFocusedEvidenceExperiment(
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Candidate, FindingEvidenceArmDisposition.Inconclusive),
+            CreateFocusedEvidenceArm(FindingEvidenceArm.Baseline, FindingEvidenceArmDisposition.ApparatusFailure));
+
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, outcome);
+    }
+
     [Xunit.Fact]
     public async Task FocusedEvidence_TwoReceiptTargetsAcrossProjects_PreserveFocusedChecks()
     {
@@ -2762,7 +3058,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     private static async Task<(FocusedEvidenceRunResult Result, List<string[]> Calls)> RunMappedEvidenceAsync(
         string request,
         bool timeOutTests = false,
-        List<TimeSpan>? observedTimeouts = null)
+        List<TimeSpan>? observedTimeouts = null,
+        Action<string>? configureWorkspace = null,
+        int? executedTestCount = null,
+        int testExitCode = 0,
+        Func<string, IDisposable?>? holdWorkspaceResource = null)
     {
         var calls = new List<string[]>();
         var root = CreateManifestWorkspace("""
@@ -2776,9 +3076,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var configuredManifest = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
         configuredManifest["engine"]!["timeouts"]!["defaultMinutes"] = 40;
         File.WriteAllText(manifestPath, configuredManifest.ToJsonString());
+        configureWorkspace?.Invoke(root);
         var goalId = new GoalId(Guid.NewGuid().ToString("N"));
         try
         {
+            using var workspaceResource = holdWorkspaceResource?.Invoke(root);
             var verifier = new GoalAcceptanceVerifier((args, _, timeout, _) =>
             {
                 calls.Add(args);
@@ -2796,10 +3098,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                             Elapsed: TimeSpan.FromMinutes(40)));
                     }
 
-                    WriteMtpTrx(args);
+                    WriteMtpTrx(args, executedTestCount);
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
-                        0,
-                        "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
+                        testExitCode,
+                        executedTestCount == 0
+                            ? "Minimum expected tests was set to 1, but 0 tests were selected."
+                            : "Passed! - Failed: 0, Passed: 1, Skipped: 0, Total: 1."));
                 }
 
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
@@ -2814,6 +3118,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             DeleteDirectoryWithRetry(root);
         }
     }
+
+    private static FocusedEvidenceArmRunResult CreateFocusedEvidenceArm(
+        FindingEvidenceArm arm,
+        FindingEvidenceArmDisposition disposition) =>
+        new(
+            arm,
+            $"{arm.ToString().ToLowerInvariant()}-sha",
+            disposition,
+            Accepted: true,
+            Passed: disposition == FindingEvidenceArmDisposition.Green,
+            Summary: disposition.ToString(),
+            Checks: []);
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_rejects_unbounded_focused_evidence_request")]
     public async Task GoalAcceptanceVerifierRejectsUnboundedFocusedEvidenceRequest()
@@ -7193,6 +7509,27 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     private static void WriteMtpTrx(string[] args)
     {
         WriteMtpTrx(args, sourcePath: null);
+    }
+
+    private static void WriteMtpTrx(string[] args, int? executedTestCount)
+    {
+        if (executedTestCount is null)
+        {
+            WriteMtpTrx(args);
+            return;
+        }
+
+        var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
+        var trxFileIndex = Array.IndexOf(args, "--report-trx-filename");
+        Assert.True(resultsDirectoryIndex >= 0);
+        Assert.True(resultsDirectoryIndex + 1 < args.Length);
+        Assert.True(trxFileIndex >= 0);
+        Assert.True(trxFileIndex + 1 < args.Length);
+        Directory.CreateDirectory(args[resultsDirectoryIndex + 1]);
+        var destinationPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
+        File.WriteAllText(
+            destinationPath,
+            $"<TestRun><ResultSummary><Counters total=\"{Math.Max(1, executedTestCount.Value)}\" executed=\"{executedTestCount}\" /></ResultSummary></TestRun>");
     }
 
     private static void WriteMtpTrx(string[] args, string? sourcePath)
