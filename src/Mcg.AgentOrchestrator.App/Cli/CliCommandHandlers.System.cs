@@ -574,17 +574,6 @@ internal static partial class CliCommandHandlers
                 ConsoleViews.PrintHealth(OrchestratorHealthInspector.InspectCurrentEnvironment(new AgentCatalog(context.Agents), context.WorkerProfiles));
                 return false;
 
-            case "firewall-setup":
-            {
-                var exitCode = new FirewallSetupCommand().Execute(Console.Out);
-                if (exitCode != FirewallSetupCommand.SuccessExitCode)
-                {
-                    throw new CliExitException(exitCode);
-                }
-
-                return false;
-            }
-
             case "repo-process-info":
                 RepoProcessCliCommand.PrintInfo(parts, Console.Out);
                 return false;

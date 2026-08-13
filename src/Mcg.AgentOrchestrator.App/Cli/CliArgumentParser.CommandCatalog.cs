@@ -40,7 +40,6 @@ internal static IReadOnlyList<string> RecognizedCommands { get; } =
     "run-events-maintenance",
     "run-event",
     "build-lease-cleanup",
-    "firewall-setup",
     "repo-process-info",
     "repo-process-stop",
     "stable-slot-dotnet",

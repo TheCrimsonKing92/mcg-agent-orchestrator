@@ -14,9 +14,6 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             ConsoleViews.PrintWorkerProfiles(context.WorkerProfiles);
             return false;
 
-        case "codex-egress-proxy":
-            return RunCodexEgressProxyCommand(parts);
-
         case "worker-profile":
             CliArgumentParser.RequirePartCount(parts, 3, "worker-profile <name> <command-template>");
             context.WorkerProfiles = context.WorkerProfiles.Upsert(new WorkerProfile(parts[1], parts[2]));
