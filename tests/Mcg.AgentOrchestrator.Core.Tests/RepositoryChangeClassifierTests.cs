@@ -634,6 +634,19 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains(check.Command, argument => argument.Contains("FullyQualifiedName~GoalAcceptanceVerifierTests", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_ignores_non_source_fixtures_in_test_class_filter")]
+    public void RepositoryTestImpactPlannerIgnoresNonSourceFixturesInTestClassFilter()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/PlannerOutputContract/485363d4-ba8e416a-20260805011642.out.txt",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/PlannerOutputContractTests.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Contains("--filter", check.Command);
+        Assert.Equal("FullyQualifiedName~PlannerOutputContractTests", check.Command[^1]);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_tests_for_core_changes")]
     public void RepositoryTestImpactPlannerSelectsCoreTestsForCoreChanges()
     {
