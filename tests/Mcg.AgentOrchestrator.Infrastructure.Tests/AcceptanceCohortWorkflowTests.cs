@@ -9,6 +9,137 @@ using Microsoft.Data.Sqlite;
 public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 {
     [Fact]
+    public void DeveloperDispatchIntegration_CleanDivergence_MergesMainAndLeavesGoalWorktreeClean()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        var goal = new Goal(new GoalId("11111111111111111111111111111111"), "Integrate before Developer dispatch", []);
+        try
+        {
+            var worktree = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktree, "goal.txt"), "goal change");
+            RunGit(worktree, "add", "goal.txt");
+            RunGit(worktree, "commit", "-m", "Goal change");
+            File.WriteAllText(Path.Combine(repo, "main.txt"), "main change");
+            RunGit(repo, "add", "main.txt");
+            RunGit(repo, "commit", "-m", "Main change");
+
+            var result = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal);
+
+            Assert.Equal(DeveloperBranchIntegrationStatus.Integrated, result.Status);
+            Assert.Empty(result.ConflictPaths);
+            Assert.Equal(string.Empty, RunGitOutput(worktree, "status", "--short").Trim());
+            RunGitOutput(
+                repo,
+                "merge-base",
+                "--is-ancestor",
+                "main",
+                GoalWorktrees.BranchName(goal.Id));
+            Assert.Equal(
+                $"Integrate main into {GoalWorktrees.BranchName(goal.Id)} before Developer dispatch",
+                RunGitOutput(worktree, "log", "-1", "--pretty=%s").Trim());
+            Assert.Equal(2, RunGitOutput(worktree, "show", "-s", "--pretty=%P", "HEAD")
+                .Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void DeveloperDispatchIntegration_ConflictingDivergence_NamesPathsAndRestoresCleanBranch()
+    {
+        var repo = CreateAcceptanceCohortRepository();
+        var goal = new Goal(new GoalId("22222222222222222222222222222222"), "Escalate conflicting integration", []);
+        try
+        {
+            File.WriteAllText(Path.Combine(repo, "shared.txt"), "base");
+            RunGit(repo, "add", "shared.txt");
+            RunGit(repo, "commit", "-m", "Shared base");
+            var worktree = GoalWorktrees.Ensure(repo, goal.Id);
+            File.WriteAllText(Path.Combine(worktree, "shared.txt"), "goal change");
+            RunGit(worktree, "add", "shared.txt");
+            RunGit(worktree, "commit", "-m", "Goal change");
+            var branchHead = RunGitOutput(worktree, "rev-parse", "HEAD").Trim();
+            File.WriteAllText(Path.Combine(repo, "shared.txt"), "main change");
+            RunGit(repo, "add", "shared.txt");
+            RunGit(repo, "commit", "-m", "Main change");
+
+            var result = ConductorDriver.IntegrateMainBeforeDeveloperDispatch(repo, goal);
+
+            Assert.Equal(DeveloperBranchIntegrationStatus.Conflict, result.Status);
+            Assert.Equal(["shared.txt"], result.ConflictPaths);
+            Assert.Contains("conductor or operator", result.Message, StringComparison.Ordinal);
+            Assert.Contains("do not instruct a worker to rebase", result.Message, StringComparison.Ordinal);
+            Assert.Equal(branchHead, RunGitOutput(worktree, "rev-parse", "HEAD").Trim());
+            Assert.Equal(string.Empty, RunGitOutput(worktree, "status", "--short").Trim());
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
+    [Fact]
+    public void DeveloperDispatchIntegration_ConflictEscalatesBeforePaidWorkerStart()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal(
+            "Block conflicting Developer dispatch",
+            [new TaskSpec(TaskId.New(), "Implement change", AgentRole.Developer)]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var dispatchStarted = false;
+        string? escalation = null;
+        var driver = new ConductorDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            getRunningPaidWorkerCount: () => 0,
+            createWorkspace: _ => "unused",
+            dispatchAndStart: _ =>
+            {
+                dispatchStarted = true;
+                return DispatchStartOutcome.Started();
+            },
+            startRecordedDispatches: null,
+            buildServerShutdown: null,
+            runAcceptanceVerification: _ => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+            runAdvisorySemanticAcceptance: null,
+            retryTask: null,
+            recordTaskNote: null,
+            recordCriterionRetryFeedback: null,
+            clearCriterionRetryFeedback: null,
+            rebaseOntoMain: _ => new GoalWorktreeRebaseResult(
+                GoalWorktreeRebaseStatus.AlreadyFastForwardable,
+                GoalWorktrees.BranchName(goal.Id),
+                "current",
+                [],
+                null),
+            land: (candidate, _) => new LandingResult(
+                candidate.Id.Value,
+                candidate.Id.Value[..8],
+                new LandingDecision.Promote(),
+                LandingExecutor.IntegrationBranchName,
+                MainAdvanced: true,
+                "landed"),
+            afterSuccessfulLanding: null,
+            record: _ => { },
+            cleanup: _ => new GoalWorktreeRemoveResult("clean", null, [], null),
+            writeEscalation: (_, _, reason) => escalation = reason,
+            classifyChangeRisk: _ => null,
+            integrateMainBeforeDeveloperDispatch: _ => new DeveloperBranchIntegrationResult(
+                DeveloperBranchIntegrationStatus.Conflict,
+                "Developer dispatch blocked: conflict in src/Semantic.cs; conductor or operator must act; do not instruct a worker to rebase.",
+                ["src/Semantic.cs"]));
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        var escalated = Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.WorkspaceReady, escalated.State);
+        Assert.False(dispatchStarted);
+        Assert.Contains("src/Semantic.cs", escalation, StringComparison.Ordinal);
+        Assert.Contains("conductor or operator", escalation, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DisposableWorkspace_MaterializesOrderedCombinedTree_WithoutMutatingGoalBranches()
     {
         var repo = CreateAcceptanceCohortRepository();
