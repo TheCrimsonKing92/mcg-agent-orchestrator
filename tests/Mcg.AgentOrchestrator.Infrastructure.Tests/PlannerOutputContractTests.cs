@@ -33,7 +33,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     {
         var workingDirectory = CreateTempDirectory();
         var targetBody =
-            "- Add `src/AcceptanceOwnershipStore.cs` — new behavior for cross-process claims.";
+            "- Extend `src/AcceptanceOwnershipStore.cs` — new behavior for cross-process claims.";
         var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
 
         var result = PlannerOutputContract.Resolve(
