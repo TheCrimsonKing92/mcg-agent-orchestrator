@@ -47,7 +47,7 @@ The reported 10k-token receipt is not duplicated in the context artifacts, but t
 - `src/Mcg.AgentOrchestrator.App/Cli/CliPersistentStateRunner.cs` — apply the same parser before goal resolution/reconciliation and use the same renderer.
 - `src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs` — add `RefreshDispatchUsage`, a validated help entry, flag descriptions, and routing.
 - `src/Mcg.AgentOrchestrator.App/Program.cs` — advertise both history options.
-- `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliArgumentNormalizationTests.cs` — parser semantics and malformed-input tests.
+- `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/CliArgumentNormalizationTests.cs` — parser semantics and malformed-input tests.
 - `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.RefreshDispatchCommands.cs` — new file: deep-history rendering and in-memory command tests.
 - `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PersistentRunnerCommands.cs` — persistent-path parity, atomicity, and durable-history assertions.
 - `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliHelpTests.cs` — command-specific help and flag-validation coverage.
