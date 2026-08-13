@@ -1564,7 +1564,7 @@ internal sealed class ConductorDriver
 
         var identityMoveHasIdenticalReviewedCommitProof =
             violation.Code == ReviewFindingConvergence.IdentityMovedViolationCode &&
-            HasIdenticalReviewedCommitAsCarriedRound(goal, reviewerTask);
+            HasIdenticalReviewedCommitAsCarriedRound(reviewerTask);
         if ((violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
                 ReviewFindingConvergence.RecycledAnchorIdentityViolationCode) &&
             reviewerTask.LastVerification.MergedReviewFindings is not null &&
@@ -1648,29 +1648,14 @@ internal sealed class ConductorDriver
         return true;
     }
 
-    private static bool HasIdenticalReviewedCommitAsCarriedRound(Goal goal, TaskSpec reviewerTask)
+    private static bool HasIdenticalReviewedCommitAsCarriedRound(TaskSpec reviewerTask)
     {
+        var currentVerification = reviewerTask.LastVerification;
         var currentDispatch = reviewerTask.LastDispatch;
-        if (string.IsNullOrWhiteSpace(currentDispatch?.BaseCommit))
-        {
-            return false;
-        }
-
-        // Reconstruct the carried round at dispatch time. The rejected verification is already in
-        // history when the conductor runs and may have a separately allocated snapshot twin, so it
-        // cannot reliably identify or exclude the carried round by record equality.
-        var carriedRound = goal.Tasks
-            .Where(candidate => candidate.RequiredRole == reviewerTask.RequiredRole)
-            .SelectMany(candidate => candidate.VerificationHistory)
-            .Where(verification =>
-                verification.CompletedAt <= currentDispatch.DispatchedAt &&
-                verification.MergedReviewFindings is not null)
-            .OrderByDescending(verification => verification.CompletedAt)
-            .FirstOrDefault();
-
-        return !string.IsNullOrWhiteSpace(carriedRound?.ReviewedCommit) &&
+        return !string.IsNullOrWhiteSpace(currentVerification?.ReviewedCommit) &&
+            !string.IsNullOrWhiteSpace(currentDispatch?.BaseCommit) &&
             string.Equals(
-                carriedRound.ReviewedCommit.Trim(),
+                currentVerification.ReviewedCommit.Trim(),
                 currentDispatch.BaseCommit.Trim(),
                 StringComparison.OrdinalIgnoreCase);
     }
