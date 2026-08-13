@@ -174,9 +174,14 @@ public static string SelectAvailableLocalUrlPrefix(int preferredPort)
 
 public static string SelectAvailableHostedUrlPrefix(int preferredPort)
 {
+    // Probe on loopback even though the prefix binds every interface. A probe that binds
+    // IPAddress.Any raises a Windows Firewall prompt for whatever executable path the process
+    // happens to run from, which mints a rule per artifact root and per worktree. Loopback
+    // answers the same question -- is this port already taken -- without the prompt, because
+    // firewall filters do not apply to loopback.
     for (var port = preferredPort; port < preferredPort + 100; port++)
     {
-        if (CanBindAnyIPv4Port(port))
+        if (CanBindLoopbackPort(port))
         {
             return $"http://0.0.0.0:{port}/";
         }
@@ -317,20 +322,6 @@ private static int? TryParsePort(string? value)
     return int.TryParse(value, out var port) && port is >= 1 and <= 65535
         ? port
         : null;
-}
-
-private static bool CanBindAnyIPv4Port(int port)
-{
-    try
-    {
-        using var listener = new TcpListener(IPAddress.Any, port);
-        listener.Start();
-        return true;
-    }
-    catch (SocketException)
-    {
-        return false;
-    }
 }
 
 private static bool IsLoopbackHost(string host)
