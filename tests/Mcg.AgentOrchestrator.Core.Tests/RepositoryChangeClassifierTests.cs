@@ -647,6 +647,18 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Equal("FullyQualifiedName~PlannerOutputContractTests", check.Command[^1]);
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_project_for_non_source_test_changes")]
+    public void RepositoryTestImpactPlannerFallsBackToProjectForNonSourceTestChanges()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/PlannerOutputContract/485363d4-ba8e416a-20260805011642.out.txt"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests", check.Name);
+        Assert.DoesNotContain("--filter", check.Command);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_core_tests_for_core_changes")]
     public void RepositoryTestImpactPlannerSelectsCoreTestsForCoreChanges()
     {

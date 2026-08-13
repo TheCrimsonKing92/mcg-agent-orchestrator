@@ -24,6 +24,23 @@ internal sealed record WorkerAdmissionSnapshot(
     int ReservedGateSlots,
     int EffectiveWorkerCap);
 
+internal enum DeveloperBranchIntegrationStatus
+{
+    Current,
+    Integrated,
+    Conflict,
+    Failed
+}
+
+internal sealed record DeveloperBranchIntegrationResult(
+    DeveloperBranchIntegrationStatus Status,
+    string Message,
+    IReadOnlyList<string> ConflictPaths)
+{
+    internal bool CanDispatch =>
+        Status is DeveloperBranchIntegrationStatus.Current or DeveloperBranchIntegrationStatus.Integrated;
+}
+
 internal sealed class ConductorDriver
 {
     private const int MaxCriterionRetryEvidenceLines = 30;
@@ -51,6 +68,7 @@ internal sealed class ConductorDriver
     private readonly Func<Goal, GoalLifecycleFacts> _getFacts;
     private readonly Func<int> _getRunningPaidWorkerCount;
     private readonly Func<Goal, string> _createWorkspace;
+    private readonly Func<Goal, DeveloperBranchIntegrationResult> _integrateMainBeforeDeveloperDispatch;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _dispatchAndStart;
     private readonly Func<Goal, ConductorAutonomyPolicy, DispatchStartOutcome> _startRecordedDispatches;
     private readonly Func<TimeSpan, string> _buildServerShutdown;
@@ -653,6 +671,33 @@ internal sealed class ConductorDriver
             GoalOperationJournal.Completed(dir, goal, "conductor:semantic-acceptance", "Advisory semantic acceptance invoked.");
         };
 
+        _integrateMainBeforeDeveloperDispatch = goal =>
+        {
+            GoalOperationJournal.Begin(
+                dir,
+                goal,
+                "conductor:developer-branch-integration",
+                "Checking goal branch against current main before Developer dispatch.");
+            var result = IntegrateMainBeforeDeveloperDispatch(dir, goal);
+            if (result.CanDispatch)
+            {
+                GoalOperationJournal.Completed(
+                    dir,
+                    goal,
+                    "conductor:developer-branch-integration",
+                    result.Message);
+            }
+            else
+            {
+                GoalOperationJournal.Failed(
+                    dir,
+                    goal,
+                    "conductor:developer-branch-integration",
+                    result.Message);
+            }
+            RefreshJournal(goal.Id);
+            return result;
+        };
         _rebaseOntoMain = goal => GoalWorktrees.TryRebaseOntoMain(dir, goal.Id);
         _recheckPreLandingRebaseConflict = goal =>
         {
@@ -835,6 +880,144 @@ internal sealed class ConductorDriver
                 EvidenceFingerprint: evidenceFingerprint);
     }
 
+    internal static DeveloperBranchIntegrationResult IntegrateMainBeforeDeveloperDispatch(
+        string executionDirectory,
+        Goal goal)
+    {
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var worktreePath = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
+        if (worktreePath is null)
+        {
+            return DeveloperIntegrationFailure($"Goal branch {branch} has no registered worktree.");
+        }
+
+        if (GitCli.IsWorktreeDirty(worktreePath))
+        {
+            return DeveloperIntegrationFailure(
+                $"Goal branch {branch} has uncommitted changes; conductor integration cannot start from a dirty worktree.");
+        }
+
+        var currentBranch = GitCli.Run(worktreePath, "branch", "--show-current");
+        if (currentBranch.ExitCode != 0 ||
+            !string.Equals(currentBranch.Output.Trim(), branch, StringComparison.Ordinal))
+        {
+            return DeveloperIntegrationFailure(
+                $"Registered worktree for {branch} is not attached to the expected branch.");
+        }
+
+        var mainHead = GitCli.Run(worktreePath, "rev-parse", "--verify", "main^{commit}");
+        var branchHead = GitCli.Run(worktreePath, "rev-parse", "--verify", "HEAD^{commit}");
+        if (mainHead.ExitCode != 0 || branchHead.ExitCode != 0 ||
+            string.IsNullOrWhiteSpace(mainHead.Output) || string.IsNullOrWhiteSpace(branchHead.Output))
+        {
+            return DeveloperIntegrationFailure(
+                $"Could not resolve main and {branch} before Developer dispatch.");
+        }
+
+        var mainRevision = mainHead.Output.Trim();
+        var branchRevision = branchHead.Output.Trim();
+        if (GitCli.Run(worktreePath, "merge-base", "--is-ancestor", mainRevision, branchRevision).ExitCode == 0)
+        {
+            return new DeveloperBranchIntegrationResult(
+                DeveloperBranchIntegrationStatus.Current,
+                $"Goal branch {branch} is already current with main at {mainRevision[..12]}.",
+                []);
+        }
+
+        ReviewerMergeTreeStatus mergeTree;
+        try
+        {
+            mergeTree = new WorkerGitContext().ReadReviewerMergeTreeStatus(
+                worktreePath,
+                mainRevision,
+                branchRevision);
+        }
+        catch (ReviewerMergeTreeStatusException ex)
+        {
+            return DeveloperIntegrationFailure(
+                $"Conductor could not inspect divergence for {branch} before Developer dispatch: {ex.Message}");
+        }
+
+        if (!mergeTree.IsClean)
+        {
+            return new DeveloperBranchIntegrationResult(
+                DeveloperBranchIntegrationStatus.Conflict,
+                BuildDeveloperIntegrationConflictMessage(branch, mergeTree.ConflictPaths),
+                mergeTree.ConflictPaths);
+        }
+
+        var merge = GitCli.Run(
+            worktreePath,
+            "merge",
+            "--no-ff",
+            mainRevision,
+            "-m",
+            $"Integrate main into {branch} before Developer dispatch");
+        if (merge.ExitCode != 0)
+        {
+            var conflictPaths = ReadUnmergedPaths(worktreePath);
+            _ = GitCli.Run(worktreePath, "merge", "--abort");
+            if (conflictPaths.Length > 0)
+            {
+                return new DeveloperBranchIntegrationResult(
+                    DeveloperBranchIntegrationStatus.Conflict,
+                    BuildDeveloperIntegrationConflictMessage(branch, conflictPaths),
+                    conflictPaths);
+            }
+
+            var diagnostic = string.Join(
+                " | ",
+                new[] { merge.Error, merge.Output }
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Select(value => value.Trim().ReplaceLineEndings(" | ")));
+            return DeveloperIntegrationFailure(
+                $"Conductor could not integrate main into {branch} before Developer dispatch: " +
+                (diagnostic.Length == 0 ? $"git merge exited {merge.ExitCode}." : diagnostic));
+        }
+
+        var integratedHead = GitCli.Run(worktreePath, "rev-parse", "--verify", "HEAD^{commit}");
+        var integrationIsCurrent = integratedHead.ExitCode == 0 &&
+            GitCli.Run(
+                worktreePath,
+                "merge-base",
+                "--is-ancestor",
+                mainRevision,
+                integratedHead.Output.Trim()).ExitCode == 0;
+        if (!integrationIsCurrent || GitCli.IsWorktreeDirty(worktreePath))
+        {
+            return DeveloperIntegrationFailure(
+                $"Conductor integrated main into {branch}, but the resulting branch failed the clean/current invariant; Developer dispatch is blocked.");
+        }
+
+        return new DeveloperBranchIntegrationResult(
+            DeveloperBranchIntegrationStatus.Integrated,
+            $"Conductor integrated main {mainRevision[..12]} into {branch} before Developer dispatch at {integratedHead.Output.Trim()[..12]}.",
+            []);
+    }
+
+    private static DeveloperBranchIntegrationResult DeveloperIntegrationFailure(string message) =>
+        new(DeveloperBranchIntegrationStatus.Failed, message, []);
+
+    private static string BuildDeveloperIntegrationConflictMessage(
+        string branch,
+        IReadOnlyList<string> conflictPaths) =>
+        $"Developer dispatch blocked: main conflicts with {branch} in {string.Join(", ", conflictPaths)}. " +
+        "Conflict resolution requires semantic ownership and must be performed by the conductor or operator; " +
+        "do not instruct a worker to rebase or resolve the branch integration.";
+
+    private static string[] ReadUnmergedPaths(string worktreePath)
+    {
+        var result = GitCli.Run(worktreePath, "diff", "--name-only", "--diff-filter=U");
+        return result.ExitCode == 0
+            ? result.Output
+                .ReplaceLineEndings("\n")
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray()
+            : [];
+    }
+
     internal ConductorDriver(
         Func<Goal, GoalLifecycleFacts> getFacts,
         Func<int> getRunningPaidWorkerCount,
@@ -899,11 +1082,17 @@ internal sealed class ConductorDriver
             ConductorAcceptanceCohortSelection,
             IReadOnlyList<Goal>,
             ConductorAutonomyPolicy,
-            ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null)
+            ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null,
+        Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null)
     {
         _getFacts = getFacts;
         _getRunningPaidWorkerCount = getRunningPaidWorkerCount;
         _createWorkspace = createWorkspace;
+        _integrateMainBeforeDeveloperDispatch = integrateMainBeforeDeveloperDispatch ?? (_ =>
+            new DeveloperBranchIntegrationResult(
+                DeveloperBranchIntegrationStatus.Current,
+                "Goal branch is current with main.",
+                []));
         _dispatchAndStart = (goal, _) => dispatchAndStart(goal);
         _startRecordedDispatches = startRecordedDispatches is null
             ? _dispatchAndStart
@@ -3236,6 +3425,16 @@ internal sealed class ConductorDriver
                             : $"At worker cap ({running}/{workerCap}); will advance when a slot opens"));
         }
 
+        if (fromState == GoalLifecycleState.WorkspaceReady &&
+            HasAssignedDeveloperReadyForDispatch(goal))
+        {
+            var integration = _integrateMainBeforeDeveloperDispatch(goal);
+            if (!integration.CanDispatch)
+            {
+                return Escalate(goal, goalPrefix, policy, fromState, integration.Message);
+            }
+        }
+
         if (TryRunPreReviewEvidenceStage(goal, goalPrefix, policy, fromState, out var preReviewResult))
         {
             return preReviewResult;
@@ -4065,6 +4264,16 @@ internal sealed class ConductorDriver
 
     private static int CountAssignedTasks(Goal goal) =>
         goal.Tasks.Count(task => task.Status == WorkTaskStatus.Assigned);
+
+    private static bool HasAssignedDeveloperReadyForDispatch(Goal goal) =>
+        goal.Tasks.Any(task =>
+            task.RequiredRole == AgentRole.Developer &&
+            task.Status == WorkTaskStatus.Assigned &&
+            !goal.Tasks.Any(candidate =>
+                GoalManagementCommandService.IsEarlierSdlcStageOf(
+                    candidate.RequiredRole,
+                    task.RequiredRole) &&
+                candidate.Status != WorkTaskStatus.Completed));
 
     private static string FormatNoRecordedDispatchStartedReason(ProcessBatchPlan plan)
     {
