@@ -214,6 +214,26 @@
           "--minimum-expected-tests",
           "1"
         ]
+      },
+      {
+        "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
+        "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+        "arguments": [
+          "{executable}",
+          "--no-ansi",
+          "--progress",
+          "off",
+          "--results-directory",
+          "{resultsDirectory}",
+          "--report-trx",
+          "--report-trx-filename",
+          "{trxFileName}",
+          "--long-running",
+          "120",
+          "--minimum-expected-tests",
+          "1"
+        ]
       }
     ]
   },
@@ -243,6 +263,13 @@
       "type": "dotnet-test",
       "runner": "mtp",
       "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+      "arguments": [ "--verbosity", "minimal" ]
+    },
+    {
+      "name": "cli tests",
+      "type": "dotnet-test",
+      "runner": "mtp",
+      "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj",
       "arguments": [ "--verbosity", "minimal" ]
     }
   ],
