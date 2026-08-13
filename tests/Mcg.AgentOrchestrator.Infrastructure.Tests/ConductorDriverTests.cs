@@ -178,9 +178,14 @@ public sealed class ConductorDriverTests
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec reviewer,
-        string? touchProofDiagnostic = null)
+        string? touchProofDiagnostic = null,
+        string? reviewedCommit = null)
     {
         DispatchTask(kernel, goal, reviewer, "review-seed");
+        if (reviewedCommit is not null)
+        {
+            kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, reviewedCommit);
+        }
         var location = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-seed",
@@ -191,16 +196,26 @@ public sealed class ConductorDriverTests
             DateTimeOffset.UtcNow,
             WorkerResultPresent: true));
         kernel.RetryTask(goal.Id, reviewer.Id, "fresh review");
-        RecordMovedReviewerIdentityViolation(kernel, goal, reviewer, touchProofDiagnostic);
+        RecordMovedReviewerIdentityViolation(
+            kernel,
+            goal,
+            reviewer,
+            touchProofDiagnostic,
+            reviewedCommit);
     }
 
     private static void RecordMovedReviewerIdentityViolation(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec reviewer,
-        string? touchProofDiagnostic = null)
+        string? touchProofDiagnostic = null,
+        string? reviewedCommit = null)
     {
         DispatchTask(kernel, goal, reviewer, "review-moved", touchProofDiagnostic);
+        if (reviewedCommit is not null)
+        {
+            kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, reviewedCommit);
+        }
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-moved",
             "C:\\tmp",
@@ -6249,6 +6264,50 @@ public sealed class ConductorDriverTests
         Assert.Contains("suppression=missing-system-derived-round-diff-proof", escalation, StringComparison.Ordinal);
         Assert.Contains("mechanical repair budget was not consumed", escalation, StringComparison.Ordinal);
         Assert.Contains(diagnostic, escalation, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Legacy identical-SHA diagnostic reproduces missing-proof suppression")]
+    public void IdenticalShaLegacyDiagnostic_ReproducesMissingProofSuppression()
+    {
+        const string unchangedCommit = "bd7854c15aa6088fee94c13b50034ecf901f7591";
+        const string legacyDiagnostic = "Reviewed commits are identical; no touched anchors.";
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        SeedReviewerIdentityViolation(
+            kernel,
+            goal,
+            reviewer,
+            legacyDiagnostic,
+            unchangedCommit);
+
+        var retried = false;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTaskWithRoundKind: (_, _, _, _) =>
+            {
+                retried = true;
+                return reviewer;
+            },
+            writeEscalation: (_, _, message) => escalation = message);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.False(retried);
+        Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
+        Assert.Contains(ReviewFindingConvergence.IdentityMovedViolationCode, escalation, StringComparison.Ordinal);
+        Assert.Contains("suppression=missing-system-derived-round-diff-proof", escalation, StringComparison.Ordinal);
+        Assert.Contains("mechanical repair budget was not consumed", escalation, StringComparison.Ordinal);
+        Assert.Contains(legacyDiagnostic, escalation, StringComparison.Ordinal);
+        Assert.Empty(goal.Timeline.Where(evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.StartsWith("review-finding contract-repair:", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_legacy_reviewer_evidence_counters_do_not_cap_structured_requests")]

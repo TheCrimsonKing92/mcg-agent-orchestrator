@@ -1650,18 +1650,20 @@ internal sealed class ConductorDriver
 
     private static bool HasIdenticalReviewedCommitAsCarriedRound(Goal goal, TaskSpec reviewerTask)
     {
-        var currentVerification = reviewerTask.LastVerification;
-        if (string.IsNullOrWhiteSpace(currentVerification?.ReviewedCommit))
+        var currentDispatch = reviewerTask.LastDispatch;
+        if (string.IsNullOrWhiteSpace(currentDispatch?.BaseCommit))
         {
             return false;
         }
 
+        // Reconstruct the carried round at dispatch time. The rejected verification is already in
+        // history when the conductor runs and may have a separately allocated snapshot twin, so it
+        // cannot reliably identify or exclude the carried round by record equality.
         var carriedRound = goal.Tasks
             .Where(candidate => candidate.RequiredRole == reviewerTask.RequiredRole)
             .SelectMany(candidate => candidate.VerificationHistory)
             .Where(verification =>
-                !Equals(verification, currentVerification) &&
-                verification.CompletedAt <= currentVerification.CompletedAt &&
+                verification.CompletedAt <= currentDispatch.DispatchedAt &&
                 verification.MergedReviewFindings is not null)
             .OrderByDescending(verification => verification.CompletedAt)
             .FirstOrDefault();
@@ -1669,7 +1671,7 @@ internal sealed class ConductorDriver
         return !string.IsNullOrWhiteSpace(carriedRound?.ReviewedCommit) &&
             string.Equals(
                 carriedRound.ReviewedCommit.Trim(),
-                currentVerification.ReviewedCommit.Trim(),
+                currentDispatch.BaseCommit.Trim(),
                 StringComparison.OrdinalIgnoreCase);
     }
 
