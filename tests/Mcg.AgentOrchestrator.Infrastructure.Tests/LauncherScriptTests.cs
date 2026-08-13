@@ -583,7 +583,8 @@ public sealed class LauncherScriptTests
         var repoRoot = FindLauncherSourceRoot();
         var modulePath = Path.Combine(repoRoot, "scripts", "OrchestratorAutoResume.Install.psm1");
         // Windows PowerShell 5.1 still needs the nested release path to remain below MAX_PATH.
-        var sandbox = Path.Combine(repoRoot, $".ar-{Guid.NewGuid():N}");
+        var sandboxToken = Guid.NewGuid().ToString("N")[..6];
+        var sandbox = Path.Combine(Path.GetTempPath(), $"ar-{sandboxToken}");
         var fakeRepository = Path.Combine(sandbox, "repository");
         Directory.CreateDirectory(sandbox);
         Directory.CreateDirectory(fakeRepository);
