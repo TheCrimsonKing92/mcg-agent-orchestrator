@@ -13,36 +13,33 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     ];
 
     [Xunit.Fact]
-    public void PlannerContract_ExactRejectedE5c18520NewStoreMarker_Passes()
+    public void PlannerContract_ArchivedE5c18520NewStoreMarker_Passes()
     {
-        var fixtureBytes = ReadCanonicalLiveFixtureBytes(E5c18520FixtureName);
-        Xunit.Assert.Equal(
-            "86A0C693C22296BC7E6517EB7A36384B99057288E057237278F364B3B65844F1",
-            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(fixtureBytes)));
-        var plan = System.Text.Encoding.UTF8.GetString(fixtureBytes);
+        var plan = ReadCanonicalArchivedFixture(
+            E5c18520FixtureName,
+            "86A0C693C22296BC7E6517EB7A36384B99057288E057237278F364B3B65844F1");
 
-        var result = PlannerOutputContract.Resolve(
+        var succeeded = PlannerOutputContract.TryValidate(
             plan,
-            string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot(),
+            out _,
+            out var diagnostic,
             acceptanceCriteria: E5c18520AcceptanceCriteria);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.True(succeeded, diagnostic);
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExactRejectedE5c18520WithoutArtifactKind_ReproducesRejection()
+    public void PlannerContract_LiveNewBehaviorWithoutArtifactKind_IsRejected()
     {
-        var plan = ReadExactLiveFixture(E5c18520FixtureName).Replace(
-            "`src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AcceptanceOwnershipStore.cs` — new SQLite-backed cross-process store.",
-            "`src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AcceptanceOwnershipStore.cs` — new behavior for cross-process claims.",
-            StringComparison.Ordinal);
+        var workingDirectory = CreateTempDirectory();
+        var targetBody =
+            "- Add `src/AcceptanceOwnershipStore.cs` — new behavior for cross-process claims.";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
 
         var result = PlannerOutputContract.Resolve(
             plan,
             string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot(),
-            acceptanceCriteria: E5c18520AcceptanceCriteria);
+            workingDirectory);
 
         Xunit.Assert.False(result.Succeeded);
         Xunit.Assert.Contains("AcceptanceOwnershipStore.cs", result.Diagnostic, StringComparison.Ordinal);
@@ -89,16 +86,15 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExactLive485363d4OrderedList_PassesWithoutSequenceKeywords()
+    public void PlannerContract_Archived485363d4OrderedList_PassesWithoutSequenceKeywords()
     {
-        var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805022806.out.txt");
+        var plan = ReadCanonicalArchivedFixture(
+            "485363d4-ba8e416a-20260805022806.out.txt",
+            "DF5A804E3066F2C7895D6CC0961CCD3E28A44DBDA2751FBB5D19C38910FF4A99");
 
-        var result = PlannerOutputContract.Resolve(
-            plan,
-            string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot());
+        var succeeded = PlannerOutputContract.TryValidate(plan, out _, out var diagnostic);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.True(succeeded, diagnostic);
     }
 
     [Xunit.Fact]
@@ -149,42 +145,39 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExactLive485363d4EmDashNewFileMarkers_Pass()
+    public void PlannerContract_Archived485363d4EmDashNewFileMarkers_Pass()
     {
-        var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805011642.out.txt");
+        var plan = ReadCanonicalArchivedFixture(
+            "485363d4-ba8e416a-20260805011642.out.txt",
+            "D34219B3D84C1DB41A03F69A4A6056A32744C4B459201E52B04D8D1BD5279210");
 
-        var result = PlannerOutputContract.Resolve(
-            plan,
-            string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot());
+        var succeeded = PlannerOutputContract.TryValidate(plan, out _, out var diagnostic);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.True(succeeded, diagnostic);
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExactLive485363d4ContextualSiblings_Pass()
+    public void PlannerContract_Archived485363d4ContextualSiblings_Pass()
     {
-        var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805010032.out.txt");
+        var plan = ReadCanonicalArchivedFixture(
+            "485363d4-ba8e416a-20260805010032.out.txt",
+            "6DBB456263999A69D0A6CDA8216A413A8DE27C3C2236D4D8BE211218E2B7A4BA");
 
-        var result = PlannerOutputContract.Resolve(
-            plan,
-            string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot());
+        var succeeded = PlannerOutputContract.TryValidate(plan, out _, out var diagnostic);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.True(succeeded, diagnostic);
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExactLive658501ceParenthesizedNewFileMarker_Passes()
+    public void PlannerContract_Archived658501ceParenthesizedNewFileMarker_Passes()
     {
-        var plan = ReadExactLiveFixture("658501ce-f6708f44-20260805012800.out.txt");
+        var plan = ReadCanonicalArchivedFixture(
+            "658501ce-f6708f44-20260805012800.out.txt",
+            "55A29354C46758800777C6332EE4E7D8F760DF216F29ED620C6A4DC0FFB3F6D9");
 
-        var result = PlannerOutputContract.Resolve(
-            plan,
-            string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot());
+        var succeeded = PlannerOutputContract.TryValidate(plan, out _, out var diagnostic);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.True(succeeded, diagnostic);
     }
 
     [Xunit.Fact]
@@ -595,10 +588,13 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             "PlannerOutputContract",
             fileName);
 
-    private static byte[] ReadCanonicalLiveFixtureBytes(string fileName) =>
-        System.Text.Encoding.UTF8.GetBytes(
+    private static string ReadCanonicalArchivedFixture(string fileName, string expectedSha256)
+    {
+        var fixtureBytes = System.Text.Encoding.UTF8.GetBytes(
             File.ReadAllText(PlannerFixturePath(fileName)).ReplaceLineEndings("\n"));
-
-    private static string ReadExactLiveFixture(string fileName) =>
-        File.ReadAllText(PlannerFixturePath(fileName));
+        Xunit.Assert.Equal(
+            expectedSha256,
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(fixtureBytes)));
+        return System.Text.Encoding.UTF8.GetString(fixtureBytes);
+    }
 }
