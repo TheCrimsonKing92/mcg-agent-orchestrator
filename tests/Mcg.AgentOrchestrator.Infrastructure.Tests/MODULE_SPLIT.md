@@ -69,7 +69,7 @@ unchanged. The parent project excludes the `Cli` directory, making each moved so
 one test assembly.
 
 The remaining `CliCommandTests*` classes stay in the umbrella project. Attention, backlog intake, goal
-revision, human-input supersede, portfolio, and refresh-dispatch tests use workspace, store, dashboard
+revision, human-input supersede, and refresh-dispatch tests use workspace, store, dashboard
 projection, synthetic dispatch, or process-wide environment helpers. Goal lifecycle, persistent runner,
 subscription dispatch, and terminal sweep tests retain the `GoalWorktreeCleanupHooks` boundary. `CliHelpTests`
 and `GitCliTests` retain their real-process boundary. In particular,
