@@ -1176,7 +1176,7 @@ transition in `3a7afb95` leaving no typed record. This is a design rule waiting 
 - **Correction to my earlier warning: `ProgressKind` ORDINALS ARE FREE.** I told the worker (and wrote here) to
   treat the numbers as persisted. They are not. `SqliteOrchestratorStateRepository.cs:2058-2061` registers a
   `JsonStringEnumConverter`, so kinds round-trip **by name**; the stores that do serialize enums numerically
-  (`OperatorIntentStore`, `ProgressiveReviewSteeringStore`, `CollaborationItemStore`) carry no
+  (`OperatorIntentStore`, `ProgressiveReviewSteeringStore`, `CollaborationItemStore`, `PortfolioStore`) carry no
   `ProgressKind` at all. The real constraint is on the NAME. Renumbering is safe — do not avoid a correct
   renumber on my say-so.
 - **`10bd7223` is the standout.** Its Developer CONFIRMED the console-flash hypothesis rather than fabricating:
