@@ -200,7 +200,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         }
     }
 
-    [Xunit.Fact]
+    [Xunit.Fact(DisplayName = "Unavailable inputs degrade while equal SHAs compute empty proof")]
     public void ReviewerRoundUnavailableInputsDegradeWhileIdenticalCommitsComputeEmpty()
     {
         // A task's FIRST reviewer round records no reviewed commit, so the baseline is legitimately absent.

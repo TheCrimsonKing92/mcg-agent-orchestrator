@@ -46,13 +46,15 @@ public sealed class ConductorDriverTests
         Goal goal,
         TaskSpec task,
         string command = "test.exe",
-        string? reviewFindingTouchProofDiagnostic = null)
+        string? reviewFindingTouchProofDiagnostic = null,
+        IReadOnlyList<ReviewFindingLocation>? reviewFindingTouchedAnchors = null)
     {
         var dispatch = new TaskDispatchRecord(
             "test-worker",
             command,
             "C:\\tmp",
             DateTimeOffset.UtcNow,
+            ReviewFindingTouchedAnchors: reviewFindingTouchedAnchors,
             ReviewFindingTouchProofDiagnostic: reviewFindingTouchProofDiagnostic);
         kernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
     }
@@ -5793,9 +5795,10 @@ public sealed class ConductorDriverTests
             CliArgumentParser.SplitCommand(command));
     }
 
-    [Xunit.Fact(DisplayName = "ConductorDriver_reviewer_contract_violation_mechanically_retries_the_same_reviewer")]
-    public void ConductorDriverReviewerContractViolationMechanicallyRetriesSameReviewer()
+    [Xunit.Fact(DisplayName = "Equal SHA identity violations consume mechanical repair budget")]
+    public void IdentityViolations_EqualShaProof_ConsumeRepairBudget()
     {
+        const string unchangedCommit = "bd7854c15aa6088fee94c13b50034ecf901f7591";
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
@@ -5806,6 +5809,7 @@ public sealed class ConductorDriverTests
         }
 
         DispatchTask(kernel, goal, reviewer, "review-1");
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         var opened = Enumerable.Range(0, 15)
             .Select(index => new ReviewFinding(
                 $"F-{index:D2}",
@@ -5834,10 +5838,24 @@ public sealed class ConductorDriverTests
             DateTimeOffset.UtcNow,
             WorkerResultPresent: true));
         kernel.RetryTask(goal.Id, reviewer.Id, "fresh review");
-        DispatchTask(kernel, goal, reviewer, "review-2");
+        var touchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
+            goal,
+            reviewer,
+            "C:\\tmp",
+            unchangedCommit);
+        Assert.Empty(touchScope.TouchedAnchors);
+        Assert.Null(touchScope.Diagnostic);
+        DispatchTask(
+            kernel,
+            goal,
+            reviewer,
+            "review-2",
+            touchScope.Diagnostic,
+            touchScope.TouchedAnchors);
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         var rejected = opened
             .Reverse()
-            .Select(finding => finding.StableId == "F-10"
+            .Select(finding => finding.StableId == "F-00"
                 ? finding with { Location = new ReviewFindingLocation("src/Moved.cs", "Moved.Run", "guard") }
                 : finding)
             .Prepend(new ReviewFinding(
@@ -5869,11 +5887,13 @@ public sealed class ConductorDriverTests
             WorkerResultPresent: true));
         var violation = Assert.IsType<ReviewFindingContractViolation>(
             reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, violation.Code);
         Assert.Equal(2, violation.IdentityMismatches!.Count);
 
         TaskId? retriedTaskId = null;
         string? retryMessage = null;
         RetryRoundKind? retryRoundKind = null;
+        string? escalation = null;
         var retryCount = 0;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
@@ -5885,7 +5905,8 @@ public sealed class ConductorDriverTests
                 retryMessage = message;
                 retryRoundKind = roundKind;
                 return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
-            });
+            },
+            writeEscalation: (_, _, message) => escalation = message);
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
@@ -5903,9 +5924,28 @@ public sealed class ConductorDriverTests
             Assert.Contains($"stable_id: {finding.StableId}", retryMessage, StringComparison.Ordinal));
         Assert.Contains("avoided_developer_reopen=1", retryMessage, StringComparison.Ordinal);
         Assert.DoesNotContain("auto-review-retry", retryMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(escalation);
+        Assert.Single(goal.Timeline.Where(evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.StartsWith("review-finding contract-repair:", StringComparison.Ordinal)));
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
 
-        DispatchTask(kernel, goal, reviewer, "review-3");
+        var correctedTouchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
+            goal,
+            reviewer,
+            "C:\\tmp",
+            unchangedCommit);
+        Assert.Empty(correctedTouchScope.TouchedAnchors);
+        Assert.Null(correctedTouchScope.Diagnostic);
+        DispatchTask(
+            kernel,
+            goal,
+            reviewer,
+            "review-3",
+            correctedTouchScope.Diagnostic,
+            correctedTouchScope.TouchedAnchors);
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-3",
             "C:\\tmp",
@@ -5931,9 +5971,10 @@ public sealed class ConductorDriverTests
         Assert.Equal(1, retryCount);
     }
 
-    [Xunit.Fact]
+    [Xunit.Fact(DisplayName = "Equal SHA untouched reopen consumes mechanical repair budget")]
     public void UntouchedReopen_ComputedEmptyProof_ConsumesRepairBudget()
     {
+        const string unchangedCommit = "bd7854c15aa6088fee94c13b50034ecf901f7591";
         var (kernel, goal) = SoftwareGoal();
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
@@ -5944,6 +5985,7 @@ public sealed class ConductorDriverTests
         var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
         var open = new ReviewFinding("F-1", ReviewFindingState.Open, anchor, "Missing guard.");
         DispatchTask(kernel, goal, reviewer, "review-open");
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-open",
             "C:\\tmp",
@@ -5954,7 +5996,21 @@ public sealed class ConductorDriverTests
             WorkerResultPresent: true));
 
         kernel.RetryTask(goal.Id, reviewer.Id, "confirm resolution");
-        DispatchTask(kernel, goal, reviewer, "review-resolved");
+        var resolvedTouchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
+            goal,
+            reviewer,
+            "C:\\tmp",
+            unchangedCommit);
+        Assert.Empty(resolvedTouchScope.TouchedAnchors);
+        Assert.Null(resolvedTouchScope.Diagnostic);
+        DispatchTask(
+            kernel,
+            goal,
+            reviewer,
+            "review-resolved",
+            resolvedTouchScope.Diagnostic,
+            resolvedTouchScope.TouchedAnchors);
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-resolved",
             "C:\\tmp",
@@ -5966,7 +6022,21 @@ public sealed class ConductorDriverTests
         Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
 
         kernel.RetryTask(goal.Id, reviewer.Id, "recheck unchanged commit");
-        DispatchTask(kernel, goal, reviewer, "review-reopened");
+        var reopenedTouchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
+            goal,
+            reviewer,
+            "C:\\tmp",
+            unchangedCommit);
+        Assert.Empty(reopenedTouchScope.TouchedAnchors);
+        Assert.Null(reopenedTouchScope.Diagnostic);
+        DispatchTask(
+            kernel,
+            goal,
+            reviewer,
+            "review-reopened",
+            reopenedTouchScope.Diagnostic,
+            reopenedTouchScope.TouchedAnchors);
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-reopened",
             "C:\\tmp",
@@ -6000,6 +6070,10 @@ public sealed class ConductorDriverTests
         Assert.Equal(RetryRoundKind.Mechanical, reviewer.PendingRetryRoundKind);
         Assert.Contains(ReviewFindingConvergence.UntouchedReopenViolationCode, retryMessage, StringComparison.Ordinal);
         Assert.Null(escalation);
+        Assert.Single(goal.Timeline.Where(evt =>
+            evt.TaskId == reviewer.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.StartsWith("review-finding contract-repair:", StringComparison.Ordinal)));
         Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
     }
 

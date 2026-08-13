@@ -3247,7 +3247,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Assert.Null(tester.LastProcess);
     }
 
-    [Xunit.Theory]
+    [Xunit.Theory(DisplayName = "Tester and Reviewer equal SHAs compute empty touch proof")]
     [Xunit.InlineData(AgentRole.Tester)]
     [Xunit.InlineData(AgentRole.Reviewer)]
     public void IdenticalCommits_BothReviewRoles_ComputeEmptyTouchProof(AgentRole role)
