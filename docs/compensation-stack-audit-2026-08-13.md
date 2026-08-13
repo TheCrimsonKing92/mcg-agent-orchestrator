@@ -120,36 +120,59 @@ One integer serves artifact identity, build concurrency, and whole-gate admissio
 inherited from a **retired** firewall-era mechanism, preserved under a compatibility alias with a single live
 caller (`ConductorParallelAcceptanceAttempts.cs:360`).
 
-**Correction, 2026-08-13, after this document first landed.** The sol pass claimed the coupling rests on a
-false comment — that `ConductorBatchLoop.cs:30` pins gate parallelism to build concurrency on the stated
-grounds that every gate holds a build slot, while `GoalAcceptanceVerifier.cs:3755` releases the permit before
-running tests. **That claim is wrong and was repeated here without being checked.** Line 3755 is the
-signature of `RunManagedMtpExecutableCheckAsync`, not a release. Measured from the live event stream for goal
-`22d6a9d8`:
+**This section was wrong twice on 2026-08-13, in opposite directions. Read the whole note before citing it.**
+
+*Round one (sol, as originally published here).* Claimed the coupling rests on a false comment: that
+`ConductorBatchLoop.cs:30` pins gate parallelism to build concurrency on the grounds that every gate holds a
+build slot, while `GoalAcceptanceVerifier.cs:3755` releases the permit before tests. The **citation** was
+wrong — line 3755 is the signature of `RunManagedMtpExecutableCheckAsync`. Published without being checked.
+
+*Round two (my correction).* Having found the citation bogus, I discarded the claim and asserted the opposite
+from lease receipts for goal `22d6a9d8`:
 
     20:44:14  ACCEPTANCE_LEASE_ACQUIRE   permit=build-0
-    20:44:14  ACCEPTANCE_LEASE_HANDOFF   permit=build-0
     21:00:01  ACCEPTANCE_LEASE_RELEASE   permit=build-0
 
-The permit is held for the entire 15m47s gate, build and test phases alike. The comment at
-`ConductorBatchLoop.cs:30` is **accurate**, and the capacity-2 cap is not free throughput being wasted —
-raising it would oversubscribe the build environment. The comment even records that the slot-exhaustion and
-second-attempt-yields tests encode capacity-2 semantics deliberately.
+and concluded the permit is held for the whole 15m47s gate and the comment is accurate. **Also wrong.**
 
-What survives is narrower and still worth doing: **only the build phase needs the permit.** Holding it across
-the test phase — roughly ten of those sixteen minutes — is what couples gate width to build concurrency. The
-change is to release after the build and re-acquire only if a rebuild is required, which is a lifetime
-redesign rather than a constant bump.
+*What is actually true.* There are **two releases of the same lease, and only one emits a receipt.**
 
-**Right design:** three types. `BuildPermitPool` (capacity 2, held **only during builds**, not across the
-test phase); `AcceptanceAdmission` (independently configured from measured CPU/memory); immutable
-content-keyed `BuildArtifactId`. Remove `stableSlotIndex` from acceptance APIs.
+    // GoalAcceptanceVerifier.cs:1173-1177 — early release, NO event emitted
+    if (prebuild.Run.Result.Passed)
+    {
+        VerifyPrebuiltMtpExecutables(shardChecks, primaryBuildPhase);
+        primaryLease.ReleaseExecutionLock();
+    }
 
-**Method note, which is the point of this correction.** This document argues that the system's recurring flaw
-is records asserting things nobody verified. The original text of this section was exactly that: a citation
-taken from another agent, restated with confidence, never opened. It was then repeated in a backlog item and
-in an operator briefing before anyone read line 3755. Treat every file:line in this document as a claim to
-check, including the ones that survived.
+    // ConductorParallelAcceptanceAttempts.cs:957-966 — outer terminal disposal, emits ACCEPTANCE_LEASE_RELEASE
+    stableSlotLease.Dispose();
+    EmitAttemptLeaseReceipt("release", ...);
+
+So on the happy path the permit is freed **before the shard loop**, silently, and the only receipt fires at
+gate end regardless. Sol's substance was right and its citation was wrong; my refutation measured the outer
+disposal and mistook it for the permit's lifetime. An independent Researcher on goal `15c4a259` reached the
+same conclusion from source and reported the brief's premise invalid.
+
+The early release is skipped when any of these hold (`GoalAcceptanceVerifier.cs:1162`, `:1173`, `:461-463`):
+a failing prebuild; any shard not using MTP; or `primaryBuildPhase` null, which requires `GateUsesStableSlot`.
+
+*What follows.* The open question is no longer "should the permit be narrowed" — it already is, conditionally.
+It is **which runs take a skip branch, and why there is no receipt for the release that matters.** A state
+change invisible to every observer produced two contradictory published conclusions inside one hour. Emitting
+a receipt at `GoalAcceptanceVerifier.cs:1176` is plausibly worth more than any lifetime refactor. Tracked as
+goal `15c4a259`.
+
+**Right design:** three types. `BuildPermitPool` (capacity 2, held only during builds); `AcceptanceAdmission`
+(independently configured from measured CPU/memory); immutable content-keyed `BuildArtifactId`. Remove
+`stableSlotIndex` from acceptance APIs. Note that `ReleaseExecutionLock()` and `Dispose()` being the same
+underlying operation on one object, with different observability, is itself an instance of this document's
+thesis: distinct concepts collapsed into one type, then reconstructed by inference.
+
+**Method note.** This document argues that the recurring flaw is records asserting what nobody verified. This
+section has now been that failure twice: once by republishing an unchecked citation, once by refuting a
+correct claim because its citation was wrong and then measuring the wrong object. **A bad citation is not a
+false claim.** Treat every file:line here as a claim to check — including the ones that survived, and
+including this note.
 
 ## Stack 5 — mutable build output turned two-phase MTP into a lease protocol
 
