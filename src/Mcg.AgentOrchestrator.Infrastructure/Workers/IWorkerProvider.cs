@@ -55,7 +55,10 @@ public sealed class StaticWorkerProvider : IWorkerProvider
         }
 
         var text = StripWorkerResultBlocks(string.Join(Environment.NewLine, outcome.StandardOutput, outcome.StandardError));
-        if (ContainsRateLimitSignal(text))
+        if (ProviderLimitEvidenceParser.TryGetEvidenceLine(
+                outcome.StandardOutput,
+                outcome.StandardError,
+                out _))
         {
             return ProviderFailureKind.RateLimit;
         }
@@ -72,12 +75,6 @@ public sealed class StaticWorkerProvider : IWorkerProvider
 
         return ProviderFailureKind.Unknown;
     }
-
-    private static bool ContainsRateLimitSignal(string text) =>
-        text.Contains("usage limit", StringComparison.OrdinalIgnoreCase) ||
-        text.Contains("rate limit", StringComparison.OrdinalIgnoreCase) ||
-        text.Contains("429", StringComparison.OrdinalIgnoreCase) ||
-        text.Contains("insufficient_quota", StringComparison.OrdinalIgnoreCase);
 
     private static bool ContainsConnectivitySignal(string text) =>
         text.Contains("websocket", StringComparison.OrdinalIgnoreCase) ||

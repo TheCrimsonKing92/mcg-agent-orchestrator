@@ -616,10 +616,48 @@ public sealed class DispatchOutcomeClassifyTests
         Xunit.Assert.Contains("evidence=ERROR: You've hit your usage limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Classify treats scripting stderr without positive merit evidence as unknown")]
-    public void ClassifyTreatsScriptingStderrWithoutPositiveMeritEvidenceAsUnknown()
+    [Xunit.Theory(DisplayName = "Classify ignores standalone worker-authored limit lookalikes")]
+    [Xunit.InlineData("{\"event\":\"usage_limit_reached\",\"retry_after_seconds\":120}")]
+    [Xunit.InlineData("rate limit reached while describing a fixture")]
+    public void ClassifyIgnoresStandaloneWorkerAuthoredLimitLookalikes(string stderr)
+    {
+        var verification = Verification(1, "", stderr) with { ProviderFailureKind = ProviderFailureKind.RateLimit };
+
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
+
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.False(DispatchFailureClassifier.HasRecoverableSubscriptionLimitEvidence(verification));
+        Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=provider-rate-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify preserves structured provider usage limit event")]
+    public void ClassifyPreservesStructuredProviderUsageLimitEvent()
+    {
+        const string stderr = "ERROR: {\"event\":\"usage_limit_reached\",\"retry_after_seconds\":120}";
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
+
+        Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.Contains("usage_limit_reached", outcome.EvidenceSummary, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify ignores sandbox preflight JSON with generic status 429")]
+    public void ClassifyIgnoresSandboxPreflightJsonWithGenericStatus429()
     {
         const string stderr =
+            "{\"event\":\"sandbox-prep\",\"phase\":\"launch-preflight\",\"status\":429}\n" +
+            "powershell.exe: ParserError: Unexpected token '}' in expression.";
+        var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), Verification(1, "", stderr));
+
+        Xunit.Assert.NotEqual(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
+        Xunit.Assert.Contains("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "Classify treats scripting stderr after launch preflight as real failure")]
+    public void ClassifyTreatsScriptingStderrAfterLaunchPreflightAsRealFailure()
+    {
+        const string stderr =
+            "{\"event\":\"sandbox-prep\",\"phase\":\"launch-preflight\",\"elapsedMs\":200}\n" +
             "WORKER_RESULT assembly failed before final marker\n" +
             "Implemented classifier fixture setup and reviewed source snippets.\n" +
             "src/ProviderParser.cs:77: text.Contains(\"rate limit\", StringComparison.OrdinalIgnoreCase)\n" +
@@ -631,16 +669,17 @@ public sealed class DispatchOutcomeClassifyTests
         var classification = TaskOutcomeClassifier.Classify(WorkTaskStatus.Failed, TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
-        Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
-        Xunit.Assert.Equal(TaskOutcomeClass.UnknownEra, classification.Class);
-        Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+        Xunit.Assert.Equal(TaskOutcomeClass.RealFailure, classification.Class);
+        Xunit.Assert.Contains("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.Contains("powershell.exe: ParserError", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("rule=preflight-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("rule=empty-output-flake", outcome.ClassifierReceipt, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "Classify keeps scripting stderr artifact tail out of real failures")]
-    public void ClassifyKeepsScriptingStderrArtifactTailOutOfRealFailures()
+    [Xunit.Fact(DisplayName = "Classify preserves scripting stderr artifact tail in real failures")]
+    public void ClassifyPreservesScriptingStderrArtifactTailInRealFailures()
     {
         var stderrPath = Path.GetTempFileName();
         try
@@ -664,9 +703,9 @@ public sealed class DispatchOutcomeClassifyTests
             var outcome = DispatchFailureClassifier.Classify(SubscriptionTask(), verification);
 
             Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
-            Xunit.Assert.Equal(RecoveryRecommendation.OperatorNeeded, outcome.RecoveryRecommendation);
-            Xunit.Assert.Contains("rule=unknown-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
-            Xunit.Assert.Contains("outcome_class=unknown-era", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Equal(RecoveryRecommendation.AutoRetry, outcome.RecoveryRecommendation);
+            Xunit.Assert.Contains("rule=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
+            Xunit.Assert.Contains("outcome_class=real-failure", outcome.ClassifierReceipt, StringComparison.Ordinal);
             Xunit.Assert.Contains("powershell.exe: ParserError", outcome.ClassifierReceipt, StringComparison.Ordinal);
             Xunit.Assert.DoesNotContain("rule=subscription-limit", outcome.ClassifierReceipt, StringComparison.Ordinal);
         }

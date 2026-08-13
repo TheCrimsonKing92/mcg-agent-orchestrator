@@ -4386,10 +4386,12 @@ public sealed class BackgroundDispatchRunner
             return "success";
         }
 
-        var combined = $"{standardOutput}\n{standardError}";
-        if (exitCode != 0 && ContainsRateLimitSentinel(combined, out var sentinelDetail))
+        if (exitCode != 0 && ProviderLimitEvidenceParser.TryGetEvidenceLine(
+                standardOutput,
+                standardError,
+                out var providerLimitEvidence))
         {
-            reason = sentinelDetail;
+            reason = $"provider limit evidence: {providerLimitEvidence}";
             return "rate-limited";
         }
 
@@ -4403,27 +4405,6 @@ public sealed class BackgroundDispatchRunner
             ? $"exit 0; fileLen={fileLen}; readLen={readLen}"
             : $"exit {exitCode}; fileLen={fileLen}; readLen={readLen}; stderrLen={stderrLen}";
         return exitCode == 0 ? "success" : "failed";
-    }
-
-    private static bool ContainsRateLimitSentinel(string combined, out string detail)
-    {
-        if (combined.Contains("usage limit", StringComparison.OrdinalIgnoreCase))
-        {
-            if (combined.Contains("try again", StringComparison.OrdinalIgnoreCase))
-            {
-                detail = "session limit sentinel ('usage limit' + 'try again') in stdout or stderr";
-                return true;
-            }
-
-            if (combined.Contains("purchase more credits", StringComparison.OrdinalIgnoreCase))
-            {
-                detail = "session limit sentinel ('usage limit' + 'purchase more credits') in stdout or stderr";
-                return true;
-            }
-        }
-
-        detail = string.Empty;
-        return false;
     }
 
     private sealed record DispatchHeartbeat(
