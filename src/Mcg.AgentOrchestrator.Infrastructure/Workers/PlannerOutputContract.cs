@@ -17,6 +17,7 @@ internal static partial class PlannerOutputContract
     internal const string DurablePlanEndMarker = "<!-- MCG_DURABLE_PLANNER_PLAN:END -->";
     private const int CapturedOutputTailBytes = (MaxPlanChars * 4) + 32_000;
     private const int AppendAttempts = 4;
+    private const int MinimumDistinctSectionWords = 8;
     private static readonly string[] CandidatePathSuffixes = [".cs"];
 
     private static readonly (string Label, Regex Heading)[] RequiredSections =
@@ -307,7 +308,7 @@ internal static partial class PlannerOutputContract
                     section.Label,
                     heading,
                     body,
-                    "must contain at least 40 characters of substantive content in its section body");
+                    "must contain at least 40 characters in its section body");
                 return false;
             }
 
@@ -768,25 +769,41 @@ internal static partial class PlannerOutputContract
         return label switch
         {
             "premise validity" =>
-                PremiseValidityMarker().IsMatch(body),
+                HasMinimumLexicalDiversity(body),
             "target seams and symbols" =>
                 body.Contains('`') &&
                 TargetCitation().IsMatch(body),
             "ownership and lifecycle" =>
-                OwnershipMarker().IsMatch(body),
+                HasMinimumLexicalDiversity(body),
             "external and edge contracts" =>
-                ExternalEdgeMarker().IsMatch(body),
+                HasMinimumLexicalDiversity(body),
             "integration seams" =>
-                IntegrationSequenceMarker().IsMatch(body) ||
-                HasSubstantivelyOrderedNumberedList(body),
+                NumberedIntegrationItem().IsMatch(body)
+                    ? HasSubstantivelyOrderedNumberedList(body)
+                    : HasMinimumLexicalDiversity(body),
             "verification commands and classes" =>
                 body.Contains('`') &&
                 (body.Contains("TEST-VERIFIABLE", StringComparison.OrdinalIgnoreCase) ||
                  body.Contains("REAL-WORLD-DEPENDENT", StringComparison.OrdinalIgnoreCase)),
             "risks and stop conditions" =>
-                StopConditionMarker().IsMatch(body),
+                HasMinimumLexicalDiversity(body),
             _ => false
         };
+    }
+
+    private static bool HasMinimumLexicalDiversity(string body)
+    {
+        var distinctWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in SubstantiveWord().Matches(body))
+        {
+            distinctWords.Add(match.Value);
+            if (distinctWords.Count >= MinimumDistinctSectionWords)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool HasSubstantivelyOrderedNumberedList(string body)
@@ -868,19 +885,19 @@ internal static partial class PlannerOutputContract
         label switch
         {
             "premise validity" =>
-                "must explicitly state whether the premise is valid or invalid in its section body",
+                "must contain at least 8 distinct words in its section body",
             "target seams and symbols" =>
                 "must cite a concrete target seam or symbol in backticks in its section body",
             "ownership and lifecycle" =>
-                "must state ownership or lifecycle responsibility in its section body",
+                "must contain at least 8 distinct words in its section body",
             "external and edge contracts" =>
-                "must describe external interaction or edge-case behavior in its section body",
+                "must contain at least 8 distinct words in its section body",
             "integration seams" =>
-                "must describe an integration sequence in its section body",
+                "must contain at least 8 distinct words of prose, or a sequential numbered list with at least two non-placeholder items, in its section body",
             "verification commands and classes" =>
                 "must include a backticked verification command or class and identify its verification class in its section body",
             "risks and stop conditions" =>
-                "must state a stop condition in its section body",
+                "must contain at least 8 distinct words in its section body",
             _ => "must contain the required evidence in its section body"
         };
 
@@ -1093,26 +1110,14 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"(?i)(?:src[/\\]|tests[/\\]|\.cs\b|`[A-Za-z_][A-Za-z0-9_.]+`)")]
     private static partial Regex TargetCitation();
 
-    [GeneratedRegex(@"(?i)\b(?:before|after|between|into|from|then|sequence)\b")]
-    private static partial Regex IntegrationSequenceMarker();
-
     [GeneratedRegex(@"(?m)^[ \t]*(?<number>\d+)[.)][ \t]+(?<content>\S[^\r\n]*)$")]
     private static partial Regex NumberedIntegrationItem();
 
     [GeneratedRegex(@"(?i)\b(?:tbd|todo|placeholder)\b")]
     private static partial Regex IntegrationPlaceholderMarker();
 
-    [GeneratedRegex(@"(?i)\b(?:valid|invalid)\b")]
-    private static partial Regex PremiseValidityMarker();
-
-    [GeneratedRegex(@"(?i)\b(?:own|owns|owned|ownership)\b")]
-    private static partial Regex OwnershipMarker();
-
-    [GeneratedRegex(@"(?i)\b(?:failure|edge|external|unhappy|invalid|missing|oversized|timeout)\b")]
-    private static partial Regex ExternalEdgeMarker();
-
-    [GeneratedRegex(@"(?i)\bstop(?:s|ped|ping)?\b")]
-    private static partial Regex StopConditionMarker();
+    [GeneratedRegex(@"[\p{L}\p{Nd}]+")]
+    private static partial Regex SubstantiveWord();
 
     [GeneratedRegex(@"(?i)(?:\bnew[ \t]+file\b|\b(?:create|add)\b(?:[ \t]+(?:a|an|the|new))?)[^`\r\n]{0,24}$")]
     private static partial Regex NewFileCitationPrefix();

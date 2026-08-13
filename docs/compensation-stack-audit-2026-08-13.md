@@ -303,6 +303,15 @@ than an observation.**
 - The intake scope-collision check returned a confident verdict having compared 24 of 77 goals, counted
   Parked goals as conflicts, and treated goals with no declared scopes as non-conflicting.
 - `ConductorBatchLoop.cs:30`'s comment asserts a coupling the verifier explicitly breaks.
+- `PlannerOutputContract` claimed to validate the meaning of premise, ownership, external/edge,
+  integration, and stop-condition sections, but admitted or rejected them through short noun lists.
+  Packaged evidence for goal `6dc59292` shows consecutive child-exit-0 Planner attempts rejected on
+  the external/edge check even though their section bodies describe removed CLI commands,
+  unrecognized-command behavior, and firewall-rule effects. The corrected contract checks the
+  directly observable structure instead: body length plus lexical diversity for open prose, with
+  specialized citation, verification-class, and numbered-list checks retained. Semantic adequacy
+  remains a Reviewer judgment. The packaged evidence does not include the complete prior stdout, so
+  this audit does not repeat the unverified claim that all ten criterion mappings were present.
 
 A check that cannot examine its whole domain must say so **in its verdict**, not only in a payload field.
 `no-overlap-detected` and `no-overlap-found-in-the-third-we-looked-at` are different claims.

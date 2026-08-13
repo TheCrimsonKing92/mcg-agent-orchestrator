@@ -128,7 +128,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains("must describe an integration sequence", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("sequential numbered list", result.Diagnostic, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -159,7 +159,29 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains("must describe an integration sequence", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("sequential numbered list", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("## Premise validity", "valid valid valid valid valid valid valid valid valid valid")]
+    [Xunit.InlineData("## Ownership and lifecycle", "owns owns owns owns owns owns owns owns owns owns")]
+    [Xunit.InlineData("## External and edge contracts", "timeout timeout timeout timeout timeout timeout timeout timeout")]
+    [Xunit.InlineData("## Integration seams", "then then then then then then then then then then")]
+    [Xunit.InlineData("## Risks and stop conditions", "stop stop stop stop stop stop stop stop stop stop")]
+    public void PlannerContract_MarkerOnlySectionBodies_Fail(string heading, string body)
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), heading, body);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement the behavior."]);
+
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("at least 8 distinct words", result.Diagnostic, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]

@@ -624,7 +624,7 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
 
         Assert.False(result.Succeeded);
         Assert.Contains(
-            "required section 'acceptance criterion mapping' must contain at least 40 characters of substantive content",
+            "required section 'acceptance criterion mapping' must contain at least 40 characters",
             result.Diagnostic,
             StringComparison.Ordinal);
         Assert.Contains("inspected heading '## Acceptance criteria mapping'", result.Diagnostic, StringComparison.Ordinal);
@@ -632,48 +632,39 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
     }
 
     [Xunit.Fact]
-    public void PlannerContract_MissingPremiseMarker_ReportsInspectedText()
+    public void PlannerContract_NaturalSectionsWithoutSemanticMarkers_Pass()
     {
         var workingDirectory = CreateTempDirectory();
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
-        var weakPremise = PlannerPlanWithoutPremiseMarker();
+        var naturalPlan = PlannerPlanWithoutSemanticMarkers();
 
         var result = PlannerOutputContract.Resolve(
-            weakPremise,
+            naturalPlan,
             string.Empty,
-            workingDirectory);
+            workingDirectory,
+            acceptanceCriteria: ["Implement the behavior."]);
 
-        Assert.False(result.Succeeded);
-        Assert.Contains(
-            "must explicitly state whether the premise is valid or invalid in its section body",
-            result.Diagnostic,
-            StringComparison.Ordinal);
-        Assert.Contains("inspected heading '## Premise validity'", result.Diagnostic, StringComparison.Ordinal);
-        Assert.Contains(
-            "inspected section-body excerpt: \"The two launcher scripts already export",
-            result.Diagnostic,
-            StringComparison.Ordinal);
-        Assert.Contains("…\"", result.Diagnostic, StringComparison.Ordinal);
-        Assert.DoesNotContain("mechanical evidence marker", result.Diagnostic, StringComparison.Ordinal);
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Contains("codex-egress-proxy", result.Plan, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ForgedDurableReceipt_RevalidatesSectionMarkers()
+    public void PlannerContract_DurableReceipt_RevalidatesNaturalSections()
     {
         var workingDirectory = CreateTempDirectory();
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
         var receipt = PlannerOutputContract.BuildIngestedReceipt(
-            "forged-plan.md",
-            PlannerPlanWithoutPremiseMarker());
+            "natural-plan.md",
+            PlannerPlanWithoutSemanticMarkers());
 
         var result = PlannerOutputContract.Resolve(
             receipt,
             string.Empty,
-            workingDirectory);
+            workingDirectory,
+            acceptanceCriteria: ["Implement the behavior."]);
 
-        Assert.False(result.Succeeded);
-        Assert.Contains("Planner durable receipt failed revalidation", result.Diagnostic, StringComparison.Ordinal);
-        Assert.Contains("inspected heading '## Premise validity'", result.Diagnostic, StringComparison.Ordinal);
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Contains("No surviving command output", result.Plan, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -940,7 +931,10 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         var naturalPlan = PlannerContractPlanFixture().Replace(
             PlannerContractAcceptanceMappingBody,
             "Criterion 1 covers disposition=planned; plan=Implement the natural mapping behavior through the existing parser seam.",
-            StringComparison.Ordinal);
+            StringComparison.Ordinal).Replace(
+                "Missing, invalid, oversized, or unreadable artifacts fail explicitly before downstream dispatch; no external provider-private path or truncated summary substitutes for the complete plan.",
+                "- `codex-egress-proxy` and `firewall-setup` become unrecognized commands; this is intentional.\n- No surviving command output, exit behavior, dispatch path, or persistent-state behavior may change.",
+                StringComparison.Ordinal);
         var logs = Path.Combine(root, "logs");
         Directory.CreateDirectory(logs);
         var stdoutPath = Path.Combine(logs, "planner-natural.out.log");
@@ -999,6 +993,10 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             clock.UtcNow);
         Assert.Contains(
             "Criterion 1 covers disposition=planned",
+            File.ReadAllText(preparedDeveloper.PromptPath!),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "codex-egress-proxy",
             File.ReadAllText(preparedDeveloper.PromptPath!),
             StringComparison.Ordinal);
         Assert.Equal(string.Empty, ReadGit(worktree, ["status", "--short"]));
@@ -1710,11 +1708,23 @@ internal static string Planner05cfd4daAcceptanceMappingBody()
     return fixture[(fixture.IndexOf("\n\n", StringComparison.Ordinal) + 2)..];
 }
 
-internal static string PlannerPlanWithoutPremiseMarker() =>
+internal static string PlannerPlanWithoutSemanticMarkers() =>
     PlannerContractPlanFixture().Replace(
         "The premise is valid because the named source seams were inspected in the fixture repository and the task can be completed without inventing missing dependencies or external behavior.",
         "The two launcher scripts already export the four requested names, and the repository evidence establishes the concrete implementation seams without inventing dependencies. " +
-        "The implementation can preserve the Windows values while bringing the shell launcher into parity and checking exact names and values in focused tests.",
+            "The implementation can preserve the Windows values while bringing the shell launcher into parity and checking exact names and values in focused tests.",
+        StringComparison.Ordinal).Replace(
+        "The dispatch completion boundary owns validation, the verification stdout log owns durable evidence, and context generation owns the downstream task-scoped copy for its dispatch lifecycle.",
+        "Dispatch completion is responsible for validation, verification stdout retains durable evidence, and context generation supplies the task-scoped copy throughout its use.",
+        StringComparison.Ordinal).Replace(
+        "Missing, invalid, oversized, or unreadable artifacts fail explicitly before downstream dispatch; no external provider-private path or truncated summary substitutes for the complete plan.",
+        "- `codex-egress-proxy` and `firewall-setup` become unrecognized commands; this is intentional.\n- No surviving command output, exit behavior, dispatch path, or persistent-state behavior may change.",
+        StringComparison.Ordinal).Replace(
+        "Validate after captured output is available, then record task verification, then build the next role context from that verified result before implementation begins.",
+        "Validation produces a durable receipt; context generation consumes that receipt while implementation uses its exact content.",
+        StringComparison.Ordinal).Replace(
+        "Stop when any required section is absent, a cited external plan is unreadable or oversized, durable capture fails, or exact downstream content cannot be proven by the fixture.",
+        "Abort the slice when a required section is absent, a cited plan cannot be read, durable capture fails, or exact downstream content cannot be proven by the fixture.",
         StringComparison.Ordinal);
 
 internal static string ResearcherContractFixture() =>
