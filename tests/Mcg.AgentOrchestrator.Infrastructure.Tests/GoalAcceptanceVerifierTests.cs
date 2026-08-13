@@ -6513,6 +6513,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 call => call.Any(argument => argument.Contains(
                     "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests",
                     StringComparison.OrdinalIgnoreCase)));
+            Assert.DoesNotContain(
+                calls,
+                call => call.Any(argument => argument.Contains(
+                    "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests",
+                    StringComparison.OrdinalIgnoreCase)));
             var providerReceipt = Assert.Single(result.Checks!, check => check.Name == "provider environment tests");
             Assert.True(providerReceipt.Passed);
             Assert.Contains(
@@ -6520,6 +6525,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 providerReceipt.ResultSummary,
                 StringComparison.Ordinal);
             Assert.Contains("dependency closure: Infrastructure.Tests", providerReceipt.ResultSummary, StringComparison.Ordinal);
+            var cliReceipt = Assert.Single(result.Checks, check => check.Name == "cli tests");
+            Assert.True(cliReceipt.Passed);
+            Assert.Contains(
+                "skipped: no changed file in dependency closure",
+                cliReceipt.ResultSummary,
+                StringComparison.Ordinal);
+            Assert.Contains("dependency closure: Infrastructure.Tests", cliReceipt.ResultSummary, StringComparison.Ordinal);
         }
         finally
         {
@@ -8760,7 +8772,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "checks": [
                 { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
                 { "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
-                { "name": "provider environment tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+                { "name": "provider environment tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "cli tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
               ],
               "forbiddenChangedPathGlobs": []
             }
