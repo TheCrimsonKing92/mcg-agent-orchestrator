@@ -140,7 +140,7 @@ public sealed class BudgetAwareRoutingTests
         {
             new ModelOutcomeRecord(
                 "OpenAI",
-                "gpt-5.5",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
                 Completed: 3,
                 Failed: 0,
                 SelfRatedAdequate: 3,
@@ -152,7 +152,7 @@ public sealed class BudgetAwareRoutingTests
                 DispatchLane: "codex-cli"),
             new ModelOutcomeRecord(
                 "OpenAI",
-                "gpt-5.5",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
                 Completed: 0,
                 Failed: 3,
                 SelfRatedAdequate: 3,
@@ -186,7 +186,7 @@ public sealed class BudgetAwareRoutingTests
         // Record a recoverable limit failure with a future retry-after so the task enters retry-deferred state
         var command = "codex exec --skip-git-repo-check --model gpt-5.5";
         var workDir = "C:\\work";
-        var dispatch = new TaskDispatchRecord("codex-cli", command, workDir, DateTimeOffset.UtcNow, "OpenAI", "gpt-5.5");
+        var dispatch = new TaskDispatchRecord("codex-cli", command, workDir, DateTimeOffset.UtcNow, "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias);
         kernel.RecordTaskDispatch(goal.Id, assignedTask.Id, dispatch);
 
         var futureRetryAt = DateTimeOffset.UtcNow.AddHours(2);

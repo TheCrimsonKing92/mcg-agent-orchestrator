@@ -24,7 +24,7 @@ public sealed class AgentCatalogTests
         Assert.Equal("codex-cli", agent.Subscription!.WorkerProfileName);
         Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, agent.Subscription.ModelAlias);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
-        Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);
+        Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, agent.ComplexModel.ModelName);
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }
 
@@ -94,12 +94,12 @@ public sealed class AgentCatalogTests
     // the test must not read or mutate the operator's live agents.json.
     (string Id, string Name, AgentRole Role, string Provider, string? ModelAlias)[] fixture =
     [
-        ("openai-planner", "OpenAI planner", AgentRole.Planner, "OpenAI", "gpt-5.6-luna"),
+        ("openai-planner", "OpenAI planner", AgentRole.Planner, "OpenAI", AgentCatalog.OpenAiLunaSubscriptionModelAlias),
         ("ollama-ideation", "Ollama ideation", AgentRole.Ideation, "Ollama", null),
-        ("openai-researcher", "OpenAI researcher", AgentRole.Researcher, "OpenAI", "gpt-5.6-sol"),
-        ("openai-developer", "OpenAI developer", AgentRole.Developer, "OpenAI", "gpt-5.6-sol"),
-        ("openai-tester", "OpenAI tester", AgentRole.Tester, "OpenAI", "gpt-5.6-luna"),
-        ("openai-reviewer", "OpenAI reviewer", AgentRole.Reviewer, "OpenAI", "gpt-5.6-sol"),
+        ("openai-researcher", "OpenAI researcher", AgentRole.Researcher, "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias),
+        ("openai-developer", "OpenAI developer", AgentRole.Developer, "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias),
+        ("openai-tester", "OpenAI tester", AgentRole.Tester, "OpenAI", AgentCatalog.OpenAiLunaSubscriptionModelAlias),
+        ("openai-reviewer", "OpenAI reviewer", AgentRole.Reviewer, "OpenAI", AgentCatalog.OpenAiSolSubscriptionModelAlias),
         ("anthropic-reviewer-opus-5", "Opus 5", AgentRole.Reviewer, "Anthropic", "claude-opus-5"),
         ("anthropic-planner-opus-5", "Opus 5", AgentRole.Planner, "Anthropic", "claude-opus-5"),
         ("anthropic-researcher-opus-5", "Opus 5", AgentRole.Researcher, "Anthropic", "claude-opus-5"),

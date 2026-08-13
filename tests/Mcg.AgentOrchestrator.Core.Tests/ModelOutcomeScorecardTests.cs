@@ -114,11 +114,11 @@ public sealed class ModelOutcomeScorecardTests
 
         Assert.Equal(2, scorecard.Count);
         Assert.Contains(scorecard, record => record.ProviderName == "OpenAI" &&
-            record.ModelName == "gpt-5.5" &&
+            record.ModelName == OpenAiSubscriptionModelAlias &&
             record.DispatchLane == "codex-cli" &&
             record.Completed == 1);
         Assert.Contains(scorecard, record => record.ProviderName == "OpenAI" &&
-            record.ModelName == "gpt-5.5" &&
+            record.ModelName == OpenAiSubscriptionModelAlias &&
             record.DispatchLane == "codex-spark" &&
             record.Failed == 1);
     }
@@ -248,7 +248,7 @@ public sealed class ModelOutcomeScorecardTests
         var kernel = new AgentOrchestratorKernel();
         var goal = kernel.CreateGoal("Launch apparatus failure", [new TaskSpec(TaskId.New(), "task", AgentRole.Developer)]);
         kernel.ActivateGoal(goal.Id, DefaultAgents());
-        Dispatch(kernel, goal, "OpenAI", "gpt-5.5", DateTimeOffset.UtcNow, exitCode: 1);
+        Dispatch(kernel, goal, "OpenAI", OpenAiSubscriptionModelAlias, DateTimeOffset.UtcNow, exitCode: 1);
         kernel.RecordTaskNote(
             goal.Id,
             goal.Tasks[0].Id,
@@ -276,7 +276,7 @@ public sealed class ModelOutcomeScorecardTests
 
         Assert.NotNull(best);
         Assert.Equal("OpenAI", best!.ProviderName);
-        Assert.Equal("gpt-5.5", best.ModelName);
+        Assert.Equal(OpenAiSubscriptionModelAlias, best.ModelName);
         Assert.Equal(ModelOutcomeRecommendation.Neutral, best.Recommendation);
     }
 
@@ -316,7 +316,7 @@ public sealed class ModelOutcomeScorecardTests
             $"task-{seconds}",
             AgentRole.Developer,
             "OpenAI",
-            "gpt-5.5",
+            OpenAiSubscriptionModelAlias,
             TaskComplexity.Complex,
             "implementation",
             outcome,

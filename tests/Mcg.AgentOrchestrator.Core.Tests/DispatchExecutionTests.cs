@@ -401,7 +401,7 @@ public sealed class DispatchExecutionTests
         "C:\\repo",
         clock.UtcNow,
         "OpenAI",
-        "gpt-5.3-codex",
+        StaleOpenAiCodexSubscriptionModelAlias,
         "medium",
         TaskComplexity.Simple,
         1234,
@@ -416,7 +416,7 @@ public sealed class DispatchExecutionTests
     Assert.Equal("C:\\repo", restoredTask.LastDispatch.WorkingDirectory);
     Assert.Equal(clock.UtcNow, restoredTask.LastDispatch.DispatchedAt);
     Assert.Equal("OpenAI", restoredTask.LastDispatch.ProviderName);
-    Assert.Equal("gpt-5.3-codex", restoredTask.LastDispatch.ModelName);
+    Assert.Equal(StaleOpenAiCodexSubscriptionModelAlias, restoredTask.LastDispatch.ModelName);
     Assert.Equal("medium", restoredTask.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, restoredTask.LastDispatch.TaskComplexity);
     Assert.Equal(1234, restoredTask.LastDispatch.PromptCharacterCount);

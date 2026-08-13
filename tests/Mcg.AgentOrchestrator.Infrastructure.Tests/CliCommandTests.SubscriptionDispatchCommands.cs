@@ -117,7 +117,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.3-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
             Subscription: new SubscriptionLaunchProfile("codex-cli"));
         kernel.ActivateGoal(goal.Id, [agent]);
@@ -128,7 +128,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             "C:\\repo",
             DateTimeOffset.UtcNow,
             "OpenAI",
-            "gpt-5.3-codex",
+            AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias,
             "medium",
             TaskComplexity.Complex,
             20000));
@@ -181,7 +181,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             AgentRole.Developer,
             new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
             ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
-            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+            ComplexModel: new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
         kernel.ActivateGoal(goal.Id, [agent]);
         var action = kernel.BuildNextActions(goal.Id).Items.Single();
 
@@ -229,7 +229,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
                 new AgentId("planner"),
                 "Planner",
                 AgentRole.Planner,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli"))
         ];
@@ -439,14 +439,14 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
                 new AgentId("planner"),
                 "Planner",
                 AgentRole.Planner,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli")),
             new AgentDefinition(
                 new AgentId("developer"),
                 "Developer",
                 AgentRole.Developer,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))
         ];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -490,7 +490,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
                 new AgentId("planner-openai"),
                 "Planner OpenAI",
                 AgentRole.Planner,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli")),
             new(
@@ -1080,7 +1080,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
             Subscription: new SubscriptionLaunchProfile("codex-cli"),
-            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+            ComplexModel: new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
         IReadOnlyList<AgentDefinition> agents = [agent];
         var provider = new FakeSmokeProvider(providerName: "OpenAI");
         var providers = new InMemoryModelProviderRegistry([provider]);
@@ -1307,14 +1307,14 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
                 new AgentId("planner"),
                 "Planner",
                 AgentRole.Planner,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli")),
             new AgentDefinition(
                 new AgentId("researcher"),
                 "Researcher",
                 AgentRole.Researcher,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli"))
         ];
@@ -1572,7 +1572,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
             Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "low"),
-            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+            ComplexModel: new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
         IReadOnlyList<AgentDefinition> agents = [agent];
         var providers = new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]);
         var profiles = WorkerProfileCatalog.Default();
@@ -1727,7 +1727,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
             Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-mini-codex", "medium"),
-            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+            ComplexModel: new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
         kernel.ActivateGoal(goal.Id, [agent]);
         var plan = SubscriptionPlanBuilder.Build(
             goal,
@@ -1737,7 +1737,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         var output = CaptureConsole(() => ConsoleViews.PrintSubscriptionPlan(plan));
         Xunit.Assert.DoesNotContain("Ready start risk:", output);
         Xunit.Assert.DoesNotContain("--confirm-large-paid-subscription-start", output);
-        Xunit.Assert.Contains("gpt-5.5", output);
+        Xunit.Assert.Contains(AgentCatalog.OpenAiSubscriptionModelAlias, output);
         Xunit.Assert.Contains("Complex", output);
     }
 
@@ -1752,9 +1752,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"));
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "medium"));
         kernel.ActivateGoal(goal.Id, [agent]);
         var plan = SubscriptionPlanBuilder.Build(
             goal,
@@ -1777,9 +1777,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
         kernel.ActivateGoal(goal.Id, [agent]);
         var plan = SubscriptionPlanBuilder.Build(
             goal,
@@ -1804,9 +1804,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("reviewer"),
             "Reviewer",
             AgentRole.Reviewer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
         kernel.ActivateGoal(goal.Id, [agent]);
         var plan = SubscriptionPlanBuilder.Build(
             goal,
@@ -2309,7 +2309,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
                 new AgentId("developer"),
                 "Developer",
                 AgentRole.Developer,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli"))
         ];
@@ -2388,10 +2388,10 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             ]);
         IReadOnlyList<AgentDefinition> agents =
         [
-            new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey)),
-            new AgentDefinition(new AgentId("tester"), "Tester", AgentRole.Tester, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey)),
-            new AgentDefinition(new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey)),
-            new AgentDefinition(new AgentId("researcher"), "Researcher", AgentRole.Researcher, new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))
+            new AgentDefinition(new AgentId("developer"), "Developer", AgentRole.Developer, new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("tester"), "Tester", AgentRole.Tester, new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("reviewer"), "Reviewer", AgentRole.Reviewer, new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey)),
+            new AgentDefinition(new AgentId("researcher"), "Researcher", AgentRole.Researcher, new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))
         ];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -2577,9 +2577,9 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("openai-developer"),
             "OpenAI developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
         IReadOnlyList<AgentDefinition> agents = [oldAgent];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -2636,7 +2636,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
                 new AgentId("developer"),
                 "Developer",
                 AgentRole.Developer,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))
         ];
         var providers = new InMemoryModelProviderRegistry([]);
         var profiles = WorkerProfileCatalog.Default();
@@ -2673,7 +2673,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
                 new AgentId("developer"),
                 "Developer",
                 AgentRole.Developer,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli"))
         ];
@@ -2768,7 +2768,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
                 new AgentId("developer"),
                 "Developer",
                 AgentRole.Developer,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
                 ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
                 Subscription: new SubscriptionLaunchProfile("codex-cli"))
         ];
@@ -3219,7 +3219,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
             Subscription: new SubscriptionLaunchProfile("codex-cli"));
         IReadOnlyList<AgentDefinition> agents = [agent];
@@ -3266,7 +3266,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
             Subscription: new SubscriptionLaunchProfile("codex-cli"));
         IReadOnlyList<AgentDefinition> agents = [agent];
@@ -3309,7 +3309,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
             Subscription: new SubscriptionLaunchProfile("codex-cli"));
         IReadOnlyList<AgentDefinition> agents = [agent];
@@ -3388,7 +3388,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
             Subscription: new SubscriptionLaunchProfile("codex-cli"));
         IReadOnlyList<AgentDefinition> agents = [agent];
@@ -3435,7 +3435,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
             Subscription: new SubscriptionLaunchProfile("codex-cli"));
         IReadOnlyList<AgentDefinition> agents = [agent];

@@ -164,7 +164,7 @@ public sealed class TaskComplexityEstimatorTests
             "Developer",
             AgentRole.Developer,
             new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
-            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+            ComplexModel: new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
 
         var simpleModel = TaskComplexityEstimator.ResolveModel(agent, TaskComplexity.Auto, "Update a tooltip label.", ComplexGoalObjective);
         var complexModel = TaskComplexityEstimator.ResolveModel(
@@ -180,9 +180,9 @@ public sealed class TaskComplexityEstimatorTests
 
         Assert.Equal("gpt-5.4-mini", simpleModel.ModelName);
         Assert.Equal("medium", simpleModel.ReasoningEffort);
-        Assert.Equal("gpt-5.5", complexModel.ModelName);
+        Assert.Equal(OpenAiSubscriptionModelAlias, complexModel.ModelName);
         Assert.Equal("high", complexModel.ReasoningEffort);
-        Assert.Equal("gpt-5.5", securityModel.ModelName);
+        Assert.Equal(OpenAiSubscriptionModelAlias, securityModel.ModelName);
         Assert.Equal("high", securityModel.ReasoningEffort);
     }
 
@@ -194,7 +194,7 @@ public sealed class TaskComplexityEstimatorTests
             "Developer",
             AgentRole.Developer,
             new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
-            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
+            ComplexModel: new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high"));
 
         var underpoweredModel = TaskComplexityEstimator.ResolveModel(
             agent,
@@ -209,7 +209,7 @@ public sealed class TaskComplexityEstimatorTests
             ComplexGoalObjective,
             [new ModelFitSummary("OpenAI", "gpt-5.4-mini", 2, 1, 0, 1, 0, ["label regression"])]);
 
-        Assert.Equal("gpt-5.5", underpoweredModel.ModelName);
+        Assert.Equal(OpenAiSubscriptionModelAlias, underpoweredModel.ModelName);
         Assert.Equal("high", underpoweredModel.ReasoningEffort);
         Assert.Equal("gpt-5.4-mini", adequateModel.ModelName);
         Assert.Equal("medium", adequateModel.ReasoningEffort);

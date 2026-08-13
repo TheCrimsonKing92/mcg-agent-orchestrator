@@ -169,7 +169,7 @@ public sealed class MonitoringAndQueryTests
         "C:\\repo",
         clock.UtcNow,
         "OpenAI",
-        "gpt-5.3-codex",
+        StaleOpenAiCodexSubscriptionModelAlias,
         "medium",
         TaskComplexity.Simple,
         456));
@@ -195,7 +195,7 @@ public sealed class MonitoringAndQueryTests
     Assert.Equal(25, summary.PotentiallyPaidOutputTokens);
     var modelUsage = summary.ModelUsage.Single();
     Assert.Equal("OpenAI", modelUsage.ProviderName);
-    Assert.Equal("gpt-5.5", modelUsage.ModelName);
+    Assert.Equal(OpenAiSubscriptionModelAlias, modelUsage.ModelName);
     Assert.Equal(1, modelUsage.ExecutionCount);
     Assert.Equal(100, modelUsage.InputTokens);
     Assert.Equal(25, modelUsage.OutputTokens);
@@ -206,7 +206,7 @@ public sealed class MonitoringAndQueryTests
     Assert.True(modelUsage.IsPotentiallyPaidProvider);
     var dispatchModel = summary.DispatchModelUsage.Single();
     Assert.Equal("OpenAI", dispatchModel.ProviderName);
-    Assert.Equal("gpt-5.3-codex", dispatchModel.ModelName);
+    Assert.Equal(StaleOpenAiCodexSubscriptionModelAlias, dispatchModel.ModelName);
     Assert.Equal(1, dispatchModel.DispatchCount);
     Assert.Equal(TaskComplexity.Simple, dispatchModel.TaskComplexity);
     Assert.Equal("medium", dispatchModel.ReasoningEffort);
@@ -263,7 +263,7 @@ public sealed class MonitoringAndQueryTests
     var item = summary.Tasks.Single(summaryTask => summaryTask.TaskId == task.Id);
 
     Assert.Equal("Model fit: OpenAI/gpt-5.4-mini - adequate - focused parser fix.", item.ModelFitNote);
-    var codexFit = summary.ModelFit.Single(fit => fit.ModelName == "gpt-5.3-codex");
+    var codexFit = summary.ModelFit.Single(fit => fit.ModelName == StaleOpenAiCodexSubscriptionModelAlias);
     Assert.Equal("OpenAI", codexFit.ProviderName);
     Assert.Equal(2, codexFit.NoteCount);
     Assert.Equal(0, codexFit.AdequateCount);
@@ -350,7 +350,7 @@ public sealed class MonitoringAndQueryTests
         "C:\\repo",
         clock.UtcNow,
         "OpenAI",
-        "gpt-5.3-codex",
+        StaleOpenAiCodexSubscriptionModelAlias,
         "low",
         TaskComplexity.Simple,
         6001));
@@ -377,7 +377,7 @@ public sealed class MonitoringAndQueryTests
         "C:\\repo",
         clock.UtcNow,
         "OpenAI",
-        "gpt-5.5",
+        OpenAiSubscriptionModelAlias,
         "high",
         TaskComplexity.Complex,
         500));

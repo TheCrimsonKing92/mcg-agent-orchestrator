@@ -47,7 +47,7 @@ public sealed class ProviderCommandBuilderParityTests
             ? "qwen3:8b"
             : providerKind == ProviderKind.AnthropicClaudeCli
                 ? "claude-sonnet-4-6"
-                : "gpt-5.5";
+                : AgentCatalog.OpenAiSubscriptionModelAlias;
         string? reasoningEffort = "high";
         string? permissionMode = isWriteCapable ? "bypassPermissions" : "plan";
         string? sandboxMode = osSandbox
@@ -144,7 +144,7 @@ public sealed class ProviderCommandBuilderParityTests
             ' ',
             ProviderCommandBuilder.Build(
                 ProviderKind.OpenAICodexCli,
-                "gpt-5.5",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
                 reasoningEffort: null,
                 resolvedPermissionMode: "plan",
                 resolvedSandboxMode: "read-only",

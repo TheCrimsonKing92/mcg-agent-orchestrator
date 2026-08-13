@@ -65,7 +65,7 @@ public abstract class ChaosGateTestBase
             new AgentId(role.ToString().ToLowerInvariant()),
             role.ToString(),
             role,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
         kernel.ActivateGoal(goal.Id, [agent]);
 
         var worktree = GoalWorktrees.Ensure(root, goal.Id);
@@ -102,9 +102,9 @@ public abstract class ChaosGateTestBase
             new AgentId(role.ToString().ToLowerInvariant()),
             role.ToString(),
             role,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
         kernel.ActivateGoal(goal.Id, [agent]);
         var task = goal.Tasks.Single();
         return (goal, task, [agent]);

@@ -71,7 +71,7 @@ public sealed class RunGoalServiceTests
         {
             "Anthropic" => "claude-haiku-4-5",
             "Ollama" => "qwen3:8b",
-            _ => "gpt-5.5"
+            _ => AgentCatalog.OpenAiSubscriptionModelAlias
         };
 
         return new AgentDefinition(

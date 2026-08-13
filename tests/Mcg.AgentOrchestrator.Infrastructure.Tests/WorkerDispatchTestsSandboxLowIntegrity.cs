@@ -116,9 +116,9 @@ public sealed class WorkerDispatchTestsSandboxLowIntegrity : WorkerDispatchTestS
         new AgentId("tester"),
         "Tester",
         AgentRole.Tester,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "medium"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
     var worktree = GoalWorktrees.Ensure(root, goal.Id);

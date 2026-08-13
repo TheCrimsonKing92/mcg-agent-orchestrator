@@ -53,7 +53,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             kernel,
             AgentRole.Developer,
             "OpenAI",
-            "gpt-5.5",
+            AgentCatalog.OpenAiSubscriptionModelAlias,
             TaskComplexity.Complex,
             exitCode: 0,
             "Model fit: OpenAI/gpt-5.5 - adequate - implementation - scoped edit");
@@ -1158,7 +1158,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             kernel,
             AgentRole.Developer,
             "OpenAI",
-            "gpt-5.5",
+            AgentCatalog.OpenAiSubscriptionModelAlias,
             TaskComplexity.Complex,
             exitCode: 1,
             "Model fit: OpenAI/gpt-5.5 - adequate - implementation - provider failed");
@@ -1199,7 +1199,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
                     "C:\\work",
                     DateTimeOffset.Parse("2026-07-01T12:00:00Z"),
                     "OpenAI",
-                    "gpt-5.5",
+                    AgentCatalog.OpenAiSubscriptionModelAlias,
                     TaskComplexity: TaskComplexity.Complex);
                 transactionKernel.RecordTaskDispatch(goal.Id, task.Id, dispatch);
                 transactionKernel.RecordDispatchExecutionResult(goal.Id, task.Id, new TaskVerificationRecord(
@@ -1217,7 +1217,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Equal(goal.Id.Value, row.GoalId);
         Assert.Equal(task.Id.Value, row.TaskId);
         Assert.Equal("OpenAI", row.ProviderName);
-        Assert.Equal("gpt-5.5", row.ModelName);
+        Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, row.ModelName);
         Assert.Equal(ModelFitHistory.Adequate, row.SelfRating);
     }
 
@@ -1227,17 +1227,17 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var db = TempDb();
         var repo = new SqliteOrchestratorStateRepository(db);
         var kernel = new AgentOrchestratorKernel();
-        RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", "gpt-5.5", TaskComplexity.Complex, 1,
+        RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, TaskComplexity.Complex, 1,
             "Model fit: OpenAI/gpt-5.5 - adequate - implementation - failed despite fit");
-        RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", "gpt-5.5", TaskComplexity.Complex, 1,
+        RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, TaskComplexity.Complex, 1,
             "Model fit: OpenAI/gpt-5.5 - underpowered - implementation - missed repo context");
-        RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", "gpt-5.5", TaskComplexity.Complex, 0,
+        RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, TaskComplexity.Complex, 0,
             "Model fit: OpenAI/gpt-5.5 - adequate - implementation - completed");
 
         await repo.SaveAsync(kernel);
 
         var scorecard = await repo.BuildModelOutcomeScorecardAsync();
-        var record = scorecard.Single(r => r.ProviderName == "OpenAI" && r.ModelName == "gpt-5.5");
+        var record = scorecard.Single(r => r.ProviderName == "OpenAI" && r.ModelName == AgentCatalog.OpenAiSubscriptionModelAlias);
         Assert.Equal("worker-cli", record.DispatchLane);
         Assert.Equal(1, record.Completed);
         Assert.Equal(2, record.Failed);
@@ -1417,7 +1417,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             kernel,
             AgentRole.Developer,
             "OpenAI",
-            "gpt-5.5",
+            AgentCatalog.OpenAiSubscriptionModelAlias,
             TaskComplexity.Complex,
             exitCode: 1,
             "Model fit: OpenAI/gpt-5.5 - adequate - implementation - provider failed");
@@ -1427,7 +1427,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             kernel,
             AgentRole.Developer,
             "OpenAI",
-            "gpt-5.5",
+            AgentCatalog.OpenAiSubscriptionModelAlias,
             TaskComplexity.Complex,
             exitCode: 1,
             "Model fit: OpenAI/gpt-5.5 - adequate - implementation - old failure");

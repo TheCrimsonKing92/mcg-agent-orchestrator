@@ -1372,7 +1372,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         root,
         now.AddMinutes(-5),
         "OpenAI",
-        "gpt-5.5",
+        AgentCatalog.OpenAiSubscriptionModelAlias,
         WorkerProviderKind: ProviderKind.OpenAICodexCli));
     var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
@@ -1992,7 +1992,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         new AgentId($"codex-{role.ToString().ToLowerInvariant()}"),
         $"Codex {role}",
         role,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
@@ -2091,7 +2091,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         new AgentId($"codex-{role.ToString().ToLowerInvariant()}"),
         $"Codex {role}",
         role,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);

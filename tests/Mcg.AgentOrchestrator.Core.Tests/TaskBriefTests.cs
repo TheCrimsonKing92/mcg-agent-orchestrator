@@ -1740,7 +1740,7 @@ static string SectionFrom(string value, string heading)
 static IReadOnlyList<AgentDefinition> DefaultAgents()
 {
     static ModelProfile OpenAi(string reasoningEffort) =>
-        new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort);
+        new("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort);
 
     return
     [

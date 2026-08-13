@@ -473,7 +473,7 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal("Model fit: openai/GPT-5.3-CODEX - underpowered - missed required tests.", taskEvidence.ModelFitNote);
     Assert.Equal("OpenAI", modelFit.ProviderName);
-    Assert.Equal("gpt-5.3-codex", modelFit.ModelName);
+    Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, modelFit.ModelName);
     Assert.Equal(2, modelFit.NoteCount);
     Assert.Equal(1, modelFit.AdequateCount);
     Assert.Equal(0, modelFit.OverkillCount);
@@ -963,9 +963,9 @@ public sealed class DashboardRenderingTests
         new AgentId("subscription-developer"),
         "Subscription developer",
         AgentRole.Developer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "low"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
 
     var plan = DashboardResponseMapper.ToSubscriptionPlanDto(
@@ -1280,7 +1280,7 @@ public sealed class DashboardRenderingTests
     public void DashboardRequestParserPreservesComplexReasoningEffort()
 {
     var submission = DashboardRequestParser.ParseAgentSubmission(
-        """
+        $$"""
         {
           "role": "Developer",
           "providerName": "OpenAI",
@@ -1288,17 +1288,17 @@ public sealed class DashboardRenderingTests
           "reasoningEffort": "medium",
           "executionPolicy": "PreferSubscription",
           "subscriptionProfileName": "codex-cli",
-          "subscriptionModelAlias": "gpt-5.3-codex",
+          "subscriptionModelAlias": "{{AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias}}",
           "subscriptionReasoningEffort": "medium",
           "complexProviderName": "OpenAI",
-          "complexModelName": "gpt-5.5",
+          "complexModelName": "{{AgentCatalog.OpenAiSubscriptionModelAlias}}",
           "complexReasoningEffort": "high"
         }
         """);
 
     var agent = DashboardRequestParser.CreateAgentDefinition(submission);
 
-    Assert.Equal("gpt-5.5", agent.ComplexModel!.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, agent.ComplexModel!.ModelName);
     Assert.Equal("high", agent.ComplexModel.ReasoningEffort);
     Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
 }
@@ -1329,7 +1329,7 @@ public sealed class DashboardRenderingTests
     Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, openAi.Model.MaxOutputTokens);
     Assert.Equal(SubscriptionMode.ApiKey, openAi.Model.SubscriptionMode);
     Assert.Equal("OpenAI", openAi.ComplexModel!.ProviderName);
-    Assert.Equal("gpt-5.5", openAi.ComplexModel.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, openAi.ComplexModel.ModelName);
     Assert.Equal(AgentCatalog.ComplexReasoningEffort, openAi.ComplexModel.ReasoningEffort);
     Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, openAi.ComplexModel.MaxOutputTokens);
 
@@ -1395,7 +1395,7 @@ public sealed class DashboardRenderingTests
         null,
         ExecutionPolicy: "ApiOnly",
         SubscriptionProfileName: "codex-cli",
-        SubscriptionModelAlias: "gpt-5.3-codex",
+        SubscriptionModelAlias: AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias,
         SubscriptionReasoningEffort: "high",
         ComplexProviderName: "Ollama",
         ComplexModelName: "qwen3:8b"));
@@ -1502,7 +1502,7 @@ public sealed class DashboardRenderingTests
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
             Subscription: new SubscriptionLaunchProfile("codex-cli"))
     ];
@@ -1573,7 +1573,7 @@ public sealed class DashboardRenderingTests
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
             Subscription: new SubscriptionLaunchProfile("codex-cli"))
     ];
@@ -2416,7 +2416,7 @@ public sealed class DashboardRenderingTests
         "C:\\repo",
         DateTimeOffset.UtcNow,
         "OpenAI",
-        "gpt-5.3-codex",
+        AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias,
         "medium",
         TaskComplexity.Complex,
         20000));
@@ -2532,7 +2532,7 @@ public sealed class DashboardRenderingTests
         "C:\\repo",
         DateTimeOffset.UtcNow,
         "OpenAI",
-        "gpt-5.5",
+        AgentCatalog.OpenAiSubscriptionModelAlias,
         "high",
         TaskComplexity.Complex,
         500));
@@ -2785,7 +2785,7 @@ public sealed class DashboardRenderingTests
         AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 768),
         ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
-        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+        ComplexModel: new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
     var agents = new[] { agent };
     kernel.ActivateGoal(goal.Id, agents);
     var task = goal.Tasks.Single();
@@ -2822,7 +2822,7 @@ public sealed class DashboardRenderingTests
         AgentId.New(),
         "Developer",
         "OpenAI",
-        "gpt-5.5",
+        AgentCatalog.OpenAiSubscriptionModelAlias,
         TaskComplexity.Simple,
         MaxOutputTokens: 1200,
         ReasoningEffort: "high",
@@ -2851,7 +2851,7 @@ public sealed class DashboardRenderingTests
         AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "low", 768),
         ExecutionPolicy: AgentExecutionPolicy.ApiOnly,
-        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+        ComplexModel: new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
     var agents = new[] { agent };
     kernel.ActivateGoal(goal.Id, agents);
     kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
@@ -2884,7 +2884,7 @@ public sealed class DashboardRenderingTests
 
     Assert.Equal(TaskComplexity.Simple, preview.TaskComplexity);
     Assert.True(preview.UsesComplexModel);
-    Assert.Equal("gpt-5.5", preview.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, preview.ModelName);
     Assert.True(risk!.UsesComplexPaidModel);
     Assert.Equal("complex paid API model", nextDto.Control!.CostRisk);
     Assert.Equal("run 2 --confirm-paid-api-run --confirm-large-paid-api-prompt", nextDto.SuggestedCommand);
@@ -2907,7 +2907,7 @@ public sealed class DashboardRenderingTests
         AgentRole.Developer,
         new ModelProfile("OpenAI", "test", ModelCapability.Text, SubscriptionMode.ApiKey, ReasoningEffort: "medium"),
         ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.3-codex", "medium"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, "medium"));
     var agents = new[] { agent };
     var profiles = WorkerProfileCatalog.Default();
     kernel.ActivateGoal(goal.Id, agents);
@@ -2919,7 +2919,7 @@ public sealed class DashboardRenderingTests
         "C:\\repo",
         DateTimeOffset.UtcNow,
         "OpenAI",
-        "gpt-5.3-codex",
+        AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias,
         "medium",
         TaskComplexity.Complex,
         9500));
@@ -2972,7 +2972,7 @@ public sealed class DashboardRenderingTests
         "C:\\repo",
         DateTimeOffset.UtcNow,
         "OpenAI",
-        "gpt-5.3-codex",
+        AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias,
         "medium",
         TaskComplexity.Complex,
         12001));
@@ -3014,7 +3014,7 @@ public sealed class DashboardRenderingTests
         "C:\\repo",
         DateTimeOffset.UtcNow,
         "OpenAI",
-        "gpt-5.3-codex",
+        AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias,
         "medium",
         TaskComplexity.Simple,
         321));
@@ -3050,20 +3050,20 @@ public sealed class DashboardRenderingTests
     Assert.Contains("using OpenAI/gpt-5.3-codex Simple reasoning medium", evidenceDto.Tasks.Single(item => item.TaskId == task.Id.Value).Message, StringComparison.Ordinal);
     var dispatchModel = evidenceDto.DispatchModelUsage.Single();
     Assert.Equal("OpenAI", dispatchModel.ProviderName);
-    Assert.Equal("gpt-5.3-codex", dispatchModel.ModelName);
+    Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, dispatchModel.ModelName);
     Assert.Equal(1, dispatchModel.DispatchCount);
     Assert.Equal(TaskComplexity.Simple, dispatchModel.TaskComplexity);
     Assert.Equal("medium", dispatchModel.ReasoningEffort);
     Assert.Equal(321, dispatchModel.PromptCharacterCount);
     Assert.True(dispatchModel.IsPotentiallyPaidProvider);
     Assert.Equal("OpenAI", taskDto.LastDispatch!.ProviderName);
-    Assert.Equal("gpt-5.3-codex", taskDto.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, taskDto.LastDispatch.ModelName);
     Assert.Equal("medium", taskDto.LastDispatch.ReasoningEffort);
     Assert.Equal(TaskComplexity.Simple, taskDto.LastDispatch.TaskComplexity);
     Assert.Equal(321, taskDto.LastDispatch.PromptCharacterCount);
     var summaryDispatch = workSummary.Tasks.Single(item => item.TaskId == task.Id.Value).LastDispatch!;
     Assert.Equal("OpenAI", summaryDispatch.ProviderName);
-    Assert.Equal("gpt-5.3-codex", summaryDispatch.ModelName);
+    Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, summaryDispatch.ModelName);
     Assert.Equal(321, summaryDispatch.PromptCharacterCount);
 }
 
@@ -3626,7 +3626,7 @@ static string ExtractTaskControls(string html, int taskNumber)
 private static void AssertOpenAiModelOrderIsCostAware(string text)
 {
     var miniIndex = text.IndexOf("gpt-5.4-mini", StringComparison.Ordinal);
-    var expensiveIndex = text.IndexOf("gpt-5.5", StringComparison.Ordinal);
+    var expensiveIndex = text.IndexOf(AgentCatalog.OpenAiSubscriptionModelAlias, StringComparison.Ordinal);
 
     Assert.True(miniIndex >= 0);
     Assert.True(expensiveIndex >= 0);

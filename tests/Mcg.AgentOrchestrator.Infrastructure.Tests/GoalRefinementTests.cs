@@ -972,7 +972,7 @@ public sealed class GoalRefinementTests
         var completer = new SubscriptionCliCompleter(
             "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})",
             "codex-cli",
-            "gpt-5.5",
+            AgentCatalog.OpenAiSubscriptionModelAlias,
             "medium",
             FakeRunner);
 
@@ -1038,7 +1038,7 @@ public sealed class GoalRefinementTests
                 ModelLane.Capable,
                 new ModelProfile("missing-api-provider", "intended-api-model", ModelCapability.Text, SubscriptionMode.ApiKey),
                 Name: ModelFunctionPurposes.SpecRefiner,
-                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"))
+                Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "medium"))
         ]);
         var profiles = new WorkerProfileCatalog([
             new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode} -p (Get-Content -Raw {promptPath})"),
