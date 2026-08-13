@@ -5911,15 +5911,15 @@ public sealed class ConductorDriverTests
             "files: none",
             "commands: review",
             "tests: pass - inspected evidence",
-            "blockers: none",
+            "blockers: identity contract fixture",
             $"findings: {JsonSerializer.Serialize(rejected)}",
             "touched_anchors: []",
-            "verdict: pass",
+            "verdict: needs-work",
             "END_WORKER_RESULT");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-2",
             workingDirectory,
-            0,
+            1,
             rejectedRound,
             "",
             DateTimeOffset.UtcNow,
@@ -5950,7 +5950,10 @@ public sealed class ConductorDriverTests
 
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal(reviewer.Id, retriedTaskId);
+        Assert.True(
+            reviewer.Id == retriedTaskId,
+            $"Expected same-reviewer contract repair but got {retriedTaskId?.Value ?? "none"}; " +
+            $"outcome={result.Outcome}; escalation={escalation ?? "none"}");
         Assert.Equal(RetryRoundKind.Mechanical, retryRoundKind);
         Assert.Equal(WorkTaskStatus.Completed, developer.Status);
         Assert.Equal(WorkTaskStatus.Completed, tester.Status);
@@ -6278,12 +6281,50 @@ public sealed class ConductorDriverTests
             PassVerification(kernel, goal, task);
         }
 
-        SeedReviewerIdentityViolation(
-            kernel,
-            goal,
-            reviewer,
-            legacyDiagnostic,
-            unchangedCommit);
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var open = new ReviewFinding(
+            "F-1",
+            ReviewFindingState.Open,
+            anchor,
+            "Missing guard.",
+            FindingSeverity.Advisory);
+        DispatchTask(kernel, goal, reviewer, "review-open");
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-open",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithFinding(open),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "confirm resolution");
+        DispatchTask(kernel, goal, reviewer, "review-resolved");
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-resolved",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithFinding(open with { State = ReviewFindingState.Resolved }),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck unchanged commit");
+        DispatchTask(kernel, goal, reviewer, "review-reopened", legacyDiagnostic);
+        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-reopened",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithFinding(open),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+        Assert.Equal(
+            ReviewFindingConvergence.UntouchedReopenViolationCode,
+            reviewer.LastVerification!.ReviewFindingContractViolation?.Code);
 
         var retried = false;
         string? escalation = null;
@@ -6300,7 +6341,7 @@ public sealed class ConductorDriverTests
 
         Assert.False(retried);
         Assert.IsType<ConductorAdvanceOutcome.Escalated>(result.Outcome);
-        Assert.Contains(ReviewFindingConvergence.IdentityMovedViolationCode, escalation, StringComparison.Ordinal);
+        Assert.Contains(ReviewFindingConvergence.UntouchedReopenViolationCode, escalation, StringComparison.Ordinal);
         Assert.Contains("suppression=missing-system-derived-round-diff-proof", escalation, StringComparison.Ordinal);
         Assert.Contains("mechanical repair budget was not consumed", escalation, StringComparison.Ordinal);
         Assert.Contains(legacyDiagnostic, escalation, StringComparison.Ordinal);
