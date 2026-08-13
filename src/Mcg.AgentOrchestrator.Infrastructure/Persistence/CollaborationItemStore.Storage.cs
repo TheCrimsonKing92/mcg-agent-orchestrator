@@ -74,8 +74,7 @@ public sealed partial class CollaborationItemStore
             CREATE INDEX IF NOT EXISTS idx_collaboration_items_goal_id
                 ON collaboration_items (goal_id)
             """);
-        if (!ColumnExists(conn, "collaboration_items", "answer_history_json"))
-            RunNonQuery(conn, "ALTER TABLE collaboration_items ADD COLUMN answer_history_json TEXT");
+        AddColumnIfMissing(conn, "collaboration_items", "answer_history_json", "TEXT");
         RunNonQuery(conn, """
             CREATE TABLE IF NOT EXISTS collaboration_item_actions (
                 correlation_key              TEXT NOT NULL,
@@ -212,6 +211,25 @@ public sealed partial class CollaborationItemStore
         }
 
         return false;
+    }
+
+    private static void AddColumnIfMissing(
+        SqliteConnection conn,
+        string table,
+        string column,
+        string type)
+    {
+        if (ColumnExists(conn, table, column))
+            return;
+
+        try
+        {
+            RunNonQuery(conn, $"ALTER TABLE {table} ADD COLUMN {column} {type}");
+        }
+        catch (SqliteException) when (ColumnExists(conn, table, column))
+        {
+            // A concurrent initializer won the migration race; the desired schema is present.
+        }
     }
 
     private static async Task RunNonQueryAsync(SqliteConnection conn, string sql, CancellationToken cancellationToken)
