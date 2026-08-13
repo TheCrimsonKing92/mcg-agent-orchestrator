@@ -2188,8 +2188,17 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             ref currentGoal));
 
         Xunit.Assert.Contains("overlap-detected", output, StringComparison.Ordinal);
-        Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Equal(2, restored.Goals.Count);
         Xunit.Assert.NotNull(currentGoal);
+        var restoredCreatedGoal = restored.GetGoal(currentGoal.Id);
+        Xunit.Assert.NotEmpty(restoredCreatedGoal.Tasks);
+        Xunit.Assert.All(restoredCreatedGoal.Tasks, task =>
+        {
+            Xunit.Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+            Xunit.Assert.Null(task.LastDispatch);
+            Xunit.Assert.Null(task.LastProcess);
+        });
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_preserves_precommit_stdout_bytes")]

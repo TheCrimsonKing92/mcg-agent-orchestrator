@@ -758,6 +758,23 @@ internal static class GoalMonitoringSubscriptionCommand
         return new GoalLifecycleFacts(workspaceExists, isBlocked, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
     }
 
+    internal static GoalScopeLifecycleObservation ReadScopeCollisionLifecycleObservation(
+        OrchestratorWorkspace workspace,
+        Goal goal)
+    {
+        try
+        {
+            return new GoalScopeLifecycleObservation(
+                GoalLifecycle.ResolveState(goal, ReadLifecycleFacts(workspace, goal)));
+        }
+        catch (Exception ex)
+        {
+            return new GoalScopeLifecycleObservation(
+                State: null,
+                UnavailableReason: ex.GetType().Name);
+        }
+    }
+
     private static bool IsNewForCursor(GoalStateSubscriptionEvent evt, long timelineCursor, long runEventCursor, long processCursor)
     {
         var cursor = evt.CursorDomain switch

@@ -207,8 +207,16 @@ private static void PrintScopeCollisionAdvisory(
     string? intakeItemId = null,
     string? heading = null)
 {
+    var lifecycleObservations = context.Kernel.Goals.ToDictionary(
+        goal => goal.Id.Value,
+        goal => GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservation(context.Workspace, goal),
+        StringComparer.Ordinal);
     ConsoleViews.PrintGoalScopeCollisionReport(
-        GoalScopeCollisionAdvisor.Build([rawObjective], context.Kernel.Goals, intakeItemId),
+        GoalScopeCollisionAdvisor.Build(
+            [rawObjective],
+            context.Kernel.Goals,
+            intakeItemId,
+            lifecycleObservations),
         intakeItemId,
         heading);
 }

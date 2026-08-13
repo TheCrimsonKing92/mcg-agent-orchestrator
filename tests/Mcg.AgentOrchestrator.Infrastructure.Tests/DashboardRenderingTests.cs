@@ -3719,9 +3719,12 @@ public sealed class GoalScopeCollisionDashboardMapperTests
         var goal = new AgentOrchestratorKernel().CreateGoal(
             "Change src/Feature/File.cs.",
             [new TaskSpec(TaskId.New(), "Implement planned work.", AgentRole.Developer)]);
+        var scopelessGoal = new AgentOrchestratorKernel().CreateGoal(
+            "No repository path is declared.",
+            [new TaskSpec(TaskId.New(), "Implement unscoped work.", AgentRole.Developer)]);
         var report = GoalScopeCollisionAdvisor.Build(
             ["Also change src/Feature/File.cs."],
-            [goal]);
+            [goal, scopelessGoal]);
         var item = new BacklogIntakeItem(
             "backlog-1",
             "Feature change",
@@ -3742,7 +3745,12 @@ public sealed class GoalScopeCollisionDashboardMapperTests
 
         var mappedReport = Xunit.Assert.Single(dto.Reports);
         var collision = Xunit.Assert.Single(mappedReport.Collisions);
-        Xunit.Assert.Equal("overlap-detected", mappedReport.Verdict);
+        Xunit.Assert.Equal("overlap-detected-incomplete", mappedReport.Verdict);
+        Xunit.Assert.Equal(2, mappedReport.InputGoalCount);
+        Xunit.Assert.Equal(2, mappedReport.EligibleGoalCount);
+        Xunit.Assert.Equal(2, mappedReport.ComparedGoalCount);
+        Xunit.Assert.Equal(1, mappedReport.UncheckableGoalCount);
+        Xunit.Assert.Equal(0, mappedReport.UncomparedGoalCount);
         Xunit.Assert.Equal(goal.Id.Value, collision.GoalId);
         Xunit.Assert.Equal("src/Feature/File.cs", collision.ProposedPath);
         Xunit.Assert.Equal("Explicit", collision.ProposedProvenance);

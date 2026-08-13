@@ -43,7 +43,11 @@ public static GoalScopeCollisionAdvisoryDto ToGoalScopeCollisionAdvisoryDto(
             entry.Item.Id,
             entry.Item.Heading,
             entry.Report.VerdictToken,
+            entry.Report.InputGoalCount,
+            entry.Report.EligibleGoalCount,
             entry.Report.ComparedGoalCount,
+            entry.Report.UncheckableGoalCount,
+            entry.Report.UncomparedGoalCount,
             entry.Report.ExplicitCollisionCount,
             entry.Report.ConflictingGoalIds,
             entry.Report.ProposedScopes
