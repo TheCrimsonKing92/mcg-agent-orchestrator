@@ -238,6 +238,24 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingConvergence.UntouchedReopenViolationCode, error.Code);
     }
 
+    [Xunit.Theory(DisplayName = "Computed-empty proof carries unchanged open and resolved findings")]
+    [Xunit.InlineData(ReviewFindingState.Open)]
+    [Xunit.InlineData(ReviewFindingState.Resolved)]
+    public void UnchangedFinding_EmptyTouchProof_CarriesForward(ReviewFindingState state)
+    {
+        var carried = new ReviewFinding(
+            "F-1",
+            state,
+            new ReviewFindingLocation("src/A.cs", "A.Run", "guard"),
+            "Missing guard.");
+
+        var result = ReviewFindingConvergence.ApplyRound(
+            [carried],
+            new ReviewFindingRound([carried], []));
+
+        Assert.Equal(carried, Assert.Single(result));
+    }
+
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_open_set_growth_from_a_new_identity_at_a_new_anchor")]
     public void ReviewFindingConvergenceAllowsOpenSetGrowthFromNewIdentityAtNewAnchor()
     {

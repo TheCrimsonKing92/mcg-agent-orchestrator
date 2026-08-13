@@ -200,8 +200,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         }
     }
 
-    [Xunit.Fact(DisplayName = "Reviewer_round_missing_baseline_degrades_instead_of_blocking_dispatch")]
-    public void ReviewerRoundMissingBaselineDegradesInsteadOfBlockingDispatch()
+    [Xunit.Fact(DisplayName = "Unavailable inputs degrade while equal SHAs compute empty proof")]
+    public void ReviewerRoundUnavailableInputsDegradeWhileIdenticalCommitsComputeEmpty()
     {
         // A task's FIRST reviewer round records no reviewed commit, so the baseline is legitimately absent.
         // Throwing here aborted the reviewer DISPATCH BEFORE IT STARTED and wedged the goal permanently:
@@ -246,7 +246,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             Assert.Empty(missingCurrent.TouchedAnchors);
             Assert.Contains("current target commit is missing", missingCurrent.Diagnostic, StringComparison.Ordinal);
             Assert.Empty(equalCommits.TouchedAnchors);
-            Assert.Contains("commits are identical", equalCommits.Diagnostic, StringComparison.Ordinal);
+            Assert.Null(equalCommits.Diagnostic);
             Assert.Empty(noAnchors.TouchedAnchors);
             Assert.Contains("ledger has no structural anchors", noAnchors.Diagnostic, StringComparison.Ordinal);
         }

@@ -3247,17 +3247,19 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         Assert.Null(tester.LastProcess);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_canonicalizes_moved_finding_when_identical_commits_provide_no_touch_proof")]
-    public void WorkerProfileDispatcherCanonicalizesMovedFindingWhenIdenticalCommitsProvideNoTouchProof()
+    [Xunit.Theory(DisplayName = "Tester and Reviewer equal SHAs compute empty touch proof")]
+    [Xunit.InlineData(AgentRole.Tester)]
+    [Xunit.InlineData(AgentRole.Reviewer)]
+    public void IdenticalCommits_BothReviewRoles_ComputeEmptyTouchProof(AgentRole role)
     {
         var root = CreateSeededDispatchRepository();
         var promptRoot = Path.Combine(root, "prompts");
         var kernel = new AgentOrchestratorKernel(
             new TestClock(DateTimeOffset.Parse("2026-08-08T11:02:30Z")));
-        var testerSpec = new TaskSpec(TaskId.New(), "Recheck a finding without a changed anchor.", AgentRole.Tester);
-        var goal = kernel.CreateGoal("Reject an unproved finding relocation.", [testerSpec]);
-        kernel.ActivateGoal(goal.Id, [TestSubscriptionAgent("tester", "Tester", AgentRole.Tester)]);
-        var tester = goal.Tasks.Single(task => task.Id == testerSpec.Id);
+        var taskSpec = new TaskSpec(TaskId.New(), "Recheck a finding without a changed anchor.", role);
+        var goal = kernel.CreateGoal("Reject an unproved finding relocation.", [taskSpec]);
+        kernel.ActivateGoal(goal.Id, [TestSubscriptionAgent(role.ToString().ToLowerInvariant(), role.ToString(), role)]);
+        var task = goal.Tasks.Single(candidate => candidate.Id == taskSpec.Id);
         var worktree = GoalWorktrees.Ensure(root, goal.Id);
         var sourceDirectory = Path.Combine(worktree, "src");
         Directory.CreateDirectory(sourceDirectory);
@@ -3274,17 +3276,17 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         WorkerProfileDispatcher.PrepareTask(
             kernel,
             goal,
-            tester,
+            task,
             profile,
             promptRoot,
             worktree,
             DateTimeOffset.Parse("2026-08-08T11:01:00Z"));
-        kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, unchangedCommit);
+        kernel.RecordDispatchBaseCommit(goal.Id, task.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(
             goal.Id,
-            tester.Id,
+            task.Id,
             new TaskVerificationRecord(
-                tester.LastDispatch!.Command,
+                task.LastDispatch!.Command,
                 worktree,
                 0,
                 AfcTesterOutput(new ReviewFinding(
@@ -3297,24 +3299,25 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
                 DateTimeOffset.Parse("2026-08-08T11:02:00Z"),
                 WorkerResultPresent: true));
 
-        kernel.RetryTask(goal.Id, tester.Id, "Recheck without a Developer change.");
+        kernel.RetryTask(goal.Id, task.Id, "Recheck without a Developer change.");
         WorkerProfileDispatcher.PrepareTask(
             kernel,
             goal,
-            tester,
+            task,
             profile,
             promptRoot,
             worktree,
             DateTimeOffset.Parse("2026-08-08T11:03:00Z"));
 
-        Assert.Empty(tester.LastDispatch!.ReviewFindingTouchedAnchors!);
-        Assert.Contains("identical", tester.LastDispatch.ReviewFindingTouchProofDiagnostic, StringComparison.OrdinalIgnoreCase);
-        kernel.RecordDispatchBaseCommit(goal.Id, tester.Id, unchangedCommit);
+        Assert.Empty(task.LastDispatch!.ReviewFindingTouchedAnchors!);
+        Assert.Null(task.LastDispatch.ReviewFindingTouchProofDiagnostic);
+        Assert.Null(task.LastProcess);
+        kernel.RecordDispatchBaseCommit(goal.Id, task.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(
             goal.Id,
-            tester.Id,
+            task.Id,
             new TaskVerificationRecord(
-                tester.LastDispatch.Command,
+                task.LastDispatch.Command,
                 worktree,
                 0,
                 AfcTesterOutput(new ReviewFinding(
@@ -3327,12 +3330,12 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
                 DateTimeOffset.Parse("2026-08-08T11:04:00Z"),
                 WorkerResultPresent: true));
 
-        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
-        Assert.Equal(unchangedCommit, tester.LastVerification!.ReviewedCommit);
-        Assert.Null(tester.LastVerification.ReviewFindingContractViolation);
-        Assert.Equal(priorLocation, Assert.Single(tester.LastVerification.MergedReviewFindings!).Location);
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(unchangedCommit, task.LastVerification!.ReviewedCommit);
+        Assert.Null(task.LastVerification.ReviewFindingContractViolation);
+        Assert.Equal(priorLocation, Assert.Single(task.LastVerification.MergedReviewFindings!).Location);
         Assert.Contains(goal.Timeline, item =>
-            item.TaskId == tester.Id &&
+            item.TaskId == task.Id &&
             item.Kind == ProgressKind.TaskNote &&
             item.Message.Contains("canonical_stable_id=reported-goals-may-lack-timeline-evidence", StringComparison.Ordinal));
     }
