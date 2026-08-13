@@ -276,9 +276,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         new AgentId("developer"),
         "Developer",
         AgentRole.Developer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var profiles = new WorkerProfileCatalog(
     [
@@ -1108,7 +1108,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         """,
         string.Empty,
         DateTimeOffset.UtcNow,
-        "Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation."));
+        "Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.")); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 
     var contextDirectory = WorkerContextArtifacts.Write(goal, currentTask, workingDirectory);
 
@@ -1125,7 +1125,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("Verification: `dotnet test --filter WorkerContextArtifacts`", summaries, StringComparison.Ordinal);
     Assert.Contains("Verification result: passed focused tests", summaries, StringComparison.Ordinal);
     Assert.Contains("Risks: none reported", summaries, StringComparison.Ordinal);
-    Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.", summaries, StringComparison.Ordinal);
+    Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.", summaries, StringComparison.Ordinal); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 }
 
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_selects_relevant_skills_and_registers_skill_artifact")]
@@ -1451,9 +1451,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         new AgentId("reviewer"),
         "Reviewer",
         AgentRole.Reviewer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     WriteSkill(worktree, "orchestrator-worker-verification");
@@ -1505,9 +1505,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         new AgentId("reviewer"),
         "Reviewer",
         AgentRole.Reviewer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     WriteSkill(worktree, "orchestrator-worker-verification");
@@ -1553,9 +1553,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         new AgentId("reviewer"),
         "Reviewer",
         AgentRole.Reviewer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
     WriteSkill(worktree, "orchestrator-worker-verification");
@@ -1659,9 +1659,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         new AgentId("reviewer"),
         "Reviewer",
         AgentRole.Reviewer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
     var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory}");
 
@@ -1695,9 +1695,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         new AgentId("reviewer"),
         "Reviewer",
         AgentRole.Reviewer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
     kernel.ActivateGoal(goal.Id, [agent]);
 
     var ex = Assert.Throws<WorkerSubscriptionPreflightException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
@@ -1734,7 +1734,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         "Implemented." + Environment.NewLine + WorkerResultBlock("src/Feature.cs, bin/generated.dll", "dotnet test", "Passed: 1", "abc123"),
         string.Empty,
         DateTimeOffset.UtcNow,
-        "Model fit: OpenAI/gpt-5.5 - adequate - implementation fixture."));
+        "Model fit: OpenAI/gpt-5.5 - adequate - implementation fixture.")); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
     kernel.ReportTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
         "dotnet test",
@@ -1800,7 +1800,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         new AgentId("developer"),
         "Developer",
         AgentRole.Developer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey))]);
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey))]);
 
     var firstAttempt = kernel.BuildTaskBrief(
         goal.Id,

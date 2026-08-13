@@ -1,10 +1,126 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.RegularExpressions;
 
 [Collection(TestCollections.ChaosGateGit)]
 public sealed class ProgressiveReviewSteeringTests
 {
+    private const string DeliberatelyDifferentModelAlias = "gpt-other"; // Deliberate non-catalog alias used to exercise model-drift fallback.
+
+    public static TheoryData<string, AgentRole, string> DefaultCatalogFixtureDispatches => new()
+    {
+        { "default-planner-dispatch-fixture", AgentRole.Planner, AgentCatalog.OpenAiSubscriptionModelAlias },
+        { "default-ideation-dispatch-fixture", AgentRole.Ideation, AgentCatalog.OpenAiSubscriptionModelAlias },
+        { "default-researcher-dispatch-fixture", AgentRole.Researcher, AgentCatalog.OpenAiSubscriptionModelAlias },
+        { "default-developer-dispatch-fixture", AgentRole.Developer, AgentCatalog.OpenAiSubscriptionModelAlias },
+        { "default-tester-dispatch-fixture", AgentRole.Tester, AgentCatalog.OpenAiSubscriptionModelAlias },
+        { "default-reviewer-dispatch-fixture", AgentRole.Reviewer, AgentCatalog.OpenAiSubscriptionModelAlias }
+    };
+
+    [Theory(DisplayName = "ProgressiveReviewSteering_each_default_fixture_dispatch_matches_activated_agent_catalog")]
+    [MemberData(nameof(DefaultCatalogFixtureDispatches))]
+    public void EachDefaultFixtureDispatchMatchesActivatedAgentCatalog(
+        string fixtureName,
+        AgentRole role,
+        string recordedModelAlias)
+    {
+        AssertFixtureDispatchMatchesCatalog(
+            fixtureName,
+            AgentCatalog.Default(),
+            role,
+            new TaskDispatchRecord(
+                "codex-cli",
+                "fixture-command",
+                "fixture-worktree",
+                new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero),
+                "OpenAI",
+                recordedModelAlias,
+                WorkerProviderKind: ProviderKind.OpenAICodexCli));
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_test_alias_literals_are_catalog_bound_or_justified")]
+    public void TestAliasLiteralsAreCatalogBoundOrJustified()
+    {
+        var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var testRoot = Path.Combine(repositoryRoot, "tests");
+        var catalogAliases = new[]
+        {
+            AgentCatalog.OpenAiSubscriptionModelAlias,
+            AgentCatalog.OpenAiSolSubscriptionModelAlias,
+            AgentCatalog.OpenAiTerraSubscriptionModelAlias,
+            AgentCatalog.OpenAiLunaSubscriptionModelAlias,
+            AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias
+        };
+
+        foreach (var path in Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories)
+                     .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) &&
+                                    !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)))
+        {
+            var relativePath = Path.GetRelativePath(repositoryRoot, path);
+            var lines = File.ReadAllLines(path);
+            for (var index = 0; index < lines.Length; index++)
+            {
+                foreach (var alias in catalogAliases)
+                {
+                    if (Regex.IsMatch(
+                            lines[index],
+                            $@"(?<![A-Za-z0-9-]){Regex.Escape(alias)}(?![A-Za-z0-9-])",
+                            RegexOptions.CultureInvariant))
+                    {
+                        Assert.True(
+                            lines[index].Contains("// Deliberate", StringComparison.Ordinal),
+                            $"{relativePath}:{index + 1} contains bare provider alias '{alias}'. Bind it to AgentCatalog or add an inline '// Deliberate ...' justification.");
+                    }
+                }
+            }
+        }
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_fixture_dispatch_matches_activated_agent_catalog")]
+    public void FixtureDispatchMatchesActivatedAgentCatalog()
+    {
+        var root = CreateGitRepository("mcg-steer-catalog-agreement");
+        var dispatchedAt = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
+
+        var (_, _, task) = RunningDeveloper(root, dispatchedAt, worktreeHead: null, sessionId: null);
+
+        AssertFixtureDispatchMatchesCatalog(
+            nameof(RunningDeveloper),
+            AgentCatalog.Default(),
+            AgentRole.Developer,
+            task.LastDispatch!);
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_fixture_catalog_mismatch_names_fixture_and_aliases")]
+    public void FixtureCatalogMismatchNamesFixtureAndAliases()
+    {
+        const string fixtureName = "negative-control-stale-developer-fixture";
+        var catalog = AgentCatalog.Default();
+        var expectedAlias = catalog.GetRequired(AgentRole.Developer).Subscription!.ModelAlias;
+        var staleAlias = string.Equals(expectedAlias, AgentCatalog.OpenAiSolSubscriptionModelAlias, StringComparison.OrdinalIgnoreCase)
+            ? AgentCatalog.OpenAiSubscriptionModelAlias
+            : AgentCatalog.OpenAiSolSubscriptionModelAlias;
+        var staleDispatch = new TaskDispatchRecord(
+            "codex-cli",
+            "fixture-command",
+            "fixture-worktree",
+            new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero),
+            "OpenAI",
+            staleAlias,
+            WorkerProviderKind: ProviderKind.OpenAICodexCli);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => AssertFixtureDispatchMatchesCatalog(
+            fixtureName,
+            catalog,
+            AgentRole.Developer,
+            staleDispatch));
+
+        Assert.Contains(fixtureName, exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"records model '{staleAlias}'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"catalog resolves model '{expectedAlias}'", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact(DisplayName = "ProgressiveReviewSteering_cancels_confirms_dead_then_warm_resumes_with_guidance")]
     public void CancelsConfirmsDeadThenWarmResumesWithGuidance()
     {
@@ -202,7 +318,7 @@ public sealed class ProgressiveReviewSteeringTests
                     root,
                     now.AddSeconds(2),
                     "OpenAI",
-                    "gpt-5.5",
+                    AgentCatalog.OpenAiSubscriptionModelAlias,
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
             },
             currentHead: head);
@@ -264,7 +380,7 @@ public sealed class ProgressiveReviewSteeringTests
                         root,
                         now.AddSeconds(2),
                         "OpenAI",
-                        "gpt-5.5",
+                        AgentCatalog.OpenAiSubscriptionModelAlias,
                         PromptPath: promptPath,
                         WorkerProviderKind: ProviderKind.OpenAICodexCli));
                 },
@@ -475,7 +591,7 @@ public sealed class ProgressiveReviewSteeringTests
                     root,
                     now.AddSeconds(2),
                     "OpenAI",
-                    "gpt-5.5",
+                    AgentCatalog.OpenAiSubscriptionModelAlias,
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
             },
             currentHead: head);
@@ -530,7 +646,7 @@ public sealed class ProgressiveReviewSteeringTests
                     root,
                     now.AddSeconds(2),
                     "OpenAI",
-                    "gpt-5.5",
+                    AgentCatalog.OpenAiSubscriptionModelAlias,
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
             },
             currentHead: head);
@@ -592,7 +708,7 @@ public sealed class ProgressiveReviewSteeringTests
                     root,
                     now.AddSeconds(2),
                     "OpenAI",
-                    "gpt-5.5",
+                    AgentCatalog.OpenAiSubscriptionModelAlias,
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
             },
             currentHead: head);
@@ -618,7 +734,7 @@ public sealed class ProgressiveReviewSteeringTests
         var preparedFresh = false;
         var agents = AgentCatalog.Default().Agents
             .Select(agent => agent.Role == AgentRole.Developer
-                ? agent with { Subscription = agent.Subscription! with { ModelAlias = "gpt-other" } }
+                ? agent with { Subscription = agent.Subscription! with { ModelAlias = DeliberatelyDifferentModelAlias } }
                 : agent)
             .ToArray();
 
@@ -644,7 +760,7 @@ public sealed class ProgressiveReviewSteeringTests
                     root,
                     now.AddSeconds(2),
                     "OpenAI",
-                    "gpt-other",
+                    DeliberatelyDifferentModelAlias,
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
             },
             currentHead: head);
@@ -694,7 +810,7 @@ public sealed class ProgressiveReviewSteeringTests
                     root,
                     now.AddSeconds(2),
                     "OpenAI",
-                    "gpt-5.5",
+                    AgentCatalog.OpenAiSubscriptionModelAlias,
                     WorkerProviderKind: ProviderKind.OpenAICodexCli));
             },
             currentHead: head);
@@ -939,7 +1055,7 @@ public sealed class ProgressiveReviewSteeringTests
                 root,
                 now.AddSeconds(2),
                 "OpenAI",
-                "gpt-5.5",
+                AgentCatalog.OpenAiSubscriptionModelAlias,
                 WorkerProviderKind: ProviderKind.OpenAICodexCli)),
             currentHead: head);
 
@@ -1062,7 +1178,7 @@ public sealed class ProgressiveReviewSteeringTests
             root,
             dispatchedAt,
             "OpenAI",
-            "gpt-5.5",
+            AgentCatalog.OpenAiSubscriptionModelAlias,
             TaskComplexity: TaskComplexity.Complex,
             PromptCharacterCount: 1234,
             PromptPath: Path.Combine(root, ".orchestrator", "prompts", "initial.md"),
@@ -1073,6 +1189,7 @@ public sealed class ProgressiveReviewSteeringTests
             ReviewFindingTouchedAnchors: reviewFindingTouchedAnchors,
             ReviewFindingTouchProofDiagnostic: reviewFindingTouchProofDiagnostic,
             ReviewRetryCap: reviewRetryCap));
+        AssertFixtureDispatchMatchesCatalog(nameof(RunningDeveloper), AgentCatalog.Default(), role, task.LastDispatch!);
         var process = new TaskProcessRecord(
             6001,
             task.LastDispatch!.Command,
@@ -1090,6 +1207,27 @@ public sealed class ProgressiveReviewSteeringTests
             clock.Advance(offset);
         }
         return (kernel, goal, task);
+    }
+
+    private static void AssertFixtureDispatchMatchesCatalog(
+        string fixtureName,
+        AgentCatalog catalog,
+        AgentRole role,
+        TaskDispatchRecord dispatch)
+    {
+        var agent = catalog.GetRequired(role);
+        var subscription = agent.Subscription
+            ?? throw new InvalidOperationException($"Fixture '{fixtureName}' activates role '{role}', which has no subscription profile.");
+        var expectedProvider = WorkerProviderCatalog.Default()
+            .ResolveProfile(subscription.WorkerProfileName)
+            .Identity.Kind;
+        if (dispatch.WorkerProviderKind != expectedProvider ||
+            !string.Equals(dispatch.ModelName, subscription.ModelAlias, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Fixture '{fixtureName}' records provider '{dispatch.WorkerProviderKind}' and records model '{dispatch.ModelName}', " +
+                $"but catalog role '{role}' resolves provider '{expectedProvider}' and catalog resolves model '{subscription.ModelAlias}'.");
+        }
     }
 
     private static ProgressiveReviewSteerIntent Intent(Goal goal, TaskSpec task, DateTimeOffset now, string guidance) =>

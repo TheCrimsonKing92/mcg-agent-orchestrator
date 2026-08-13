@@ -64,7 +64,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         "tests: not-run",
         "commit: none",
         "blockers: API rate limit hit while running a local verification fixture",
-        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: none",
         "confidence: medium",
         "END_WORKER_RESULT");
@@ -593,7 +593,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
     var task = goal.Tasks.First(task => task.RequiredRole == AgentRole.Developer);
     File.WriteAllText(stdout, "WORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT");
-    File.WriteAllText(stderr, "Rate limit reached for gpt-5.5. Please try again in 42s.");
+    File.WriteAllText(stderr, "Rate limit reached for gpt-5.5. Please try again in 42s."); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
     File.WriteAllText(exit, "0");
     kernel.RecordTaskDispatch(
         goal.Id,
@@ -1360,7 +1360,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         "tests: fail - timed out",
         "commit: none",
         "blockers: full Infrastructure no-build timed out at 214s",
-        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: dotnet-windows-build-hygiene",
         "confidence: medium",
         "END_WORKER_RESULT"));
@@ -1372,7 +1372,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         root,
         now.AddMinutes(-5),
         "OpenAI",
-        "gpt-5.5",
+        AgentCatalog.OpenAiSubscriptionModelAlias,
         WorkerProviderKind: ProviderKind.OpenAICodexCli));
     var process = new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null);
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
@@ -1992,7 +1992,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         new AgentId($"codex-{role.ToString().ToLowerInvariant()}"),
         $"Codex {role}",
         role,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
@@ -2091,7 +2091,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         new AgentId($"codex-{role.ToString().ToLowerInvariant()}"),
         $"Codex {role}",
         role,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
@@ -3186,7 +3186,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     [Xunit.Fact(DisplayName = "WorkerResultParser_successful_result_rejects_no_opener_files_plus_tests_only")]
     public void WorkerResultParserSuccessfulResultRejectsNoOpenerFilesPlusTestsOnly()
 {
-    var output = """
+    var output = $"""
         Completed work summary:
         files: src/Feature.cs
         tests: Passed: 2, Failed: 0
@@ -3207,7 +3207,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         commands: dotnet test --filter WorkerDispatch
         tests: Passed: 2, Failed: 0
         blockers: none
-        model_fit: OpenAI/gpt-5.5 - adequate - parser regression
+        model_fit: OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias} - adequate - parser regression
         skills: dotnet-windows-build-hygiene
         confidence: high
         """;

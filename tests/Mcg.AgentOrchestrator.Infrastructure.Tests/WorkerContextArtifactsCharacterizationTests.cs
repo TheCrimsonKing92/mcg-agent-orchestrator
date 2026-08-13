@@ -30,21 +30,21 @@ public sealed class WorkerContextArtifactsCharacterizationTests
             "dotnet test --filter FeatureService",
             workingDirectory,
             0,
-            """
+            $"""
             WORKER_RESULT:
             files: src/Feature/FeatureService.cs, tests/Feature.Tests/FeatureServiceTests.cs
             commands: dotnet test --filter FeatureService
             tests: pass focused FeatureService tests
             commit: none
             blockers: none
-            model_fit: OpenAI/gpt-5.5 - adequate - characterization fixture
+            model_fit: OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias} - adequate - characterization fixture
             skills: dotnet-windows-build-hygiene
             confidence: high
             END_WORKER_RESULT
             """,
             string.Empty,
             DateTimeOffset.Parse("2026-01-01T00:02:00Z"),
-            "Model fit: OpenAI/gpt-5.5 - adequate - characterization fixture."));
+            $"Model fit: OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias} - adequate - characterization fixture."));
         goal = kernel.GetGoal(goal.Id);
         var preflight = new[] { "profile catalog valid" };
 
@@ -75,14 +75,14 @@ public sealed class WorkerContextArtifactsCharacterizationTests
             "verify",
             CreateTempDirectory(),
             0,
-            """
+            $"""
             WORKER_RESULT:
             files: src/A.cs, tests/A.cs
             commands: dotnet test
             tests: pass
             commit: none
             blockers: none
-            model_fit: OpenAI/gpt-5.5 - adequate - parser characterization
+            model_fit: OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias} - adequate - parser characterization
             skills: dotnet-windows-build-hygiene
             confidence: high
             END_WORKER_RESULT
@@ -109,14 +109,14 @@ public sealed class WorkerContextArtifactsCharacterizationTests
             "verify",
             CreateTempDirectory(),
             0,
-            """
+            $"""
             WORKER_RESULT:
             files: src/A.cs
             commands: dotnet test
             tests: pass - prior retry mentioned failed and timed out prose
             commit: abc123
             blockers: none - no blockers remain
-            model_fit: OpenAI/gpt-5.5 - adequate - parser characterization
+            model_fit: OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias} - adequate - parser characterization
             skills: dotnet-windows-build-hygiene
             confidence: high
             END_WORKER_RESULT

@@ -148,7 +148,7 @@ public sealed class InquiryDispatcherTests
         ProviderKind providerKind,
         string workerName,
         string? sessionId = "parent-session-1234",
-        string? modelName = "gpt-5.5")
+        string? modelName = AgentCatalog.OpenAiSubscriptionModelAlias)
     {
         var repo = Path.Combine(root, "repo");
         Directory.CreateDirectory(repo);
@@ -167,7 +167,7 @@ public sealed class InquiryDispatcherTests
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
         kernel.ActivateGoal(goal.Id, [agent]);
         var task = goal.Tasks.Single();
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(

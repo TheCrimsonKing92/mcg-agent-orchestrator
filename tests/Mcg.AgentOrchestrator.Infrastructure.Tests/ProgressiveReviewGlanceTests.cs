@@ -854,7 +854,7 @@ public sealed class ProgressiveReviewGlanceTests
         var fallbackSelection = SubscriptionCliProgressiveReviewGlanceRunner.SelectProfile(
             new WorkerProfileCatalog([WorkerProfileCatalog.Default().GetRequired("codex-cli")]));
         Xunit.Assert.Equal("codex-cli", fallbackSelection.ProfileName);
-        Xunit.Assert.Equal("gpt-5.5", fallbackSelection.ModelAlias);
+        Xunit.Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, fallbackSelection.ModelAlias);
 
         var command = SubscriptionCliCompleter.SubstitutePlaceholders(
             WorkerProfileCatalog.Default().GetRequired("codex-spark").CommandTemplate,

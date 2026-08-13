@@ -214,7 +214,7 @@ public sealed class TaskBriefTests
 
     Assert.True(provider.LastRequest is not null);
     Assert.Contains("/api/source-survey?max=8", provider.LastRequest!.Messages.Single().Content, StringComparison.Ordinal);
-    Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", provider.LastRequest!.Messages.Single().Content, StringComparison.Ordinal);
+    Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", provider.LastRequest!.Messages.Single().Content, StringComparison.Ordinal); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_trims_noisy_goal_and_task_primary_context")]
     public void BuildTaskBriefTrimsNoisyGoalAndTaskPrimaryContext()
@@ -386,7 +386,7 @@ public sealed class TaskBriefTests
     var prompt = provider.LastRequest!.Messages.Single().Content;
     Assert.Contains("Response guidance: Keep the response evidence-focused", prompt, StringComparison.Ordinal);
     Assert.Contains("omit generic progress and long logs", prompt, StringComparison.Ordinal);
-    Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", prompt, StringComparison.Ordinal);
+    Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate|overkill|underpowered - <task shape> - <short reason>", prompt, StringComparison.Ordinal); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 }
     [Xunit.Fact(DisplayName = "BuildTaskBrief_includes_pending_human_input_and_verification")]
     public void BuildTaskBriefIncludesPendingHumanInputAndVerification()
@@ -1740,7 +1740,7 @@ static string SectionFrom(string value, string heading)
 static IReadOnlyList<AgentDefinition> DefaultAgents()
 {
     static ModelProfile OpenAi(string reasoningEffort) =>
-        new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort);
+        new("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort);
 
     return
     [

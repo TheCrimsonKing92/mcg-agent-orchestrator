@@ -257,7 +257,7 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
         "C:\\repo",
         DateTimeOffset.Parse("2026-06-01T15:00:00Z"),
         "OpenAI",
-        "gpt-5.5",
+        AgentCatalog.OpenAiSubscriptionModelAlias,
         "high",
         TaskComplexity.Simple,
         123,
@@ -294,7 +294,7 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
         new AgentId(role.ToString().ToLowerInvariant()),
         role.ToString(),
         role,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single(candidate => candidate.RequiredRole == role);
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, clock.UtcNow));
@@ -339,7 +339,7 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
         new AgentId(role.ToString().ToLowerInvariant()),
         role.ToString(),
         role,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
     kernel.ActivateGoal(goal.Id, [agent]);
 
     var worktree = GoalWorktrees.Ensure(root, goal.Id);
@@ -453,17 +453,17 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
         new AgentId(id),
         name,
         AgentRole.Planner,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
 
     protected static AgentDefinition SubscriptionDeveloperAgent() => new(
         new AgentId("developer"),
         "Developer",
         AgentRole.Developer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
 
     protected static bool RealClaudeLauncherExists(string executable) =>
         executable.Equals("claude", StringComparison.OrdinalIgnoreCase);
@@ -1190,9 +1190,9 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             new AgentId("researcher"),
             "Researcher",
             AgentRole.Researcher,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "low"));
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
         var plannerAgent = SubscriptionPlannerAgent("planner", "Planner");
         kernel.ActivateGoal(goal.Id, [researcherAgent, plannerAgent]);
         var researcher = kernel.GetTask(goal.Id, researchSpec.Id);
@@ -1646,7 +1646,7 @@ protected static string WorkerResultBlock(
     string tests,
     string commit = "{commit}",
     string blockers = "none",
-    string modelFit = "OpenAI/gpt-5.5 - adequate - test worker fixture.",
+    string modelFit = "OpenAI/gpt-5.5 - adequate - test worker fixture.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
     string skills = "dotnet-windows-build-hygiene",
     string confidence = "high")
 {

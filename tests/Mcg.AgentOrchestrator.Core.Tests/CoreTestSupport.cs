@@ -4,10 +4,14 @@ using Mcg.AgentOrchestrator.Core;
 
 internal static class CoreTestData
 {
+    public const string OpenAiSubscriptionModelAlias = "gpt-5.5"; // Deliberate cross-layer pin: Core tests cannot reference Infrastructure's AgentCatalog authority.
+    public const string OpenAiSolSubscriptionModelAlias = "gpt-5.6-sol"; // Deliberate cross-layer pin: Core tests cannot reference Infrastructure's AgentCatalog authority.
+    public const string StaleOpenAiCodexSubscriptionModelAlias = "gpt-5.3-codex"; // Deliberate persistence-compatibility pin for records created by the retired Codex alias.
+
     public static IReadOnlyList<AgentDefinition> DefaultAgents()
     {
         static ModelProfile OpenAi(string reasoningEffort) =>
-            new("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort);
+            new("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, reasoningEffort);
 
         return
         [

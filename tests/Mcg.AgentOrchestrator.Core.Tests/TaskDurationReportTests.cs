@@ -224,7 +224,7 @@ public sealed class TaskDurationReportTests
             WorkDir,
             at,
             ProviderName: "OpenAI",
-            ModelName: "gpt-5.5",
+            ModelName: OpenAiSubscriptionModelAlias,
             TaskComplexity: TaskComplexity.Complex);
 
     private static TaskVerificationRecord Verification(int exitCode, DateTimeOffset at) =>

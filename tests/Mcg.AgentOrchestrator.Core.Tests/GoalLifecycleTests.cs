@@ -915,7 +915,7 @@ static AgentDefinition TestAgent(string id, string name, AgentRole role) =>
         new AgentId(id),
         name,
         role,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+        new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
 
     [Xunit.Fact(DisplayName = "Snapshot_roundtrip_preserves_verification_plan")]
     public void SnapshotRoundtripPreservesVerificationPlan()

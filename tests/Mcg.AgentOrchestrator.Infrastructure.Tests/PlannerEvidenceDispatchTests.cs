@@ -39,7 +39,7 @@ public sealed class PlannerEvidenceDispatchTests
             "tests: not-run - planning requires operator evidence",
             "commit: none",
             "blockers: operator evidence required",
-            "model_fit: OpenAI/gpt-5.5 - adequate - planning",
+            "model_fit: OpenAI/gpt-5.5 - adequate - planning", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             "skills: none",
             "confidence: high",
             "END_WORKER_RESULT"));

@@ -39,8 +39,9 @@ Repository-wide production C# scan used co-occurrence searches for transaction/l
 
 ### Scanned
 
-- Persistence stores other than orchestrator state (`BacklogStore`, `CollaborationItemStore`, `DogfoodLogStore`, `RunEventStore`, `ProgressiveReviewSteeringStore`). Reason: searches found short transaction/busy-retry mechanics but not verified transaction scopes spanning dispatch/model/process/network completion.
+- Persistence stores other than orchestrator state (`BacklogStore`, `CollaborationItemStore`, `DogfoodLogStore`, `RunEventStore`, `PortfolioStore`, `ProgressiveReviewSteeringStore`). Reason: searches found short transaction/busy-retry mechanics but not verified transaction scopes spanning dispatch/model/process/network completion.
 - Operator communications (`DiscordGatewayListener`, `DiscordControlPlaneDeliverer`, message transports, dead-man heartbeat, steward dispatcher). Reason: network calls were found, but no state transaction or global mutation gate was verified around the HTTP/Discord calls in this pass.
+- Remote git mirror and worktree helpers. Reason: process/git calls are present, but the primary mirror worker is backgrounded and no state.db write transaction was verified across remote push completion in this pass.
 - Provider registry and smoke checks. Reason: synchronous HTTP probes exist, but they are startup/diagnostic checks rather than mutation-gated submission/completion paths.
 - Dashboard monitoring streams. Reason: polling loops are explicit streaming/read surfaces and were not found holding dashboard mutation state.
 

@@ -301,6 +301,8 @@ public sealed class BackgroundDispatchRunner
         var prepExitCodePath = useSandbox ? Path.Combine(logRoot, $"{prefix}.prep.exit.txt") : null;
 
         var dispatchHostCommand = RewriteRealWorkerCommandForTests(dispatch.Command, IsTestRealWorkerCommandRewriteEnabled());
+        var egressProxyOptions = CodexEgressProxyOptions.FromEnvironment();
+
         if (useSandbox)
         {
             DispatchProcessHost.WritePrepRecord(prepRecordPath!, new DispatchProcessHost.DispatchPrepRecord(
@@ -332,6 +334,10 @@ public sealed class BackgroundDispatchRunner
             ProviderSessionId: dispatch.ProviderSessionId,
             WorktreeHeadSha: dispatch.WorktreeHeadSha,
             DirtyStateHash: dispatch.DirtyStateHash,
+            CodexEgressProxyEnabled: egressProxyOptions.Enabled,
+            CodexEgressProxyEnforce: egressProxyOptions.Enforce,
+            CodexEgressProxyIdleTimeoutMs: egressProxyOptions.IdleTimeoutMs,
+            CodexEgressProxyConnectTimeoutMs: egressProxyOptions.ConnectTimeoutMs,
             Kind: DispatchProcessHost.WorkerDispatchKind,
             PrepGoalId: useSandbox ? goalId.Value : null,
             PrepTaskId: useSandbox ? taskId.Value : null,
