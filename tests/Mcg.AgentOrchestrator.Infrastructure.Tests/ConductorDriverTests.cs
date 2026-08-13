@@ -5958,8 +5958,8 @@ public sealed class ConductorDriverTests
             $"outcome={result.Outcome}; escalation={escalation ?? "none"}");
         Assert.Null(retryRoundKind);
         Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
-        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
-        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, tester.Status);
+        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
         Assert.DoesNotContain("contract-repair", retryMessage, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("suppression=missing-system-derived-round-diff-proof", retryMessage, StringComparison.Ordinal);
         Assert.Contains("open_count: 15", retryMessage, StringComparison.Ordinal);
