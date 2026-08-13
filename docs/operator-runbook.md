@@ -378,20 +378,6 @@ git merge --no-ff goal/<goal-prefix>
 
 Use this only after reviewing the diff and confirming the branch is the intended `goal/<prefix>`. Pre-landing verification merges happen on a scratch branch such as `verify/<prefix>`, never on `main`; `main` moves only at the actual landing step. Until the c0624af9 verification fix lands, a goal can reach `Verified` without executed self-tests, so before any hand-landing run the goal's own new/changed test classes and keep the receipts. `goal-mark-landed` records the out-of-band merge, writes a durable retired terminal disposition, and lets the conductor continue record/cleanup steps; it is not a replacement for acceptance or review.
 
-### 6.2.2 Optional remote mirror
-
-Remote mirroring is disabled unless `config/mirror.json` opts in. The file names git remotes already configured in the repository; the conductor uses plain `git push`, so it works with GitHub, GitLab, Gitea, Bitbucket, and bare SSH/filesystem remotes without forge APIs.
-
-```json
-{
-  "enabled": true,
-  "remotes": ["origin", "backup"],
-  "push": { "main": true, "goalBranch": true, "tags": true }
-}
-```
-
-After a durable landing, the conductor enqueues mirror debt and starts a trusted background mirror worker; later conduct/reconcile ticks start the same background worker for due retries. The terminal sweep does not run `git push` inline. Each remote is independent: reachable remotes can push while unreachable/auth-failing remotes record `conductor:mirror:<remote>` as `MirrorFailed classification=TRANSIENT` and retry on later ticks with backoff. Mirror state lives in `.orchestrator/git-mirror-state.json`; mirror failure never escalates the goal or blocks record/cleanup.
-
 ### 6.3 Concurrency caps
 
 Three independent constraints bound useful parallelism:
@@ -400,7 +386,7 @@ Three independent constraints bound useful parallelism:
 
 **Build capacity and test artifacts.** Builds share two machine-wide file locks under the isolated dotnet root. Test execution is not slot-confined: acceptance receipts live beneath `.orchestrator/acceptance-gate-attempts/<goal-id>/`, pre-review focused receipts beneath `.orchestrator/pre-review-evidence-attempts/<goal-id>/`, and operator test commands use invocation-owned directories. Both receipt roots follow the goal artifact retention plan and `Show-TestDurations.ps1` reads both by default. Per-goal build artifacts remain reusable under the isolated dotnet goal root.
 
-After the slot-free gate has soaked cleanly for at least three days, an administrator may remove the obsolete inbound rules once:
+The stable-slot testhost firewall rules from the pre-MTP era are still installed and are deliberately left in place. After the slot-free gate has soaked cleanly for at least three days, an administrator may remove the obsolete inbound rules once from an elevated PowerShell session; `scripts/Remove-TestSlotFirewallRules.ps1` is the recorded reversal procedure:
 
 ```powershell
 .\scripts\Remove-TestSlotFirewallRules.ps1
