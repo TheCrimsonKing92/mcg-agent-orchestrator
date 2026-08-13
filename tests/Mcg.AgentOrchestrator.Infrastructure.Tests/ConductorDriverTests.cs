@@ -354,7 +354,15 @@ public sealed class ConductorDriverTests
         return result.Output.Trim();
     }
 
-    private static (string WorkingDirectory, string Head) CreateSeededGitRepository()
+    private sealed record SeededGitRepository(string WorkingDirectory, string Head) : IDisposable
+    {
+        public void Dispose()
+        {
+            try { Directory.Delete(WorkingDirectory, recursive: true); } catch { }
+        }
+    }
+
+    private static SeededGitRepository CreateSeededGitRepository()
     {
         var workingDirectory = CreateTempDirectory();
         RunGit(workingDirectory, "init");
@@ -364,7 +372,7 @@ public sealed class ConductorDriverTests
         RunGit(workingDirectory, "add", "seed.txt");
         RunGit(workingDirectory, "commit", "-m", "seed");
         var head = ReadGit(workingDirectory, "rev-parse", "HEAD");
-        return (workingDirectory, head);
+        return new SeededGitRepository(workingDirectory, head);
     }
 
     private static int CountOccurrences(string value, string expected)
@@ -5835,10 +5843,11 @@ public sealed class ConductorDriverTests
             CliArgumentParser.SplitCommand(command));
     }
 
-    [Xunit.Fact(DisplayName = "Equal SHA identity violations consume mechanical repair budget")]
+    [Xunit.Fact(DisplayName = "Equal SHA noncanonicalizable identity violations consume mechanical repair budget")]
     public void IdentityViolations_EqualShaProof_ConsumeRepairBudget()
     {
-        var (workingDirectory, unchangedCommit) = CreateSeededGitRepository();
+        using var repository = CreateSeededGitRepository();
+        var (workingDirectory, unchangedCommit) = repository;
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
@@ -5929,6 +5938,7 @@ public sealed class ConductorDriverTests
             reviewer.LastVerification!.ReviewFindingContractViolation);
         Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, violation.Code);
         Assert.Equal(2, violation.IdentityMismatches!.Count);
+        Assert.Null(reviewer.LastVerification.MergedReviewFindings);
 
         TaskId? retriedTaskId = null;
         string? retryMessage = null;
@@ -6017,7 +6027,8 @@ public sealed class ConductorDriverTests
     [Xunit.Fact(DisplayName = "Equal SHA untouched reopen consumes mechanical repair budget")]
     public void UntouchedReopen_ComputedEmptyProof_ConsumesRepairBudget()
     {
-        var (workingDirectory, unchangedCommit) = CreateSeededGitRepository();
+        using var repository = CreateSeededGitRepository();
+        var (workingDirectory, unchangedCommit) = repository;
         var (kernel, goal) = SoftwareGoal();
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
