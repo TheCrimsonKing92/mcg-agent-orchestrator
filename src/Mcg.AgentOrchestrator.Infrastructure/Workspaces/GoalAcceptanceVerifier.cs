@@ -207,6 +207,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
     private const string ProviderEnvironmentTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
+    private const string CliTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
     private const int MaxFocusedEvidenceFilterLength = 1024;
     internal const string FocusedEvidenceSupportedProjectForms =
         "Core, Core.Tests, Mcg.AgentOrchestrator.Core.Tests, Infrastructure, Infrastructure.Tests, " +
@@ -222,12 +223,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
-        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
-        [AppProject] = [InfrastructureTestsProject, ProviderEnvironmentTestsProject],
+        [CoreProject] = [InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [AppProject] = [InfrastructureTestsProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [CoreTestsProject] = [],
         [InfrastructureTestsProject] = [],
-        [ProviderEnvironmentTestsProject] = []
+        [ProviderEnvironmentTestsProject] = [],
+        [CliTestsProject] = []
     };
 
     public static StartupContract ValidateStartupContract(string repositoryRoot)
@@ -309,7 +311,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AppProject,
         CoreTestsProject,
         InfrastructureTestsProject,
-        ProviderEnvironmentTestsProject
+        ProviderEnvironmentTestsProject,
+        CliTestsProject
     ];
 
     public GoalAcceptanceVerifier() : this(RunProcessAsync, TimeProvider.System) { }
@@ -2497,6 +2500,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return CoreTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/", StringComparison.OrdinalIgnoreCase))
             return ProviderEnvironmentTestsProject;
+        if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/", StringComparison.OrdinalIgnoreCase))
+            return CliTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/", StringComparison.OrdinalIgnoreCase))
             return InfrastructureTestsProject;
         return null;
