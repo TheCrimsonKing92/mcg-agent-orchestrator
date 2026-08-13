@@ -1562,12 +1562,18 @@ internal sealed class ConductorDriver
             return false;
         }
 
+        var identityMoveHasIdenticalReviewedCommitProof =
+            violation.Code == ReviewFindingConvergence.IdentityMovedViolationCode &&
+            HasIdenticalReviewedCommitAsCarriedRound(goal, reviewerTask);
         if ((violation.Code is ReviewFindingConvergence.IdentityMovedViolationCode or
                 ReviewFindingConvergence.RecycledAnchorIdentityViolationCode) &&
-            reviewerTask.LastVerification.MergedReviewFindings is not null)
+            reviewerTask.LastVerification.MergedReviewFindings is not null &&
+            !identityMoveHasIdenticalReviewedCommitProof)
         {
             // The kernel retained the prior form of the invalid transition and accepted the rest of
             // the substantive round. Let normal Reviewer/Tester convergence route its real blockers.
+            // An identity move at the same reviewed commit is different: its empty touch proof is
+            // determinate, so it must consume the existing contract-repair budget.
             return false;
         }
 
@@ -1640,6 +1646,31 @@ internal sealed class ConductorDriver
             null,
             RetryRoundKind.Mechanical);
         return true;
+    }
+
+    private static bool HasIdenticalReviewedCommitAsCarriedRound(Goal goal, TaskSpec reviewerTask)
+    {
+        var currentVerification = reviewerTask.LastVerification;
+        if (string.IsNullOrWhiteSpace(currentVerification?.ReviewedCommit))
+        {
+            return false;
+        }
+
+        var carriedRound = goal.Tasks
+            .Where(candidate => candidate.RequiredRole == reviewerTask.RequiredRole)
+            .SelectMany(candidate => candidate.VerificationHistory)
+            .Where(verification =>
+                !Equals(verification, currentVerification) &&
+                verification.CompletedAt <= currentVerification.CompletedAt &&
+                verification.MergedReviewFindings is not null)
+            .OrderByDescending(verification => verification.CompletedAt)
+            .FirstOrDefault();
+
+        return !string.IsNullOrWhiteSpace(carriedRound?.ReviewedCommit) &&
+            string.Equals(
+                carriedRound.ReviewedCommit.Trim(),
+                currentVerification.ReviewedCommit.Trim(),
+                StringComparison.OrdinalIgnoreCase);
     }
 
     private bool TryBuildVerifyingFindingAutoRetry(
