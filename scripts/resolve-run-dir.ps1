@@ -108,10 +108,12 @@ if ((-not (Test-Path -LiteralPath (Join-Path $run $leaf))) -or (-not (Test-Nativ
 Assert-NativeSqliteAssetPresent -Path $run -Context 'isolated run directory'
 
 # Best-effort prune of old, unused run copies. A copy a process is actively running has its dll locked,
-# so its directory survives the delete; only abandoned copies are removed.
+# so its directory survives the delete; only abandoned copies are removed. The window only has to outlast
+# a single conductor lifetime -- an abandoned copy is reproducible from the build hash naming it -- and at
+# one bounce per landing a longer window costs gigabytes.
 if (Test-Path -LiteralPath $base) {
     foreach ($dir in (Get-ChildItem -LiteralPath $base -Directory)) {
-        if ($dir.LastWriteTime -lt (Get-Date).AddDays(-7)) {
+        if ($dir.LastWriteTime -lt (Get-Date).AddDays(-1)) {
             Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
