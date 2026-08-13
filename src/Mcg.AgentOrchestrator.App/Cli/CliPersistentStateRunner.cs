@@ -484,7 +484,7 @@ internal static class CliPersistentStateRunner
             "backlog-update" or "backlog-annotate" or "backlog-close" or
             "backlog-supersede" or "backlog-unsupersede" or "backlog-link" or "backlog-reopen" or "backlog-view" or
             "cleanup-status" or
-            "firewall-setup" or "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
+            "repo-process-info" or "repo-process-stop" or "stable-slot-dotnet" or
             "gate-status" or "acceptance-engine" or "run-event" or
             "project" => true,
             _ => false,
@@ -875,7 +875,6 @@ internal static class CliPersistentStateRunner
             }
 
             GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, sweepKernel);
-            RemoteGitMirror.TryStartBackgroundProcessing(sweepKernel, workspace.ExecutionDirectory, watchGoalId);
         }
         catch (Exception ex)
         {
@@ -2226,7 +2225,6 @@ internal static class CliPersistentStateRunner
         var runner = new BackgroundDispatchRunner();
         var reconciled = runner.SweepExitedProcesses(kernel);
         GoalWorktreeOrphanSweepScheduler.SweepIfDue(workspace.ExecutionDirectory, kernel);
-        RemoteGitMirror.TryStartBackgroundProcessing(kernel, workspace.ExecutionDirectory);
         Console.WriteLine($"Reconciled dispatches: {reconciled}");
 
         var results = CaptureRefreshResults(kernel, candidates);

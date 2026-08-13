@@ -2,7 +2,7 @@
 # directory to stdout. The launcher runs `dotnet <run-dir>\App.dll` so a live run holds its own copy
 # instead of the in-tree output -- leaving the in-tree binary free to rebuild while something runs, so
 # builds and real runs stop interfering. Content-addressed by the complete app output: identical builds reuse
-# one copy, while any changed dependency/config/head marker gets a fresh one. Copies unused for 7 days are pruned (a live copy's dll is locked, so
+# one copy, while any changed dependency/config/head marker gets a fresh one. Copies unused for a day are pruned (a live copy's dll is locked, so
 # it survives the prune). The copy is valid only when the native SQLite asset is present too; otherwise the
 # launcher fails before running an orchestrator command that would later hit DllNotFoundException.
 param([Parameter(Mandatory = $true)][string]$Dll)
@@ -108,10 +108,12 @@ if ((-not (Test-Path -LiteralPath (Join-Path $run $leaf))) -or (-not (Test-Nativ
 Assert-NativeSqliteAssetPresent -Path $run -Context 'isolated run directory'
 
 # Best-effort prune of old, unused run copies. A copy a process is actively running has its dll locked,
-# so its directory survives the delete; only abandoned copies are removed.
+# so its directory survives the delete; only abandoned copies are removed. The window only has to outlast
+# a single conductor lifetime -- an abandoned copy is reproducible from the build hash naming it -- and at
+# one bounce per landing a longer window costs gigabytes.
 if (Test-Path -LiteralPath $base) {
     foreach ($dir in (Get-ChildItem -LiteralPath $base -Directory)) {
-        if ($dir.LastWriteTime -lt (Get-Date).AddDays(-7)) {
+        if ($dir.LastWriteTime -lt (Get-Date).AddDays(-1)) {
             Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
         }
     }

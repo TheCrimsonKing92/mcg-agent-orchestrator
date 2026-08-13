@@ -855,8 +855,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             ConsoleViews.PrintGoal(
                 context.CurrentGoal,
                 ResolveGoalFriendlyLabel(context.CurrentGoal, context.Workspace.BacklogStorePath),
-                ResolveGoalStatusText(context.Workspace, context.CurrentGoal),
-                new PortfolioStore(context.Workspace.PortfolioStorePath).GetGoalMembershipAsync(context.CurrentGoal.Id.Value).GetAwaiter().GetResult());
+                ResolveGoalStatusText(context.Workspace, context.CurrentGoal));
             PrintGoalCleanupBackoffStatus(context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
             return false;
 
@@ -1526,7 +1525,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     RunEventMaintenanceCadence.TryRunIfDue(
                         context.Workspace.RunEventStorePath,
                         context.Workspace.ConductEventsLogPath);
-                    RemoteGitMirror.TryStartBackgroundProcessing(loopKernel, context.Workspace.ExecutionDirectory);
                     return terminalSweep;
                 }
                 GoalStatus? resolveEvictedGoalStatus(string goalId)
@@ -1647,7 +1645,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     }
 
                     watchReaper.SweepExitedProcesses(wk, context.CurrentGoal.Id);
-                    RemoteGitMirror.TryStartBackgroundProcessing(wk, context.Workspace.ExecutionDirectory, context.CurrentGoal.Id);
                     var g = wk.Goals.FirstOrDefault(x => x.Id.Value == watchGoalId);
                     if (g is not null) { try { GoalManagementCommandService.RefreshDispatches(wk, g, watchReaper); } catch { } }
                 };

@@ -69,7 +69,7 @@ unchanged. The parent project excludes the `Cli` directory, making each moved so
 one test assembly.
 
 The remaining `CliCommandTests*` classes stay in the umbrella project. Attention, backlog intake, goal
-revision, human-input supersede, portfolio, and refresh-dispatch tests use workspace, store, dashboard
+revision, human-input supersede, and refresh-dispatch tests use workspace, store, dashboard
 projection, synthetic dispatch, or process-wide environment helpers. Goal lifecycle, persistent runner,
 subscription dispatch, and terminal sweep tests retain the `GoalWorktreeCleanupHooks` boundary. `CliHelpTests`
 and `GitCliTests` retain their real-process boundary. In particular,
@@ -100,8 +100,8 @@ and the focused/standard gate results remain acceptance-owned measurements reque
 | Goal acceptance verifier; Goal acceptance build slots | `Infrastructure.GoalAcceptance.Tests` | Nested verifier/build activity. Retain `xunit:GoalAcceptanceVerifier` and `xunit:JobAccounting`. |
 | Provider environment | `Infrastructure.ProviderEnvironment.Tests` | Extracted first slice; environment-mutation boundary described above. |
 | Remainder balance A | `Infrastructure.Persistence.Tests` | `RunEventStoreTests` is persistence work; move other store/state classes from the final remainder here. |
-| Remainder balance B | Split by ownership, never copied as a lane | `RunGoalService`, monitoring, and operator-channel cases join GoalLifecycle; verification/dispatch-recovery cases join WorkerRuntime; toolchain, isolated-dotnet, alias, and egress-proxy cases join ProcessAndToolchain; state/performance joins Persistence; Discord joins Integrations; progressive-review glance joins ReviewWorkflow. |
-| Remainder | Split into `Infrastructure.Planning.Tests`, `Infrastructure.Persistence.Tests`, `Infrastructure.Integrations.Tests`, `Infrastructure.ReviewWorkflow.Tests`, and `Infrastructure.TestHarness.Tests` | Assign by production namespace and fixture: goal/DAG/refinement/portfolio classes to Planning; stores and decision spine to Persistence; Discord/provider integrations to Integrations; pre-review/steward/provenance/model-outcome classes to ReviewWorkflow; source guards, baseline, test-coverage, and runner contract classes to TestHarness. Generate positive class filters during each extraction; do not preserve the negative catch-all. |
+| Remainder balance B | Split by ownership, never copied as a lane | `RunGoalService`, monitoring, and operator-channel cases join GoalLifecycle; verification/dispatch-recovery cases join WorkerRuntime; toolchain, isolated-dotnet, and alias cases join ProcessAndToolchain; state/performance joins Persistence; Discord joins Integrations; progressive-review glance joins ReviewWorkflow. |
+| Remainder | Split into `Infrastructure.Planning.Tests`, `Infrastructure.Persistence.Tests`, `Infrastructure.Integrations.Tests`, `Infrastructure.ReviewWorkflow.Tests`, and `Infrastructure.TestHarness.Tests` | Assign by production namespace and fixture: goal/DAG/refinement classes to Planning; stores and decision spine to Persistence; Discord/provider integrations to Integrations; pre-review/steward/provenance/model-outcome classes to ReviewWorkflow; source guards, baseline, test-coverage, and runner contract classes to TestHarness. Generate positive class filters during each extraction; do not preserve the negative catch-all. |
 
 Each later extraction follows the same gate: nest the project below
 `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/` and name it

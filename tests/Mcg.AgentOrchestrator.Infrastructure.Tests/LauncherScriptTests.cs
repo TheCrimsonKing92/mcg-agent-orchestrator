@@ -831,6 +831,50 @@ public sealed class LauncherScriptTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ResolveRunDir_prunes_abandoned_copies_older_than_one_day")]
+    public void ResolveRunDirPrunesAbandonedCopiesOlderThanOneDay()
+    {
+        var repoRoot = FindLauncherSourceRoot();
+        var root = Path.Combine(Path.GetTempPath(), $"resolve-run-dir-{Guid.NewGuid():N}");
+        var appOutput = Path.Combine(root, "app");
+        Directory.CreateDirectory(Path.Combine(appOutput, "runtimes", "win-x64", "native"));
+        try
+        {
+            var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
+            File.WriteAllText(appDll, "fake app");
+            File.WriteAllText(
+                Path.Combine(appOutput, "runtimes", "win-x64", "native", "e_sqlite3.dll"),
+                "native");
+
+            // A copy older than the window, one just inside it, and one that is not a run copy at all.
+            var stale = Path.Combine(root, "mcg-run", "STALEABANDONED01");
+            var recent = Path.Combine(root, "mcg-run", "RECENTABANDONED1");
+            Directory.CreateDirectory(stale);
+            Directory.CreateDirectory(recent);
+            File.WriteAllText(Path.Combine(stale, "Mcg.AgentOrchestrator.App.dll"), "stale");
+            File.WriteAllText(Path.Combine(recent, "Mcg.AgentOrchestrator.App.dll"), "recent");
+            Directory.SetLastWriteTime(stale, DateTime.Now.AddDays(-2));
+            Directory.SetLastWriteTime(recent, DateTime.Now.AddHours(-2));
+
+            var result = RunPowerShellCommand(repoRoot, $"""
+                $ErrorActionPreference = 'Stop'
+                $env:TEMP = '{EscapePowerShellSingleQuoted(root)}'
+                $env:TMP = '{EscapePowerShellSingleQuoted(root)}'
+                & '{EscapePowerShellSingleQuoted(Path.Combine(repoRoot, "scripts", "resolve-run-dir.ps1"))}' '{EscapePowerShellSingleQuoted(appDll)}'
+                """);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+            Assert.False(Directory.Exists(stale));
+            Assert.True(Directory.Exists(recent));
+            Assert.True(Directory.Exists(result.Stdout.Trim()));
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ResolveRunDir_content_address_includes_changed_dependencies")]
     public void ResolveRunDirContentAddressIncludesChangedDependencies()
     {

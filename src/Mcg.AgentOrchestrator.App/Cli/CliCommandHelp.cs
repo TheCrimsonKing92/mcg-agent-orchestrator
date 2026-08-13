@@ -47,13 +47,6 @@ internal static class CliCommandHelp
     public const string BacklogDependsUsage = "Usage: backlog-depends <item-prefix> --on <prerequisite-prefix> | backlog-depends <item-prefix> --remove <prerequisite-prefix> | backlog-depends <item-prefix> --clear";
     public const string BacklogReopenUsage = "Usage: backlog-reopen <id-prefix> [reason]";
     public const string BacklogViewUsage = "Usage: backlog-view";
-    public const string EpicAddUsage = "Usage: epic-add <title> | epic-add --text-file <path>";
-    public const string EpicAssignUsage = "Usage: epic-assign <goal-or-backlog-id> <epic>";
-    public const string EpicListUsage = "Usage: epic-list";
-    public const string EpicSuggestUsage = "Usage: epic-suggest | epic-suggestions";
-    public const string ProjectAddUsage = "Usage: project-add <title> | project-add --text-file <path>";
-    public const string ProjectAssignUsage = "Usage: project-assign <epic> <project>";
-    public const string PortfolioUsage = "Usage: portfolio | portfolio-view";
     public const string DogfoodLogUsage = "Usage: dogfood-log list [--limit <n>] | dogfood-log add [goal-prefix]";
     public const string OperatorCommandsUsage = "Usage: operator-commands [--help]";
     public const string GateStatusUsage = "Usage: gate-status";
@@ -293,41 +286,6 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry BacklogView = new(
         BacklogViewUsage,
         "Render all backlog items as markdown.",
-        ["--help", "-h"]);
-
-    private static readonly CommandHelpEntry EpicAdd = new(
-        EpicAddUsage,
-        "Add a portfolio epic.",
-        ["--text-file", "--help", "-h"]);
-
-    private static readonly CommandHelpEntry EpicAssign = new(
-        EpicAssignUsage,
-        "Assign a goal or backlog item to one epic.",
-        ["--help", "-h"]);
-
-    private static readonly CommandHelpEntry EpicList = new(
-        EpicListUsage,
-        "List epics with membership and state rollups.",
-        ["--help", "-h"]);
-
-    private static readonly CommandHelpEntry EpicSuggest = new(
-        EpicSuggestUsage,
-        "Refresh or list advisory relatedness cluster suggestions.",
-        ["--help", "-h"]);
-
-    private static readonly CommandHelpEntry ProjectAdd = new(
-        ProjectAddUsage,
-        "Add a portfolio project.",
-        ["--text-file", "--help", "-h"]);
-
-    private static readonly CommandHelpEntry ProjectAssign = new(
-        ProjectAssignUsage,
-        "Assign an epic to one project.",
-        ["--help", "-h"]);
-
-    private static readonly CommandHelpEntry Portfolio = new(
-        PortfolioUsage,
-        "Render the project to epic to goal portfolio hierarchy.",
         ["--help", "-h"]);
 
     private static readonly CommandHelpEntry DogfoodLog = new(
@@ -728,50 +686,6 @@ internal static class CliCommandHelp
         if (args[0].Equals("backlog-view", StringComparison.OrdinalIgnoreCase))
         {
             entry = BacklogView;
-            return true;
-        }
-
-        if (args[0].Equals("epic-add", StringComparison.OrdinalIgnoreCase))
-        {
-            entry = EpicAdd;
-            return true;
-        }
-
-        if (args[0].Equals("epic-assign", StringComparison.OrdinalIgnoreCase))
-        {
-            entry = EpicAssign;
-            return true;
-        }
-
-        if (args[0].Equals("epic-list", StringComparison.OrdinalIgnoreCase))
-        {
-            entry = EpicList;
-            return true;
-        }
-
-        if (args[0].Equals("epic-suggest", StringComparison.OrdinalIgnoreCase) ||
-            args[0].Equals("epic-suggestions", StringComparison.OrdinalIgnoreCase))
-        {
-            entry = EpicSuggest;
-            return true;
-        }
-
-        if (args[0].Equals("project-add", StringComparison.OrdinalIgnoreCase))
-        {
-            entry = ProjectAdd;
-            return true;
-        }
-
-        if (args[0].Equals("project-assign", StringComparison.OrdinalIgnoreCase))
-        {
-            entry = ProjectAssign;
-            return true;
-        }
-
-        if (args[0].Equals("portfolio", StringComparison.OrdinalIgnoreCase) ||
-            args[0].Equals("portfolio-view", StringComparison.OrdinalIgnoreCase))
-        {
-            entry = Portfolio;
             return true;
         }
 
