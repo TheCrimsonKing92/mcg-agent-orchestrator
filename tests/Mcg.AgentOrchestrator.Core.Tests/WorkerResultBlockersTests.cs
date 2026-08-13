@@ -238,6 +238,22 @@ public sealed class WorkerResultBlockersTests
         Assert.Equal(ReviewFindingConvergence.UntouchedReopenViolationCode, error.Code);
     }
 
+    [Xunit.Fact]
+    public void UnchangedOpenFinding_EmptyTouchProof_CarriesForward()
+    {
+        var carried = new ReviewFinding(
+            "F-1",
+            ReviewFindingState.Open,
+            new ReviewFindingLocation("src/A.cs", "A.Run", "guard"),
+            "Missing guard.");
+
+        var state = ReviewFindingConvergence.ApplyRound(
+            [carried],
+            new ReviewFindingRound([carried], []));
+
+        Assert.Equal(carried, Assert.Single(state));
+    }
+
     [Xunit.Fact(DisplayName = "ReviewFindingConvergence_allows_open_set_growth_from_a_new_identity_at_a_new_anchor")]
     public void ReviewFindingConvergenceAllowsOpenSetGrowthFromNewIdentityAtNewAnchor()
     {

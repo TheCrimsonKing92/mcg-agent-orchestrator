@@ -1340,7 +1340,6 @@ public sealed class DispatchExecutionTests
             clock.UtcNow,
             BaseCommit: "abc1234",
             ReviewFindingTouchedAnchors: [],
-            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors.",
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         var claimedResolved = StructuredReviewerResult(
             "pass",
@@ -1391,7 +1390,6 @@ public sealed class DispatchExecutionTests
             clock.UtcNow,
             BaseCommit: "same-commit",
             ReviewFindingTouchedAnchors: [],
-            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors.",
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-2",
@@ -1452,7 +1450,6 @@ public sealed class DispatchExecutionTests
             clock.UtcNow,
             BaseCommit: "abc1234",
             ReviewFindingTouchedAnchors: [],
-            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors.",
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         var claimedResolved = StructuredReviewerResult(
             "pass",
@@ -1473,7 +1470,6 @@ public sealed class DispatchExecutionTests
             clock.UtcNow,
             BaseCommit: "abc1234",
             ReviewFindingTouchedAnchors: [],
-            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors.",
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         var emptyPass = StructuredReviewerResult("pass", "[]", "none");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
@@ -1516,8 +1512,7 @@ public sealed class DispatchExecutionTests
             "C:\\repo",
             clock.UtcNow,
             BaseCommit: "abc1234",
-            ReviewFindingTouchedAnchors: [],
-            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors."));
+            ReviewFindingTouchedAnchors: []));
         var claimedResolved = StructuredReviewerResult(
             "pass",
             """[{"stable_id":"F-LEGACY-CAP","state":"resolved","location":{"file":"src/A.cs","region":"A.Run","hunk":"guard"},"description":"Missing guard.","severity":"blocking"}]""",

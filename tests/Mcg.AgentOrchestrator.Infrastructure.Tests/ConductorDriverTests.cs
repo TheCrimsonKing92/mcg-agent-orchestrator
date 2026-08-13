@@ -5931,6 +5931,78 @@ public sealed class ConductorDriverTests
         Assert.Equal(1, retryCount);
     }
 
+    [Xunit.Fact]
+    public void UntouchedReopen_ComputedEmptyProof_ConsumesRepairBudget()
+    {
+        var (kernel, goal) = SoftwareGoal();
+        var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
+        foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
+        {
+            PassVerification(kernel, goal, task);
+        }
+
+        var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
+        var open = new ReviewFinding("F-1", ReviewFindingState.Open, anchor, "Missing guard.");
+        DispatchTask(kernel, goal, reviewer, "review-open");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-open",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithFinding(open),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "confirm resolution");
+        DispatchTask(kernel, goal, reviewer, "review-resolved");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-resolved",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithFinding(open with { State = ReviewFindingState.Resolved }),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            WorkerResultPresent: true));
+        Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
+
+        kernel.RetryTask(goal.Id, reviewer.Id, "recheck unchanged commit");
+        DispatchTask(kernel, goal, reviewer, "review-reopened");
+        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
+            "review-reopened",
+            "C:\\tmp",
+            0,
+            ReviewerPassWithFinding(open),
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            StandardOutputPath: "C:\\tmp\\reviewer.out.log",
+            WorkerResultPresent: true));
+
+        var violation = Assert.IsType<ReviewFindingContractViolation>(
+            reviewer.LastVerification!.ReviewFindingContractViolation);
+        Assert.Equal(ReviewFindingConvergence.UntouchedReopenViolationCode, violation.Code);
+
+        RetryRoundKind? retryRoundKind = null;
+        string? retryMessage = null;
+        string? escalation = null;
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
+            {
+                retryRoundKind = roundKind;
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message, retryRoundKind: roundKind);
+            },
+            writeEscalation: (_, _, message) => escalation = message);
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
+
+        Assert.Equal(RetryRoundKind.Mechanical, retryRoundKind);
+        Assert.Equal(RetryRoundKind.Mechanical, reviewer.PendingRetryRoundKind);
+        Assert.Contains(ReviewFindingConvergence.UntouchedReopenViolationCode, retryMessage, StringComparison.Ordinal);
+        Assert.Null(escalation);
+        Assert.IsType<ConductorAdvanceOutcome.Executed>(result.Outcome);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_tester_contract_violation_mechanically_retries_the_same_tester")]
     public void ConductorDriverTesterContractViolationMechanicallyRetriesSameTester()
     {
@@ -6454,7 +6526,6 @@ public sealed class ConductorDriverTests
             DateTimeOffset.UtcNow,
             BaseCommit: "4cc96e28",
             ReviewFindingTouchedAnchors: [],
-            ReviewFindingTouchProofDiagnostic: "Reviewed commits are identical; no touched anchors.",
             ReviewRetryCap: new ReviewRetryCapReceipt(7, 7)));
         var resolved = finding with { State = ReviewFindingState.Resolved };
         var stdout = string.Join(
