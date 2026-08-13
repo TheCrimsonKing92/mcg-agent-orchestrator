@@ -5853,8 +5853,8 @@ public sealed class ConductorDriverTests
                 $"F-{index:D2}",
                 ReviewFindingState.Open,
                 new ReviewFindingLocation($"src/F{index:D2}.cs", $"F{index:D2}.Run", "guard"),
-                $"Advisory {index:D2}.",
-                FindingSeverity.Advisory))
+                $"Blocking finding {index:D2}.",
+                FindingSeverity.Blocking))
             .ToArray();
         var firstRound = string.Join(
             Environment.NewLine,
