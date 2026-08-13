@@ -4297,7 +4297,7 @@ public sealed class ConductorDriverTests
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.Equal(
-            "Infrastructure.Cli.Tests:CliArgumentNormalizationTests,CliCommandTestsAddTaskCommands",
+            "Infrastructure.Cli.Tests:CliArgumentNormalizationTests; Infrastructure.Cli.Tests:CliCommandTestsAddTaskCommands",
             request);
         var recorded = reviewer.VerificationHistory.Last().MergedReviewFindings!;
         Assert.True(recorded.Single(item => item.StableId == "cli-extracted-project").EvidenceOutcome?.Honoured);
