@@ -8118,6 +8118,44 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
+    public async Task TestTamperGuard_DeclaredRemovalFromWhollyDeletedSplitFile_Passes()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PortfolioCommands.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PortfolioCommands.cs",
+            "deleted file mode 100644",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PortfolioCommands.cs",
+            "+++ /dev/null",
+            "@@ -1,9 +0,0 @@",
+            "-public sealed class CliCommandTestsPortfolioCommands : CliCommandTestBase",
+            "-{",
+            "-    [Xunit.Fact]",
+            "-    public void EpicAndProjectCommandsAssignMembersAndPrintRollups()",
+            "-    {",
+            "-        Assert.True(something);",
+            "-    }",
+            "-}"
+        ]);
+        var criteria = """
+            [
+              {
+                "name": "test-removal: CliCommandTestsPortfolioCommands.EpicAndProjectCommandsAssignMembersAndPrintRollups",
+                "type": "test-removal",
+                "testIdentity": "CliCommandTestsPortfolioCommands.EpicAndProjectCommandsAssignMembersAndPrintRollups"
+              }
+            ]
+            """;
+
+        var result = await RunTamperGuardAsync(
+            CreateTamperGuardVerifier(diff),
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.PortfolioCommands.cs"],
+            criteria);
+
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Passed, tamperCheck.OutputTail);
+        Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
+    }
+
+    [Xunit.Fact]
     public async Task TestTamperGuard_DeclaredRemovalWithLambdaAssertions_Passes()
     {
         var diff = string.Join("\n", [

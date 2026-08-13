@@ -5888,6 +5888,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
                 if (line[0] == '-')
                 {
+                    var containingTypeMatch = DiffContainingTypePattern.Match(trimmed);
+                    if (containingTypeMatch.Success)
+                        currentContainingType = containingTypeMatch.Groups["name"].Value;
+
                     var startsSanctionedRemovedMethod = false;
                     if (trimmed.StartsWith("Assert.", StringComparison.Ordinal))
                     {
