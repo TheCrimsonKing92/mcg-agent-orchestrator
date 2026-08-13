@@ -109,6 +109,58 @@ public sealed class AssemblyTempRedirectTests
         }
     }
 
+    [Fact(DisplayName = "Reaper removes only roots whose owning process is gone")]
+    public void ReapsOnlyRootsOwnedByDeadProcesses()
+    {
+        var alive = new HashSet<int> { 0x1a2b, 0x30 };
+
+        var reapable = AssemblyTempRedirect.SelectReapableRoots(
+            ["p1a2b", "p30", "pdead1", "pbeef", "p7fffffff"],
+            currentProcessId: 0x30,
+            isProcessAlive: pid => alive.Contains(pid));
+
+        Assert.Equal(["pdead1", "pbeef", "p7fffffff"], reapable);
+    }
+
+    [Fact(DisplayName = "Reaper never removes the current process root even if reported dead")]
+    public void NeverReapsCurrentProcessRoot()
+    {
+        var reapable = AssemblyTempRedirect.SelectReapableRoots(
+            ["p30"],
+            currentProcessId: 0x30,
+            isProcessAlive: _ => false);
+
+        Assert.Empty(reapable);
+    }
+
+    [Theory(DisplayName = "Reaper ignores directories that are not owned process roots")]
+    [InlineData("scratch")]
+    [InlineData("")]
+    [InlineData("p")]
+    [InlineData("pzzz")]
+    [InlineData("p0")]
+    [InlineData("1a2b")]
+    public void IgnoresForeignDirectoryNames(string directoryName)
+    {
+        var reapable = AssemblyTempRedirect.SelectReapableRoots(
+            [directoryName],
+            currentProcessId: 0x30,
+            isProcessAlive: _ => false);
+
+        Assert.Empty(reapable);
+        Assert.False(AssemblyTempRedirect.TryParseProcessTempRootName(directoryName, out _));
+    }
+
+    [Fact(DisplayName = "Reaped root name round-trips the process id that built it")]
+    public void ReapableNameRoundTripsBuiltRoot()
+    {
+        var root = AssemblyTempRedirect.BuildProcessTempRoot(Path.Combine("shared", "mcg-tests"), 0x1a2b);
+
+        Assert.True(
+            AssemblyTempRedirect.TryParseProcessTempRootName(Path.GetFileName(root), out var processId));
+        Assert.Equal(0x1a2b, processId);
+    }
+
     [Fact]
     public void SkipsCandidateThatCannotCreateFiles()
     {
