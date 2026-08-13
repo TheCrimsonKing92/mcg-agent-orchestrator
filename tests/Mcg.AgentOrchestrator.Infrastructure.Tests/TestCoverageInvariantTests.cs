@@ -279,6 +279,82 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "TestCoverageInvariant_preserves_cli_move_across_parent_and_extracted_project")]
+    public void TestCoverageInvariantPreservesCliMoveAcrossParentAndExtractedProject()
+    {
+        const string parentProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+        const string cliProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
+        var deleted = GoalAcceptanceVerifier.ParseDeletedTestFilesForTests(
+            "R100\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliArgumentNormalizationTests.cs" +
+                "\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/CliArgumentNormalizationTests.cs\n" +
+            "R100\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.AddTaskCommands.cs" +
+                "\ttests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/CliCommandTests.AddTaskCommands.cs",
+            parentProject,
+            _ => cliProject);
+        var retained = Enumerable.Range(0, 20)
+            .Select(index => $"retained case {index:D2}")
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var moved = Enumerable.Range(0, 15)
+            .Select(index => (
+                Name: $"argument normalization case {index:D2}",
+                SourceFile: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliArgumentNormalizationTests.cs"))
+            .Concat(Enumerable.Range(0, 4)
+                .Select(index => (
+                    Name: $"add-task command case {index:D2}",
+                    SourceFile: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.AddTaskCommands.cs")))
+            .ToArray();
+        var mainDiscovery = ParseMtpDiscovery(
+            retained
+                .Select(name => (
+                    Name: name,
+                    SourceFile: "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/RetainedTests.cs"))
+                .Concat(moved)
+                .ToArray());
+        var trx = WriteTrxWithMethodIdentity(retained
+            .Select((name, index) => (
+                index.ToString(),
+                name,
+                "Passed",
+                $"RetainedTests.Case{index:D2}"))
+            .ToArray());
+        try
+        {
+            var partitions = new[] { new TestPartitionCoverage("parent", true, [trx]) };
+
+            var receipt = TestCoverageInvariant.Evaluate(
+                retained,
+                partitions,
+                mainDiscovery.Tests,
+                deleted,
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest);
+            var oneShort = TestCoverageInvariant.Evaluate(
+                retained.Take(19).ToHashSet(StringComparer.OrdinalIgnoreCase),
+                partitions,
+                mainDiscovery.Tests,
+                deleted,
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest);
+
+            Xunit.Assert.Equal(19, moved.Length);
+            Xunit.Assert.Equal(
+                [
+                    "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliArgumentNormalizationTests.cs",
+                    "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/CliCommandTests.AddTaskCommands.cs"
+                ],
+                deleted);
+            Xunit.Assert.True(receipt.Passed);
+            Xunit.Assert.False(oneShort.Passed);
+            Xunit.Assert.Contains(
+                "cross-generation-count:candidate=19,minimum=20,main=39,deleted=19",
+                oneShort.MissingTests);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_credits_single_test_file_once_from_discovery_metadata")]
     public void TestCoverageInvariantCountsDeletedTestFile()
     {

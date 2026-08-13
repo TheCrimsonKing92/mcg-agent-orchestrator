@@ -1,6 +1,6 @@
 using Mcg.AgentOrchestrator.App.Cli;
 
-public sealed class CliCommandTestsAddTaskCommands : CliCommandTestBase
+public sealed class CliCommandTestsAddTaskCommands
 {
     [Xunit.Fact]
     public void NormalizeArgs_TextFileBeforeRole_PreservesExactArgv()

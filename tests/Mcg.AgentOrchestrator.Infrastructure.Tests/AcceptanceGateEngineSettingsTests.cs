@@ -15,7 +15,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
         Xunit.Assert.Equal(17, settings.InfrastructureTestLanes.Count);
-        Xunit.Assert.Equal(4, startupContract.ManifestCheckCount);
+        Xunit.Assert.Equal(5, startupContract.ManifestCheckCount);
         var expectedEstimates = new Dictionary<string, double>(StringComparer.Ordinal)
         {
             ["Cli"] = 11.4,
@@ -106,7 +106,12 @@ public sealed class AcceptanceGateEngineSettingsTests
         const string providerProject =
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/" +
             "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
+        const string cliProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/" +
+            "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
         _ = settings.ResolveMtpInvocation(providerProject);
+        _ = settings.ResolveMtpInvocation(cliProject);
+        Xunit.Assert.Equal("Infrastructure.Cli.Tests", GoalAcceptanceVerifier.ProjectLabel(cliProject));
 
         var manifest = System.Text.Json.Nodes.JsonNode.Parse(
             File.ReadAllText(Path.Combine(repositoryRoot, "config", "acceptance-manifest.json")))!;
@@ -116,9 +121,16 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(providerProject, providerCheck["project"]?.GetValue<string>());
         Xunit.Assert.False(providerCheck.ContainsKey("estimatedSerialSeconds"));
         Xunit.Assert.False(providerCheck.ContainsKey("exclusiveResourceKeys"));
+        var cliCheck = manifest["checks"]!.AsArray()
+            .Select(check => check!.AsObject())
+            .Single(check => check["name"]?.GetValue<string>() == "cli tests");
+        Xunit.Assert.Equal(cliProject, cliCheck["project"]?.GetValue<string>());
+        Xunit.Assert.False(cliCheck.ContainsKey("estimatedSerialSeconds"));
+        Xunit.Assert.False(cliCheck.ContainsKey("exclusiveResourceKeys"));
 
         var solutionText = File.ReadAllText(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln"));
         var trustedTestProjects = GoalAcceptanceVerifier.DiscoverTrustedTestProjects(repositoryRoot, repositoryRoot);
+        Xunit.Assert.Contains(cliProject, trustedTestProjects);
         Xunit.Assert.All(
             trustedTestProjects,
             project => Xunit.Assert.Contains(

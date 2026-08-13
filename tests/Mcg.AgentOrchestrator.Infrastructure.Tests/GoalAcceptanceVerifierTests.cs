@@ -5594,7 +5594,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj",
             "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
             "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj"
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
         ];
         foreach (var project in restoredProjects)
         {
@@ -5662,6 +5663,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("build_phase_ms=", output, StringComparison.Ordinal);
             Assert.Contains("Core=hit", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=hit", output, StringComparison.Ordinal);
+            Assert.Contains("Infrastructure.Cli.Tests=hit", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", output, StringComparison.Ordinal);
             Assert.Contains("built_projects=Infrastructure.Tests", output, StringComparison.Ordinal);
             Assert.Contains(result.Checks!, check =>
@@ -5745,12 +5747,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var buildCalls = calls
                 .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
                 .ToArray();
-            Assert.Equal(4, buildCalls.Length);
+            Assert.Equal(5, buildCalls.Length);
             Assert.All(buildCalls, call => Assert.DoesNotContain("Mcg.AgentOrchestrator.sln", call, StringComparer.OrdinalIgnoreCase));
             Assert.Contains(buildCalls, call => call.Contains("src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj"));
+            Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"));
             Assert.DoesNotContain(calls, call => call.Any(arg => arg.Contains(cacheRoot, StringComparison.OrdinalIgnoreCase)));
             var artifactsPath = GetArtifactsPath(buildCalls[0]);
             Assert.True(File.Exists(Path.Combine(artifactsPath, "bin", "Mcg.AgentOrchestrator.Core", "debug_net10.0", "cache.txt")));
@@ -5762,7 +5765,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("App=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=changed", output, StringComparison.Ordinal);
-            Assert.Contains("built_projects=Infrastructure,App,Infrastructure.Tests,Infrastructure.ProviderEnvironment.Tests", output, StringComparison.Ordinal);
+            Assert.Contains("Infrastructure.Cli.Tests=changed", output, StringComparison.Ordinal);
+            Assert.Contains("built_projects=Infrastructure,App,Infrastructure.Tests,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", output, StringComparison.Ordinal);
         }
         finally
         {
@@ -5789,7 +5793,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
             "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj"
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
         ];
 
         GoalAcceptanceVerifier.ResolveBaseBuildMainShaForTests = _ => mainSha;
@@ -5891,13 +5896,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("Core.Tests=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=miss", firstOutput, StringComparison.Ordinal);
-            Assert.Contains("built_projects=Core,Infrastructure,App,Core.Tests,Infrastructure.Tests,Infrastructure.ProviderEnvironment.Tests", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("Infrastructure.Cli.Tests=miss", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("built_projects=Core,Infrastructure,App,Core.Tests,Infrastructure.Tests,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("App=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=hit", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("Infrastructure.Cli.Tests=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("built_projects=Infrastructure.Tests", secondOutput, StringComparison.Ordinal);
             Assert.False(File.Exists(staleRestoredProjectFile));
             Assert.True(firstBuildPhaseMs >= 0, $"Expected non-negative cold build phase receipt; cold={firstBuildPhaseMs}ms");
@@ -6513,6 +6520,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 call => call.Any(argument => argument.Contains(
                     "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests",
                     StringComparison.OrdinalIgnoreCase)));
+            Assert.DoesNotContain(
+                calls,
+                call => call.Any(argument => argument.Contains(
+                    "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests",
+                    StringComparison.OrdinalIgnoreCase)));
             var providerReceipt = Assert.Single(result.Checks!, check => check.Name == "provider environment tests");
             Assert.True(providerReceipt.Passed);
             Assert.Contains(
@@ -6520,6 +6532,55 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 providerReceipt.ResultSummary,
                 StringComparison.Ordinal);
             Assert.Contains("dependency closure: Infrastructure.Tests", providerReceipt.ResultSummary, StringComparison.Ordinal);
+            var cliReceipt = Assert.Single(result.Checks, check => check.Name == "cli tests");
+            Assert.True(cliReceipt.Passed);
+            Assert.Contains(
+                "skipped: no changed file in dependency closure",
+                cliReceipt.ResultSummary,
+                StringComparison.Ordinal);
+            Assert.Contains("dependency closure: Infrastructure.Tests", cliReceipt.ResultSummary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Theory(DisplayName = "GoalAcceptanceVerifier_includes_cli_project_for_related_change")]
+    [Xunit.InlineData("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/CliArgumentNormalizationTests.cs")]
+    [Xunit.InlineData("src/Mcg.AgentOrchestrator.App/Cli/CliArgumentParser.cs")]
+    public async Task GoalAcceptanceVerifierIncludesCliProjectForRelatedChange(string changedFile)
+    {
+        var root = CreateExtractedProjectManifestWorkspace();
+        var calls = new List<string[]>();
+        try
+        {
+            var verifier = new GoalAcceptanceVerifier((args, _, _) =>
+            {
+                calls.Add(args);
+                if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests") ||
+                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests") ||
+                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests"))
+                {
+                    WriteMtpTrx(args);
+                    return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Passed: 1"));
+                }
+
+                return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Build succeeded."));
+            });
+
+            var result = await verifier.RunAsync(root, changedFiles: [changedFile]);
+
+            Assert.True(result.Passed);
+            Assert.Single(
+                calls,
+                call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests"));
+            var cliReceipt = Assert.Single(result.Checks!, check => check.Name == "cli tests");
+            Assert.True(cliReceipt.Passed);
+            Assert.DoesNotContain(
+                "skipped: no changed file in dependency closure",
+                cliReceipt.ResultSummary,
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -8760,7 +8821,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "checks": [
                 { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
                 { "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
-                { "name": "provider environment tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+                { "name": "provider environment tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "cli tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
               ],
               "forbiddenChangedPathGlobs": []
             }

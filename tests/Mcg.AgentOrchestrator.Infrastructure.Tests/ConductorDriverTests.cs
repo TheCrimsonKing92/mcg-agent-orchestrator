@@ -4259,11 +4259,11 @@ public sealed class ConductorDriverTests
     }
 
     [Xunit.Fact]
-    public void FindingEvidenceRequestAcceptsAnyRegisteredExtractedInfrastructureProject()
+    public void FindingEvidenceRequestAcceptsRegisteredCliInfrastructureProject()
     {
-        const string secondProject =
-            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondModule/" +
-            "Mcg.AgentOrchestrator.Infrastructure.SecondModule.Tests.csproj";
+        const string cliProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/" +
+            "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
         var (kernel, goal) = SoftwareGoal();
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
@@ -4272,17 +4272,17 @@ public sealed class ConductorDriverTests
         }
 
         var finding = EvidenceFindingWithRequest(
-            "A future extracted project needs focused evidence.",
-            id: "second-extracted-project",
-            project: "Infrastructure.SecondModule.Tests",
-            classes: ["SecondModuleTests"]);
+            "The extracted CLI project needs focused evidence.",
+            id: "cli-extracted-project",
+            project: "Infrastructure.Cli.Tests",
+            classes: ["CliArgumentNormalizationTests", "CliCommandTestsAddTaskCommands"]);
         FailReviewerNeedsWork(kernel, goal, reviewer, "registered extracted project", findings: [finding]);
         string? request = null;
         var driver = MakeDriver(
             getPreReviewEvidenceContext: _ => NoPreReviewContext("abc1234"),
             getFindingEvidenceEngineSettings: _ => new AcceptanceGateEngineSettings
             {
-                MtpInvocations = [new AcceptanceMtpInvocation { Project = secondProject }]
+                MtpInvocations = [new AcceptanceMtpInvocation { Project = cliProject }]
             },
             runFocusedEvidence: (_, value) =>
             {
@@ -4296,9 +4296,11 @@ public sealed class ConductorDriverTests
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
-        Assert.Equal("Infrastructure.SecondModule.Tests:SecondModuleTests", request);
+        Assert.Equal(
+            "Infrastructure.Cli.Tests:CliArgumentNormalizationTests; Infrastructure.Cli.Tests:CliCommandTestsAddTaskCommands",
+            request);
         var recorded = reviewer.VerificationHistory.Last().MergedReviewFindings!;
-        Assert.True(recorded.Single(item => item.StableId == "second-extracted-project").EvidenceOutcome?.Honoured);
+        Assert.True(recorded.Single(item => item.StableId == "cli-extracted-project").EvidenceOutcome?.Honoured);
     }
 
     [Xunit.Fact]

@@ -59,6 +59,33 @@ manifest's `enforceStructuralCoverage: true`, structural coverage later re-adds 
 every trusted project, so that policy-level skip is not a production gate-run avoidance receipt; the
 unchanged extracted output hash above is the independent build-graph-skipping evidence for this criterion.
 
+## Second slice: fixture-free CLI parsing
+
+The extracted CLI project owns the two classes that meet the lane boundary without importing the umbrella
+project's fragile fixture: `CliArgumentNormalizationTests` (15 source-declared cases) and
+`CliCommandTestsAddTaskCommands` (4 source-declared cases). The latter used no member of
+`CliCommandTestBase`, so its unused inheritance was removed while its class and test-method identities stayed
+unchanged. The parent project excludes the `Cli` directory, making each moved source file compile in exactly
+one test assembly.
+
+The remaining `CliCommandTests*` classes stay in the umbrella project. Attention, backlog intake, goal
+revision, human-input supersede, portfolio, and refresh-dispatch tests use workspace, store, dashboard
+projection, synthetic dispatch, or process-wide environment helpers. Goal lifecycle, persistent runner,
+subscription dispatch, and terminal sweep tests retain the `GoalWorktreeCleanupHooks` boundary. `CliHelpTests`
+and `GitCliTests` retain their real-process boundary. In particular,
+`CliCommandTests.PersistentRunnerCommands.cs` was not changed.
+
+No `Infrastructure.Testing` project is created in this slice. ProviderEnvironment owns `GetAvailablePort`
+and `FakeSmokeProvider`; neither moved CLI class uses them. The two moved classes use no umbrella fixture or
+collection and declare no exclusive resource key. The checked intersection is therefore empty, and creating
+an empty support project would violate the shared-fixture rule.
+
+The source-declared moved-case accounting is 19 before and 19 after (15 normalization + 4 add-task). The
+existing recorded aggregate MTP discovery baseline is 3,375. A current-candidate aggregate discovery and
+execution count, the extracted-output hash/timestamp rows, the policy-level dependency-closure skip receipt,
+and the focused/standard gate results remain acceptance-owned measurements requested in
+`docs/negative-controls/b526bf42.md`; the 19/19 source count is not substituted for those receipts.
+
 ## Proposed projects after the first slice
 
 | Existing lane | Target project | Boundary evidence |
