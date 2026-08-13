@@ -22,7 +22,70 @@ Acceptance lane model used here:
 
 Prior art already exists: `AgentOrchestratorKernel.*.cs` is a successful Core partial-class split, with the largest fragment now `AgentOrchestratorKernel.GoalLifecycle.cs` at 706 lines and 33 commits in the last 60 days. `CliCommandHandlers.*.cs` is also partially split, but `CliCommandHandlers.Goals.cs` remains a 3,054-line hotspot while siblings such as `CliCommandHandlers.Workers.cs` at 509 lines and `CliCommandHandlers.Backlog.cs` at 305 lines show the intended direction.
 
+## 2026-08-13 refresh: what happened in a month
+
+Re-measured on main at `603d4714`. **The inventory table below is the 2026-07-10 snapshot and its numbers are
+now wrong by up to 5x. Use this section for current sizes.**
+
+The result is unambiguous and worth stating plainly: **every file this plan attacked shrank. Every file it
+did not attack grew.**
+
+Where Wave 1 and early Wave 2 slices landed:
+
+| File | 2026-07-10 | 2026-08-13 | |
+| --- | ---: | ---: | --- |
+| `tests/.../CliCommandTests.cs` | 8,143 | **1,065** | split into `CliCommandTests.<Concern>.cs` |
+| `tests/.../WorkerDispatchTests.cs` | 8,096 | **2,331** | split into `WorkerDispatchTests<Concern>.cs` |
+| `tests/.../GoalWorktreeTests.cs` | 5,512 | **2,087** | split |
+| `src/.../Workspaces/GoalWorktrees.cs` | 1,567 | **290** | extracted |
+| `src/.../Cli/CliCommandHandlers.Goals.cs` | 3,054 | **1,756** | partially extracted |
+
+Where nothing was applied:
+
+| File | 2026-07-10 | 2026-08-13 | Growth |
+| --- | ---: | ---: | ---: |
+| `tests/.../ConductorBatchLoopTests.cs` | 2,996 | **12,617** | 4.2x |
+| `tests/.../GoalAcceptanceVerifierTests.cs` | 1,731 | **9,178** | 5.3x |
+| `src/.../Workspaces/GoalAcceptanceVerifier.cs` | 1,698 | **8,790** | 5.2x |
+| `tests/.../ConductorDriverTests.cs` | 1,512 | **8,054** | 5.3x |
+| `src/.../Orchestration/ConductorDriver.cs` | 1,201 | **5,035** | 4.2x |
+| `src/.../Orchestration/ConductorBatchLoop.cs` | 1,234 | **4,596** | 3.7x |
+| `src/.../Processes/BackgroundDispatchRunner.cs` | 2,156 | **4,499** | 2.1x |
+| `tests/.../DashboardRenderingTests.cs` | 3,068 | **3,751** | 1.2x |
+| `src/.../Cli/CliPersistentStateRunner.cs` | 1,178 | **3,189** | 2.7x |
+| `src/.../Workers/WorkerProfileDispatcher.cs` | 1,090 | **2,268** | 2.1x |
+| `src/.../Application/DispatchFailureClassifier.cs` | 1,451 | **2,307** | 1.6x |
+
+The approach is proven. It stopped being applied, and the untouched Conductor/Acceptance cluster absorbed the
+growth. `ConductorBatchLoopTests.cs` is now the largest file in the repository.
+
+### Corrections to the original sequencing
+
+1. **`ConductorDriverTests.cs` was ranked 16th and is now 8,054 lines.** Its product file
+   `ConductorDriver.cs` (5,035) was a merge-conflict point three separate times on 2026-08-13 alone. Both
+   belong near the front of the queue, not at position 16.
+2. **`GoalAcceptanceVerifierTests.cs` was deferred to "after the three larger test splits."** Those three
+   have landed, so its precondition is met — and at 9,178 lines it is second-largest. It is due now.
+3. **The Wave 1 fragment lists predate the growth.** `ConductorBatchLoopTests.cs` quadrupled after its six
+   fragments were named. Treat those lists as starting points and re-derive boundaries from the current
+   content; do not force methods into a fragment to make the original list come out even.
+4. **Dashboard tests should leave `Infrastructure.Tests` entirely**, not merely be split.
+   `DashboardRenderingTests.cs` (3,751), `DashboardHostTests.cs` (600),
+   `DashboardDispatchStartFailureEndpointTests.cs` (358) and `DashboardValidationHarnessTests.cs` (74) total
+   4,783 lines of a human-interface concern sitting on the orchestrator's acceptance critical path. The
+   dashboard is not on the conductor's critical path and the orchestrator runs without it.
+
+### Cross-reference
+
+`docs/compensation-stack-audit-2026-08-13.md` reaches the same targets from the runtime side and supplies the
+*why* this plan lacks: `GoalAcceptanceVerifier` is a home-grown CI scheduler compensating for test topology,
+and `BackgroundDispatchRunner` reconstructs typed worker outcomes from free-form logs. Read them together —
+this document says what to split, the audit says what the split is worth.
+
 ## Ranked Inventory
+
+**Snapshot dated 2026-07-10. Line counts superseded by the refresh above; retained for churn data and
+rationale.**
 
 Score is `lines x churn x lane breadth`. Lane breadth is intentionally coarse: it measures how many acceptance partition lanes a change is expected to exercise, not how many tests are inside the lane.
 
@@ -50,6 +113,11 @@ Score is `lines x churn x lane breadth`. Lane breadth is intentionally coarse: i
 | 20 | `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LauncherScriptTests.cs` | 1,100 | 25 | Remainder / process-spawning Infrastructure | 1 | 27,500 | `[Collection("ProcessSpawning")]`; launcher script and worker sandbox helpers. |
 
 ## Wave 1: Test-Class Splits
+
+**Status as of 2026-08-13:** items 1, 2 and 3 have landed (see the refresh section for measured results).
+Item 5 is in flight as goal `732af577`. Item 4 is superseded by extracting dashboard tests to their own
+project rather than splitting them in place. Item 6's stated precondition — "after the three larger test
+splits" — is now satisfied, and at 9,178 lines it is the largest remaining item in this wave.
 
 These should land first because they reduce future verification cost without changing product behavior. Timing rationale: `tests/Mcg.AgentOrchestrator.Infrastructure.Tests/README.md` records a 565s full Infrastructure run versus 23.9s for a focused CLI help filter. The partition helper already exposes named filters for the largest areas, but several lanes are still blocked behind 3k-8k monolithic files. Splitting those files lets `RepositoryTestImpactPlanner.BuildChangedTestClassFilter` and policy shard receipts run narrower class filters for follow-up goals.
 
