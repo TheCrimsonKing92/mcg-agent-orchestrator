@@ -668,6 +668,28 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
     }
 
     [Xunit.Fact]
+    public void PlannerContract_ForgedDurableReceipt_RevalidatesEnforcedRules()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var invalidPlan = PlannerPlanWithoutSemanticMarkers().Replace(
+            "TEST-VERIFIABLE",
+            "AUTOMATED-CHECK",
+            StringComparison.Ordinal);
+        var receipt = PlannerOutputContract.BuildIngestedReceipt("forged-plan.md", invalidPlan);
+
+        var result = PlannerOutputContract.Resolve(
+            receipt,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement the behavior."]);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("Planner durable receipt failed revalidation", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("identify its verification class", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_IncidentalAdditionPrefix_RejectsMissingCitation()
     {
         // Control: citation validation is intentionally unchanged by the marker fix.

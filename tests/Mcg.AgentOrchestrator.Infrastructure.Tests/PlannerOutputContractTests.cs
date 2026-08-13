@@ -132,14 +132,14 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void PlannerContract_NumberedIntegrationListWithSubstantiveLaterText_Passes()
+    public void PlannerContract_NumberedIntegrationLineWithSubstantiveProse_Passes()
     {
         var workingDirectory = CreateTempDirectory();
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
         var plan = ReplaceSectionBody(
             PlannerContractPlanFixture(),
             "## Integration seams",
-            "1. Persist the validated receipt so later roles consume the complete Planner evidence.\n2. Build the downstream context from that durable receipt and verify its exact content.");
+            "1. Persist the shared substance predicate.\nThe premise, ownership, external, and stop sections then route through it before dispatch conversion runs.");
 
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
@@ -154,7 +154,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var plan = ReplaceSectionBody(
             PlannerContractPlanFixture(),
             "## Integration seams",
-            "1. Persist the validated receipt so later roles consume complete Planner evidence.\n3. Build downstream context using that durable receipt and verify its exact content.");
+            "1. Persist receipt evidence here.\n3. Persist receipt evidence there.");
 
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
@@ -168,6 +168,7 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     [Xunit.InlineData("## External and edge contracts", "timeout timeout timeout timeout timeout timeout timeout timeout")]
     [Xunit.InlineData("## Integration seams", "then then then then then then then then then then")]
     [Xunit.InlineData("## Risks and stop conditions", "stop stop stop stop stop stop stop stop stop stop")]
+    [Xunit.InlineData("## Premise validity", "1 22 333 4444 55555 666666 7777777 88888888")]
     public void PlannerContract_MarkerOnlySectionBodies_Fail(string heading, string body)
     {
         var workingDirectory = CreateTempDirectory();
@@ -618,6 +619,11 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var normalized = plan.ReplaceLineEndings("\n");
         var bodyStart = normalized.IndexOf(heading, StringComparison.Ordinal) + heading.Length;
         var nextHeading = normalized.IndexOf("\n## ", bodyStart, StringComparison.Ordinal);
+        if (nextHeading < 0)
+        {
+            nextHeading = normalized.Length;
+        }
+
         return normalized[..bodyStart] + "\n\n" + replacement.Trim() + "\n" + normalized[nextHeading..];
     }
 

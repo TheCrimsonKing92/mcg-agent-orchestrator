@@ -778,9 +778,8 @@ internal static partial class PlannerOutputContract
             "external and edge contracts" =>
                 HasMinimumLexicalDiversity(body),
             "integration seams" =>
-                NumberedIntegrationItem().IsMatch(body)
-                    ? HasSubstantivelyOrderedNumberedList(body)
-                    : HasMinimumLexicalDiversity(body),
+                HasMinimumLexicalDiversity(body) ||
+                HasSubstantivelyOrderedNumberedList(body),
             "verification commands and classes" =>
                 body.Contains('`') &&
                 (body.Contains("TEST-VERIFIABLE", StringComparison.OrdinalIgnoreCase) ||
@@ -885,19 +884,19 @@ internal static partial class PlannerOutputContract
         label switch
         {
             "premise validity" =>
-                "must contain at least 8 distinct words in its section body",
+                $"must contain at least {MinimumDistinctSectionWords} distinct words in its section body",
             "target seams and symbols" =>
                 "must cite a concrete target seam or symbol in backticks in its section body",
             "ownership and lifecycle" =>
-                "must contain at least 8 distinct words in its section body",
+                $"must contain at least {MinimumDistinctSectionWords} distinct words in its section body",
             "external and edge contracts" =>
-                "must contain at least 8 distinct words in its section body",
+                $"must contain at least {MinimumDistinctSectionWords} distinct words in its section body",
             "integration seams" =>
-                "must contain at least 8 distinct words of prose, or a sequential numbered list with at least two non-placeholder items, in its section body",
+                $"must contain at least {MinimumDistinctSectionWords} distinct words of prose, or a sequential numbered list with at least two non-placeholder items, in its section body",
             "verification commands and classes" =>
                 "must include a backticked verification command or class and identify its verification class in its section body",
             "risks and stop conditions" =>
-                "must contain at least 8 distinct words in its section body",
+                $"must contain at least {MinimumDistinctSectionWords} distinct words in its section body",
             _ => "must contain the required evidence in its section body"
         };
 
@@ -1116,7 +1115,7 @@ internal static partial class PlannerOutputContract
     [GeneratedRegex(@"(?i)\b(?:tbd|todo|placeholder)\b")]
     private static partial Regex IntegrationPlaceholderMarker();
 
-    [GeneratedRegex(@"[\p{L}\p{Nd}]+")]
+    [GeneratedRegex(@"\p{L}[\p{L}\p{Nd}]*")]
     private static partial Regex SubstantiveWord();
 
     [GeneratedRegex(@"(?i)(?:\bnew[ \t]+file\b|\b(?:create|add)\b(?:[ \t]+(?:a|an|the|new))?)[^`\r\n]{0,24}$")]
