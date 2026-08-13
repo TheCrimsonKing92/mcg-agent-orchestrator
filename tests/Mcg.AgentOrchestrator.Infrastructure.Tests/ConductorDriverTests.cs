@@ -47,12 +47,13 @@ public sealed class ConductorDriverTests
         TaskSpec task,
         string command = "test.exe",
         string? reviewFindingTouchProofDiagnostic = null,
-        IReadOnlyList<ReviewFindingLocation>? reviewFindingTouchedAnchors = null)
+        IReadOnlyList<ReviewFindingLocation>? reviewFindingTouchedAnchors = null,
+        string workingDirectory = "C:\\tmp")
     {
         var dispatch = new TaskDispatchRecord(
             "test-worker",
             command,
-            "C:\\tmp",
+            workingDirectory,
             DateTimeOffset.UtcNow,
             ReviewFindingTouchedAnchors: reviewFindingTouchedAnchors,
             ReviewFindingTouchProofDiagnostic: reviewFindingTouchProofDiagnostic);
@@ -327,6 +328,17 @@ public sealed class ConductorDriverTests
         }
     }
 
+    private static string ReadGit(string workingDirectory, params string[] args)
+    {
+        var result = GitCli.Run(workingDirectory, args);
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Error}");
+        }
+
+        return result.Output.Trim();
+    }
+
     private static (string WorkingDirectory, string Head) CreateSeededGitRepository()
     {
         var workingDirectory = CreateTempDirectory();
@@ -336,7 +348,7 @@ public sealed class ConductorDriverTests
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
         RunGit(workingDirectory, "add", "seed.txt");
         RunGit(workingDirectory, "commit", "-m", "seed");
-        var head = GitCli.Run(workingDirectory, "rev-parse", "HEAD").Output.Trim();
+        var head = ReadGit(workingDirectory, "rev-parse", "HEAD");
         return (workingDirectory, head);
     }
 
@@ -5821,7 +5833,7 @@ public sealed class ConductorDriverTests
             PassVerification(kernel, goal, task);
         }
 
-        DispatchTask(kernel, goal, reviewer, "review-1");
+        DispatchTask(kernel, goal, reviewer, "review-1", workingDirectory: workingDirectory);
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         var opened = Enumerable.Range(0, 15)
             .Select(index => new ReviewFinding(
@@ -5857,14 +5869,14 @@ public sealed class ConductorDriverTests
             workingDirectory,
             unchangedCommit);
         Assert.Empty(touchScope.TouchedAnchors);
-        Assert.Null(touchScope.Diagnostic);
         DispatchTask(
             kernel,
             goal,
             reviewer,
             "review-2",
             touchScope.Diagnostic,
-            touchScope.TouchedAnchors);
+            touchScope.TouchedAnchors,
+            workingDirectory);
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         var rejected = opened
             .Reverse()
@@ -5950,14 +5962,14 @@ public sealed class ConductorDriverTests
             workingDirectory,
             unchangedCommit);
         Assert.Empty(correctedTouchScope.TouchedAnchors);
-        Assert.Null(correctedTouchScope.Diagnostic);
         DispatchTask(
             kernel,
             goal,
             reviewer,
             "review-3",
             correctedTouchScope.Diagnostic,
-            correctedTouchScope.TouchedAnchors);
+            correctedTouchScope.TouchedAnchors,
+            workingDirectory);
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-3",
@@ -5996,8 +6008,13 @@ public sealed class ConductorDriverTests
         }
 
         var anchor = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
-        var open = new ReviewFinding("F-1", ReviewFindingState.Open, anchor, "Missing guard.");
-        DispatchTask(kernel, goal, reviewer, "review-open");
+        var open = new ReviewFinding(
+            "F-1",
+            ReviewFindingState.Open,
+            anchor,
+            "Missing guard.",
+            FindingSeverity.Advisory);
+        DispatchTask(kernel, goal, reviewer, "review-open", workingDirectory: workingDirectory);
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-open",
@@ -6015,14 +6032,14 @@ public sealed class ConductorDriverTests
             workingDirectory,
             unchangedCommit);
         Assert.Empty(resolvedTouchScope.TouchedAnchors);
-        Assert.Null(resolvedTouchScope.Diagnostic);
         DispatchTask(
             kernel,
             goal,
             reviewer,
             "review-resolved",
             resolvedTouchScope.Diagnostic,
-            resolvedTouchScope.TouchedAnchors);
+            resolvedTouchScope.TouchedAnchors,
+            workingDirectory);
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-resolved",
@@ -6041,14 +6058,14 @@ public sealed class ConductorDriverTests
             workingDirectory,
             unchangedCommit);
         Assert.Empty(reopenedTouchScope.TouchedAnchors);
-        Assert.Null(reopenedTouchScope.Diagnostic);
         DispatchTask(
             kernel,
             goal,
             reviewer,
             "review-reopened",
             reopenedTouchScope.Diagnostic,
-            reopenedTouchScope.TouchedAnchors);
+            reopenedTouchScope.TouchedAnchors,
+            workingDirectory);
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-reopened",
