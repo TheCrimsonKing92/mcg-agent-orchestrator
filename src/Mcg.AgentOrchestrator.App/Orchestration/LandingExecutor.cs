@@ -14,6 +14,22 @@ public sealed record LandingResult(
     string? MergeCommitSha = null,
     IReadOnlyList<string>? ChangedFiles = null);
 
+internal enum AcceptanceCohortLandingOutcome
+{
+    Advanced,
+    StateInvalidated,
+    RetryableHold
+}
+
+internal sealed record AcceptanceCohortLandingResult(
+    AcceptanceCohortLandingOutcome Outcome,
+    string Message,
+    string? CommitRevision = null,
+    IReadOnlyList<AcceptanceCohortCoverage>? Coverage = null)
+{
+    public bool MainAdvanced => Outcome == AcceptanceCohortLandingOutcome.Advanced;
+}
+
 internal static class LandingExecutor
 {
     public const string IntegrationBranchName = "integration";
@@ -207,6 +223,225 @@ internal static class LandingExecutor
         eventWriter?.AppendGoalEscalated(goal.Id, GoalLifecycleState.Verified, goal.Status, escalate.Reason, IntegrationBranchName);
         return new LandingResult(goal.Id.Value, goalPrefix, decision, IntegrationBranchName,
             false, $"Parked on {IntegrationBranchName}: {escalate.Reason}");
+    }
+
+    internal static AcceptanceCohortLandingResult ExecuteCohort(
+        AgentOrchestratorKernel kernel,
+        IReadOnlyList<Goal> goals,
+        OrchestratorWorkspace workspace,
+        AcceptanceCohortReceipt receipt,
+        string combinedCommitRevision,
+        CohortAcceptanceStore store,
+        ConductorAutonomyPolicy policy,
+        IGoalLifecycleEventWriter? eventWriter = null,
+        Func<string?>? mutationBlocker = null)
+    {
+        ArgumentNullException.ThrowIfNull(goals);
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(store);
+        if (goals.Count != 2 || goals[0].Id == goals[1].Id || receipt.Identity.Members.Count != 2)
+        {
+            throw new ArgumentException("Cohort landing requires exactly two distinct bound goals.", nameof(goals));
+        }
+        if (!receipt.HasAuthoritativeLandingEvidence)
+        {
+            throw new InvalidOperationException(
+                "Only an exact passing cohort receipt with successful exit and extant coherent TRX evidence can authorize landing.");
+        }
+
+        var executionDirectory = workspace.ExecutionDirectory;
+        var blockReason = mutationBlocker?.Invoke();
+        if (!string.IsNullOrWhiteSpace(blockReason))
+        {
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Landing held at mutation boundary: {blockReason}");
+        }
+
+        var liveMain = GoalWorktrees.ResolveRequiredRef(executionDirectory, "refs/heads/main");
+        if (!liveMain.Equals(receipt.Identity.ObservedMainRevision, StringComparison.Ordinal))
+        {
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.StateInvalidated,
+                "Cohort receipt invalidated because main changed after the gate.");
+        }
+        var commit = AcceptanceCohortMemberBinding.NormalizeRevision(
+            combinedCommitRevision,
+            nameof(combinedCommitRevision));
+        var tree = GoalWorktrees.ResolveRequiredRef(executionDirectory, $"{commit}^{{tree}}");
+        if (!tree.Equals(receipt.Identity.CombinedTreeRevision, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Cohort landing commit does not contain the exact tested tree.");
+        }
+        for (var index = 0; index < goals.Count; index++)
+        {
+            var member = receipt.Identity.Members[index];
+            if (goals[index].Id != member.GoalId)
+            {
+                throw new InvalidOperationException("Cohort goal order differs from the tested receipt.");
+            }
+            var liveBranch = GoalWorktrees.ResolveRequiredRef(
+                executionDirectory,
+                $"refs/heads/{GoalWorktrees.BranchName(member.GoalId)}");
+            if (!liveBranch.Equals(member.BranchRevision, StringComparison.Ordinal) ||
+                !liveBranch.Equals(member.CandidateRevision, StringComparison.Ordinal))
+            {
+                return new AcceptanceCohortLandingResult(
+                    AcceptanceCohortLandingOutcome.StateInvalidated,
+                    $"Cohort receipt invalidated because goal {member.GoalId.Value[..8]} changed after the gate.");
+            }
+        }
+
+        var changedFiles = receipt.Identity.Members
+            .SelectMany(member => member.LandingPaths)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var ownership = RepositoryOwnershipMap.GuardWriteSet(changedFiles);
+        if (ownership.RequiresOperatorApproval && !policy.AllowsAutonomousHighRiskOwnership)
+        {
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.RetryableHold,
+                "Cohort landing requires operator approval for ownership-protected paths.");
+        }
+
+        var currentIntegration = RunGit(
+            executionDirectory,
+            "rev-parse", "--verify", "--quiet", $"refs/heads/{IntegrationBranchName}");
+        string? priorIntegrationRevision = null;
+        if (currentIntegration.ExitCode == 0 && !string.IsNullOrWhiteSpace(currentIntegration.Output))
+        {
+            priorIntegrationRevision = currentIntegration.Output.Trim();
+            if (RunGit(executionDirectory, "merge-base", "--is-ancestor", priorIntegrationRevision, liveMain).ExitCode != 0)
+            {
+                return new AcceptanceCohortLandingResult(
+                    AcceptanceCohortLandingOutcome.RetryableHold,
+                    "Cohort landing held because the integration branch contains state not present on bound main.");
+            }
+        }
+
+        // The prepared intent captures the exact integration ref predecessor before either ref moves.
+        // Recovery can therefore restore integration when the process exits before the main CAS, or
+        // replay post-main lifecycle effects when the tested commit is already reachable from main.
+        store.PrepareLanding(receipt, commit, priorIntegrationRevision);
+        foreach (var goal in goals)
+        {
+            GoalOperationJournal.RecordLandingIntent(
+                executionDirectory,
+                goal,
+                GoalWorktrees.BranchName(goal.Id),
+                $"cohort/{receipt.Identity.Value}",
+                commit,
+                "LandingExecutor.ExecuteCohort");
+        }
+
+        blockReason = mutationBlocker?.Invoke();
+        if (!string.IsNullOrWhiteSpace(blockReason))
+        {
+            foreach (var goal in goals)
+            {
+                GoalOperationJournal.TombstoneLandingIntent(
+                    executionDirectory,
+                    goal,
+                    $"cohort landing mutation blocked after intent write: {blockReason}");
+            }
+            return new AcceptanceCohortLandingResult(
+                AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Landing held at mutation boundary: {blockReason}");
+        }
+
+        if (priorIntegrationRevision is not null)
+        {
+            var advanceIntegration = RunGit(
+                executionDirectory,
+                "update-ref",
+                $"refs/heads/{IntegrationBranchName}",
+                commit,
+                priorIntegrationRevision);
+            if (advanceIntegration.ExitCode != 0)
+            {
+                return new AcceptanceCohortLandingResult(
+                    AcceptanceCohortLandingOutcome.RetryableHold,
+                    $"Cohort integration ref update failed: {advanceIntegration.Error}");
+            }
+        }
+        else
+        {
+            var createIntegration = RunGit(
+                executionDirectory,
+                "update-ref",
+                $"refs/heads/{IntegrationBranchName}",
+                commit);
+            if (createIntegration.ExitCode != 0)
+            {
+                return new AcceptanceCohortLandingResult(
+                    AcceptanceCohortLandingOutcome.RetryableHold,
+                    $"Cohort integration ref creation failed: {createIntegration.Error}");
+            }
+        }
+
+        var advanceMain = RunGit(
+            executionDirectory,
+            "update-ref",
+            "refs/heads/main",
+            commit,
+            receipt.Identity.ObservedMainRevision);
+        if (advanceMain.ExitCode != 0)
+        {
+            var rollbackIntegration = priorIntegrationRevision is null
+                ? RunGit(
+                    executionDirectory,
+                    "update-ref", "-d", $"refs/heads/{IntegrationBranchName}", commit)
+                : RunGit(
+                    executionDirectory,
+                    "update-ref",
+                    $"refs/heads/{IntegrationBranchName}",
+                    priorIntegrationRevision,
+                    commit);
+            var rollbackDetail = rollbackIntegration.ExitCode == 0
+                ? "integration ref restored"
+                : $"integration ref rollback failed: {rollbackIntegration.Error}";
+            foreach (var goal in goals)
+            {
+                GoalOperationJournal.TombstoneLandingIntent(
+                    executionDirectory,
+                    goal,
+                    $"cohort main compare-and-swap failed: {advanceMain.Error}; {rollbackDetail}");
+            }
+            return new AcceptanceCohortLandingResult(
+                rollbackIntegration.ExitCode == 0
+                    ? AcceptanceCohortLandingOutcome.StateInvalidated
+                    : AcceptanceCohortLandingOutcome.RetryableHold,
+                $"Cohort receipt invalidated because main changed at the compare-and-swap boundary: {advanceMain.Error}; {rollbackDetail}.");
+        }
+        var refreshCheckout = RunGit(
+            executionDirectory,
+            "read-tree", "-m", "-u", receipt.Identity.ObservedMainRevision, commit);
+        if (refreshCheckout.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Main advanced to the exact cohort commit, but its checked-out files could not be refreshed: {refreshCheckout.Error}");
+        }
+
+        var coverage = store.FinalizeLanding(receipt.Identity.Value, receipt.ReceiptId);
+        foreach (var goal in goals)
+        {
+            GoalOperationJournal.Completed(
+                executionDirectory,
+                goal,
+                "conductor:land",
+                $"Shared cohort receipt {receipt.ReceiptId} landed exact tree {receipt.Identity.CombinedTreeRevision}.");
+            eventWriter?.AppendGoalLanded(
+                goal.Id,
+                $"cohort/{receipt.Identity.Value}",
+                GoalWorktrees.BranchName(goal.Id));
+            StateEffectProposalApplier.ApplyLandedProposals(kernel, goal, workspace, changedFiles, Console.WriteLine);
+        }
+        return new AcceptanceCohortLandingResult(
+            AcceptanceCohortLandingOutcome.Advanced,
+            $"Landed exact tested cohort tree for {goals[0].Id.Value[..8]},{goals[1].Id.Value[..8]}.",
+            commit,
+            coverage);
     }
 
     private static void EnsureIntegrationBranch(string executionDirectory)

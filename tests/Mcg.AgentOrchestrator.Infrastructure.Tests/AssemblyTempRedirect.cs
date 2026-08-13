@@ -137,6 +137,13 @@ internal static class AssemblyTempRedirect
         return $"assembly-temp-redirect selected={selected} rejected={rejected}";
     }
 
+    internal static string BuildProcessTempRoot(string sharedRoot, int processId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sharedRoot);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(processId);
+        return Path.Combine(sharedRoot, $"p{processId:x}");
+    }
+
     private static bool EnsureLowLabel(string path, IWorkerIntegrityLabeler labeler)
     {
         try
@@ -184,13 +191,15 @@ internal static class AssemblyTempRedirect
             if (!string.IsNullOrEmpty(localAppData))
             {
                 yield return new TempRootCandidate(
-                    Path.Combine(localAppData, "Temp", "Low", "mcg-tests"),
+                    BuildProcessTempRoot(
+                        Path.Combine(localAppData, "Temp", "Low", "mcg-tests"),
+                        Environment.ProcessId),
                     RequiresLowLabel: true);
             }
         }
 
         yield return new TempRootCandidate(
-            Path.Combine(AppContext.BaseDirectory, ".test-tmp"),
+            BuildProcessTempRoot(Path.Combine(AppContext.BaseDirectory, ".test-tmp"), Environment.ProcessId),
             RequiresLowLabel: false);
     }
 }

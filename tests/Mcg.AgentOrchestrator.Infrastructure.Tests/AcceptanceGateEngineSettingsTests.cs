@@ -52,6 +52,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             "Goal lifecycle commands",
             "Goal worktree cleanup",
             [
+                "AcceptanceCohortWorkflowTests",
                 "CliCommandTestsGoalLifecycleCommands",
                 "CliCommandTestsPersistentRunnerCommands",
                 "CliCommandTestsSubscriptionDispatchCommands",
@@ -604,8 +605,47 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_structural_coverage_combines_reused_and_fresh_partition_TRX")]
-    public async Task GoalAcceptanceVerifierStructuralCoverageCombinesReusedAndFreshPartitionTrx()
+    [Xunit.Fact]
+    public void EffectivePlanIdentityBindsScopeAndEnvironmentExpansion()
+    {
+        var root = CreateWorkspace("""
+            {
+              "version": 1,
+              "checks": [{
+                "name": "infrastructure tests",
+                "type": "dotnet-test",
+                "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"
+              }]
+            }
+            """);
+        var previous = Environment.GetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED");
+        try
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "1");
+            var scoped = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
+            var differentScope = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                ["src/Mcg.AgentOrchestrator.Core/Domain/AcceptanceCohorts.cs"]);
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", "0");
+            var full = GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(
+                root,
+                ["src/Mcg.AgentOrchestrator.App/Orchestration/ConductorDriver.cs"]);
+
+            Xunit.Assert.StartsWith("effective-manifest-sha256-", scoped, StringComparison.Ordinal);
+            Xunit.Assert.NotEqual(scoped, differentScope);
+            Xunit.Assert.NotEqual(scoped, full);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MCG_ACCEPTANCE_CHANGE_SCOPED", previous);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task GoalAcceptanceVerifierManifestChangeInvalidatesAllPartitionVerdicts()
     {
         var root = CreateWorkspace("""
             {
@@ -682,11 +722,12 @@ public sealed class AcceptanceGateEngineSettingsTests
             var second = await verifier.RunAsync(root, goalId);
 
             Xunit.Assert.True(second.Passed);
-            Xunit.Assert.Equal(3, partitionExecutions);
+            Xunit.Assert.Equal(4, partitionExecutions);
             var cacheReceipt = Xunit.Assert.Single(
                 second.Checks!,
                 check => check.Name == "infrastructure partition verdict cache");
-            Xunit.Assert.Contains("partition_id=alpha,source_attempt_id=attempt-one", cacheReceipt.ResultSummary);
+            Xunit.Assert.DoesNotContain("source_attempt_id=attempt-one", cacheReceipt.ResultSummary);
+            Xunit.Assert.Contains("{partition_id=alpha,verdict=GREEN}", cacheReceipt.ResultSummary);
             Xunit.Assert.Contains("{partition_id=beta,verdict=GREEN}", cacheReceipt.ResultSummary);
             Xunit.Assert.Contains(second.Checks!, check =>
                 check.Name.StartsWith("structural test coverage", StringComparison.Ordinal) &&

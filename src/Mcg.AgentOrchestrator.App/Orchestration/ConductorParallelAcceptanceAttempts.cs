@@ -348,6 +348,21 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceRunAcceptance runAcceptance)
         => EvaluateCore(candidate, policy, runAcceptance, GateDispatchKind, focusedEvidenceRequest: null);
 
+    internal DotnetBuildEnvironmentLease AcquireCohortStableSlotLease(
+        string cohortId,
+        CancellationToken cancellationToken = default,
+        TimeSpan? timeout = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(cohortId);
+        var lease = DotnetBuildEnvironmentManager.AcquireFirstAvailableStableSlotExecutionLock(
+            timeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
+            cancellationToken: cancellationToken,
+            slotCount: DotnetBuildEnvironmentManager.StableSlotCount);
+        Console.WriteLine(
+            $"ACCEPTANCE_LEASE_ACQUIRE cohort={cohortId} permit=acceptance-{lease.Environment.BuildPermitIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} holderPid={Environment.ProcessId}");
+        return lease;
+    }
+
     internal ConductorParallelAcceptanceAttemptDecision EvaluateFocusedEvidence(
         ConductorParallelAcceptanceCandidate candidate,
         ConductorAutonomyPolicy policy,

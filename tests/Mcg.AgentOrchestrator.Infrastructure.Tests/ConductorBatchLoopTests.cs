@@ -163,7 +163,12 @@ public sealed class ConductorBatchLoopTests
         Func<bool>? hasGateReadyGoal = null,
         Func<int>? getWorkerAdmissionCapacity = null,
         Func<Goal, bool>? isVerificationGateSatisfied = null,
-        GateReadyCandidateProjector? gateReadyCandidateProjector = null) =>
+        GateReadyCandidateProjector? gateReadyCandidateProjector = null,
+        Func<
+            ConductorAcceptanceCohortSelection,
+            IReadOnlyList<Goal>,
+            ConductorAutonomyPolicy,
+            ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null) =>
         new ConductorDriver(
             getFacts ?? (_ => GoalLifecycleFacts.None),
             getRunningCount ?? (() => 0),
@@ -197,7 +202,8 @@ public sealed class ConductorBatchLoopTests
             getWorkerAdmissionCapacity: getWorkerAdmissionCapacity,
             recheckPreLandingRebaseConflict: recheckPreLandingRebaseConflict,
             isVerificationGateSatisfied: isVerificationGateSatisfied,
-            gateReadyCandidateProjector: gateReadyCandidateProjector);
+            gateReadyCandidateProjector: gateReadyCandidateProjector,
+            runAcceptanceCohort: runAcceptanceCohort);
 
     // Returns a path to a stop file that does NOT exist yet.
     private static string NoStopPath() =>
@@ -1522,8 +1528,8 @@ public sealed class ConductorBatchLoopTests
         Assert.Equal([passing.Id.Value], landed);
     }
 
-    [Xunit.Fact(DisplayName = "SpeculativeCohort_advisory_receipt_does_not_change_ordinary_acceptance")]
-    public void SpeculativeCohortAdvisoryReceiptDoesNotChangeOrdinaryAcceptance()
+    [Xunit.Fact]
+    public void ProductionCohortRunsOneSharedGateAndBypassesOrdinaryMemberGates()
     {
         var root = CreateTempDirectory("mcg-speculative-cohort-advisory");
         var logPath = Path.Combine(root, ConductEventLogWriter.CurrentFileName);
@@ -1533,11 +1539,13 @@ public sealed class ConductorBatchLoopTests
         var statusesBefore = new[] { first.Status, second.Status };
         var paths = new Dictionary<GoalId, IReadOnlyList<string>>
         {
-            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Cli/FirstAdvisory.cs"],
-            [second.Id] = ["src/Mcg.AgentOrchestrator.App/Orchestration/SecondAdvisory.cs"]
+            [first.Id] = ["src/Mcg.AgentOrchestrator.App/Dashboard/Components/FirstAdvisory.razor"],
+            [second.Id] = ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/SecondAdvisoryTests.cs"]
         };
         var acceptanceCalls = new List<string>();
         var landed = new List<string>();
+        var cohortCalls = 0;
+        string? sharedReceiptId = null;
         var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         var projector = new GateReadyCandidateProjector(
             goalId => new GateReadyCandidateRevisionPair(
@@ -1569,7 +1577,40 @@ public sealed class ConductorBatchLoopTests
                 classifyRisk: _ => ChangeRiskTier.DocsOnly,
                 getLandingFileScopes: goal => paths[goal.Id],
                 isVerificationGateSatisfied: _ => true,
-                gateReadyCandidateProjector: projector);
+                gateReadyCandidateProjector: projector,
+                runAcceptanceCohort: (selection, goals, policy) =>
+                {
+                    cohortCalls++;
+                    var identity = AcceptanceCohortIdentity.Create(
+                        selection.BindMembers(),
+                        mainRevision,
+                        "dddddddddddddddddddddddddddddddddddddddd",
+                        "manifest-v1");
+                    var receipt = new AcceptanceCohortReceipt(
+                        $"receipt-{identity.Value}",
+                        identity,
+                        AcceptanceCohortGateOutcome.Passed,
+                        DateTimeOffset.UtcNow,
+                        10,
+                        [],
+                        GateExitCode: 0,
+                        GateTestResultPaths: [Path.GetFullPath("production-cohort.trx")],
+                        ValidForLanding: true);
+                    sharedReceiptId = receipt.ReceiptId;
+                    return new ConductorAcceptanceCohortRunResult(
+                        receipt,
+                        goals.Where(goal => selection.Members.Any(member => member.GoalId == goal.Id)).ToDictionary(
+                            goal => goal.Id.Value,
+                            goal => new ConductorAdvanceResult(
+                                goal.Id.Value,
+                                goal.Id.Value[..8],
+                                policy.Name,
+                                new ConductorAdvanceOutcome.Executed(
+                                    GoalLifecycleState.Verified,
+                                    $"shared receipt {receipt.ReceiptId}")),
+                            StringComparer.Ordinal),
+                        $"outcome=passed receipt={receipt.ReceiptId}");
+                });
 
             var summary = new ConductorBatchLoop(
                 conductEventLogWriter: new ConductEventLogWriter(logPath)).Run(
@@ -1586,8 +1627,10 @@ public sealed class ConductorBatchLoopTests
                 .ToArray();
 
             Assert.Equal(2, summary.Advanced);
-            Assert.Equal(2, acceptanceCalls.Count);
-            Assert.Equal(2, landed.Count);
+            Assert.Equal(1, cohortCalls);
+            Assert.Empty(acceptanceCalls);
+            Assert.Empty(landed);
+            Assert.NotNull(sharedReceiptId);
             Assert.Equal(statusesBefore, new[] { first.Status, second.Status });
             var receipt = Assert.Single(cohortEvents);
             Assert.Null(receipt.GoalId);
@@ -1599,6 +1642,64 @@ public sealed class ConductorBatchLoopTests
         {
             TryDeleteDirectory(root);
         }
+    }
+
+    [Xunit.Fact]
+    public void IncompatibleCohortCandidates_UseOrdinaryAcceptance()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = CreateVerifiedSimpleGoal(kernel, "Update first overlapping source");
+        var second = CreateVerifiedSimpleGoal(kernel, "Update second overlapping source");
+        var acceptanceCalls = new List<string>();
+        var landed = new List<string>();
+        var cohortCalls = 0;
+        var sharedPath = "src/Mcg.AgentOrchestrator.App/Orchestration/Shared.cs";
+        var mainRevision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var projector = new GateReadyCandidateProjector(
+            goalId => new GateReadyCandidateRevisionPair(
+                goalId.Value.PadRight(40, 'b')[..40],
+                mainRevision),
+            _ => new GateReadyLandingScopeObservation(true, [sharedPath]),
+            (_, _, _) => new GateReadyMergeTreeObservation(true));
+        var driver = MakeDriver(
+            getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
+            runAcceptanceWithSlot: (goal, _) =>
+            {
+                acceptanceCalls.Add(goal.Id.Value);
+                return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+            },
+            land: goal =>
+            {
+                landed.Add(goal.Id.Value);
+                return new LandingResult(
+                    goal.Id.Value,
+                    goal.Id.Value[..8],
+                    new LandingDecision.Promote(),
+                    "integration",
+                    true,
+                    "ok");
+            },
+            classifyRisk: _ => ChangeRiskTier.DocsOnly,
+            getLandingFileScopes: _ => [sharedPath],
+            isVerificationGateSatisfied: _ => true,
+            gateReadyCandidateProjector: projector,
+            runAcceptanceCohort: (_, _, _) =>
+            {
+                cohortCalls++;
+                throw new InvalidOperationException("Incompatible candidates must not enter a production cohort.");
+            });
+
+        var summary = new ConductorBatchLoop().Run(
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 1);
+
+        Assert.Equal(2, summary.Advanced);
+        Assert.Equal(0, cohortCalls);
+        Assert.Equal(2, acceptanceCalls.Count);
+        Assert.Equal(2, landed.Count);
     }
 
     [Xunit.Fact(DisplayName = "BatchLoop_slot_path_unmet_acceptance_retries_with_concrete_feedback")]
@@ -3252,7 +3353,7 @@ public sealed class ConductorBatchLoopTests
             return;
         }
 
-        using var _ = IsolatedDotnetRootScope();
+        using var isolatedDotnetRoot = IsolatedDotnetRootScope();
         var root = CreateSeededGitRepository();
         var attemptRoot = CreateTempDirectory("mcg-conductor-owned-start");
         var kernel = new AgentOrchestratorKernel();
@@ -3302,6 +3403,7 @@ public sealed class ConductorBatchLoopTests
                 launchOwnedProcess: launch => LaunchExternalAcceptanceProcess(
                     launch,
                     useLegacyStartThenAttach,
+                    isolatedDotnetRoot.Value,
                     externalProcesses));
             var candidate = ConductorParallelAcceptanceCandidate.Create(
                 goal,
@@ -3397,6 +3499,7 @@ public sealed class ConductorBatchLoopTests
     private static ConductorParallelAcceptanceOwnedProcessLaunchResult LaunchExternalAcceptanceProcess(
         ConductorParallelAcceptanceOwnedProcessLaunch launch,
         bool useLegacyStartThenAttach,
+        string isolatedDotnetRoot,
         ConcurrentBag<Process> externalProcesses)
     {
         var appAssembly = Path.Combine(AppContext.BaseDirectory, "Mcg.AgentOrchestrator.App.dll");
@@ -3405,6 +3508,13 @@ public sealed class ConductorBatchLoopTests
             launch.Attempt,
             "dotnet",
             [appAssembly]);
+        // The production child is intentionally hermetic and scrubs MCG_* variables. This real-process
+        // fixture must reapply its test-only lease root so unrelated stable-slot users cannot preempt the
+        // owned-start seam that the test is meant to exercise.
+        startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = isolatedDotnetRoot;
+        Assert.Equal(
+            isolatedDotnetRoot,
+            startInfo.Environment[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable]);
         if (useLegacyStartThenAttach)
         {
             startInfo.Environment[GoalAcceptanceVerifier.LegacyOwnedStartNegativeControlVariable] =
@@ -3910,7 +4020,7 @@ public sealed class ConductorBatchLoopTests
         return path;
     }
 
-    private static IDisposable IsolatedDotnetRootScope() =>
+    private static EnvVarScope IsolatedDotnetRootScope() =>
         new EnvVarScope(
             DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable,
             Path.Combine(Path.GetTempPath(), $"{DotnetBuildEnvironmentManager.RootDirectoryName}-batch-loop-{Guid.NewGuid():N}"));
@@ -3932,15 +4042,17 @@ public sealed class ConductorBatchLoopTests
     {
         private readonly string _name;
         private readonly string? _previousValue;
-        private readonly string? _value;
+        private readonly string _value;
 
-        public EnvVarScope(string name, string? value)
+        public EnvVarScope(string name, string value)
         {
             _name = name;
             _value = value;
             _previousValue = Environment.GetEnvironmentVariable(name);
             Environment.SetEnvironmentVariable(name, value);
         }
+
+        public string Value => _value;
 
         public void Dispose()
         {

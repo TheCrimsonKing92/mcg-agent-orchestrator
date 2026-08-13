@@ -244,7 +244,9 @@ public sealed class MtpTestRunnerScriptTests
     {
         using var sandbox = ScriptSandbox.Create("success", rootNamePrefix: "meta%SystemRoot%&chars");
 
-        var metacharacterResultsRoot = Path.Combine(sandbox.Root, "results%SystemRoot%&output");
+        var metacharacterResultsRoot = Path.Combine(
+            sandbox.ResultsRoot,
+            "meta%SystemRoot%&chars-output");
         var result = sandbox.RunPartition("GoalWorktree", resultsRoot: metacharacterResultsRoot);
 
         Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
@@ -502,6 +504,7 @@ public sealed class MtpTestRunnerScriptTests
     {
         private ScriptSandbox(
             string root,
+            string localApplicationDataRoot,
             string resultsRoot,
             string runnerPath,
             string argumentLog,
@@ -510,6 +513,7 @@ public sealed class MtpTestRunnerScriptTests
             string releasePath)
         {
             Root = root;
+            LocalApplicationDataRoot = localApplicationDataRoot;
             ResultsRoot = resultsRoot;
             RunnerPath = runnerPath;
             ArgumentLog = argumentLog;
@@ -519,6 +523,7 @@ public sealed class MtpTestRunnerScriptTests
         }
 
         public string Root { get; }
+        public string LocalApplicationDataRoot { get; }
         public string ResultsRoot { get; }
         public string RunnerPath { get; }
         public string ArgumentLog { get; }
@@ -528,10 +533,11 @@ public sealed class MtpTestRunnerScriptTests
 
         public static ScriptSandbox Create(string behavior, string rootNamePrefix = "sandbox")
         {
-            var root = Path.Combine(
-                Path.GetTempPath(), "mtp-script-tests", $"{rootNamePrefix}-{Guid.NewGuid():n}");
-            var resultsRoot = Path.Combine(
-                Path.GetTempPath(), "script-tests", Guid.NewGuid().ToString("n"));
+            var suffix = Guid.NewGuid().ToString("n")[..8];
+            var repositoryRoot = RepositoryRoot();
+            var root = Path.Combine(repositoryRoot, $".mtp-{rootNamePrefix}-{suffix}");
+            var localApplicationDataRoot = Path.Combine(repositoryRoot, $".mtp-local-{suffix}");
+            var resultsRoot = Path.Combine(localApplicationDataRoot, "Temp", "Low", "mcg-tests");
             var scripts = Path.Combine(root, "scripts");
             var config = Path.Combine(root, "config");
             var projectDirectory = Path.Combine(root, "tests", "Mcg.AgentOrchestrator.Infrastructure.Tests");
@@ -659,7 +665,15 @@ public sealed class MtpTestRunnerScriptTests
                 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0FakeRunner.ps1" %*
                 exit /b %ERRORLEVEL%
                 """);
-            return new ScriptSandbox(root, resultsRoot, runnerPath, argumentLog, lockPath, readyPath, releasePath);
+            return new ScriptSandbox(
+                root,
+                localApplicationDataRoot,
+                resultsRoot,
+                runnerPath,
+                argumentLog,
+                lockPath,
+                readyPath,
+                releasePath);
         }
 
         public string CreateBuildStub(int exitCode, string markerPath, bool diagnosticToStderr = false)
@@ -696,7 +710,7 @@ public sealed class MtpTestRunnerScriptTests
             string? resultsRoot = null,
             int testHostTimeoutSeconds = 780)
         {
-            var startInfo = PowerShellStartInfo(Root);
+            var startInfo = SandboxPowerShellStartInfo();
             startInfo.ArgumentList.Add("-File");
             startInfo.ArgumentList.Add(Path.Combine(Root, "scripts", "Invoke-InfrastructureTestPartition.ps1"));
             startInfo.ArgumentList.Add("-Partition");
@@ -737,7 +751,7 @@ public sealed class MtpTestRunnerScriptTests
 
         public ProcessResult RunSummary(string? partition = null, string? filter = null)
         {
-            var startInfo = PowerShellStartInfo(Root);
+            var startInfo = SandboxPowerShellStartInfo();
             startInfo.ArgumentList.Add("-File");
             startInfo.ArgumentList.Add(Path.Combine(Root, "scripts", "Invoke-TestSummary.ps1"));
             if (partition is not null)
@@ -776,13 +790,23 @@ public sealed class MtpTestRunnerScriptTests
                 $"-Filters 'FullyQualifiedName~GoalWorktreeTests' -RunLabel 'environment' -NoBuild -ResultsRoot '{resultsRoot}' -RunnerPath '{runner}'; " +
                 "$result = [ordered]@{ exitCode = $run.ExitCode; temp = $env:TEMP; tmp = $env:TMP; tmpdir = $env:TMPDIR; localAppData = $env:LOCALAPPDATA; expectedLocalAppData = $beforeLocalAppData }; " +
                 "$result | ConvertTo-Json -Compress";
-            return RunPowerShellCommand(Root, command);
+            var startInfo = SandboxPowerShellStartInfo();
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(command);
+            return Run(startInfo);
+        }
+
+        private ProcessStartInfo SandboxPowerShellStartInfo()
+        {
+            var startInfo = PowerShellStartInfo(Root);
+            startInfo.Environment["LOCALAPPDATA"] = LocalApplicationDataRoot;
+            return startInfo;
         }
 
         public void Dispose()
         {
             TryDelete(Root);
-            TryDelete(ResultsRoot);
+            TryDelete(LocalApplicationDataRoot);
         }
 
         private static string TrxBody(int total, int passed, int failed) => $"""

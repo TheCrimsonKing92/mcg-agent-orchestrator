@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
 
@@ -19,6 +20,7 @@ public static class WorkerProcessJobs
     private const string ProtectedPidVariable = "MCG_ORCHESTRATOR_PROTECTED_PID";
     private const int IdentityReadAttempts = 10;
     private const int IdentityReadDelayMilliseconds = 25;
+    private static readonly TimeSpan StartupReapClaimLease = TimeSpan.FromMinutes(1);
     private static readonly ConcurrentDictionary<int, RegisteredJob> Jobs = new();
     private static SpawnRegistry? Registry;
     private static string? RegistryDbPath;
@@ -43,7 +45,8 @@ public static class WorkerProcessJobs
         }
 
         var reaped = 0;
-        var sweeper = BuildSweeperEvidence();
+        var sweepStartedAt = DateTimeOffset.UtcNow;
+        var sweeper = BuildSweeperEvidence(sweepStartedAt);
         foreach (var entry in registry.ListActive())
         {
             if (entry.Lifecycle == SpawnRegistryLifecycle.GracefullyDetached)
@@ -133,6 +136,10 @@ public static class WorkerProcessJobs
                 // Claim the exact registry entry and durably record authorization before the destructive
                 // action. The compare-and-set prevents concurrent CLI startup sweeps from acting on the
                 // same stale snapshot; a later sweep can retry a claim abandoned by a crashed sweeper.
+                if (HasActiveStartupReapClaim(entry.LastDiagnostic, sweepStartedAt))
+                {
+                    continue;
+                }
                 if (!registry.TryRecordDiagnostic(
                         entry.Id,
                         entry.LastDiagnostic,
@@ -219,7 +226,36 @@ public static class WorkerProcessJobs
         $"owner_liveness={ownerLiveness} owner_evidence={SanitizeDiagnostic(ownerEvidence)} " +
         $"victim_evidence={SanitizeDiagnostic(victimEvidence ?? "not-evaluated")} {sweeper}";
 
-    private static string BuildSweeperEvidence()
+    private static bool HasActiveStartupReapClaim(string? diagnostic, DateTimeOffset observedAt)
+    {
+        const string prefix = "spawn_registry: startup-reap-authorized ";
+        const string timestampMarker = "sweeper_claimed_at=";
+        if (diagnostic is null || !diagnostic.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var markerIndex = diagnostic.IndexOf(timestampMarker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            return false;
+        }
+
+        var valueStart = markerIndex + timestampMarker.Length;
+        var valueEnd = diagnostic.IndexOf(' ', valueStart);
+        var value = valueEnd < 0
+            ? diagnostic[valueStart..]
+            : diagnostic[valueStart..valueEnd];
+        return DateTimeOffset.TryParseExact(
+                value,
+                "O",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind,
+                out var claimedAt) &&
+            observedAt < claimedAt + StartupReapClaimLease;
+    }
+
+    private static string BuildSweeperEvidence(DateTimeOffset claimedAt)
     {
         var argv = SanitizeDiagnostic(string.Join(' ', Environment.GetCommandLineArgs()));
         if (argv.Length > 1024)
@@ -227,7 +263,7 @@ public static class WorkerProcessJobs
             argv = argv[..1024] + "...";
         }
 
-        return $"sweeper_pid={Environment.ProcessId} sweeper_argv={argv}";
+        return $"sweeper_claimed_at={claimedAt:O} sweeper_pid={Environment.ProcessId} sweeper_argv={argv}";
     }
 
     private static string SanitizeDiagnostic(string value) =>

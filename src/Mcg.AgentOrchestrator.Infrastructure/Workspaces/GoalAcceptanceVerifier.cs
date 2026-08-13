@@ -143,6 +143,11 @@ public sealed record FocusedEvidenceCoverage(
 
 public interface IGoalAcceptanceVerifier
 {
+    string ComputeEffectivePlanIdentity(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles = null) =>
+        GoalAcceptanceVerifier.ComputeEffectiveAcceptancePlanIdentity(worktreePath, changedFiles);
+
     Task<AcceptanceVerificationResult> RunAsync(
         string worktreePath,
         GoalId? goalId = null,
@@ -384,6 +389,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static AcceptanceGateEngineSettings EngineSettings =>
         CurrentGateEngineSettings.Value ?? new AcceptanceGateEngineSettings();
 
+    public static string ComputeEffectiveAcceptancePlanIdentity(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(worktreePath);
+        var engineSettings = AcceptanceGateEngineSettings.Load(worktreePath);
+        using var engineScope = PushEngineSettings(engineSettings);
+        using var runEnvironmentScope = PushManagedRunEnvironmentScope();
+        var plan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings);
+        return ComputeEffectiveAcceptanceManifestIdentity(plan.Checks);
+    }
+
     public async Task<AcceptanceVerificationResult> RunAsync(
         string worktreePath,
         GoalId? goalId = null,
@@ -413,33 +430,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             engineSettings.ResolveBuildServerShutdownTimeout(),
             cancellationToken).ConfigureAwait(false);
 
-        var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
         var shardCoreBudget =
             ResolveShardCoreBudgetForTests?.Invoke() ?? Math.Max(1, Environment.ProcessorCount / 2);
         var shardConcurrencyBudget = Math.Min(
             engineSettings.MaxConcurrentShards,
             shardCoreBudget);
-        var infrastructureTestLanes = engineSettings.InfrastructureTestLanes;
-        var policyShardPlan = BuildPolicyShardPlan(changedFiles);
-
-        // Apply policy-required checks from the change scope. Focused project checks replace
-        // matching unfiltered project checks so a narrow App change does not still run the full
-        // Infrastructure project suite from the tracked manifest.
-        var policyRequiredChecks = BuildRequiredPolicyChecks(changedFiles);
-        var policyEffectiveChecks = BuildPolicyEffectiveChecks(
-            manifest.Checks,
-            changedFiles,
-            policyRequiredChecks,
-            policyShardPlan,
-            infrastructureTestLanes);
-        var structuralCoverageApplies = StructuralCoverageApplies(engineSettings, changedFiles);
-        var structurallyCompleteChecks = structuralCoverageApplies
-            ? EnsureTrustedStructuralCoverageExecutionChecks(
-                policyEffectiveChecks,
-                manifest.Checks,
-                worktreePath)
-            : policyEffectiveChecks;
-        var effectiveChecks = ExpandBroadInfrastructureChecks(structurallyCompleteChecks, infrastructureTestLanes);
+        var effectivePlan = CreateEffectiveGatePlan(worktreePath, changedFiles, engineSettings);
+        var manifest = effectivePlan.Manifest;
+        var infrastructureTestLanes = effectivePlan.InfrastructureTestLanes;
+        var policyShardPlan = effectivePlan.PolicyShardPlan;
+        var policyRequiredChecks = effectivePlan.PolicyRequiredChecks;
+        var structuralCoverageApplies = effectivePlan.StructuralCoverageApplies;
+        var effectiveChecks = effectivePlan.Checks;
         var partitionVerdictCache = CreatePartitionVerdictCacheContext(
             worktreePath,
             goalId,
@@ -2313,6 +2315,43 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             changedFiles.Count == 0 ||
             !RepositoryChangeClassifier.Classify(changedFiles).IsDocsOnly);
 
+    private static EffectiveGatePlan CreateEffectiveGatePlan(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles,
+        AcceptanceGateEngineSettings engineSettings)
+    {
+        var manifest = AcceptanceManifest.Load(worktreePath, changedFiles);
+        var infrastructureTestLanes = engineSettings.InfrastructureTestLanes;
+        var policyShardPlan = BuildPolicyShardPlan(changedFiles);
+
+        // This is the single owner of the environment- and scope-expanded gate plan. Cohort
+        // identity, partition-cache identity, and execution all hash or consume this exact plan.
+        var policyRequiredChecks = BuildRequiredPolicyChecks(changedFiles);
+        var policyEffectiveChecks = BuildPolicyEffectiveChecks(
+            manifest.Checks,
+            changedFiles,
+            policyRequiredChecks,
+            policyShardPlan,
+            infrastructureTestLanes);
+        var structuralCoverageApplies = StructuralCoverageApplies(engineSettings, changedFiles);
+        var structurallyCompleteChecks = structuralCoverageApplies
+            ? EnsureTrustedStructuralCoverageExecutionChecks(
+                policyEffectiveChecks,
+                manifest.Checks,
+                worktreePath)
+            : policyEffectiveChecks;
+        var effectiveChecks = ExpandBroadInfrastructureChecks(
+            structurallyCompleteChecks,
+            infrastructureTestLanes);
+        return new EffectiveGatePlan(
+            manifest,
+            effectiveChecks,
+            infrastructureTestLanes,
+            policyShardPlan,
+            policyRequiredChecks,
+            structuralCoverageApplies);
+    }
+
     private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(IReadOnlyList<string>? changedFiles)
     {
         if (changedFiles is null || changedFiles.Count == 0)
@@ -2861,15 +2900,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return null;
         }
 
+        var manifestIdentity = ComputeEffectiveAcceptanceManifestIdentity(effectiveChecks);
         var journalPath = PartitionVerdictJournalPath(worktreePath, goalId.Value);
         var journal = ReadPartitionVerdictJournal(journalPath);
-        var pairKey = PartitionVerdictPairKey(goalId.Value, candidateTreeSha, mainSha);
+        var pairKey = PartitionVerdictPairKey(goalId.Value, candidateTreeSha, mainSha, manifestIdentity);
         var priorReuseAttemptCount = LatestPartitionReuseAttemptCount(journal, pairKey);
         var reusableGreenExists = effectiveChecks.Any(check =>
             TryBuildPartitionCacheKey(
                 goalId.Value,
                 candidateTreeSha,
                 mainSha,
+                manifestIdentity,
                 check,
                 out _,
                 out _,
@@ -2881,6 +2922,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             goalId.Value,
             NormalizeShaToken(candidateTreeSha),
             NormalizeShaToken(mainSha),
+            manifestIdentity,
             NormalizeShaToken(verifyingCommitSha),
             CurrentAcceptanceAttemptId(),
             pairKey,
@@ -2920,6 +2962,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             $"partition-verdict-cache reused_partitions={FormatPartitionReuseReceipt(cacheContext.Reused)} " +
             $"executed_partitions={FormatPartitionExecutionReceipt(cacheContext.Executed)} " +
             $"aggregate_verdict={aggregateVerdict} verifying_commit_sha={cacheContext.VerifyingCommitSha} " +
+            $"effective_manifest_identity={cacheContext.ManifestIdentity} " +
             $"reroll_attempt_count={attemptCount.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
             $"forced_full_rerun={cacheContext.ForceFullRerun.ToString().ToLowerInvariant()} " +
             "before_reroll_wall_time=20-25m after_reroll_wall_time=2-7m";
@@ -2961,6 +3004,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             cacheContext.GoalId,
             cacheContext.CandidateTreeSha,
             cacheContext.MainSha,
+            cacheContext.ManifestIdentity,
             check,
             out partitionId,
             out filterHash,
@@ -2970,6 +3014,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string goalId,
         string candidateTreeSha,
         string mainSha,
+        string manifestIdentity,
         AcceptanceManifestCheck check,
         out string partitionId,
         out string filterHash,
@@ -2982,9 +3027,65 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return false;
 
         filterHash = ShortHash(filter);
-        cacheKey =
-            $"{goalId}:{NormalizeShaToken(candidateTreeSha)}:{NormalizeShaToken(mainSha)}:{filterHash}".ToLowerInvariant();
+        cacheKey = string.Join(
+                ':',
+                goalId,
+                NormalizeShaToken(candidateTreeSha),
+                NormalizeShaToken(mainSha),
+                manifestIdentity,
+                filterHash)
+            .ToLowerInvariant();
         return true;
+    }
+
+    private static string ComputeEffectiveAcceptanceManifestIdentity(
+        IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
+    {
+        var canonicalChecks = effectiveChecks.Select(check => new
+        {
+            check.Name,
+            check.Type,
+            check.Command,
+            check.Project,
+            Arguments = check.Arguments.ToArray(),
+            check.Pattern,
+            check.FilePath,
+            check.TimeoutMinutes,
+            check.Advisory,
+            check.Runner,
+            check.EstimatedSerialSeconds,
+            ExclusiveResourceKeys = check.ExclusiveResourceKeys.ToArray()
+        }).ToArray();
+        var settings = EngineSettings;
+        var canonicalPlan = new
+        {
+            Checks = canonicalChecks,
+            Engine = new
+            {
+                settings.MaxConcurrentShards,
+                settings.EnforceStructuralCoverage,
+                settings.PartitionVerdictFullRerunEveryN,
+                settings.OutputCaptureLimitBytes,
+                Timeouts = new
+                {
+                    settings.Timeouts.DefaultMinutes,
+                    settings.Timeouts.BuildServerShutdownMinutes,
+                    settings.Timeouts.DiscoveryMinutes
+                },
+                MtpInvocations = settings.MtpInvocations
+                    .OrderBy(invocation => invocation.Project, StringComparer.OrdinalIgnoreCase)
+                    .Select(invocation => new
+                    {
+                        invocation.Project,
+                        invocation.ExecutablePathTemplate,
+                        Arguments = invocation.Arguments.ToArray()
+                    })
+                    .ToArray()
+            }
+        };
+        var canonicalJson = JsonSerializer.Serialize(canonicalPlan);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonicalJson));
+        return $"effective-manifest-sha256-{Convert.ToHexStringLower(hash)}";
     }
 
     private static bool TryGetInfrastructurePartitionId(
@@ -3205,8 +3306,16 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string PartitionVerdictPairKey(
         string goalId,
         string candidateTreeSha,
-        string mainSha) =>
-        $"{goalId}:acceptance:{NormalizeShaToken(candidateTreeSha)}:{NormalizeShaToken(mainSha)}".ToLowerInvariant();
+        string mainSha,
+        string manifestIdentity) =>
+        string.Join(
+                ':',
+                goalId,
+                "acceptance",
+                NormalizeShaToken(candidateTreeSha),
+                NormalizeShaToken(mainSha),
+                manifestIdentity)
+            .ToLowerInvariant();
 
     private static string CurrentAcceptanceAttemptId()
     {
@@ -8029,6 +8138,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         catch { return 0L; }
     }
 
+    private sealed record EffectiveGatePlan(
+        AcceptanceManifest Manifest,
+        IReadOnlyList<AcceptanceManifestCheck> Checks,
+        IReadOnlyList<AcceptanceTestLane> InfrastructureTestLanes,
+        PolicyShardPlan PolicyShardPlan,
+        IReadOnlyList<AcceptanceManifestCheck> PolicyRequiredChecks,
+        bool StructuralCoverageApplies);
+
     private sealed record PolicyShardPlan(
         bool Applies,
         bool ForceFull,
@@ -8270,6 +8387,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string goalId,
         string candidateTreeSha,
         string mainSha,
+        string manifestIdentity,
         string verifyingCommitSha,
         string attemptId,
         string pairKey,
@@ -8284,6 +8402,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public string GoalId { get; } = goalId;
         public string CandidateTreeSha { get; } = candidateTreeSha;
         public string MainSha { get; } = mainSha;
+        public string ManifestIdentity { get; } = manifestIdentity;
         public string VerifyingCommitSha { get; } = verifyingCommitSha;
         public string AttemptId { get; } = attemptId;
         public string PairKey { get; } = pairKey;
