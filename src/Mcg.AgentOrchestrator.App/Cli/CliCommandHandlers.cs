@@ -39,6 +39,7 @@ public static bool Execute(IReadOnlyList<string> parts, CliExecutionContext cont
         TryExecuteGoalCommand(command, parts, context) ??
         TryExecuteTaskCommand(command, parts, context) ??
         TryExecuteWorkerCommand(command, parts, context) ??
+        TryExecutePortfolioCommand(command, parts, context) ??
         TryExecuteBacklogCommand(command, parts, context);
 
     if (handled is not null)
