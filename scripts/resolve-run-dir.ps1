@@ -2,7 +2,7 @@
 # directory to stdout. The launcher runs `dotnet <run-dir>\App.dll` so a live run holds its own copy
 # instead of the in-tree output -- leaving the in-tree binary free to rebuild while something runs, so
 # builds and real runs stop interfering. Content-addressed by the complete app output: identical builds reuse
-# one copy, while any changed dependency/config/head marker gets a fresh one. Copies unused for 7 days are pruned (a live copy's dll is locked, so
+# one copy, while any changed dependency/config/head marker gets a fresh one. Copies unused for a day are pruned (a live copy's dll is locked, so
 # it survives the prune). The copy is valid only when the native SQLite asset is present too; otherwise the
 # launcher fails before running an orchestrator command that would later hit DllNotFoundException.
 param([Parameter(Mandatory = $true)][string]$Dll)
