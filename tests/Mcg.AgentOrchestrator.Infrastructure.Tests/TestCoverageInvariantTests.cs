@@ -490,6 +490,59 @@ public sealed class TestCoverageInvariantTests
     }
 
     [Xunit.Fact]
+    public void Evaluate_DeclaredMethodIdentity_CreditsDisplayNameAndEveryTheoryExpansion()
+    {
+        var trx = WriteTrxWithMethodIdentity(("1", "current test", "Passed", "CurrentTests.Runs"));
+        try
+        {
+            var candidate = new HashSet<string>(["current test"], StringComparer.OrdinalIgnoreCase);
+            var mainDiscovery = ParseMtpDiscovery(
+                ("current test", "tests/Example.Tests/LandingExecutorTests.cs"),
+                ("Remote_mirror_enabled_pushes_main_goal_branch_and_tags_to_bare_remote", "tests/Example.Tests/LandingExecutorTests.cs"),
+                ("Remote_mirror_success_does_not_leave_interrupted_enqueue_operation", "tests/Example.Tests/LandingExecutorTests.cs"),
+                ("Remote_mirror_disabled_or_unconfigured_does_not_push(writeDisabledConfig: False)", "tests/Example.Tests/LandingExecutorTests.cs"),
+                ("Remote_mirror_disabled_or_unconfigured_does_not_push(writeDisabledConfig: True)", "tests/Example.Tests/LandingExecutorTests.cs"),
+                ("Terminal_sweep_does_not_run_remote_mirror_push_inline", "tests/Example.Tests/LandingExecutorTests.cs"),
+                ("Remote_mirror_unreachable_remote_defers_and_later_retry_succeeds", "tests/Example.Tests/LandingExecutorTests.cs"),
+                ("Remote_mirror_retry_uses_landed_branch_tip_after_cleanup_deletes_goal_branch", "tests/Example.Tests/LandingExecutorTests.cs"),
+                ("Remote_mirror_two_remotes_pushes_reachable_and_defers_unreachable", "tests/Example.Tests/LandingExecutorTests.cs"),
+                ("Remote_mirror_processing_preserves_later_enqueued_mirror_debt", "tests/Example.Tests/LandingExecutorTests.cs"));
+
+            var result = TestCoverageInvariant.Evaluate(
+                candidate,
+                [new TestPartitionCoverage("lane", true, [trx])],
+                mainDiscovery.Tests,
+                [],
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest,
+                sanctionedRemovedTests:
+                [
+                    "Example.Tests.LandingExecutorTests.RemoteMirrorEnabledPushesMainGoalBranchAndTagsToBareRemote",
+                    "Example.Tests.LandingExecutorTests.RemoteMirrorSuccessDoesNotLeaveInterruptedEnqueueOperation",
+                    "Example.Tests.LandingExecutorTests.RemoteMirrorDisabledOrUnconfiguredDoesNotPush",
+                    "Example.Tests.LandingExecutorTests.TerminalSweepDoesNotRunRemoteMirrorPushInline",
+                    "Example.Tests.LandingExecutorTests.RemoteMirrorUnreachableRemoteDefersAndLaterRetrySucceeds",
+                    "Example.Tests.LandingExecutorTests.RemoteMirrorRetryUsesLandedBranchTipAfterCleanupDeletesGoalBranch",
+                    "Example.Tests.LandingExecutorTests.RemoteMirrorTwoRemotesPushesReachableAndDefersUnreachable",
+                    "Example.Tests.LandingExecutorTests.RemoteMirrorProcessingPreservesLaterEnqueuedMirrorDebt"
+                ]);
+
+            Xunit.Assert.True(result.Passed, result.Summary);
+            Xunit.Assert.Contains(
+                "cross-generation-count:candidate=1,minimum=1,main=10,deleted=9",
+                result.Summary,
+                StringComparison.Ordinal);
+            Xunit.Assert.Contains(
+                "identity=Example.Tests.LandingExecutorTests.RemoteMirrorDisabledOrUnconfiguredDoesNotPush,status=corroborated,credit=2",
+                result.Summary,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact]
     public void Evaluate_DeclaredRemoval_DoesNotDoubleCreditLegacyFallback()
     {
         var trx = WriteTrxWithMethodIdentity(("1", "current test", "Passed", "CurrentTests.Runs"));

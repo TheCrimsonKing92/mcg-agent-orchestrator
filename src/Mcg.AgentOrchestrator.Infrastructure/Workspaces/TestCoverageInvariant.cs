@@ -387,7 +387,7 @@ internal static class TestCoverageInvariant
             {
                 var corroboratedTests = mainDiscoveredTests
                     .Where(mainTest =>
-                        IdentitiesMatch(mainTest, declaredIdentity) &&
+                        DeclaredIdentityMatchesDiscoveredTest(mainTest, declaredIdentity) &&
                         !candidateDiscoveredTests.Any(candidateTest => IdentitiesMatch(mainTest, candidateTest)))
                     .ToArray();
                 creditedMainTests.UnionWith(corroboratedTests);
@@ -450,6 +450,49 @@ internal static class TestCoverageInvariant
         return normalizedLeft.Equals(normalizedRight, StringComparison.OrdinalIgnoreCase) ||
             normalizedLeft.EndsWith($".{normalizedRight}", StringComparison.OrdinalIgnoreCase) ||
             normalizedRight.EndsWith($".{normalizedLeft}", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool DeclaredIdentityMatchesDiscoveredTest(string discoveredIdentity, string declaredIdentity)
+    {
+        if (IdentitiesMatch(discoveredIdentity, declaredIdentity))
+        {
+            return true;
+        }
+
+        var discoveredMethod = GetIdentityMethodName(discoveredIdentity);
+        var declaredMethod = GetIdentityMethodName(declaredIdentity);
+        return !string.IsNullOrWhiteSpace(discoveredMethod) &&
+            !string.IsNullOrWhiteSpace(declaredMethod) &&
+            NormalizeMethodName(discoveredMethod).Equals(
+                NormalizeMethodName(declaredMethod),
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetIdentityMethodName(string identity)
+    {
+        var normalized = NormalizeIdentity(identity);
+        var argumentsIndex = normalized.IndexOf('(');
+        if (argumentsIndex >= 0)
+        {
+            normalized = normalized[..argumentsIndex];
+        }
+
+        var separatorIndex = Math.Max(normalized.LastIndexOf('.'), normalized.LastIndexOf(':'));
+        return (separatorIndex >= 0 ? normalized[(separatorIndex + 1)..] : normalized).Trim();
+    }
+
+    private static string NormalizeMethodName(string methodName)
+    {
+        var normalized = new StringBuilder(methodName.Length);
+        foreach (var character in methodName)
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                normalized.Append(char.ToLowerInvariant(character));
+            }
+        }
+
+        return normalized.ToString();
     }
 
     private static bool IdentityBelongsToDeletedTestFile(string identity, string className)

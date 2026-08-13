@@ -8084,13 +8084,82 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
+    public async Task TestTamperGuard_DeclaredRemovalFromClassNotNamedAfterFile_Passes()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs",
+            "@@ -10,5 +10,0 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase",
+            "-    [Xunit.Fact]",
+            "-    public void SomeTest()",
+            "-    {",
+            "-        Assert.True(something);",
+            "-    }"
+        ]);
+        var criteria = """
+            [
+              {
+                "name": "test-removal: Example.Tests.GoalAcceptanceVerifierDotnetBuildSlotTests.SomeTest",
+                "type": "test-removal",
+                "testIdentity": "Example.Tests.GoalAcceptanceVerifierDotnetBuildSlotTests.SomeTest"
+              }
+            ]
+            """;
+
+        var result = await RunTamperGuardAsync(
+            CreateTamperGuardVerifier(diff),
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/GoalAcceptanceVerifierTests.cs"],
+            criteria);
+
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Passed, tamperCheck.OutputTail);
+        Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
+    }
+
+    [Xunit.Fact]
+    public async Task TestTamperGuard_DeclaredRemovalWithLambdaAssertions_Passes()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LandingExecutorTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LandingExecutorTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LandingExecutorTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LandingExecutorTests.cs",
+            "@@ -10,6 +10,0 @@ public sealed class LandingExecutorTests",
+            "-    [Xunit.Fact]",
+            "-    public void RemoteMirrorTwoRemotesPushesReachableAndDefersUnreachable()",
+            "-    {",
+            "-        Assert.Contains(outcomes, outcome => outcome.Succeeded);",
+            "-        Assert.Contains(outcomes, outcome => outcome.Failed);",
+            "-    }"
+        ]);
+        var criteria = """
+            [
+              {
+                "name": "test-removal: Example.Tests.LandingExecutorTests.RemoteMirrorTwoRemotesPushesReachableAndDefersUnreachable",
+                "type": "test-removal",
+                "testIdentity": "Example.Tests.LandingExecutorTests.RemoteMirrorTwoRemotesPushesReachableAndDefersUnreachable"
+              }
+            ]
+            """;
+
+        var result = await RunTamperGuardAsync(
+            CreateTamperGuardVerifier(diff),
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/LandingExecutorTests.cs"],
+            criteria);
+
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Passed, tamperCheck.OutputTail);
+        Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
+    }
+
+    [Xunit.Fact]
     public async Task TestTamperGuard_WrongClassDeclaration_Fails()
     {
         var diff = string.Join("\n", [
             "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
             "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
             "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
-            "@@ -10,5 +10,0 @@",
+            "@@ -10,5 +10,0 @@ public sealed class FooTests",
             "-    [Xunit.Fact]",
             "-    public void SomeTest()",
             "-    {",

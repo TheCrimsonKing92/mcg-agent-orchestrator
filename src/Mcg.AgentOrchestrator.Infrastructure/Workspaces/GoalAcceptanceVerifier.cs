@@ -194,6 +194,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         @"\b(?:public|internal|protected|private)\s+(?:static\s+)?(?:async\s+)?(?:[\w<>,.?\[\]]+\s+)+(?<name>[A-Za-z_]\w*)\s*\(",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex DiffContainingTypePattern = new(
+        @"\b(?:class|struct|record(?:\s+class|\s+struct)?)\s+(?<name>[A-Za-z_]\w*)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex TautologyPattern = new(
         @"Assert\.True\(\s*true\s*\)|Assert\.False\(\s*false\s*\)|Assert\.Equal\(\s*(?<v>\w+)\s*,\s*\k<v>\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -5816,6 +5820,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var sanctionedTestAttrRemoved = 0;
         var pendingRemovedTestAttribute = false;
         var inSanctionedRemovedMethod = false;
+        string? currentContainingType = null;
         var sanctionedMethodBraceDepth = 0;
         var sanctionedMethodBodyStarted = false;
         var tautologies = new List<string>();
@@ -5843,6 +5848,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             sanctionedAssertRemoved = sanctionedTestAttrRemoved = 0;
             pendingRemovedTestAttribute = false;
             inSanctionedRemovedMethod = false;
+            currentContainingType = null;
             sanctionedMethodBraceDepth = 0;
             sanctionedMethodBodyStarted = false;
             tautologies.Clear();
@@ -5866,6 +5872,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 StartFile(pendingFile);
                 pendingFile = null;
             }
+            else if (line.StartsWith("@@", StringComparison.Ordinal))
+            {
+                var containingTypeMatch = DiffContainingTypePattern.Match(line);
+                currentContainingType = containingTypeMatch.Success
+                    ? containingTypeMatch.Groups["name"].Value
+                    : null;
+            }
             else if (line.Length > 1 && line[0] is '-' or '+' &&
                      !line.StartsWith("--- ", StringComparison.Ordinal) &&
                      !line.StartsWith("+++ ", StringComparison.Ordinal))
@@ -5875,6 +5888,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
                 if (line[0] == '-')
                 {
+                    var startsSanctionedRemovedMethod = false;
                     if (trimmed.StartsWith("Assert.", StringComparison.Ordinal))
                     {
                         assertRemoved++;
@@ -5891,7 +5905,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                         TryGetTestMethodName(trimmed, out var methodName))
                     {
                         inSanctionedRemovedMethod = sanctionedRemovedTests.Any(identity =>
-                            DeclaredIdentityMatchesMethod(identity, currentFile!, methodName));
+                            DeclaredIdentityMatchesMethod(identity, currentFile!, currentContainingType, methodName));
+                        startsSanctionedRemovedMethod = inSanctionedRemovedMethod;
                         if (inSanctionedRemovedMethod)
                             sanctionedTestAttrRemoved++;
                         pendingRemovedTestAttribute = false;
@@ -5899,7 +5914,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
                     if (inSanctionedRemovedMethod)
                     {
-                        var expressionBodiedMethod = content.Contains("=>", StringComparison.Ordinal) &&
+                        var expressionBodiedMethod = startsSanctionedRemovedMethod &&
+                            content.Contains("=>", StringComparison.Ordinal) &&
                             content.Contains(';', StringComparison.Ordinal);
                         var opens = content.Count(ch => ch == '{');
                         var closes = content.Count(ch => ch == '}');
@@ -5962,6 +5978,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool DeclaredIdentityMatchesMethod(
         string identity,
         string filePath,
+        string? containingType,
         string methodName)
     {
         var normalized = identity.Trim();
@@ -5982,7 +5999,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ? containingIdentity[(containingSeparatorIndex + 1)..]
             : containingIdentity;
         return declaredClass.Equals(
-            Path.GetFileNameWithoutExtension(filePath),
+            containingType ?? Path.GetFileNameWithoutExtension(filePath),
             StringComparison.OrdinalIgnoreCase);
     }
 
