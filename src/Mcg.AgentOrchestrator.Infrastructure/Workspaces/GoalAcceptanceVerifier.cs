@@ -190,6 +190,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         @"^\s*\[\s*(?:Xunit\.)?(?:Fact|Theory)\s*(?:\(|,|\])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private static readonly Regex TestMethodDeclarationPattern = new(
+        @"\b(?:public|internal|protected|private)\s+(?:static\s+)?(?:async\s+)?(?:[\w<>,.?\[\]]+\s+)+(?<name>[A-Za-z_]\w*)\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex TautologyPattern = new(
         @"Assert\.True\(\s*true\s*\)|Assert\.False\(\s*false\s*\)|Assert\.Equal\(\s*(?<v>\w+)\s*,\s*\k<v>\s*\)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -455,6 +459,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             : null;
 
         var advisoryChecks = LoadAdvisoryChecks(worktreePath);
+        var sanctionedRemovedTests = LoadSanctionedTestRemovals(worktreePath);
 
         var checks = new List<AcceptanceCheckResult>();
         var retried = false;
@@ -610,6 +615,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 stableSlotIndex,
                 stableSlotLease,
                 partitionVerdictCache?.AttemptId,
+                sanctionedRemovedTests,
                 cancellationToken).ConfigureAwait(false);
             checks.Add(structuralCoverage);
             retried |= structuralCoverage.LockRemediationApplied;
@@ -630,7 +636,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var testFileChanges = changedFiles?.Where(IsTestFile).ToArray();
         if (testFileChanges is { Length: > 0 })
         {
-            checks.Add(await RunTestTamperCheckAsync(testFileChanges, worktreePath, cancellationToken).ConfigureAwait(false));
+            checks.Add(await RunTestTamperCheckAsync(
+                testFileChanges,
+                worktreePath,
+                sanctionedRemovedTests,
+                cancellationToken).ConfigureAwait(false));
         }
 
         var failedCheck = checks.FirstOrDefault(check => !check.Advisory && !check.Passed);
@@ -3390,8 +3400,34 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 File.ReadAllText(path),
                 CriteriaJsonOptions) ?? [];
             return criteria
-                .Where(c => !string.IsNullOrWhiteSpace(c.Type))
+                .Where(c =>
+                    !string.IsNullOrWhiteSpace(c.Type) &&
+                    !c.Type.Equals("test-removal", StringComparison.OrdinalIgnoreCase))
                 .Select(c => CriterionToManifestCheck(c))
+                .ToArray();
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static string[] LoadSanctionedTestRemovals(string worktreePath)
+    {
+        var path = System.IO.Path.Combine(worktreePath, ".orchestrator", "goal-acceptance-criteria.json");
+        if (!File.Exists(path))
+            return [];
+
+        try
+        {
+            return (JsonSerializer.Deserialize<AcceptanceCriterion[]>(
+                    File.ReadAllText(path),
+                    CriteriaJsonOptions) ?? [])
+                .Where(c => string.Equals(c.Type, "test-removal", StringComparison.OrdinalIgnoreCase))
+                .Select(c => c.TestIdentity?.Trim())
+                .Where(identity => !string.IsNullOrWhiteSpace(identity))
+                .Cast<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }
         catch (JsonException)
@@ -5147,6 +5183,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         int? stableSlotIndex,
         DotnetBuildEnvironmentLease? stableSlotLease,
         string? currentAttemptId,
+        IReadOnlyList<string> sanctionedRemovedTests,
         CancellationToken cancellationToken)
     {
         var mainWorktreePath = ResolveMainWorktreePath(worktreePath);
@@ -5327,7 +5364,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 mainDiscoverySnapshot?.Tests,
                 DeletedTestFilesForProject(deletedTestFiles, broadCheck.Project!),
                 currentAttemptId,
-                mainDiscoverySnapshot?.SourceFilesByTest);
+                mainDiscoverySnapshot?.SourceFilesByTest,
+                sanctionedRemovedTests);
             if (!coverage.Passed)
             {
                 var details = new List<string>
@@ -5733,6 +5771,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private async Task<AcceptanceCheckResult> RunTestTamperCheckAsync(
         string[] testFiles,
         string worktreePath,
+        IReadOnlyList<string> sanctionedRemovedTests,
         CancellationToken cancellationToken)
     {
         const string CheckName = "test tamper guard";
@@ -5748,7 +5787,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         if (result.ExitCode != 0)
             return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "diff unavailable");
 
-        var signals = AnalyzeTestFileDiff(result.Output);
+        var signals = AnalyzeTestFileDiff(result.Output, sanctionedRemovedTests);
 
         if (signals.Count == 0)
             return new AcceptanceCheckResult(CheckName, true, 0, null, Advisory: true, ResultSummary: "no test degradation detected");
@@ -5763,7 +5802,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsTestFile(string path) =>
         path.Contains("Tests", StringComparison.OrdinalIgnoreCase);
 
-    private static List<string> AnalyzeTestFileDiff(string diff)
+    private static List<string> AnalyzeTestFileDiff(
+        string diff,
+        IReadOnlyList<string> sanctionedRemovedTests)
     {
         var signals = new List<string>();
         var fileStats = new List<TestFileDiffStats>();
@@ -5771,6 +5812,12 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string? pendingFile = null;
         int assertRemoved = 0, assertAdded = 0;
         int testAttrRemoved = 0, testAttrAdded = 0;
+        var sanctionedAssertRemoved = 0;
+        var sanctionedTestAttrRemoved = 0;
+        var pendingRemovedTestAttribute = false;
+        var inSanctionedRemovedMethod = false;
+        var sanctionedMethodBraceDepth = 0;
+        var sanctionedMethodBodyStarted = false;
         var tautologies = new List<string>();
 
         void FlushFile()
@@ -5779,9 +5826,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
             fileStats.Add(new TestFileDiffStats(
                 currentFile,
-                assertRemoved,
+                Math.Max(0, assertRemoved - sanctionedAssertRemoved),
                 assertAdded,
-                testAttrRemoved,
+                Math.Max(0, testAttrRemoved - sanctionedTestAttrRemoved),
                 testAttrAdded));
 
             foreach (var t in tautologies)
@@ -5793,6 +5840,11 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             FlushFile();
             currentFile = filePath;
             assertRemoved = assertAdded = testAttrRemoved = testAttrAdded = 0;
+            sanctionedAssertRemoved = sanctionedTestAttrRemoved = 0;
+            pendingRemovedTestAttribute = false;
+            inSanctionedRemovedMethod = false;
+            sanctionedMethodBraceDepth = 0;
+            sanctionedMethodBodyStarted = false;
             tautologies.Clear();
         }
 
@@ -5824,9 +5876,44 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 if (line[0] == '-')
                 {
                     if (trimmed.StartsWith("Assert.", StringComparison.Ordinal))
+                    {
                         assertRemoved++;
+                        if (inSanctionedRemovedMethod)
+                            sanctionedAssertRemoved++;
+                    }
                     if (TestAttrPattern.IsMatch(trimmed))
+                    {
                         testAttrRemoved++;
+                        pendingRemovedTestAttribute = true;
+                    }
+
+                    if (pendingRemovedTestAttribute &&
+                        TryGetTestMethodName(trimmed, out var methodName))
+                    {
+                        inSanctionedRemovedMethod = sanctionedRemovedTests.Any(identity =>
+                            DeclaredIdentityMatchesMethod(identity, currentFile!, methodName));
+                        if (inSanctionedRemovedMethod)
+                            sanctionedTestAttrRemoved++;
+                        pendingRemovedTestAttribute = false;
+                    }
+
+                    if (inSanctionedRemovedMethod)
+                    {
+                        var expressionBodiedMethod = content.Contains("=>", StringComparison.Ordinal) &&
+                            content.Contains(';', StringComparison.Ordinal);
+                        var opens = content.Count(ch => ch == '{');
+                        var closes = content.Count(ch => ch == '}');
+                        if (opens > 0)
+                            sanctionedMethodBodyStarted = true;
+                        sanctionedMethodBraceDepth += opens - closes;
+                        if (expressionBodiedMethod ||
+                            sanctionedMethodBodyStarted && sanctionedMethodBraceDepth <= 0)
+                        {
+                            inSanctionedRemovedMethod = false;
+                            sanctionedMethodBraceDepth = 0;
+                            sanctionedMethodBodyStarted = false;
+                        }
+                    }
                 }
                 else
                 {
@@ -5863,6 +5950,40 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         return signals;
+    }
+
+    private static bool TryGetTestMethodName(string line, out string methodName)
+    {
+        var match = TestMethodDeclarationPattern.Match(line);
+        methodName = match.Success ? match.Groups["name"].Value : string.Empty;
+        return match.Success;
+    }
+
+    private static bool DeclaredIdentityMatchesMethod(
+        string identity,
+        string filePath,
+        string methodName)
+    {
+        var normalized = identity.Trim();
+        var argumentsIndex = normalized.IndexOf('(');
+        if (argumentsIndex >= 0)
+            normalized = normalized[..argumentsIndex];
+
+        var separatorIndex = Math.Max(normalized.LastIndexOf('.'), normalized.LastIndexOf(':'));
+        var declaredMethod = separatorIndex >= 0 ? normalized[(separatorIndex + 1)..] : normalized;
+        if (!declaredMethod.Equals(methodName, StringComparison.OrdinalIgnoreCase) || separatorIndex <= 0)
+            return false;
+
+        var containingIdentity = normalized[..separatorIndex].TrimEnd('.', ':');
+        var containingSeparatorIndex = Math.Max(
+            containingIdentity.LastIndexOf('.'),
+            containingIdentity.LastIndexOf(':'));
+        var declaredClass = containingSeparatorIndex >= 0
+            ? containingIdentity[(containingSeparatorIndex + 1)..]
+            : containingIdentity;
+        return declaredClass.Equals(
+            Path.GetFileNameWithoutExtension(filePath),
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FormatTestFileDiffDetails(IReadOnlyList<TestFileDiffStats> fileStats)

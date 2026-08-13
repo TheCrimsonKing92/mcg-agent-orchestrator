@@ -447,6 +447,77 @@ public sealed class TestCoverageInvariantTests
         }
     }
 
+    [Xunit.Fact]
+    public void Evaluate_DeclaredRemovalsAcrossFiles_CreditsEveryCase()
+    {
+        var trx = WriteTrxWithMethodIdentity(("1", "current test", "Passed", "CurrentTests.Runs"));
+        try
+        {
+            var candidate = new HashSet<string>(["current test"], StringComparer.OrdinalIgnoreCase);
+            var mainDiscovery = ParseMtpDiscovery(
+                ("current test", "tests/Example.Tests/FirstRetainedTests.cs"),
+                ("Example.Tests.FirstRetainedTests.FirstRemoval", "tests/Example.Tests/FirstRetainedTests.cs"),
+                ("Example.Tests.SecondRetainedTests.SecondRemoval", "tests/Example.Tests/SecondRetainedTests.cs"),
+                ("Example.Tests.SecondRetainedTests.ThirdRemoval", "tests/Example.Tests/SecondRetainedTests.cs"));
+
+            var result = TestCoverageInvariant.Evaluate(
+                candidate,
+                [new TestPartitionCoverage("lane", true, [trx])],
+                mainDiscovery.Tests,
+                [],
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest,
+                sanctionedRemovedTests:
+                [
+                    "Example.Tests.FirstRetainedTests.FirstRemoval",
+                    "Example.Tests.SecondRetainedTests.SecondRemoval",
+                    "Example.Tests.SecondRetainedTests.ThirdRemoval"
+                ]);
+
+            Xunit.Assert.True(result.Passed, result.Summary);
+            Xunit.Assert.Contains(
+                "cross-generation-count:candidate=1,minimum=1,main=4,deleted=3",
+                result.Summary,
+                StringComparison.Ordinal);
+            Xunit.Assert.Contains(
+                "source=declared-test-removal,identity=Example.Tests.FirstRetainedTests.FirstRemoval,status=corroborated,credit=1",
+                result.Summary,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact]
+    public void Evaluate_DeclaredRemoval_DoesNotDoubleCreditLegacyFallback()
+    {
+        var trx = WriteTrxWithMethodIdentity(("1", "current test", "Passed", "CurrentTests.Runs"));
+        try
+        {
+            var mainDiscovery = ParseMtpDiscoveryWithoutLocations(
+                "current test",
+                "Example.Tests.RemovedTests.RemovedCase");
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>(["current test"], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("lane", true, [trx])],
+                mainDiscovery.Tests,
+                ["tests/Example.Tests/RemovedTests.cs"],
+                mainDiscoveredTestSourceFiles: mainDiscovery.SourceFilesByTest,
+                sanctionedRemovedTests: ["Example.Tests.RemovedTests.RemovedCase"]);
+
+            Xunit.Assert.True(result.Passed, result.Summary);
+            Xunit.Assert.Contains(
+                "cross-generation-count:candidate=1,minimum=1,main=2,deleted=1",
+                result.Summary,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "TestCoverageInvariant_does_not_reduce_minimum_for_intra_project_rename")]
     public void TestCoverageInvariantDoesNotReduceMinimumForIntraProjectRename()
     {

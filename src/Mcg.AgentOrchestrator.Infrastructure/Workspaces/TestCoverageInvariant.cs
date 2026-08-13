@@ -258,7 +258,8 @@ internal static class TestCoverageInvariant
         IReadOnlySet<string>? mainDiscoveredTests = null,
         IReadOnlyList<string>? deletedTestFiles = null,
         string? currentAttemptId = null,
-        IReadOnlyDictionary<string, string>? mainDiscoveredTestSourceFiles = null)
+        IReadOnlyDictionary<string, string>? mainDiscoveredTestSourceFiles = null,
+        IReadOnlyList<string>? sanctionedRemovedTests = null)
     {
         if (candidateDiscoveredTests.Count == 0)
         {
@@ -310,6 +311,7 @@ internal static class TestCoverageInvariant
             .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
             .ToList();
         var attributionReceipts = new List<string>();
+        string? crossGenerationCountReceipt = null;
 
         if (mainDiscoveredTests is not null)
         {
@@ -326,21 +328,23 @@ internal static class TestCoverageInvariant
             // attribution over the legacy filename/class-name heuristic. Location metadata is
             // optional, however, so an unattributed deleted file retains at most the legacy
             // one-test credit and emits a named receipt instead of silently tightening the gate.
-            int deletedMainTestCount;
+            var creditedMainTests = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var anonymousAttributionCandidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var unattributedDeletedFiles = new List<string>();
             var unmatchedDeletedFileCount = 0;
             if (mainDiscoveredTestSourceFiles is not null)
             {
-                deletedMainTestCount = 0;
-                var unattributedDeletedFiles = new List<string>();
                 foreach (var deletedTestFile in normalizedDeletedTestFiles)
                 {
-                    var attributedTestCount = mainDiscoveredTests.Count(mainTest =>
-                        mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) &&
-                        IsUsableRepositoryRelativeSourcePath(sourceFile) &&
-                        sourceFile.Equals(deletedTestFile, StringComparison.OrdinalIgnoreCase));
+                    var attributedTests = mainDiscoveredTests.Where(mainTest =>
+                            mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) &&
+                            IsUsableRepositoryRelativeSourcePath(sourceFile) &&
+                            sourceFile.Equals(deletedTestFile, StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+                    var attributedTestCount = attributedTests.Length;
                     if (attributedTestCount > 0)
                     {
-                        deletedMainTestCount += attributedTestCount;
+                        creditedMainTests.UnionWith(attributedTests);
                     }
                     else
                     {
@@ -351,20 +355,22 @@ internal static class TestCoverageInvariant
                 var testsWithoutUsableAttribution = mainDiscoveredTests.Count(mainTest =>
                     !mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) ||
                     !IsUsableRepositoryRelativeSourcePath(sourceFile));
+                anonymousAttributionCandidates.UnionWith(mainDiscoveredTests.Where(mainTest =>
+                    !mainDiscoveredTestSourceFiles.TryGetValue(mainTest, out var sourceFile) ||
+                    !IsUsableRepositoryRelativeSourcePath(sourceFile)));
                 unmatchedDeletedFileCount = Math.Min(
                     unattributedDeletedFiles.Count,
                     testsWithoutUsableAttribution);
-                for (var index = 0; index < unattributedDeletedFiles.Count; index++)
-                {
-                    attributionReceipts.Add(
-                        $"cross-generation-attribution:source=mtp-json-location,file={unattributedDeletedFiles[index]},status=unattributed,fallback=legacy-one-per-file,credit={(index < unmatchedDeletedFileCount ? 1 : 0)}");
-                }
             }
             else
             {
-                deletedMainTestCount = mainDiscoveredTests.Count(mainTest =>
+                creditedMainTests.UnionWith(mainDiscoveredTests.Where(mainTest =>
                     deletedClassNames.Any(className =>
-                        IdentityBelongsToDeletedTestFile(mainTest, className!)));
+                        IdentityBelongsToDeletedTestFile(mainTest, className!))));
+                anonymousAttributionCandidates.UnionWith(mainDiscoveredTests.Where(mainTest =>
+                    !HasClassQualifiedIdentity(mainTest) &&
+                    !deletedClassNames.Any(className =>
+                        IdentityBelongsToDeletedTestFile(mainTest, className!))));
                 unmatchedDeletedFileCount = Math.Min(
                     deletedClassNames.Count(className =>
                         !mainDiscoveredTests.Any(mainTest =>
@@ -374,13 +380,38 @@ internal static class TestCoverageInvariant
                         !deletedClassNames.Any(className =>
                             IdentityBelongsToDeletedTestFile(mainTest, className!))));
             }
+
+            foreach (var declaredIdentity in (sanctionedRemovedTests ?? [])
+                .Where(identity => !string.IsNullOrWhiteSpace(identity))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var corroboratedTests = mainDiscoveredTests
+                    .Where(mainTest =>
+                        IdentitiesMatch(mainTest, declaredIdentity) &&
+                        !candidateDiscoveredTests.Any(candidateTest => IdentitiesMatch(mainTest, candidateTest)))
+                    .ToArray();
+                creditedMainTests.UnionWith(corroboratedTests);
+                attributionReceipts.Add(
+                    $"cross-generation-attribution:source=declared-test-removal,identity={declaredIdentity},status={(corroboratedTests.Length > 0 ? "corroborated" : "unmatched")},credit={corroboratedTests.Length}");
+            }
+
+            unmatchedDeletedFileCount = Math.Max(
+                0,
+                unmatchedDeletedFileCount - creditedMainTests.Count(anonymousAttributionCandidates.Contains));
+            for (var index = 0; index < unattributedDeletedFiles.Count; index++)
+            {
+                attributionReceipts.Add(
+                    $"cross-generation-attribution:source=mtp-json-location,file={unattributedDeletedFiles[index]},status=unattributed,fallback=legacy-one-per-file,credit={(index < unmatchedDeletedFileCount ? 1 : 0)}");
+            }
+            var deletedMainTestCount = creditedMainTests.Count;
             var minimumCandidateCount = Math.Max(
                 0,
                 mainDiscoveredTests.Count - deletedMainTestCount - unmatchedDeletedFileCount);
+            crossGenerationCountReceipt =
+                $"cross-generation-count:candidate={candidateDiscoveredTests.Count},minimum={minimumCandidateCount},main={mainDiscoveredTests.Count},deleted={deletedMainTestCount + unmatchedDeletedFileCount}";
             if (candidateDiscoveredTests.Count < minimumCandidateCount)
             {
-                missing.Add(
-                    $"cross-generation-count:candidate={candidateDiscoveredTests.Count},minimum={minimumCandidateCount},main={mainDiscoveredTests.Count},deleted={deletedMainTestCount + unmatchedDeletedFileCount}");
+                missing.Add(crossGenerationCountReceipt);
             }
         }
 
@@ -388,6 +419,10 @@ internal static class TestCoverageInvariant
         var summary = passed
             ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, partitions={partitions.Count}"
             : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
+        if (crossGenerationCountReceipt is not null)
+        {
+            summary += $"; {crossGenerationCountReceipt}";
+        }
         if (attributionReceipts.Count > 0)
         {
             summary += $"; {string.Join("; ", attributionReceipts)}";

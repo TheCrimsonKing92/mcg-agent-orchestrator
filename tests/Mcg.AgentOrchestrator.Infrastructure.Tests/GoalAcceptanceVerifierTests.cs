@@ -8049,6 +8049,114 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
+    public async Task TestTamperGuard_DeclaredRemoval_Passes()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,5 +10,0 @@",
+            "-    [Xunit.Fact(DisplayName = \"some test\")]",
+            "-    public void SomeTest()",
+            "-    {",
+            "-        Assert.True(something);",
+            "-    }"
+        ]);
+        var criteria = """
+            [
+              {
+                "name": "test-removal: Example.Tests.FooTests.SomeTest",
+                "type": "test-removal",
+                "testIdentity": "Example.Tests.FooTests.SomeTest"
+              }
+            ]
+            """;
+
+        var result = await RunTamperGuardAsync(
+            CreateTamperGuardVerifier(diff),
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"],
+            criteria);
+
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.True(tamperCheck.Passed, tamperCheck.OutputTail);
+        Assert.Equal("no test degradation detected", tamperCheck.ResultSummary);
+        Assert.DoesNotContain(result.Checks, check => check.Name.StartsWith("test-removal:", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task TestTamperGuard_WrongClassDeclaration_Fails()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,5 +10,0 @@",
+            "-    [Xunit.Fact]",
+            "-    public void SomeTest()",
+            "-    {",
+            "-        Assert.True(something);",
+            "-    }"
+        ]);
+        var criteria = """
+            [
+              {
+                "name": "test-removal: Example.Tests.OtherTests.SomeTest",
+                "type": "test-removal",
+                "testIdentity": "Example.Tests.OtherTests.SomeTest"
+              }
+            ]
+            """;
+
+        var result = await RunTamperGuardAsync(
+            CreateTamperGuardVerifier(diff),
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"],
+            criteria);
+
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.False(tamperCheck.Passed);
+        Assert.Contains("tests -1/+0", tamperCheck.OutputTail!, StringComparison.Ordinal);
+        Assert.Contains("net -1 assertion", tamperCheck.OutputTail!, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task TestTamperGuard_DeclaredRemoval_DoesNotMaskWeakening()
+    {
+        var diff = string.Join("\n", [
+            "diff --git a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "--- a/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "+++ b/tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs",
+            "@@ -10,5 +10,0 @@",
+            "-    [Xunit.Fact]",
+            "-    public void SomeTest()",
+            "-    {",
+            "-        Assert.True(something);",
+            "-    }",
+            "@@ -30,1 +25,0 @@ public void ExistingTest()",
+            "-        Assert.True(stillRequired);"
+        ]);
+        var criteria = """
+            [
+              {
+                "name": "test-removal: Example.Tests.FooTests.SomeTest",
+                "type": "test-removal",
+                "testIdentity": "Example.Tests.FooTests.SomeTest"
+              }
+            ]
+            """;
+
+        var result = await RunTamperGuardAsync(
+            CreateTamperGuardVerifier(diff),
+            ["tests/Mcg.AgentOrchestrator.Infrastructure.Tests/FooTests.cs"],
+            criteria);
+
+        var tamperCheck = result.Checks!.Single(c => c.Name == "test tamper guard");
+        Assert.False(tamperCheck.Passed);
+        Assert.Equal("1 test degradation signal(s)", tamperCheck.ResultSummary);
+        Assert.Contains("net -1 assertion", tamperCheck.OutputTail!, StringComparison.Ordinal);
+        Assert.DoesNotContain("test method(s) removed", tamperCheck.OutputTail!, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public async Task TestTamperGuardAllowsQualifiedFactRename()
     {
         var diff = string.Join("\n", [
@@ -8841,11 +8949,21 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
     private static async Task<AcceptanceVerificationResult> RunTamperGuardAsync(
         GoalAcceptanceVerifier verifier,
-        IReadOnlyList<string> changedFiles)
+        IReadOnlyList<string> changedFiles,
+        string? criteriaJson = null)
     {
         var root = CreatePartitionedInfrastructureManifestWorkspace();
         try
         {
+            if (!string.IsNullOrWhiteSpace(criteriaJson))
+            {
+                var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+                Directory.CreateDirectory(orchestratorDirectory);
+                File.WriteAllText(
+                    Path.Combine(orchestratorDirectory, "goal-acceptance-criteria.json"),
+                    criteriaJson);
+            }
+
             return await verifier.RunAsync(root, changedFiles: changedFiles);
         }
         finally
