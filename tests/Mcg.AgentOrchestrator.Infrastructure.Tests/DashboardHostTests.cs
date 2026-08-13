@@ -209,7 +209,7 @@ public sealed class DashboardHostTests
             using var developerAgentResponse = await client.PostAsync(
                 new Uri(new Uri(url), "api/agents"),
                 new StringContent(
-                    "{\"role\":\"Developer\",\"providerName\":\"OpenAI\",\"modelName\":\"gpt-5.5\",\"executionPolicy\":\"PreferSubscription\",\"subscriptionProfileName\":\"codex-cli\"}",
+                    "{\"role\":\"Developer\",\"providerName\":\"OpenAI\",\"modelName\":\"gpt-5.5\",\"executionPolicy\":\"PreferSubscription\",\"subscriptionProfileName\":\"codex-cli\"}", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
                     System.Text.Encoding.UTF8,
                     "application/json"));
             var developerAgent = await developerAgentResponse.Content.ReadAsStringAsync();

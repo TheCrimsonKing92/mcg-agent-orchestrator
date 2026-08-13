@@ -407,7 +407,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
     var expectedPromptCharacters = kernel.BuildTaskBrief(
         goal.Id,
         task.Id,
-        "OpenAI/gpt-5.3-codex",
+        $"OpenAI/{AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias}",
         workingDirectory,
         contextDirectory).Content.Length;
     var estimatedPromptCharacters = WorkerProfileDispatcher.EstimateSubscriptionPromptCharacters(kernel, goal, task, [agent]);
@@ -423,7 +423,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
         dispatchedAt);
 
     Assert.Equal("custom-codex", task.LastDispatch!.WorkerName);
-    Assert.Contains("--model 'gpt-5.3-codex'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains($"--model '{AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("model_reasoning_effort='medium'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--api-reasoning 'high'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains($"--cd '{workingDirectory}'", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -435,7 +435,7 @@ public sealed class WorkerDispatchTestsModelSelection : WorkerDispatchTestSuppor
     var prompt = File.ReadAllText(dispatchResult.PromptPath);
     Assert.Equal(prompt.Length, task.LastDispatch.PromptCharacterCount);
     Assert.Equal(expectedPromptCharacters, task.LastDispatch.PromptCharacterCount);
-    Assert.Contains("Model fit: OpenAI/gpt-5.3-codex - adequate|overkill|underpowered - <task shape> - <short reason>", prompt, StringComparison.Ordinal);
+    Assert.Contains($"Model fit: OpenAI/{AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias} - adequate|overkill|underpowered - <task shape> - <short reason>", prompt, StringComparison.Ordinal);
     Assert.Contains("WORKER_RESULT", prompt, StringComparison.Ordinal);
     var preflightPath = Path.Combine(contextDirectory, "subscription-preflight.md");
     Assert.True(File.Exists(preflightPath));
@@ -628,7 +628,7 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
     Assert.Contains("--model 'gpt-5-mini-codex'", complexTask.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Contains("model_reasoning_effort='high'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
-    Assert.Contains("--api-model 'gpt-5.5'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains("--api-model 'gpt-5.5'", complexTask.LastDispatch.Command, StringComparison.Ordinal); // Deliberate paid API complex-model name, not a subscription alias.
     Assert.Contains("--api-reasoning 'high'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("--complexity 'Complex'", complexTask.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", complexTask.LastDispatch.ProviderName);
@@ -1495,7 +1495,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.StartsWith("codex exec", dispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("claude", dispatch.Command, StringComparison.OrdinalIgnoreCase);
     Assert.Contains("profile: codex-cli", preflight, StringComparison.Ordinal);
-    Assert.Contains("model: OpenAI/gpt-5.5", preflight, StringComparison.Ordinal);
+    Assert.Contains($"model: OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias}", preflight, StringComparison.Ordinal);
     Assert.Contains("model-selection: provider-constrained: Planner remains on OpenAI", preflight, StringComparison.Ordinal);
 }
 
@@ -2630,7 +2630,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         dispatchedAt);
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
-    Assert.Contains("--model 'gpt-5.5'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.Contains("model_reasoning_effort='high'", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
@@ -3351,7 +3351,7 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         $"findings: {JsonSerializer.Serialize(new[] { finding })}",
         "touched_anchors: []",
         "verdict: pass",
-        "model_fit: OpenAI/gpt-5.5 - adequate - focused test - fixture",
+        "model_fit: OpenAI/gpt-5.5 - adequate - focused test - fixture", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: none",
         "confidence: high",
         "END_WORKER_RESULT");

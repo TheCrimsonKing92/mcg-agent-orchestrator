@@ -105,7 +105,7 @@ public sealed class ModelFitEvidenceTests
     public void ModelFitEvidenceRejectsLiteralTemplateEcho()
     {
         var observation = ModelFitEvidence.TryParseNote(
-            ModelFitEvidence.BuildNoteTemplate("OpenAI/gpt-5.5"));
+            ModelFitEvidence.BuildNoteTemplate("OpenAI/gpt-5.5")); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 
         Assert.True(observation is null, "template echo must not count as evidence");
     }
@@ -114,7 +114,7 @@ public sealed class ModelFitEvidenceTests
     public void ModelFitEvidenceDropsPlaceholderTaskShape()
     {
         var observation = ModelFitEvidence.TryParseNote(
-            "Model fit: OpenAI/gpt-5.5 - overkill - <task shape> - <short reason>");
+            "Model fit: OpenAI/gpt-5.5 - overkill - <task shape> - <short reason>"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 
         Assert.True(observation is not null, "expected note to parse");
         Assert.Equal("overkill", observation!.Fit);
@@ -125,7 +125,7 @@ public sealed class ModelFitEvidenceTests
     public void ModelFitEvidenceTreatsUnrecognizedFitAsUnknown()
     {
         var observation = ModelFitEvidence.TryParseNote(
-            "Model fit: OpenAI/gpt-5.5 - excellent - docs update");
+            "Model fit: OpenAI/gpt-5.5 - excellent - docs update"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 
         Assert.True(observation is not null, "expected note to parse");
         Assert.Equal("unknown", observation!.Fit);

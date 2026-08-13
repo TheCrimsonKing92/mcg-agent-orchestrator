@@ -1,4 +1,4 @@
-using Mcg.AgentOrchestrator.App.Cli;
+﻿using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -1837,7 +1837,7 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
             root,
             1,
             string.Empty,
-            "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.",
+            "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             DateTimeOffset.UtcNow));
 
         var output = CaptureConsole(() =>

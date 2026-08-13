@@ -195,7 +195,7 @@ public abstract class ChaosGateTestBase
         string tests,
         string commit   = "{commit}",
         string blockers = "none",
-        string modelFit = "OpenAI/gpt-5.5 - adequate - chaos test fixture",
+        string modelFit = "OpenAI/gpt-5.5 - adequate - chaos test fixture", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         string skills   = "dotnet-windows-build-hygiene",
         string confidence = "high")
     {
@@ -223,7 +223,7 @@ public abstract class ChaosGateTestBase
         string tests,
         string commit     = "{commit}",
         string blockers   = "none",
-        string modelFit   = "OpenAI/gpt-5.5 - adequate - chaos test fixture",
+        string modelFit   = "OpenAI/gpt-5.5 - adequate - chaos test fixture", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         string skills     = "dotnet-windows-build-hygiene",
         string confidence = "high")
     {

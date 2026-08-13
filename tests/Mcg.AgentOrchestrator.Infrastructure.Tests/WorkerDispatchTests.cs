@@ -1646,7 +1646,7 @@ protected static string WorkerResultBlock(
     string tests,
     string commit = "{commit}",
     string blockers = "none",
-    string modelFit = "OpenAI/gpt-5.5 - adequate - test worker fixture.",
+    string modelFit = "OpenAI/gpt-5.5 - adequate - test worker fixture.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
     string skills = "dotnet-windows-build-hygiene",
     string confidence = "high")
 {

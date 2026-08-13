@@ -1108,7 +1108,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         """,
         string.Empty,
         DateTimeOffset.UtcNow,
-        "Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation."));
+        "Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.")); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 
     var contextDirectory = WorkerContextArtifacts.Write(goal, currentTask, workingDirectory);
 
@@ -1125,7 +1125,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Contains("Verification: `dotnet test --filter WorkerContextArtifacts`", summaries, StringComparison.Ordinal);
     Assert.Contains("Verification result: passed focused tests", summaries, StringComparison.Ordinal);
     Assert.Contains("Risks: none reported", summaries, StringComparison.Ordinal);
-    Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.", summaries, StringComparison.Ordinal);
+    Assert.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused context bundle implementation.", summaries, StringComparison.Ordinal); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 }
 
     [Xunit.Fact(DisplayName = "WorkerContextArtifacts_selects_relevant_skills_and_registers_skill_artifact")]
@@ -1734,7 +1734,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         "Implemented." + Environment.NewLine + WorkerResultBlock("src/Feature.cs, bin/generated.dll", "dotnet test", "Passed: 1", "abc123"),
         string.Empty,
         DateTimeOffset.UtcNow,
-        "Model fit: OpenAI/gpt-5.5 - adequate - implementation fixture."));
+        "Model fit: OpenAI/gpt-5.5 - adequate - implementation fixture.")); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
     kernel.ReportTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
         "dotnet test",

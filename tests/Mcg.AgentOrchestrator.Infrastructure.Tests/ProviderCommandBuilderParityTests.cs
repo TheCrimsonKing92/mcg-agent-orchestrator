@@ -151,7 +151,7 @@ public sealed class ProviderCommandBuilderParityTests
                 workingDirectory: null));
 
         Assert.Equal(
-            "codex exec --skip-git-repo-check --model 'gpt-5.5' -c model_reasoning_effort= --sandbox 'read-only' --cd ",
+            $"codex exec --skip-git-repo-check --model '{AgentCatalog.OpenAiSubscriptionModelAlias}' -c model_reasoning_effort= --sandbox 'read-only' --cd ",
             command);
     }
 

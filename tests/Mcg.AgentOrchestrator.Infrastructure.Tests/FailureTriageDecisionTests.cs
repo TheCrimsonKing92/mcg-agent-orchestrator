@@ -122,7 +122,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                 repo,
                 1,
                 "Connecting to API...",
-                "  Planner output contract failed: model-home target citation 'models/gpt-5.6-sol' does not exist. Retry Planner for contract repair.",
+                "  Planner output contract failed: model-home target citation 'models/gpt-5.6-sol' does not exist. Retry Planner for contract repair.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
                 completedAt));
 
             var item = FailureTriagePlanner.Build(
@@ -159,7 +159,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                 1,
                 string.Empty,
                 "Planner output contract failed: missing required evidence. Retry Planner for contract repair.\n" +
-                "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.",
+                "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
                 completedAt));
 
             var item = FailureTriagePlanner.Build(
@@ -225,7 +225,7 @@ public sealed class FailureTriageDecisionTests : WorkerDispatchTestSupport
                     "tests: fail - quoted historical result",
                     "commit: none",
                     "blockers: none",
-                    "model_fit: OpenAI/gpt-5.6-sol - adequate - test",
+                    "model_fit: OpenAI/gpt-5.6-sol - adequate - test", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
                     "skills: none",
                     "confidence: high",
                     "END_WORKER_RESULT"),

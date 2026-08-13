@@ -547,7 +547,7 @@ public sealed class RunGoalServiceTests
             "codex-cli exec",
             workspace.ExecutionDirectory,
             1,
-            "Changed files: src/example.cs\nModel fit: OpenAI/gpt-5.5 - adequate - useful work before provider error.",
+            "Changed files: src/example.cs\nModel fit: OpenAI/gpt-5.5 - adequate - useful work before provider error.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             "Error: websocket transport failed with OS error 10013 after partial work.",
             DateTimeOffset.UtcNow));
 
@@ -672,7 +672,7 @@ public sealed class RunGoalServiceTests
             "codex-cli exec",
             DateTimeOffset.UtcNow,
             "Planner output contract failed: missing required evidence. Retry Planner for contract repair.\n" +
-            "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.");
+            "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account."); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var result = await RunGoalService.RunAsync(
@@ -718,7 +718,7 @@ public sealed class RunGoalServiceTests
             workspace.ExecutionDirectory,
             1,
             "Connecting to API...",
-            "  Planner output contract failed: model-home target citation 'models/gpt-5.6-sol' does not exist. Retry Planner for contract repair.",
+            "  Planner output contract failed: model-home target citation 'models/gpt-5.6-sol' does not exist. Retry Planner for contract repair.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             completedAt));
 
         var result = await RunGoalService.RunAsync(

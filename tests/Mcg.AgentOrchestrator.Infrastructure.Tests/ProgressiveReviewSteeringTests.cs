@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text.RegularExpressions;
 
 [Collection(TestCollections.ChaosGateGit)]
 public sealed class ProgressiveReviewSteeringTests
@@ -62,7 +63,10 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 foreach (var alias in catalogAliases)
                 {
-                    if (lines[index].Contains($"\"{alias}\"", StringComparison.Ordinal))
+                    if (Regex.IsMatch(
+                            lines[index],
+                            $@"(?<![A-Za-z0-9-]){Regex.Escape(alias)}(?![A-Za-z0-9-])",
+                            RegexOptions.CultureInvariant))
                     {
                         Assert.True(
                             lines[index].Contains("// Deliberate", StringComparison.Ordinal),

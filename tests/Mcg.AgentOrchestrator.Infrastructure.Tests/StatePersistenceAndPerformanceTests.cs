@@ -583,7 +583,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, subscription.ReasoningEffort);
         Assert.True(agent.ComplexModel is not null);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
-        Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, agent.ComplexModel.ModelName);
+        Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName); // Deliberate paid API complex-model name from the seeded catalog, independent of the subscription alias.
         Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel.ReasoningEffort);
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }

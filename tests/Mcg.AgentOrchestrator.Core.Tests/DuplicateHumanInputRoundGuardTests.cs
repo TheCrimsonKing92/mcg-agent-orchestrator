@@ -300,7 +300,7 @@ public sealed class DuplicateHumanInputRoundGuardTests
         tests: pass - focused verification passed
         commit: none
         blockers: {{blockers}}
-        model_fit: OpenAI/gpt-5.6-sol - adequate - focused implementation
+        model_fit: OpenAI/{{OpenAiSolSubscriptionModelAlias}} - adequate - focused implementation
         skills: none
         confidence: high
         END_WORKER_RESULT

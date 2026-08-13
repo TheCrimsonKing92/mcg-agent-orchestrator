@@ -24,7 +24,7 @@ public sealed class AgentCatalogTests
         Assert.Equal("codex-cli", agent.Subscription!.WorkerProfileName);
         Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, agent.Subscription.ModelAlias);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
-        Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, agent.ComplexModel.ModelName);
+        Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName); // Deliberate paid API complex-model name from OpenAiComplex(), independent of the subscription alias.
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }
 

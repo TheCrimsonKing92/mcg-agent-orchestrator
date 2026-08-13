@@ -331,7 +331,7 @@ public sealed class VerificationAndProcessLogTests
             commands: focused review
             tests: pass - focused review passed
             blockers: none
-            model_fit: OpenAI/gpt-5.6-sol - adequate
+            model_fit: OpenAI/{{AgentCatalog.OpenAiSolSubscriptionModelAlias}} - adequate
             skills: none
             confidence: high
             END_WORKER_RESULT
@@ -343,7 +343,7 @@ public sealed class VerificationAndProcessLogTests
             commands: none
             tests: deferred - awaiting operator
             blockers: {{upstreamBlocker}}
-            model_fit: OpenAI/gpt-5.6-sol - adequate
+            model_fit: OpenAI/{{AgentCatalog.OpenAiSolSubscriptionModelAlias}} - adequate
             skills: none
             confidence: high
             END_WORKER_RESULT
@@ -429,14 +429,14 @@ public sealed class VerificationAndProcessLogTests
         File.WriteAllText(stdoutPath, "Worker wrote the structured result to its result artifact.");
         File.WriteAllText(stderrPath, "Prompt context only; no worker result here.");
         File.WriteAllText(exitPath, "0");
-        File.WriteAllText(Path.Combine(root, "WORKER_RESULT.md"), """
+        File.WriteAllText(Path.Combine(root, "WORKER_RESULT.md"), $"""
             WORKER_RESULT:
             files: none
             commands: focused review
             tests: pass - focused review passed
             commit: none
             blockers: none
-            model_fit: OpenAI/gpt-5.6-sol - adequate
+            model_fit: OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias} - adequate
             skills: none
             confidence: high
             END_WORKER_RESULT

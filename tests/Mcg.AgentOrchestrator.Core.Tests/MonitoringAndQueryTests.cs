@@ -234,7 +234,7 @@ public sealed class MonitoringAndQueryTests
         "manual-verification passed",
         "C:\\repo",
         0,
-        "Evidence checked.\nModel fit: OpenAI/gpt-5.3-codex - overkill - label-only change.",
+        "Evidence checked.\nModel fit: OpenAI/gpt-5.3-codex - overkill - label-only change.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         string.Empty,
         clock.UtcNow));
     kernel.RecordTaskVerification(goal.Id, task.Id, new TaskVerificationRecord(
@@ -255,7 +255,7 @@ public sealed class MonitoringAndQueryTests
         "manual-verification passed",
         "C:\\repo",
         0,
-        "Evidence checked.\nModel fit: OpenAI/gpt-5.3-codex - underpowered - missed test coverage.",
+        "Evidence checked.\nModel fit: OpenAI/gpt-5.3-codex - underpowered - missed test coverage.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         string.Empty,
         clock.UtcNow.AddMinutes(3)));
 

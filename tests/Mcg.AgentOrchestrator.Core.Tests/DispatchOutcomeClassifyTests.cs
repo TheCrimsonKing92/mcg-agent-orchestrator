@@ -510,7 +510,7 @@ public sealed class DispatchOutcomeClassifyTests
             "C:\\repo",
             0,
             "WORKER_RESULT:\nfiles: src/Foo.cs\ntests: pass\nblockers: none\nEND_WORKER_RESULT",
-            "Rate limit reached for gpt-5.5. Please try again in 42s.",
+            "Rate limit reached for gpt-5.5. Please try again in 42s.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             DateTimeOffset.UtcNow,
             WorkerResultPresent: true,
             HasCommittedChanges: true);
@@ -527,7 +527,7 @@ public sealed class DispatchOutcomeClassifyTests
     {
         var outcome = DispatchFailureClassifier.Classify(
             SubscriptionTask(),
-            Verification(1, "", "ERROR: Rate limit reached for gpt-5.5. Please try again in 42s."));
+            Verification(1, "", "ERROR: Rate limit reached for gpt-5.5. Please try again in 42s.")); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 
         Xunit.Assert.Equal(DispatchOutcomeKind.RecoverableSubscriptionLimit, outcome.Kind);
         Xunit.Assert.Equal(RecoveryRecommendation.Deferred, outcome.RecoveryRecommendation);
@@ -1140,7 +1140,7 @@ public sealed class DispatchOutcomeClassifyTests
             Verification(
                 1,
                 "Connecting to API...",
-                "Planner output contract failed: model-home target citation 'models/gpt-5.6-sol' does not exist and is not marked as a new file. Retry Planner for contract repair."));
+                "Planner output contract failed: model-home target citation 'models/gpt-5.6-sol' does not exist and is not marked as a new file. Retry Planner for contract repair.")); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);
         Xunit.Assert.Contains("Planner output contract failed", outcome.EvidenceSummary, StringComparison.Ordinal);
@@ -1212,7 +1212,7 @@ public sealed class DispatchOutcomeClassifyTests
             SimpleTask(AgentRole.Planner),
             Verification(
                 1,
-                "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.",
+                "ERROR: invalid model 'gpt-5.3-codex' does not exist for this account.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
                 "Planner output contract failed: missing required evidence. Retry Planner for contract repair."));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.ProviderModelRejection, outcome.Kind);
@@ -1226,7 +1226,7 @@ public sealed class DispatchOutcomeClassifyTests
             AgentRole.Planner,
             Verification(
                 1,
-                "ERROR: requested model gpt-5.6-sol is not supported.",
+                "ERROR: requested model gpt-5.6-sol is not supported.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
                 "Planner output contract failed: missing required evidence. Retry Planner for contract repair."));
 
         Xunit.Assert.Equal(WorkTaskStatus.Failed, task.Status);
@@ -1242,7 +1242,7 @@ public sealed class DispatchOutcomeClassifyTests
             AgentRole.Planner,
             Verification(
                 1,
-                "ERROR: requested model gpt-5.6-sol is not supported.",
+                "ERROR: requested model gpt-5.6-sol is not supported.", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
                 "Planner output contract failed: missing required evidence. Retry Planner for contract repair."));
 
         Xunit.Assert.Single(task.VerificationHistory);

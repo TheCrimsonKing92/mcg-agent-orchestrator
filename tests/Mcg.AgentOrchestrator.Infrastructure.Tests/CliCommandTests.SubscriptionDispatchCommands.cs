@@ -261,7 +261,7 @@ public sealed class CliCommandTestsSubscriptionDispatchCommands : CliCommandTest
         Xunit.Assert.Contains($"Dashboard: {Path.GetFullPath(dashboardPath)}", output);
         Xunit.Assert.Contains("subscription-dispatch 1", html, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("<code>run 1</code>", html, StringComparison.Ordinal);
-        Xunit.Assert.DoesNotContain("OpenAI/gpt-5.5", html, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain($"OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias}", html, StringComparison.Ordinal);
     }
 
 

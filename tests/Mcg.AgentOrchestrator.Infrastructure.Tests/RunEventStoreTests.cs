@@ -46,21 +46,21 @@ public sealed class RunEventStoreTests
             "## 2026-07-02 - First",
             "summary",
             "tests passed",
-            "Model fit: OpenAI/gpt-5.5 - adequate - storage test - enough",
+            "Model fit: OpenAI/gpt-5.5 - adequate - storage test - enough", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             "## 2026-07-02 - First\n\nsummary"));
         await store.UpsertAsync(new DogfoodLogAppend(
             "goal-1",
             "## 2026-07-02 - First updated",
             "updated summary",
             "tests passed",
-            "Model fit: OpenAI/gpt-5.5 - adequate - storage test - enough",
+            "Model fit: OpenAI/gpt-5.5 - adequate - storage test - enough", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             "## 2026-07-02 - First updated\n\nupdated summary"));
         await store.UpsertAsync(new DogfoodLogAppend(
             "goal-2",
             "## 2026-07-02 - Second",
             "second summary",
             "tests passed",
-            "Model fit: OpenAI/gpt-5.5 - adequate - storage test - enough",
+            "Model fit: OpenAI/gpt-5.5 - adequate - storage test - enough", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             "## 2026-07-02 - Second\n\nsecond summary"));
 
         var recent = await store.ListRecentAsync();

@@ -157,7 +157,7 @@ public sealed class VerificationAndInputWorklistTests
         "tests: Failed: 1",
         "commit: abc123",
         "blockers: Finding A blocks acceptance",
-        "model_fit: OpenAI/gpt-5.5 - adequate - review",
+        "model_fit: OpenAI/gpt-5.5 - adequate - review", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: none",
         "confidence: high",
         "END_WORKER_RESULT");
@@ -213,7 +213,7 @@ public sealed class VerificationAndInputWorklistTests
         "tests: pass - focused check",
         "commit: none",
         "blockers: missing full Infrastructure suite before review",
-        "model_fit: OpenAI/gpt-5.5 - adequate - review",
+        "model_fit: OpenAI/gpt-5.5 - adequate - review", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: none",
         "confidence: high",
         "END_WORKER_RESULT");
@@ -260,7 +260,7 @@ public sealed class VerificationAndInputWorklistTests
         "tests: pass - focused check",
         "commit: none",
         "blockers: missing full Infrastructure suite before review; public status output omits the correction overlay",
-        "model_fit: OpenAI/gpt-5.5 - adequate - review",
+        "model_fit: OpenAI/gpt-5.5 - adequate - review", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: none",
         "confidence: high",
         "END_WORKER_RESULT");
@@ -302,7 +302,7 @@ public sealed class VerificationAndInputWorklistTests
         "**tests**: review found a blocker",
         "**commit**: none",
         "**blockers**: decorated blocker survives markdown",
-        "**model_fit**: OpenAI/gpt-5.5 - adequate - review",
+        "**model_fit**: OpenAI/gpt-5.5 - adequate - review", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "**skills**: none",
         "**confidence**: high",
         "END_WORKER_RESULT");
@@ -345,7 +345,7 @@ public sealed class VerificationAndInputWorklistTests
         "tests: old review",
         "commit: none",
         "blockers: stale blocker should be ignored",
-        "model_fit: OpenAI/gpt-5.5 - adequate - review",
+        "model_fit: OpenAI/gpt-5.5 - adequate - review", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: none",
         "confidence: medium",
         "END_WORKER_RESULT",
@@ -356,7 +356,7 @@ public sealed class VerificationAndInputWorklistTests
         "**tests**: clean retry",
         "**commit**: none",
         "**blockers**: none",
-        "**model_fit**: OpenAI/gpt-5.5 - adequate - review",
+        "**model_fit**: OpenAI/gpt-5.5 - adequate - review", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "**skills**: none",
         "**confidence**: high",
         "END_WORKER_RESULT");

@@ -617,7 +617,7 @@ public sealed class DispatchExecutionTests
             "tests: fail - Core 67/67 and Infrastructure 196/196 passed; substantive finding blocks acceptance",
             "commit: none",
             "blockers: none",
-            "model_fit: OpenAI/gpt-5.5 - adequate - verification",
+            "model_fit: OpenAI/gpt-5.5 - adequate - verification", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             "skills: dotnet-windows-build-hygiene",
             "confidence: high",
             "END_WORKER_RESULT");
@@ -978,7 +978,7 @@ public sealed class DispatchExecutionTests
         "tests: pass - focused dispatch-runner coverage",
         "commit: abc1234",
         "blockers: full suite deferred to orchestrator acceptance gate per current-task.md",
-        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: dotnet-windows-build-hygiene",
         "confidence: high",
         "END_WORKER_RESULT");
@@ -2337,7 +2337,7 @@ public sealed class DispatchExecutionTests
         "tests: fail - timed out",
         "commit: none",
         "blockers: full Infrastructure no-build timed out at 214s after local rate limit fixture",
-        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: dotnet-windows-build-hygiene",
         "confidence: medium",
         "END_WORKER_RESULT");
@@ -2767,7 +2767,7 @@ private static string WorkerResultStdout(string files, string tests, string bloc
             : "findings: []",
         "touched_anchors: []",
         $"verdict: {(hasBlocker ? "needs-work" : "pass")}",
-        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch",
+        "model_fit: OpenAI/gpt-5.5 - adequate - dispatch", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         "skills: dotnet-windows-build-hygiene",
         "confidence: high",
         "END_WORKER_RESULT");

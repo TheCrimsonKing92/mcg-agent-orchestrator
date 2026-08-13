@@ -56,7 +56,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             AgentCatalog.OpenAiSubscriptionModelAlias,
             TaskComplexity.Complex,
             exitCode: 0,
-            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - scoped edit");
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - scoped edit"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         await writable.SaveAsync(kernel);
 
         using (var stale = new SqliteConnection($"Data Source={db};Mode=ReadWrite;Pooling=False;"))
@@ -1161,7 +1161,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             AgentCatalog.OpenAiSubscriptionModelAlias,
             TaskComplexity.Complex,
             exitCode: 1,
-            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - provider failed");
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - provider failed"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         var task = goal.Tasks.Single();
         kernel.RecordTaskNote(
             goal.Id,
@@ -1206,7 +1206,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
                     dispatch.Command,
                     dispatch.WorkingDirectory,
                     0,
-                    "Model fit: OpenAI/gpt-5.5 - adequate - implementation - scoped edit",
+                    "Model fit: OpenAI/gpt-5.5 - adequate - implementation - scoped edit", // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
                     string.Empty,
                     DateTimeOffset.Parse("2026-07-01T12:00:01Z")));
                 var updated = transactionKernel.ExportSnapshot().Goals.Single(updatedGoal => updatedGoal.Id == goal.Id.Value);
@@ -1228,11 +1228,11 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         var repo = new SqliteOrchestratorStateRepository(db);
         var kernel = new AgentOrchestratorKernel();
         RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, TaskComplexity.Complex, 1,
-            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - failed despite fit");
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - failed despite fit"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, TaskComplexity.Complex, 1,
-            "Model fit: OpenAI/gpt-5.5 - underpowered - implementation - missed repo context");
+            "Model fit: OpenAI/gpt-5.5 - underpowered - implementation - missed repo context"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         RecordDispatchOutcome(kernel, AgentRole.Developer, "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, TaskComplexity.Complex, 0,
-            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - completed");
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - completed"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 
         await repo.SaveAsync(kernel);
 
@@ -1420,7 +1420,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             AgentCatalog.OpenAiSubscriptionModelAlias,
             TaskComplexity.Complex,
             exitCode: 1,
-            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - provider failed");
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - provider failed"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         var knownTask = known.Tasks.Single();
         kernel.RecordTaskNote(known.Id, knownTask.Id, "CLASSIFIER rule=provider-connectivity; verdict=ProviderConnectivity");
         var unknown = RecordDispatchOutcome(
@@ -1430,7 +1430,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             AgentCatalog.OpenAiSubscriptionModelAlias,
             TaskComplexity.Complex,
             exitCode: 1,
-            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - old failure");
+            "Model fit: OpenAI/gpt-5.5 - adequate - implementation - old failure"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
 
         SeedOldSchemaState(db, kernel, unknown.Id.Value);
         var before = ReadOutcomeClassCounts(db, hasOutcomeColumns: false);

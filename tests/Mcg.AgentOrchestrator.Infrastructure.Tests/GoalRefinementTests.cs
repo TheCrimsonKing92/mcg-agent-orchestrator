@@ -979,7 +979,7 @@ public sealed class GoalRefinementTests
         await completer.CompleteAsync("Return JSON", "codex-prompt.md", default);
 
         Xunit.Assert.True(capturedCommand is not null);
-        Xunit.Assert.True(capturedCommand!.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+        Xunit.Assert.True(capturedCommand!.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", StringComparison.Ordinal));
         Xunit.Assert.True(capturedCommand.Contains("--sandbox 'read-only'", StringComparison.Ordinal));
         Xunit.Assert.True(capturedCommand.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
     }
@@ -1081,7 +1081,7 @@ public sealed class GoalRefinementTests
         var provider = WorkerProviderCatalog.Default().ResolveProfile(capturedSubscription!.WorkerProfileName);
         Xunit.Assert.Equal(ProviderKind.OpenAICodexCli, provider.Identity.Kind);
         Xunit.Assert.True(capturedCommand is not null);
-        Xunit.Assert.Contains("--model 'gpt-5.5'", capturedCommand!);
+        Xunit.Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", capturedCommand!);
         Xunit.Assert.Equal("The typed subscription refiner was used.", kernel.GetGoal(goalId).RefinedSpec!.BehavioralContract);
     }
 

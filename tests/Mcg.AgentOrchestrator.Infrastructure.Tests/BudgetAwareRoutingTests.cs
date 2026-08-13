@@ -87,7 +87,7 @@ public sealed class BudgetAwareRoutingTests
     public void BudgetAwareRoutingScorecardAvoidOverridesCheapLane()
     {
         var kernel = new AgentOrchestratorKernel();
-        // Default OpenAI agents use gpt-5.5 as the subscription model (codex-cli ModelAlias)
+        // Deliberate catalog-default documentation; Default OpenAI agents use gpt-5.5 as the subscription model (codex-cli ModelAlias)
         var agents = AgentCatalog.Default().Agents;
         var task = new TaskSpec(TaskId.New(), "Update docs for the new API endpoint", AgentRole.Developer);
         var goal = kernel.CreateGoal("Documentation update", [task]);
@@ -184,7 +184,7 @@ public sealed class BudgetAwareRoutingTests
         var assignedTask = updatedGoal.Tasks.Single(t => t.RequiredRole == AgentRole.Developer);
 
         // Record a recoverable limit failure with a future retry-after so the task enters retry-deferred state
-        var command = "codex exec --skip-git-repo-check --model gpt-5.5";
+        var command = $"codex exec --skip-git-repo-check --model {AgentCatalog.OpenAiSubscriptionModelAlias}";
         var workDir = "C:\\work";
         var dispatch = new TaskDispatchRecord("codex-cli", command, workDir, DateTimeOffset.UtcNow, "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias);
         kernel.RecordTaskDispatch(goal.Id, assignedTask.Id, dispatch);
