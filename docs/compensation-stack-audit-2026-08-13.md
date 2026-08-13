@@ -120,15 +120,36 @@ One integer serves artifact identity, build concurrency, and whole-gate admissio
 inherited from a **retired** firewall-era mechanism, preserved under a compatibility alias with a single live
 caller (`ConductorParallelAcceptanceAttempts.cs:360`).
 
-Worse, the coupling rests on a **comment that is false**. `ConductorBatchLoop.cs:30` pins gate parallelism to
-build concurrency on the stated grounds that every gate holds a build slot. `GoalAcceptanceVerifier.cs:3755`
-explicitly *releases* the permit before running the tests. The conductor still admits at most two whole
-acceptance attempts (`ConductorBatchLoop.cs:2631`, `:2842`), so throughput is rationed against a resource the
-20-minute test phase is not holding.
+**Correction, 2026-08-13, after this document first landed.** The sol pass claimed the coupling rests on a
+false comment — that `ConductorBatchLoop.cs:30` pins gate parallelism to build concurrency on the stated
+grounds that every gate holds a build slot, while `GoalAcceptanceVerifier.cs:3755` releases the permit before
+running tests. **That claim is wrong and was repeated here without being checked.** Line 3755 is the
+signature of `RunManagedMtpExecutableCheckAsync`, not a release. Measured from the live event stream for goal
+`22d6a9d8`:
 
-**Right design:** three types. `BuildPermitPool` (capacity 2, held only during builds); `AcceptanceAdmission`
-(independently configured from measured CPU/memory); immutable content-keyed `BuildArtifactId`. Remove
-`stableSlotIndex` from acceptance APIs.
+    20:44:14  ACCEPTANCE_LEASE_ACQUIRE   permit=build-0
+    20:44:14  ACCEPTANCE_LEASE_HANDOFF   permit=build-0
+    21:00:01  ACCEPTANCE_LEASE_RELEASE   permit=build-0
+
+The permit is held for the entire 15m47s gate, build and test phases alike. The comment at
+`ConductorBatchLoop.cs:30` is **accurate**, and the capacity-2 cap is not free throughput being wasted —
+raising it would oversubscribe the build environment. The comment even records that the slot-exhaustion and
+second-attempt-yields tests encode capacity-2 semantics deliberately.
+
+What survives is narrower and still worth doing: **only the build phase needs the permit.** Holding it across
+the test phase — roughly ten of those sixteen minutes — is what couples gate width to build concurrency. The
+change is to release after the build and re-acquire only if a rebuild is required, which is a lifetime
+redesign rather than a constant bump.
+
+**Right design:** three types. `BuildPermitPool` (capacity 2, held **only during builds**, not across the
+test phase); `AcceptanceAdmission` (independently configured from measured CPU/memory); immutable
+content-keyed `BuildArtifactId`. Remove `stableSlotIndex` from acceptance APIs.
+
+**Method note, which is the point of this correction.** This document argues that the system's recurring flaw
+is records asserting things nobody verified. The original text of this section was exactly that: a citation
+taken from another agent, restated with confidence, never opened. It was then repeated in a backlog item and
+in an operator briefing before anyone read line 3755. Treat every file:line in this document as a claim to
+check, including the ones that survived.
 
 ## Stack 5 — mutable build output turned two-phase MTP into a lease protocol
 
@@ -192,7 +213,7 @@ Preserved deliberately; these are the least settled claims.
 
 | Lead | Verdict |
 |---|---|
-| Retired two-slot grid caused the lease pile | **Partly confirmed.** Artifact roots are per-goal now, so the "slot = artifact isolation" framing was stale. The live defect is gate admission coupled to a two-permit build pool via a false comment. |
+| Retired two-slot grid caused the lease pile | **Partly confirmed, and sol's counter-claim was itself wrong.** Artifact roots are per-goal now, so the "slot = artifact isolation" framing was stale. But the comment at `ConductorBatchLoop.cs:30` is accurate — lease events show the permit held for the whole gate. The live defect is permit *lifetime*, not a false comment. See the correction in Stack 4. |
 | Criterion prose is mined into pattern-absence checks | **Root cause refuted, observation real.** `AcceptanceCriteriaParser.TryClassify` (`:134-149`) emits only `test-removal`, `file-exists`, `command-exit` — no pattern type. But `RunGrepCheckAsync` (`GoalAcceptanceVerifier.cs:3512-3543`) does run `git grep` and emits the exact `"pattern still present"` string observed in a live receipt for pattern `[Xunit.Theory]`. The mechanism exists and fired; how it was reached is still untraced. Its results are advisory. |
 | Worker test ban caused the gate lease machinery | **Causally refuted.** Independent acceptance would be required regardless. The ban costs feedback latency, not gate architecture. |
 | Two-phase MTP execution caused the artifact machinery | **Partly confirmed.** Two-phase is fine; mutable in-place reuse is the wrong decision. `Invoke-IsolatedDotnet.ps1` is operator tooling, not the conductor hot path, and should not be counted as such. |
