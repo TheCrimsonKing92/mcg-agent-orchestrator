@@ -11,9 +11,14 @@ using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 
-[Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTestSupport
 {
+    private static readonly WorkerSandboxOptions DisabledSandbox = new(
+        false,
+        WorkerSandboxOptions.DefaultAccount,
+        WorkerSandboxOptions.DefaultCredentialTarget);
+    private static readonly WorkerSandboxOptions EnabledSandbox = DisabledSandbox with { Enabled = true };
+
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_swept_terminal_goal_without_starting_worker")]
     public void WorkerProfileDispatcherPreflightAllowsSweptTerminalGoalWithoutStartingWorker()
     {
@@ -87,49 +92,41 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_reports_goal_worktree_git_metadata_access_without_worker_start")]
     public void WorkerProfileDispatcherPreflightReportsGoalWorktreeGitMetadataAccessWithoutWorkerStart()
 {
-    var previousSandbox = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
     var root = CreateSeededDispatchRepository();
-    try
-    {
-        Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, "1");
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("Inspect worker git metadata permissions", [new TaskSpec(TaskId.New(), "Inspect worker git metadata permissions.", AgentRole.Developer)]);
-        var agent = new AgentDefinition(
-            new AgentId("developer"),
-            "Developer",
-            AgentRole.Developer,
-            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
-            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
-        kernel.ActivateGoal(goal.Id, [agent]);
-        var task = goal.Tasks.Single();
-        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal("Inspect worker git metadata permissions", [new TaskSpec(TaskId.New(), "Inspect worker git metadata permissions.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var worktree = GoalWorktrees.Ensure(root, goal.Id);
 
-        var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
-            goal,
-            task,
-            [agent],
-            WorkerProfileCatalog.Default(),
-            worktree,
-            DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
-            allowGitReference: true);
+    var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+        goal,
+        task,
+        [agent],
+        WorkerProfileCatalog.Default(),
+        worktree,
+        DateTimeOffset.Parse("2026-06-26T12:00:00Z"),
+        allowGitReference: true,
+        sandboxOptions: EnabledSandbox);
 
-        var findings = string.Join("\n", preflight.Findings);
-        Assert.True(preflight.Allowed, findings);
-        Assert.Null(task.LastDispatch);
-        Assert.Contains("git metadata index_lock=", findings);
-        Assert.Contains(Path.Combine(".git", "worktrees", goal.Id.Value[..8], "index.lock"), findings.Replace('/', Path.DirectorySeparatorChar));
-        Assert.Contains("current_process_can_write=True", findings);
-        Assert.Contains(
-            OperatingSystem.IsWindows() ? "worker_git_write=blocked-by-low-integrity" : "worker_git_write=same-as-orchestrator",
-            findings);
-        Assert.Contains("commit_contract=workers edit worktree files; orchestrator commits verified dirty edits on behalf", findings);
-        Assert.Contains("ok: worktree clean before dispatch", findings);
-    }
-    finally
-    {
-        Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previousSandbox);
-    }
+    var findings = string.Join("\n", preflight.Findings);
+    Assert.True(preflight.Allowed, findings);
+    Assert.Null(task.LastDispatch);
+    Assert.Contains("git metadata index_lock=", findings);
+    Assert.Contains(Path.Combine(".git", "worktrees", goal.Id.Value[..8], "index.lock"), findings.Replace('/', Path.DirectorySeparatorChar));
+    Assert.Contains("current_process_can_write=True", findings);
+    Assert.Contains(
+        OperatingSystem.IsWindows() ? "worker_git_write=blocked-by-low-integrity" : "worker_git_write=same-as-orchestrator",
+        findings);
+    Assert.Contains("commit_contract=workers edit worktree files; orchestrator commits verified dirty edits on behalf", findings);
+    Assert.Contains("ok: worktree clean before dispatch", findings);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_does_not_start_worker_or_mutate_owned_ephemeral_cleanup")]
@@ -316,63 +313,57 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         bool expectedAllowed,
         string expectedCapabilityStatus)
     {
-        var previousSandbox = Environment.GetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable);
-        try
-        {
-            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, ambientSandboxValue);
-            var root = CreateSeededDispatchRepository();
-            var kernel = new AgentOrchestratorKernel();
-            var task = new TaskSpec(
-                TaskId.New(),
-                "Update .agents/skills/example/SKILL.md.",
-                AgentRole.Developer);
-            var goal = kernel.CreateGoal("Maintain repo-scoped procedures", [task]);
-            var agent = new AgentDefinition(
-                new AgentId("developer"),
-                "Developer",
-                AgentRole.Developer,
-                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
-                ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
-                Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"),
-                IsProviderRoutingConstrained: true);
-            kernel.ActivateGoal(goal.Id, [agent]);
-            var workingDirectory = GoalWorktrees.Ensure(root, goal.Id);
-            var statusBefore = ReadGit(workingDirectory, ["status", "--short"]);
-            var sandbox = new WorkerSandboxOptions(
-                explicitSandboxEnabled,
-                WorkerSandboxOptions.DefaultAccount,
-                WorkerSandboxOptions.DefaultCredentialTarget);
+        var root = CreateSeededDispatchRepository();
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(
+            TaskId.New(),
+            "Update .agents/skills/example/SKILL.md.",
+            AgentRole.Developer);
+        var goal = kernel.CreateGoal("Maintain repo-scoped procedures", [task]);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "medium"),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"),
+            IsProviderRoutingConstrained: true);
+        kernel.ActivateGoal(goal.Id, [agent]);
+        var workingDirectory = GoalWorktrees.Ensure(root, goal.Id);
+        var statusBefore = ReadGit(workingDirectory, ["status", "--short"]);
+        var sandbox = new WorkerSandboxOptions(
+            explicitSandboxEnabled,
+            WorkerSandboxOptions.DefaultAccount,
+            WorkerSandboxOptions.DefaultCredentialTarget);
 
-            var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
-                goal,
-                task,
-                [agent],
-                WorkerProfileCatalog.Default(),
-                workingDirectory,
-                DateTimeOffset.Parse("2026-08-10T12:00:00Z"),
-                sandboxOptions: sandbox,
-                commandExists: _ => true);
+        var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
+            goal,
+            task,
+            [agent],
+            WorkerProfileCatalog.Default(),
+            workingDirectory,
+            DateTimeOffset.Parse("2026-08-10T12:00:00Z"),
+            sandboxOptions: sandbox,
+            commandExists: _ => true,
+            sandboxOptionsAccessor: () => DisabledSandbox with
+            {
+                Enabled = ambientSandboxValue == "1"
+            });
 
-            Assert.Equal(expectedAllowed, preflight.Allowed);
-            Assert.Equal("codex-cli", preflight.ProfileName);
-            Assert.Equal(expectedCapabilityStatus, preflight.CapabilityStatus);
-            Assert.Contains(
-                preflight.Findings,
-                finding => finding.Contains($"capability: {expectedCapabilityStatus}", StringComparison.Ordinal));
-            Assert.Null(task.LastDispatch);
-            Assert.Null(task.LastProcess);
-            Assert.Equal(statusBefore, ReadGit(workingDirectory, ["status", "--short"]));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable(WorkerSandboxOptions.EnabledVariable, previousSandbox);
-        }
+        Assert.Equal(expectedAllowed, preflight.Allowed);
+        Assert.Equal("codex-cli", preflight.ProfileName);
+        Assert.Equal(expectedCapabilityStatus, preflight.CapabilityStatus);
+        Assert.Contains(
+            preflight.Findings,
+            finding => finding.Contains($"capability: {expectedCapabilityStatus}", StringComparison.Ordinal));
+        Assert.Null(task.LastDispatch);
+        Assert.Null(task.LastProcess);
+        Assert.Equal(statusBefore, ReadGit(workingDirectory, ["status", "--short"]));
     }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_skips_preflight_blocked_tasks")]
     public void WorkerProfileDispatcherReadyBatchSkipsPreflightBlockedTasks()
 {
-    using var _sandboxEnv = ClearWorkerSandboxEnv();
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
@@ -401,7 +392,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+        sandboxOptions: DisabledSandbox);
 
     Assert.Equal(1, results.Count);
     Assert.Equal(allowedTask.Id, results.Single().Task.Id);

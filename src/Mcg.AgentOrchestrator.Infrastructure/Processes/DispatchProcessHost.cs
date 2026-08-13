@@ -299,7 +299,9 @@ public static class DispatchProcessHost
         ProcessStartInfo startInfo,
         WorkerSandboxProvider provider,
         string sandboxRoot,
-        string? stderrPath = null)
+        string? stderrPath = null,
+        Func<string?>? anthropicApiKeyAccessor = null,
+        Func<string>? claudeCredentialDirectoryAccessor = null)
     {
         startInfo.Environment.Remove("CODEX_HOME");
         startInfo.Environment.Remove("CLAUDE_CONFIG_DIR");
@@ -315,7 +317,12 @@ public static class DispatchProcessHost
 
         if (provider == WorkerSandboxProvider.Claude)
         {
-            SeedClaudeEnvironment(startInfo, sandboxRoot, stderrPath);
+            SeedClaudeEnvironment(
+                startInfo,
+                sandboxRoot,
+                stderrPath,
+                anthropicApiKeyAccessor,
+                claudeCredentialDirectoryAccessor);
         }
     }
 
@@ -492,14 +499,17 @@ public static class DispatchProcessHost
         }
     }
 
-    internal static string? ClaudeCredentialSourceOverrideForTests;
-
-    private static void SeedClaudeEnvironment(ProcessStartInfo startInfo, string sandboxRoot, string? stderrPath)
+    private static void SeedClaudeEnvironment(
+        ProcessStartInfo startInfo,
+        string sandboxRoot,
+        string? stderrPath,
+        Func<string?>? anthropicApiKeyAccessor,
+        Func<string>? claudeCredentialDirectoryAccessor)
     {
         var claudeConfigDir = Path.Combine(sandboxRoot, "claude-config");
         Directory.CreateDirectory(claudeConfigDir);
 
-        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        var apiKey = (anthropicApiKeyAccessor ?? ReadAnthropicApiKey)();
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
             startInfo.Environment["ANTHROPIC_API_KEY"] = apiKey;
@@ -509,9 +519,7 @@ public static class DispatchProcessHost
             // Subscription auth: seed the sandbox config with the operator's persisted CLI login so
             // the Low-IL worker authenticates without an API key. claude-cli reads credentials from
             // the ROOT of CLAUDE_CONFIG_DIR; a Low-IL process can read the Medium-labeled copies.
-            var userClaudeDir = ClaudeCredentialSourceOverrideForTests ?? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".claude");
+            var userClaudeDir = (claudeCredentialDirectoryAccessor ?? ResolveClaudeCredentialDirectory)();
             var seededCredentials = false;
             foreach (var fileName in new[] { ".credentials.json", "settings.json" })
             {
@@ -539,6 +547,12 @@ public static class DispatchProcessHost
 
         startInfo.Environment["CLAUDE_CONFIG_DIR"] = claudeConfigDir;
     }
+
+    private static string? ReadAnthropicApiKey() =>
+        Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+
+    private static string ResolveClaudeCredentialDirectory() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
 
     private static void AppendDispatchStderrDiagnostic(string stderrPath, string message)
     {
