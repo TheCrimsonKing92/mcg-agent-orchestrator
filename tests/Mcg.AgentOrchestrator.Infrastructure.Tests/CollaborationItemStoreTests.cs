@@ -5,6 +5,57 @@ using Microsoft.Data.Sqlite;
 
 public sealed class CollaborationItemStoreTests
 {
+    [Xunit.Fact]
+    public async Task ConcurrentLegacySchemaInitializationAddsAnswerHistoryOnce()
+    {
+        // The unique database path keeps this real-SQLite test parallel-safe.
+        var databasePath = DbPath();
+        using (var connection = new SqliteConnection(
+                   $"Data Source={databasePath};Mode=ReadWriteCreate;Pooling=False;"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE collaboration_items (
+                    id              TEXT PRIMARY KEY,
+                    type            TEXT NOT NULL,
+                    goal_id         TEXT,
+                    status          TEXT NOT NULL,
+                    subject         TEXT NOT NULL,
+                    body            TEXT NOT NULL,
+                    correlation_key TEXT,
+                    raised_at       TEXT NOT NULL,
+                    resolved_at     TEXT,
+                    resolution      TEXT
+                )
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        Xunit.Assert.DoesNotContain("answer_history_json", ReadColumnNames(databasePath));
+
+        using var startGate = new Barrier(3);
+        Task StartInitializer() =>
+            Task.Factory.StartNew(
+                () =>
+                {
+                    startGate.SignalAndWait();
+                    _ = new CollaborationItemStore(databasePath);
+                },
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+        var initializers = new[] { StartInitializer(), StartInitializer() };
+
+        startGate.SignalAndWait();
+        await Task.WhenAll(initializers);
+
+        Xunit.Assert.Equal(
+            1,
+            ReadColumnNames(databasePath).Count(name =>
+                string.Equals(name, "answer_history_json", StringComparison.OrdinalIgnoreCase)));
+    }
+
     // --- Basic CRUD ---
 
     [Xunit.Fact(DisplayName = "CollaborationItemStore_raise_creates_item_in_Raised_status")]
@@ -685,6 +736,21 @@ public sealed class CollaborationItemStoreTests
 
     private static string DbPath() =>
         Path.Combine(CreateTempDirectory(), "collab.db");
+
+    private static IReadOnlyList<string> ReadColumnNames(string databasePath)
+    {
+        using var connection = new SqliteConnection(
+            $"Data Source={databasePath};Mode=ReadWrite;Pooling=False;");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(collaboration_items)";
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read())
+            names.Add(reader.GetString(1));
+
+        return names;
+    }
 }
 
 internal sealed class FakeCollaborationItemStore : ICollaborationItemStore
