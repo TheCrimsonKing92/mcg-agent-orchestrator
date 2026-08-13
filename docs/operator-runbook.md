@@ -39,6 +39,12 @@ Before writing the objective or its acceptance criteria, assign every criterion 
 post-landing observation with the operator, and cross-goal receipts in context-packaging instead of asking a
 worker role to produce evidence outside its enforced boundary.
 
+When a goal deliberately removes tests, declare every removed discovered identity as its own acceptance
+bullet using `test-removal: Namespace.TestClass.TestMethod`. The acceptance gate credits only declarations
+corroborated as present on main and absent from the candidate, and the tamper guard additionally requires
+the named method to be removed by the test-file diff. Code tokens in ordinary criterion prose never create
+pattern-presence or pattern-absence checks; those checks must come from an explicit structured manifest.
+
 `conduct --loop` runs `ConductorBatchLoop`: each tick advances every eligible goal one policy-gated step through its state machine, creates worktrees, dispatches workers, waits on them, runs the acceptance suite against the worktree, applies the change-risk gate, fast-forward-merges into `main`, records the dogfood entry in SQLite, and removes the worktree. The loop ends on its own when all goals are done or escalated (`LOOP_STOP reason=all-done-or-escalated`). Infrastructure-triggered self-relaunch is **opt-in**: set `MCG_ORCHESTRATOR_SELF_RELAUNCH_ENABLED=true` before starting the loop to have a landing that changes conductor/verifier/gate/build/dispatch infrastructure stop admissions, drain current workers, build and self-check a content-addressed successor, and hand off. It is disabled by default, so without that setting no `LOOP_RELAUNCH_*` or infrastructure-triggered `LOOP_HANDOFF` event is expected; use the manual bounce below after a loop-affecting landing. The separate bounded-run successor handoff still runs when `--max-duration` is reached while active work remains, but it starts the incumbent executable without rebuilding. A successful bounded `LOOP_HANDOFF` therefore renews the run but does **not** arm code landed after that executable was built; use the manual bounce to arm such a landing.
 
 You do **not** need `workspace create`, `subscription-dispatch`, `start-dispatch`, `refresh-dispatch`, or `accept` by hand. A single non-loop `conduct <goal-prefix>` advances exactly one step (useful for stepping/inspection).
