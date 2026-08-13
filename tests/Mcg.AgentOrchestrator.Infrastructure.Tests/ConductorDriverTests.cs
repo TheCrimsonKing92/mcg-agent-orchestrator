@@ -178,14 +178,9 @@ public sealed class ConductorDriverTests
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec reviewer,
-        string? touchProofDiagnostic = null,
-        string? reviewedCommit = null)
+        string? touchProofDiagnostic = null)
     {
         DispatchTask(kernel, goal, reviewer, "review-seed");
-        if (reviewedCommit is not null)
-        {
-            kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, reviewedCommit);
-        }
         var location = new ReviewFindingLocation("src/A.cs", "A.Run", "guard");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-seed",
@@ -200,22 +195,16 @@ public sealed class ConductorDriverTests
             kernel,
             goal,
             reviewer,
-            touchProofDiagnostic,
-            reviewedCommit);
+            touchProofDiagnostic);
     }
 
     private static void RecordMovedReviewerIdentityViolation(
         AgentOrchestratorKernel kernel,
         Goal goal,
         TaskSpec reviewer,
-        string? touchProofDiagnostic = null,
-        string? reviewedCommit = null)
+        string? touchProofDiagnostic = null)
     {
         DispatchTask(kernel, goal, reviewer, "review-moved", touchProofDiagnostic);
-        if (reviewedCommit is not null)
-        {
-            kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, reviewedCommit);
-        }
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-moved",
             "C:\\tmp",
@@ -5843,8 +5832,8 @@ public sealed class ConductorDriverTests
             CliArgumentParser.SplitCommand(command));
     }
 
-    [Xunit.Fact(DisplayName = "Equal SHA noncanonicalizable identity violations consume mechanical repair budget")]
-    public void IdentityViolations_EqualShaProof_ConsumeRepairBudget()
+    [Xunit.Fact(DisplayName = "Equal SHA identity violations salvage the prior ledger and converge normally")]
+    public void IdentityViolations_EqualShaProof_SalvagePriorLedgerAndConvergeNormally()
     {
         using var repository = CreateSeededGitRepository();
         var (workingDirectory, unchangedCommit) = repository;
@@ -5893,6 +5882,7 @@ public sealed class ConductorDriverTests
             workingDirectory,
             unchangedCommit);
         Assert.Empty(touchScope.TouchedAnchors);
+        Assert.Null(touchScope.Diagnostic);
         DispatchTask(
             kernel,
             goal,
@@ -5938,19 +5928,21 @@ public sealed class ConductorDriverTests
             reviewer.LastVerification!.ReviewFindingContractViolation);
         Assert.Equal(ReviewFindingConvergence.IdentityMovedViolationCode, violation.Code);
         Assert.Equal(2, violation.IdentityMismatches!.Count);
-        Assert.Null(reviewer.LastVerification.MergedReviewFindings);
+        var salvaged = Assert.IsAssignableFrom<IReadOnlyList<ReviewFinding>>(
+            reviewer.LastVerification.MergedReviewFindings);
+        Assert.Equal(opened.Length, salvaged.Count);
+        Assert.All(opened, finding =>
+            Assert.Contains(salvaged, candidate => candidate == finding));
 
         TaskId? retriedTaskId = null;
         string? retryMessage = null;
         RetryRoundKind? retryRoundKind = null;
         string? escalation = null;
-        var retryCount = 0;
         var driver = MakeDriver(
             getFacts: _ => GoalLifecycleFacts.None,
             dispatchAndStart: _ => DispatchStartOutcome.Started(),
             retryTaskWithRoundKind: (goalId, taskId, message, roundKind) =>
             {
-                retryCount++;
                 retriedTaskId = taskId;
                 retryMessage = message;
                 retryRoundKind = roundKind;
@@ -5961,67 +5953,28 @@ public sealed class ConductorDriverTests
         var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Permissive);
 
         Assert.True(
-            reviewer.Id == retriedTaskId,
-            $"Expected same-reviewer contract repair but got {retriedTaskId?.Value ?? "none"}; " +
+            developer.Id == retriedTaskId,
+            $"Expected normal Developer convergence retry but got {retriedTaskId?.Value ?? "none"}; " +
             $"outcome={result.Outcome}; escalation={escalation ?? "none"}");
-        Assert.Equal(RetryRoundKind.Mechanical, retryRoundKind);
-        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
+        Assert.Null(retryRoundKind);
+        Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
         Assert.Equal(WorkTaskStatus.Completed, tester.Status);
-        Assert.Equal(WorkTaskStatus.Assigned, reviewer.Status);
-        Assert.StartsWith("review-finding contract-repair:", retryMessage, StringComparison.Ordinal);
-        Assert.Contains("ERR_REVIEW_FINDING_IDENTITY_MOVED", retryMessage, StringComparison.Ordinal);
-        Assert.Contains("ERR_REVIEW_FINDING_ANCHOR_IDENTITY_RECYCLED", retryMessage, StringComparison.Ordinal);
-        Assert.Contains("violation_count: 2", retryMessage, StringComparison.Ordinal);
+        Assert.Equal(WorkTaskStatus.Failed, reviewer.Status);
+        Assert.DoesNotContain("contract-repair", retryMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("suppression=missing-system-derived-round-diff-proof", retryMessage, StringComparison.Ordinal);
         Assert.Contains("open_count: 15", retryMessage, StringComparison.Ordinal);
         Assert.All(opened, finding =>
             Assert.Contains($"stable_id: {finding.StableId}", retryMessage, StringComparison.Ordinal));
-        Assert.Contains("avoided_developer_reopen=1", retryMessage, StringComparison.Ordinal);
-        Assert.DoesNotContain("auto-review-retry", retryMessage, StringComparison.OrdinalIgnoreCase);
         Assert.Null(escalation);
-        Assert.Single(goal.Timeline.Where(evt =>
+        Assert.Empty(goal.Timeline.Where(evt =>
             evt.TaskId == reviewer.Id &&
             evt.Kind == ProgressKind.TaskRetried &&
             evt.Message.StartsWith("review-finding contract-repair:", StringComparison.Ordinal)));
+        Assert.Contains(goal.Timeline, evt =>
+            evt.TaskId == developer.Id &&
+            evt.Kind == ProgressKind.TaskRetried &&
+            evt.Message.Contains("auto-review-retry", StringComparison.OrdinalIgnoreCase));
         Assert.True(result.Outcome is ConductorAdvanceOutcome.Executed);
-
-        var correctedTouchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
-            goal,
-            reviewer,
-            workingDirectory,
-            unchangedCommit);
-        Assert.Empty(correctedTouchScope.TouchedAnchors);
-        DispatchTask(
-            kernel,
-            goal,
-            reviewer,
-            "review-3",
-            correctedTouchScope.Diagnostic,
-            correctedTouchScope.TouchedAnchors,
-            workingDirectory);
-        kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
-        kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
-            "review-3",
-            workingDirectory,
-            0,
-            string.Join(
-                Environment.NewLine,
-                "WORKER_RESULT:",
-                "files: none",
-                "commands: review",
-                "tests: pass - corrected structured receipt",
-                "blockers: none",
-                $"findings: {JsonSerializer.Serialize(opened.Reverse())}",
-                "touched_anchors: []",
-                "verdict: pass",
-                "END_WORKER_RESULT"),
-            string.Empty,
-            DateTimeOffset.UtcNow,
-            WorkerResultPresent: true));
-
-        Assert.Null(reviewer.LastVerification!.ReviewFindingContractViolation);
-        Assert.Equal(WorkTaskStatus.Completed, developer.Status);
-        Assert.Equal(WorkTaskStatus.Completed, tester.Status);
-        Assert.Equal(1, retryCount);
     }
 
     [Xunit.Fact(DisplayName = "Equal SHA untouched reopen consumes mechanical repair budget")]
@@ -6284,7 +6237,8 @@ public sealed class ConductorDriverTests
     public void IdenticalShaLegacyDiagnostic_ReproducesMissingProofSuppression()
     {
         const string unchangedCommit = "bd7854c15aa6088fee94c13b50034ecf901f7591";
-        const string legacyDiagnostic = "Reviewed commits are identical; no touched anchors.";
+        const string legacyDiagnostic =
+            $"Round-diff touch proof unavailable because the carried and current reviewed commits are identical ({unchangedCommit}).";
         var (kernel, goal) = SoftwareGoal();
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
