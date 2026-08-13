@@ -12,7 +12,10 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     public void DeveloperDispatchIntegration_CleanDivergence_MergesMainAndLeavesGoalWorktreeClean()
     {
         var repo = CreateAcceptanceCohortRepository();
-        var goal = new Goal(new GoalId("11111111111111111111111111111111"), "Integrate before Developer dispatch", []);
+        var goal = new Goal(
+            new GoalId("11111111111111111111111111111111"),
+            "Integrate before Developer dispatch",
+            [new TaskSpec(TaskId.New(), "Implement change", AgentRole.Developer)]);
         try
         {
             var worktree = GoalWorktrees.Ensure(repo, goal.Id);
@@ -50,7 +53,10 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     public void DeveloperDispatchIntegration_ConflictingDivergence_NamesPathsAndRestoresCleanBranch()
     {
         var repo = CreateAcceptanceCohortRepository();
-        var goal = new Goal(new GoalId("22222222222222222222222222222222"), "Escalate conflicting integration", []);
+        var goal = new Goal(
+            new GoalId("22222222222222222222222222222222"),
+            "Escalate conflicting integration",
+            [new TaskSpec(TaskId.New(), "Implement change", AgentRole.Developer)]);
         try
         {
             File.WriteAllText(Path.Combine(repo, "shared.txt"), "base");
