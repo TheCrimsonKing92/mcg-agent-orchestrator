@@ -203,6 +203,7 @@ public static class RepositoryTestImpactPlanner
     {
         var classFilters = summary.Files
             .Where(file => StartsWith(file.Path, testProjectPrefix))
+            .Where(file => Path.GetExtension(file.Path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
             .Select(file => Path.GetFileNameWithoutExtension(file.Path))
             .Where(name => !string.IsNullOrWhiteSpace(name))
             .Select(name => $"FullyQualifiedName~{name}")
