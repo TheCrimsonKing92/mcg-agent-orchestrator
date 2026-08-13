@@ -327,6 +327,19 @@ public sealed class ConductorDriverTests
         }
     }
 
+    private static (string WorkingDirectory, string Head) CreateSeededGitRepository()
+    {
+        var workingDirectory = CreateTempDirectory();
+        RunGit(workingDirectory, "init");
+        RunGit(workingDirectory, "config", "user.email", "test@example.com");
+        RunGit(workingDirectory, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        RunGit(workingDirectory, "add", "seed.txt");
+        RunGit(workingDirectory, "commit", "-m", "seed");
+        var head = GitCli.Run(workingDirectory, "rev-parse", "HEAD").Output.Trim();
+        return (workingDirectory, head);
+    }
+
     private static int CountOccurrences(string value, string expected)
     {
         var count = 0;
@@ -5798,7 +5811,7 @@ public sealed class ConductorDriverTests
     [Xunit.Fact(DisplayName = "Equal SHA identity violations consume mechanical repair budget")]
     public void IdentityViolations_EqualShaProof_ConsumeRepairBudget()
     {
-        const string unchangedCommit = "bd7854c15aa6088fee94c13b50034ecf901f7591";
+        var (workingDirectory, unchangedCommit) = CreateSeededGitRepository();
         var (kernel, goal) = SoftwareGoal();
         var developer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Developer);
         var tester = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Tester);
@@ -5831,7 +5844,7 @@ public sealed class ConductorDriverTests
             "END_WORKER_RESULT");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-1",
-            "C:\\tmp",
+            workingDirectory,
             0,
             firstRound,
             "",
@@ -5841,7 +5854,7 @@ public sealed class ConductorDriverTests
         var touchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
             goal,
             reviewer,
-            "C:\\tmp",
+            workingDirectory,
             unchangedCommit);
         Assert.Empty(touchScope.TouchedAnchors);
         Assert.Null(touchScope.Diagnostic);
@@ -5878,12 +5891,12 @@ public sealed class ConductorDriverTests
             "END_WORKER_RESULT");
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-2",
-            "C:\\tmp",
+            workingDirectory,
             0,
             rejectedRound,
             "",
             DateTimeOffset.UtcNow,
-            StandardOutputPath: "C:\\tmp\\reviewer.out.log",
+            StandardOutputPath: Path.Combine(workingDirectory, "reviewer.out.log"),
             WorkerResultPresent: true));
         var violation = Assert.IsType<ReviewFindingContractViolation>(
             reviewer.LastVerification!.ReviewFindingContractViolation);
@@ -5934,7 +5947,7 @@ public sealed class ConductorDriverTests
         var correctedTouchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
             goal,
             reviewer,
-            "C:\\tmp",
+            workingDirectory,
             unchangedCommit);
         Assert.Empty(correctedTouchScope.TouchedAnchors);
         Assert.Null(correctedTouchScope.Diagnostic);
@@ -5948,7 +5961,7 @@ public sealed class ConductorDriverTests
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-3",
-            "C:\\tmp",
+            workingDirectory,
             0,
             string.Join(
                 Environment.NewLine,
@@ -5974,7 +5987,7 @@ public sealed class ConductorDriverTests
     [Xunit.Fact(DisplayName = "Equal SHA untouched reopen consumes mechanical repair budget")]
     public void UntouchedReopen_ComputedEmptyProof_ConsumesRepairBudget()
     {
-        const string unchangedCommit = "bd7854c15aa6088fee94c13b50034ecf901f7591";
+        var (workingDirectory, unchangedCommit) = CreateSeededGitRepository();
         var (kernel, goal) = SoftwareGoal();
         var reviewer = goal.Tasks.Single(task => task.RequiredRole == AgentRole.Reviewer);
         foreach (var task in goal.Tasks.Where(task => task.RequiredRole != AgentRole.Reviewer))
@@ -5988,7 +6001,7 @@ public sealed class ConductorDriverTests
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-open",
-            "C:\\tmp",
+            workingDirectory,
             0,
             ReviewerPassWithFinding(open),
             string.Empty,
@@ -5999,7 +6012,7 @@ public sealed class ConductorDriverTests
         var resolvedTouchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
             goal,
             reviewer,
-            "C:\\tmp",
+            workingDirectory,
             unchangedCommit);
         Assert.Empty(resolvedTouchScope.TouchedAnchors);
         Assert.Null(resolvedTouchScope.Diagnostic);
@@ -6013,7 +6026,7 @@ public sealed class ConductorDriverTests
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-resolved",
-            "C:\\tmp",
+            workingDirectory,
             0,
             ReviewerPassWithFinding(open with { State = ReviewFindingState.Resolved }),
             string.Empty,
@@ -6025,7 +6038,7 @@ public sealed class ConductorDriverTests
         var reopenedTouchScope = WorkerProfileDispatcher.ReadReviewRoundTouchScope(
             goal,
             reviewer,
-            "C:\\tmp",
+            workingDirectory,
             unchangedCommit);
         Assert.Empty(reopenedTouchScope.TouchedAnchors);
         Assert.Null(reopenedTouchScope.Diagnostic);
@@ -6039,12 +6052,12 @@ public sealed class ConductorDriverTests
         kernel.RecordDispatchBaseCommit(goal.Id, reviewer.Id, unchangedCommit);
         kernel.RecordDispatchExecutionResult(goal.Id, reviewer.Id, new TaskVerificationRecord(
             "review-reopened",
-            "C:\\tmp",
+            workingDirectory,
             0,
             ReviewerPassWithFinding(open),
             string.Empty,
             DateTimeOffset.UtcNow,
-            StandardOutputPath: "C:\\tmp\\reviewer.out.log",
+            StandardOutputPath: Path.Combine(workingDirectory, "reviewer.out.log"),
             WorkerResultPresent: true));
 
         var violation = Assert.IsType<ReviewFindingContractViolation>(
