@@ -3086,7 +3086,10 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.Equal("BLOCKED", receipt.RootElement.GetProperty("outcome").GetString());
             Assert.Equal("budget-exceeded", receipt.RootElement.GetProperty("reason").GetString());
             Assert.True(receipt.RootElement.GetProperty("leaseReleased").GetBoolean());
-            Assert.True(File.Exists(startedPath));
+            var outputLogPath = receipt.RootElement.GetProperty("outputLogPath").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(outputLogPath));
+            Assert.True(File.Exists(outputLogPath));
+            Assert.Equal(JsonValueKind.Null, receipt.RootElement.GetProperty("testProcessExitCode").ValueKind);
             Assert.False(File.Exists(logPath));
             Assert.True(string.IsNullOrWhiteSpace(RunCommand("git", workDirectory, "status", "--porcelain")));
         }
