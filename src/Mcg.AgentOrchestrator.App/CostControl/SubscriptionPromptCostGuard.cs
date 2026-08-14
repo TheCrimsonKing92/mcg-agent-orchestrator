@@ -92,9 +92,7 @@ internal static class SubscriptionPromptCostGuard
                 task.LastDispatch.ModelName ?? "default",
                 task.LastDispatch.TaskComplexity,
                 task.LastDispatch.PromptCharacterCount!.Value,
-                PaidPromptThresholds.EffectivePromptCharacterCount(
-                    task.LastDispatch.PromptCharacterCount.Value,
-                    AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, task.Id)),
+                EffectivePreparedPromptCharacterCount(goal, task),
                 task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex))
             .ToList();
 
@@ -119,12 +117,27 @@ internal static class SubscriptionPromptCostGuard
                     task.LastDispatch.ModelName ?? "default",
                     task.LastDispatch.TaskComplexity,
                     task.LastDispatch.PromptCharacterCount.Value,
-                    PaidPromptThresholds.EffectivePromptCharacterCount(
-                        task.LastDispatch.PromptCharacterCount.Value,
-                        AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, task.Id)),
+                    EffectivePreparedPromptCharacterCount(goal, task),
                     task.LastDispatch.UsesComplexModel || task.LastDispatch.TaskComplexity == TaskComplexity.Complex)
             ],
             BuildReadyModelFitSummaries(goal));
+    }
+
+    private static int EffectivePreparedPromptCharacterCount(Goal goal, TaskSpec task)
+    {
+        var dispatch = task.LastDispatch
+            ?? throw new InvalidOperationException("Prepared prompt accounting requires a dispatch record.");
+        var effective = PaidPromptThresholds.EffectivePromptCharacterCount(
+            dispatch.PromptCharacterCount ?? 0,
+            AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, task.Id));
+        var canonicalInventoryCharacters = dispatch.ContextPackageReceipt?.Sections
+            .Where(section => section.LogicalIdentity.Equals("context/manifest.v1.json", StringComparison.Ordinal))
+            .Sum(section => section.CharacterCount) ?? 0;
+
+        // The manifest is a canonical inventory of artifact records already represented by their
+        // rendered delivery entries. Keep the actual prompt count for telemetry, but do not treat
+        // that required duplicate attestation metadata as anomalous brief content.
+        return Math.Max(0, effective - canonicalInventoryCharacters);
     }
 
     // Only a genuinely ANOMALOUS prompt (disproportionate to its task complexity, or an extreme
