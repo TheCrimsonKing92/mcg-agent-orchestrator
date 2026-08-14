@@ -1888,15 +1888,24 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
         var buildPermit = environment.BuildPermitIndex
             ?? throw new InvalidOperationException("Goal build permit was not assigned.");
         var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-regate-{Guid.NewGuid():N}");
+        var permitLeases = new List<FileStream>();
 
         try
         {
             ConductorParallelAcceptanceAttemptDecision blocked;
-            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(environment, TimeSpan.Zero))
+            try
             {
+                foreach (var permitIndex in Enumerable.Range(0, DotnetBuildEnvironmentManager.BuildConcurrencySlotCount))
+                {
+                    permitLeases.Add(DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                        DotnetBuildEnvironmentManager.CreateStableSlotAttempt(permitIndex),
+                        TimeSpan.Zero));
+                }
+
                 var blockedCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                     attemptRoot,
-                    runInline: true);
+                    runInline: true,
+                    buildPermitBusyTimeout: TimeSpan.Zero);
                 blocked = blockedCoordinator.Evaluate(
                     candidate,
                     ConductorAutonomyPolicy.Conservative,
@@ -1907,7 +1916,17 @@ public sealed class GoalWorktreeAcceptanceContentionTests : GoalWorktreeTestBase
                 Xunit.Assert.Equal(
                     ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot,
                     blocked.Attempt.Outcome);
+                Xunit.Assert.Equal(
+                    AcceptanceBuildPermitWaitReason.AllPermitsBusy,
+                    blocked.Attempt.BuildPermitWaitReason);
                 blockedCoordinator.MarkReconciled(blocked.Attempt);
+            }
+            finally
+            {
+                foreach (var permitLease in permitLeases)
+                {
+                    permitLease.Dispose();
+                }
             }
 
             var regateCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
