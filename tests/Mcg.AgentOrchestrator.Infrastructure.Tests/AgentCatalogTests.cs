@@ -22,7 +22,10 @@ public sealed class AgentCatalogTests
         Assert.Equal(AgentCatalog.RoutineApiMaxOutputTokens, agent.Model.MaxOutputTokens);
         Assert.Equal(AgentExecutionPolicy.PreferSubscription, agent.ExecutionPolicy);
         Assert.Equal("codex-cli", agent.Subscription!.WorkerProfileName);
-        Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, agent.Subscription.ModelAlias);
+        var expectedSubscriptionModel = role == AgentRole.Ideation
+            ? AgentCatalog.OpenAiSubscriptionModelAlias
+            : AgentCatalog.OpenAiSolSubscriptionModelAlias;
+        Assert.Equal(expectedSubscriptionModel, agent.Subscription.ModelAlias);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
         Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName); // Deliberate paid API complex-model name from OpenAiComplex(), independent of the subscription alias.
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
@@ -311,6 +314,13 @@ public sealed class AgentCatalogTests
             AgentRole.Developer,
             new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "medium")),
+        new AgentDefinition(
+            new AgentId("openai-planner"),
+            "OpenAI planner",
+            AgentRole.Planner,
+            new ModelProfile("OpenAI", "gpt-custom", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
             Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, "medium")),
         new AgentDefinition(
             new AgentId("openai-reviewer"),
@@ -325,9 +335,38 @@ public sealed class AgentCatalogTests
 
     var restored = AgentCatalogStore.Load(path);
 
-    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, restored.GetRequired(AgentRole.Developer).Subscription!.ModelAlias);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, restored.GetRequired(AgentRole.Developer).Subscription!.ModelAlias);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, restored.GetRequired(AgentRole.Planner).Subscription!.ModelAlias);
     Assert.Equal(AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, restored.GetRequired(AgentRole.Reviewer).Subscription!.ModelAlias);
 }
+
+    [Xunit.Fact]
+    public void AgentCatalogStoreLoadMigratesPersistedFiveRoleGpt55AliasesToSol()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "agents.json");
+        AgentRole[] roles =
+        [
+            AgentRole.Researcher,
+            AgentRole.Planner,
+            AgentRole.Developer,
+            AgentRole.Tester,
+            AgentRole.Reviewer
+        ];
+        var catalog = new AgentCatalog(roles.Select(role => new AgentDefinition(
+            new AgentId($"openai-{role.ToString().ToLowerInvariant()}"),
+            $"OpenAI {role}",
+            role,
+            new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text | ModelCapability.Code, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
+            Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "low"))).ToArray());
+        AgentCatalogStore.Save(path, catalog);
+
+        var restored = AgentCatalogStore.Load(path);
+
+        Assert.All(roles, role =>
+            Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, restored.GetRequired(role).Subscription!.ModelAlias));
+    }
     [Xunit.Fact(DisplayName = "AgentCatalogStore_load_preserves_new_and_unknown_subscription_aliases")]
     public void AgentCatalogStoreLoadPreservesNewAndUnknownSubscriptionAliases()
 {

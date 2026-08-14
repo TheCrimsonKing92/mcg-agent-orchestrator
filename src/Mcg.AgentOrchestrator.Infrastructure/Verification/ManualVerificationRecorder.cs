@@ -15,12 +15,16 @@ public static class ManualVerificationRecorder
             throw new ArgumentException("Manual verification note cannot be empty.", nameof(note));
         }
 
+        var standardOutput = passed ? note.Trim() : string.Empty;
+        var standardError = passed ? string.Empty : note.Trim();
         return new TaskVerificationRecord(
             passed ? "manual-verification passed" : "manual-verification failed",
             workingDirectory,
             passed ? 0 : 1,
-            passed ? note.Trim() : string.Empty,
-            passed ? string.Empty : note.Trim(),
-            completedAt);
+            standardOutput,
+            standardError,
+            completedAt,
+            FullStandardOutput: standardOutput,
+            FullStandardError: standardError);
     }
 }

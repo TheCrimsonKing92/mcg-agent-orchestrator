@@ -160,6 +160,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
 
         var originalDispatch = task.LastDispatch;
         var originalProcess = task.LastProcess;
+        var originalRenderedContextPackage = CaptureRenderedContextPackage(originalDispatch);
         var cancelTimeOwnedProcessSet = CaptureCancelTimeOwnedProcessSet(originalProcess);
         var cancelled = _cancelProcess(kernel, goal.Id, taskId);
         TryRecordCancelPathNote(
@@ -203,7 +204,13 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         try
         {
             if (admission.AllowsResume)
-                PrepareWarmResumeDispatch(kernel, refreshedGoal, refreshedTask, originalDispatch, effectiveGuidanceText);
+                PrepareWarmResumeDispatch(
+                    kernel,
+                    refreshedGoal,
+                    refreshedTask,
+                    originalDispatch,
+                    originalRenderedContextPackage,
+                    effectiveGuidanceText);
             else
                 PrepareFreshDispatchWithGuidance(kernel, refreshedGoal, refreshedTask, effectiveGuidanceText);
 
@@ -429,9 +436,33 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         Goal goal,
         TaskSpec task,
         TaskDispatchRecord originalDispatch,
+        string? originalRenderedContextPackage,
         string guidanceText)
     {
-        var promptPath = WriteGuidancePrompt(goal.Id, task.Id, originalDispatch.WorkerName, guidanceText);
+        var promptText = guidanceText;
+        WorkerContextPackageReceipt? contextPackageReceipt = null;
+        if (originalDispatch.ContextPackageReceipt is { } originalReceipt)
+        {
+            if (originalRenderedContextPackage is null)
+            {
+                throw new WorkerContextPreparationException(
+                    new LogicalArtifactIdentity("context/originating-rendered-package.md"),
+                    "originating-package-unavailable",
+                    "Warm steering cannot recover the complete rendered context package from the originating attempt.");
+            }
+
+            var package = new WorkerContextPackageBuilder().RehydrateAndAppendInlineArtifact(
+                task.RequiredRole,
+                originalDispatch.WorkingDirectory,
+                originalRenderedContextPackage,
+                originalReceipt,
+                new LogicalArtifactIdentity("steering/progressive-review-guidance.md"),
+                Encoding.UTF8.GetBytes(guidanceText));
+            promptText = WorkerContextPackageBuilder.Render(package);
+            contextPackageReceipt = WorkerContextPackageBuilder.CreateReceipt(package);
+        }
+
+        var promptPath = WriteGuidancePrompt(goal.Id, task.Id, originalDispatch.WorkerName, promptText);
         var command = BuildWarmResumeCommand(originalDispatch);
         kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
             originalDispatch.WorkerName,
@@ -442,16 +473,30 @@ internal sealed class ProgressiveReviewSteeringCoordinator
             originalDispatch.ModelName,
             originalDispatch.ReasoningEffort,
             originalDispatch.TaskComplexity,
-            guidanceText.Length,
+            promptText.Length,
             originalDispatch.UsesComplexModel,
             PromptPath: promptPath,
             WorkerProviderKind: originalDispatch.WorkerProviderKind,
             ReasoningEffortReason: originalDispatch.ReasoningEffortReason,
             DispatchLane: originalDispatch.DispatchLane,
             ModelSelectionReason: "progressive-review-steer:warm-resume",
+            ProviderSessionId: originalDispatch.ProviderSessionId,
+            WorktreeHeadSha: originalDispatch.WorktreeHeadSha,
+            DirtyStateHash: originalDispatch.DirtyStateHash,
             ReviewFindingTouchedAnchors: originalDispatch.ReviewFindingTouchedAnchors,
             ReviewFindingTouchProofDiagnostic: originalDispatch.ReviewFindingTouchProofDiagnostic,
-            ReviewRetryCap: originalDispatch.ReviewRetryCap));
+            ReviewRetryCap: originalDispatch.ReviewRetryCap,
+            ContextPackageReceipt: contextPackageReceipt));
+    }
+
+    private static string? CaptureRenderedContextPackage(TaskDispatchRecord originalDispatch)
+    {
+        if (originalDispatch.ContextPackageReceipt is null)
+            return null;
+
+        return TryReadText(originalDispatch.PromptPath, out var renderedPackage)
+            ? renderedPackage
+            : null;
     }
 
     private void PrepareRawFreshSubscriptionDispatch(AgentOrchestratorKernel kernel, Goal goal, TaskSpec task, string guidanceText)
@@ -475,12 +520,30 @@ internal sealed class ProgressiveReviewSteeringCoordinator
         var freshPrompt = TryReadText(prepared.PromptPath, out var preparedPrompt)
             ? preparedPrompt
             : string.Empty;
+        if (prepared.ContextPackageReceipt is { } receipt)
+        {
+            if (string.IsNullOrWhiteSpace(freshPrompt) ||
+                !freshPrompt.Contains(receipt.SemanticPackageId, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Fresh steering produced a typed receipt that is not bound to its rendered launch package.");
+            }
+
+            // The guidance task note was recorded before fresh preparation, so it is already authoritative
+            // timeline content covered by this receipt. Do not append bytes after package hashing.
+            kernel.ReplacePreparedTaskDispatch(
+                goal.Id,
+                task.Id,
+                prepared with { ModelSelectionReason = "progressive-review-steer:fresh-fallback" });
+            return;
+        }
+
         var guidedPrompt = string.IsNullOrWhiteSpace(freshPrompt)
             ? guidanceText
             : $"{guidanceText}{Environment.NewLine}{Environment.NewLine}---{Environment.NewLine}{Environment.NewLine}{freshPrompt}";
         var promptPath = WriteGuidancePrompt(goal.Id, task.Id, prepared.WorkerName, guidedPrompt);
         var command = RewritePromptPath(prepared.Command, prepared.PromptPath, promptPath);
-        kernel.RecordTaskDispatch(
+        kernel.ReplacePreparedTaskDispatch(
             goal.Id,
             task.Id,
             prepared with
@@ -489,8 +552,7 @@ internal sealed class ProgressiveReviewSteeringCoordinator
                 PromptPath = promptPath,
                 PromptCharacterCount = guidedPrompt.Length,
                 ModelSelectionReason = "progressive-review-steer:fresh-fallback"
-            },
-            allowPendingRecordedDispatchRefresh: true);
+            });
     }
 
     private ProgressiveReviewSteerReceipt BuildReceipt(

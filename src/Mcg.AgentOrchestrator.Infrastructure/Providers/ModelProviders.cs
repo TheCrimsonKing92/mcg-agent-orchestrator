@@ -43,7 +43,7 @@ public sealed class OpenAiResponsesModelProvider : IModelProvider
 
         return new ModelResponse(
             ExtractOpenAiText(payload),
-            new ModelUsage(payload.Usage?.InputTokens, payload.Usage?.OutputTokens),
+            new ModelUsage(payload.Usage?.InputTokens, payload.Usage?.OutputTokens, payload.Usage?.InputTokenDetails?.CachedTokens),
             payload.Status ?? "unknown");
     }
 
@@ -159,7 +159,11 @@ internal sealed record OpenAiContentItem(string? Type, string? Text);
 
 internal sealed record OpenAiUsage(
     [property: JsonPropertyName("input_tokens")] int? InputTokens,
-    [property: JsonPropertyName("output_tokens")] int? OutputTokens);
+    [property: JsonPropertyName("output_tokens")] int? OutputTokens,
+    [property: JsonPropertyName("input_tokens_details")] OpenAiInputTokenDetails? InputTokenDetails);
+
+internal sealed record OpenAiInputTokenDetails(
+    [property: JsonPropertyName("cached_tokens")] int? CachedTokens);
 
 internal sealed record AnthropicResponsePayload(
     IReadOnlyList<AnthropicContentItem>? Content,

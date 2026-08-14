@@ -1,6 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
+using System.Text;
 using System.Text.RegularExpressions;
 
 [Collection(TestCollections.ChaosGateGit)]
@@ -10,12 +11,12 @@ public sealed class ProgressiveReviewSteeringTests
 
     public static TheoryData<string, AgentRole, string> DefaultCatalogFixtureDispatches => new()
     {
-        { "default-planner-dispatch-fixture", AgentRole.Planner, AgentCatalog.OpenAiSubscriptionModelAlias },
+        { "default-planner-dispatch-fixture", AgentRole.Planner, AgentCatalog.OpenAiSolSubscriptionModelAlias },
         { "default-ideation-dispatch-fixture", AgentRole.Ideation, AgentCatalog.OpenAiSubscriptionModelAlias },
-        { "default-researcher-dispatch-fixture", AgentRole.Researcher, AgentCatalog.OpenAiSubscriptionModelAlias },
-        { "default-developer-dispatch-fixture", AgentRole.Developer, AgentCatalog.OpenAiSubscriptionModelAlias },
-        { "default-tester-dispatch-fixture", AgentRole.Tester, AgentCatalog.OpenAiSubscriptionModelAlias },
-        { "default-reviewer-dispatch-fixture", AgentRole.Reviewer, AgentCatalog.OpenAiSubscriptionModelAlias }
+        { "default-researcher-dispatch-fixture", AgentRole.Researcher, AgentCatalog.OpenAiSolSubscriptionModelAlias },
+        { "default-developer-dispatch-fixture", AgentRole.Developer, AgentCatalog.OpenAiSolSubscriptionModelAlias },
+        { "default-tester-dispatch-fixture", AgentRole.Tester, AgentCatalog.OpenAiSolSubscriptionModelAlias },
+        { "default-reviewer-dispatch-fixture", AgentRole.Reviewer, AgentCatalog.OpenAiSolSubscriptionModelAlias }
     };
 
     [Theory(DisplayName = "ProgressiveReviewSteering_each_default_fixture_dispatch_matches_activated_agent_catalog")]
@@ -206,6 +207,140 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Equal(expectedCancelledInputTokens, receipt.CancelledInputTokens);
         Assert.True(receipt.SteeredInputTokens > 0);
         Assert.Equal(WorkTaskStatus.Running, kernel.GetTask(goal.Id, task.Id).Status);
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_typed_warm_resume_repackages_complete_context_and_guidance_with_receipt")]
+    public void TypedWarmResumeRepackagesCompleteContextAndGuidanceWithReceipt()
+    {
+        var now = new DateTimeOffset(2026, 8, 12, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-warm-package");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var builder = new WorkerContextPackageBuilder();
+        var original = WorkerProfileDispatcher.FinalizeContextPackageWithManifest(
+            builder,
+            builder.Prepare(
+                AgentRole.Developer,
+                root,
+                [WorkerContextArtifact.Create(
+                    new LogicalArtifactIdentity("brief/original.md"),
+                    ContextArtifactKind.OperatorInstructions,
+                    Encoding.UTF8.GetBytes("complete original package bytes\n"),
+                    [AgentRole.Developer],
+                    ContextDeliveryMode.InlineFull,
+                    ContextContractVersion.V1)]));
+        var originalReceipt = WorkerContextPackageBuilder.CreateReceipt(original);
+        var (kernel, goal, task) = RunningDeveloper(
+            root,
+            now,
+            head,
+            sessionId: "typed-session-12345678",
+            contextPackageReceipt: originalReceipt);
+        Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
+        File.WriteAllText(task.LastDispatch.PromptPath!, WorkerContextPackageBuilder.Render(original));
+        var originalPromptPath = task.LastDispatch.PromptPath!;
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "typed guidance is identity-bound")).GetAwaiter().GetResult();
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: (k, goalId, taskId) =>
+            {
+                var cancelled = CancelWithTerminalProof(now)(k, goalId, taskId);
+                File.Delete(originalPromptPath);
+                return cancelled;
+            },
+            startProcess: (k, goalId, taskId) =>
+            {
+                var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
+                var receipt = Assert.IsType<WorkerContextPackageReceipt>(dispatch.ContextPackageReceipt);
+                var prompt = File.ReadAllText(dispatch.PromptPath!);
+                Assert.Contains(receipt.SemanticPackageId, prompt, StringComparison.Ordinal);
+                Assert.Contains("typed guidance is identity-bound", prompt, StringComparison.Ordinal);
+                Assert.Contains(receipt.Sections, section => section.LogicalIdentity == "brief/original.md");
+                Assert.Contains(receipt.Sections, section => section.LogicalIdentity == "steering/progressive-review-guidance.md");
+                Assert.NotEqual(originalReceipt.SemanticPackageId, receipt.SemanticPackageId);
+                var started = new TaskProcessRecord(
+                    7010,
+                    dispatch.Command,
+                    dispatch.WorkingDirectory,
+                    "out-package.log",
+                    "err-package.log",
+                    "exit-package.txt",
+                    now.AddSeconds(2),
+                    null,
+                    null);
+                k.RecordTaskProcessStarted(goalId, taskId, started);
+                return started;
+            },
+            currentHead: head,
+            utcNow: () => now.AddSeconds(10));
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState, string.Join(Environment.NewLine, result.ProgressLines));
+        Assert.Equal(2, kernel.GetTask(goal.Id, task.Id).DispatchHistory.Count);
+    }
+
+    [Fact(DisplayName = "ProgressiveReviewSteering_reports_typed_repackaging_failure_through_fail_safe_path")]
+    public void ReportsTypedRepackagingFailureThroughFailSafePath()
+    {
+        var now = new DateTimeOffset(2026, 8, 12, 12, 0, 0, TimeSpan.Zero);
+        var root = CreateGitRepository("mcg-steer-warm-package-invalid");
+        var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
+        var builder = new WorkerContextPackageBuilder();
+        var original = WorkerProfileDispatcher.FinalizeContextPackageWithManifest(
+            builder,
+            builder.Prepare(
+                AgentRole.Developer,
+                root,
+                [WorkerContextArtifact.Create(
+                    new LogicalArtifactIdentity("brief/original.md"),
+                    ContextArtifactKind.OperatorInstructions,
+                    Encoding.UTF8.GetBytes("complete original package bytes\n"),
+                    [AgentRole.Developer],
+                    ContextDeliveryMode.InlineFull,
+                    ContextContractVersion.V1)]));
+        var (kernel, goal, task) = RunningDeveloper(
+            root,
+            now,
+            head,
+            sessionId: "typed-session-12345678",
+            contextPackageReceipt: WorkerContextPackageBuilder.CreateReceipt(original));
+        Directory.CreateDirectory(Path.GetDirectoryName(task.LastDispatch!.PromptPath!)!);
+        File.WriteAllText(task.LastDispatch.PromptPath!, "corrupt rendered context package");
+        var store = new InMemoryProgressiveReviewSteeringStore();
+        store.EnqueueIntentAsync(Intent(goal, task, now, "typed guidance is identity-bound")).GetAwaiter().GetResult();
+        File.WriteAllText(Path.Combine(root, "worker-edit.cs"), "valuable worker edit");
+        var started = false;
+
+        var coordinator = NewCoordinator(
+            root,
+            store,
+            cancelProcess: CancelWithTerminalProof(now),
+            startProcess: (_, _, _) =>
+            {
+                started = true;
+                throw new InvalidOperationException("start must not run");
+            },
+            currentHead: head,
+            utcNow: () => now.AddSeconds(10));
+
+        var result = coordinator.ExecutePending(kernel, goal);
+
+        Assert.True(result.MutatedTaskState, string.Join(Environment.NewLine, result.ProgressLines));
+        Assert.False(started);
+        Assert.Single(kernel.GetTask(goal.Id, task.Id).DispatchHistory);
+        var receipt = Assert.Single(store.Receipts);
+        Assert.Contains("tree-dead", receipt.CancelConfirmation, StringComparison.Ordinal);
+        Assert.Equal("operator-attention", receipt.Decision);
+        Assert.Contains("receipt-package-mismatch", receipt.Outcome, StringComparison.Ordinal);
+        Assert.Contains("steer-restart-failed", receipt.Outcome, StringComparison.Ordinal);
+        Assert.Contains(result.ProgressLines, line => line.Contains("reason=restart-failed", StringComparison.Ordinal));
+        Assert.Equal(WorkTaskStatus.Assigned, kernel.GetTask(goal.Id, task.Id).Status);
+        Assert.True(string.IsNullOrWhiteSpace(GitCli.Run(root, "status", "--porcelain", "--untracked-files=all").Output));
+        Assert.Contains("worker-edit.cs", GitCli.Run(root, "stash", "show", "--include-untracked", "--name-only", "stash@{0}").Output, StringComparison.Ordinal);
+        Assert.Matches("preserved=[0-9a-f]{40}", receipt.Outcome);
     }
 
     [Fact(DisplayName = "ProgressiveReviewSteering_warm_resume_preserves_reviewer_cap_and_touch_receipts")]
@@ -576,6 +711,8 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 var dispatch = k.GetTask(goalId, taskId).LastDispatch!;
                 Assert.Equal("fresh-guided", dispatch.Command);
+                Assert.NotNull(dispatch.ContextPackageReceipt);
+                Assert.Contains(dispatch.ContextPackageReceipt.SemanticPackageId, File.ReadAllText(dispatch.PromptPath!), StringComparison.Ordinal);
                 Assert.Contains("fresh fallback guidance", File.ReadAllText(dispatch.PromptPath!), StringComparison.Ordinal);
                 var started = new TaskProcessRecord(7002, dispatch.Command, dispatch.WorkingDirectory, "out3.log", "err3.log", "exit3.txt", now.AddSeconds(2), null, null);
                 k.RecordTaskProcessStarted(goalId, taskId, started);
@@ -585,6 +722,22 @@ public sealed class ProgressiveReviewSteeringTests
             {
                 preparedFresh = true;
                 Assert.Contains("fresh fallback guidance", guidance, StringComparison.Ordinal);
+                var builder = new WorkerContextPackageBuilder();
+                var package = WorkerProfileDispatcher.FinalizeContextPackageWithManifest(
+                    builder,
+                    builder.Prepare(
+                        AgentRole.Developer,
+                        root,
+                        [WorkerContextArtifact.Create(
+                            new LogicalArtifactIdentity("steering/current-guidance.md"),
+                            ContextArtifactKind.OperatorInstructions,
+                            Encoding.UTF8.GetBytes(guidance),
+                            [AgentRole.Developer],
+                            ContextDeliveryMode.InlineFull,
+                            ContextContractVersion.V1)]));
+                var promptPath = Path.Combine(root, ".orchestrator", "prompts", "fresh-typed.md");
+                Directory.CreateDirectory(Path.GetDirectoryName(promptPath)!);
+                File.WriteAllText(promptPath, WorkerContextPackageBuilder.Render(package));
                 k.RecordTaskDispatch(g.Id, t.Id, new TaskDispatchRecord(
                     "codex-cli",
                     "fresh-guided",
@@ -592,7 +745,9 @@ public sealed class ProgressiveReviewSteeringTests
                     now.AddSeconds(2),
                     "OpenAI",
                     AgentCatalog.OpenAiSubscriptionModelAlias,
-                    WorkerProviderKind: ProviderKind.OpenAICodexCli));
+                    PromptPath: promptPath,
+                    WorkerProviderKind: ProviderKind.OpenAICodexCli,
+                    ContextPackageReceipt: WorkerContextPackageBuilder.CreateReceipt(package)));
             },
             currentHead: head);
 
@@ -600,6 +755,7 @@ public sealed class ProgressiveReviewSteeringTests
 
         Assert.True(result.MutatedTaskState);
         Assert.True(preparedFresh);
+        Assert.Equal(2, kernel.GetTask(goal.Id, task.Id).DispatchHistory.Count);
         var receipt = Assert.Single(store.Receipts);
         Assert.Equal("fresh-dispatch", receipt.Decision);
         Assert.Contains(receipt.AdmissionChecks, check => check.Contains("SpawnHeadAncestor:Failed", StringComparison.Ordinal));
@@ -722,13 +878,18 @@ public sealed class ProgressiveReviewSteeringTests
         Assert.Contains(receipt.AdmissionChecks, check => check.Contains("AcceptanceCriteriaHash:Failed", StringComparison.Ordinal));
     }
 
-    [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_when_current_model_differs")]
-    public void FallsBackToFreshDispatchWhenCurrentModelDiffers()
+    [Fact(DisplayName = "ProgressiveReviewSteering_falls_back_to_fresh_dispatch_for_pre_migration_parent_model")]
+    public void FallsBackToFreshDispatchForPreMigrationParentModel()
     {
         var now = new DateTimeOffset(2026, 7, 20, 12, 0, 0, TimeSpan.Zero);
         var root = CreateGitRepository("mcg-steer-model-drift");
         var head = GitCli.Run(root, "rev-parse", "HEAD").Output.Trim();
-        var (kernel, goal, task) = RunningDeveloper(root, now, head, sessionId: "session-12345678");
+        var (kernel, goal, task) = RunningDeveloper(
+            root,
+            now,
+            head,
+            sessionId: "session-12345678",
+            dispatchedModel: AgentCatalog.OpenAiSubscriptionModelAlias);
         var store = new InMemoryProgressiveReviewSteeringStore();
         store.EnqueueIntentAsync(Intent(goal, task, now, "fresh fallback after model drift")).GetAwaiter().GetResult();
         var preparedFresh = false;
@@ -741,7 +902,6 @@ public sealed class ProgressiveReviewSteeringTests
         var coordinator = NewCoordinator(
             root,
             store,
-            agents: agents,
             cancelProcess: CancelWithTerminalProof(now),
             startProcess: (k, goalId, taskId) =>
             {
@@ -1121,7 +1281,8 @@ public sealed class ProgressiveReviewSteeringTests
         Action<AgentOrchestratorKernel, Goal, TaskSpec, string>? prepareFreshDispatch = null,
         IReadOnlyList<AgentDefinition>? agents = null,
         ProgressiveReviewSteeringOptions? options = null,
-        string? currentHead = null)
+        string? currentHead = null,
+        Func<DateTimeOffset>? utcNow = null)
     {
         var workspace = OrchestratorWorkspace.ForDirectory(root);
         return new ProgressiveReviewSteeringCoordinator(
@@ -1132,7 +1293,7 @@ public sealed class ProgressiveReviewSteeringTests
             store,
             attentionStore ?? new FakeCollaborationItemStore(),
             options,
-            utcNow: () => new DateTimeOffset(2026, 7, 20, 12, 0, 10, TimeSpan.Zero),
+            utcNow: utcNow ?? (() => new DateTimeOffset(2026, 7, 20, 12, 0, 10, TimeSpan.Zero)),
             isProcessRunning: isProcessRunning ?? (_ => false),
             getLineageDescendants: getLineageDescendants,
             cancelProcess: cancelProcess,
@@ -1164,7 +1325,9 @@ public sealed class ProgressiveReviewSteeringTests
         AgentRole role = AgentRole.Developer,
         IReadOnlyList<ReviewFindingLocation>? reviewFindingTouchedAnchors = null,
         string? reviewFindingTouchProofDiagnostic = null,
-        ReviewRetryCapReceipt? reviewRetryCap = null)
+        ReviewRetryCapReceipt? reviewRetryCap = null,
+        WorkerContextPackageReceipt? contextPackageReceipt = null,
+        string dispatchedModel = AgentCatalog.OpenAiSolSubscriptionModelAlias)
     {
         Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "logs"));
         var clock = new TestClock(dispatchedAt);
@@ -1178,7 +1341,7 @@ public sealed class ProgressiveReviewSteeringTests
             root,
             dispatchedAt,
             "OpenAI",
-            AgentCatalog.OpenAiSubscriptionModelAlias,
+            dispatchedModel,
             TaskComplexity: TaskComplexity.Complex,
             PromptCharacterCount: 1234,
             PromptPath: Path.Combine(root, ".orchestrator", "prompts", "initial.md"),
@@ -1188,8 +1351,16 @@ public sealed class ProgressiveReviewSteeringTests
             DirtyStateHash: "clean",
             ReviewFindingTouchedAnchors: reviewFindingTouchedAnchors,
             ReviewFindingTouchProofDiagnostic: reviewFindingTouchProofDiagnostic,
-            ReviewRetryCap: reviewRetryCap));
-        AssertFixtureDispatchMatchesCatalog(nameof(RunningDeveloper), AgentCatalog.Default(), role, task.LastDispatch!);
+            ReviewRetryCap: reviewRetryCap,
+            ContextPackageReceipt: contextPackageReceipt));
+        var catalog = AgentCatalog.Default();
+        if (string.Equals(
+                dispatchedModel,
+                catalog.GetRequired(role).Subscription?.ModelAlias,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            AssertFixtureDispatchMatchesCatalog(nameof(RunningDeveloper), catalog, role, task.LastDispatch!);
+        }
         var process = new TaskProcessRecord(
             6001,
             task.LastDispatch!.Command,

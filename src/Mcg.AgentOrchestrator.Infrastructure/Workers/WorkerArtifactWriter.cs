@@ -29,8 +29,14 @@ internal sealed class WorkerArtifactWriter
         TaskSpec task,
         string workingDirectory,
         IReadOnlyList<string>? preflightFindings = null,
-        string? citedPriorEvidence = null)
+        string? citedPriorEvidence = null,
+        string? providerName = null,
+        string? modelName = null)
     {
+        var preserveCompleteArtifacts = WorkerContextHelpers.UsesTypedContextPackage(
+            task.RequiredRole,
+            providerName,
+            modelName);
         var scratchRoot = Path.Combine(workingDirectory, ".orchestrator-context");
         var contextDirectory = Path.Combine(scratchRoot, goal.Id.Value);
         Directory.CreateDirectory(contextDirectory);
@@ -46,7 +52,9 @@ internal sealed class WorkerArtifactWriter
         }
 
         WriteText(Path.Combine(contextDirectory, "objective.md"), BuildObjective(goal));
-        WriteText(Path.Combine(contextDirectory, "current-task.md"), BuildCurrentTask(task, workingDirectory));
+        WriteText(
+            Path.Combine(contextDirectory, "current-task.md"),
+            BuildCurrentTask(task, workingDirectory, preserveCompleteArtifacts));
         var durablePlannerPlans = ResolveDurablePlannerPlans(goal.Tasks, task.Id);
         var durableResearch = ResolveLatestDurableResearch(goal.Tasks, task.Id);
         var durablePlan = durablePlannerPlans.Values.LastOrDefault(resolution => resolution.Succeeded);
@@ -62,7 +70,11 @@ internal sealed class WorkerArtifactWriter
             BuildPriorTaskSummaries(goal.Tasks, task.Id, durablePlannerPlans));
         WriteText(
             Path.Combine(contextDirectory, "prior-task-evidence.md"),
-            BuildPriorTaskEvidence(goal.Tasks, task.Id, durablePlannerPlans));
+            BuildPriorTaskEvidence(
+                goal.Tasks,
+                task.Id,
+                durablePlannerPlans,
+                preserveCompleteArtifacts));
         WriteOptionalArtifact(
             Path.Combine(contextDirectory, "prior-goal-evidence.md"),
             citedPriorEvidence);
@@ -79,7 +91,9 @@ internal sealed class WorkerArtifactWriter
         {
             WriteText(sourceSurveyPath, _sourceSurvey.BuildSourceSurvey(goal, task, workingDirectory));
         }
-        WriteText(Path.Combine(contextDirectory, "diff-summary.md"), _gitContext.BuildDiffSummary(workingDirectory));
+        WriteText(
+            Path.Combine(contextDirectory, "diff-summary.md"),
+            _gitContext.BuildDiffSummary(workingDirectory, preserveCompleteArtifacts));
         if (preflightFindings is { Count: > 0 })
         {
             WriteText(Path.Combine(contextDirectory, "subscription-preflight.md"), BuildPreflight(preflightFindings));
@@ -93,9 +107,10 @@ internal sealed class WorkerArtifactWriter
                 workingDirectory,
                 preflightFindings,
                 plannerUsesDurableResearch,
-                !string.IsNullOrEmpty(citedPriorEvidence)));
+                !string.IsNullOrEmpty(citedPriorEvidence),
+                preserveCompleteArtifacts));
 
-        var guidanceFiles = CopyGuidanceFiles(workingDirectory, contextDirectory);
+        var guidanceFiles = CopyGuidanceFiles(workingDirectory, contextDirectory, preserveCompleteArtifacts);
         WriteText(
             Path.Combine(contextDirectory, "manifest.md"),
             BuildManifest(goal, task, workingDirectory, guidanceFiles, preflightFindings, contextDirectory, plannerUsesDurableResearch));
@@ -139,7 +154,8 @@ internal sealed class WorkerArtifactWriter
         string workingDirectory,
         IReadOnlyList<string>? preflightFindings,
         bool plannerUsesDurableResearch,
-        bool hasCitedPriorEvidence = false)
+        bool hasCitedPriorEvidence,
+        bool preserveCompleteArtifacts)
     {
         var priorTasks = goal.Tasks
             .TakeWhile(t => t.Id != task.Id)
@@ -156,10 +172,10 @@ internal sealed class WorkerArtifactWriter
             $"Working directory: {workingDirectory}",
             string.Empty,
             "## Objective",
-            TrimDigestText(goal.Objective),
+            TrimDigestText(goal.Objective, preserveCompleteArtifacts),
             string.Empty,
             "## Current Task",
-            TrimDigestText(task.Description),
+            TrimDigestText(task.Description, preserveCompleteArtifacts),
             string.Empty,
             "## Role Focus",
             BuildRoleFocus(task.RequiredRole)
@@ -173,7 +189,7 @@ internal sealed class WorkerArtifactWriter
         {
             lines.Add(string.Empty);
             lines.Add("## Verification Plan");
-            lines.Add(TrimDigestText(task.VerificationPlan));
+            lines.Add(TrimDigestText(task.VerificationPlan, preserveCompleteArtifacts));
         }
 
         lines.Add(string.Empty);
@@ -199,7 +215,7 @@ internal sealed class WorkerArtifactWriter
                     lines.Add($"  Model fit: {priorTask.LastVerification.ModelFitNote}");
                 }
 
-                var evidence = TrimDigestEvidence(priorTask.LastVerification.StandardOutput);
+                var evidence = TrimDigestEvidence(priorTask.LastVerification.StandardOutput, preserveCompleteArtifacts);
                 if (!string.IsNullOrWhiteSpace(evidence))
                 {
                     lines.Add($"  Outcome: {evidence}");
@@ -250,7 +266,10 @@ internal sealed class WorkerArtifactWriter
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static string BuildCurrentTask(TaskSpec task, string workingDirectory)
+    private static string BuildCurrentTask(
+        TaskSpec task,
+        string workingDirectory,
+        bool preserveCompleteArtifacts)
     {
         var lines = new List<string>
         {
@@ -299,7 +318,9 @@ internal sealed class WorkerArtifactWriter
         {
             lines.Add(string.Empty);
             lines.Add("## Last Model Output");
-            lines.Add(WorkerContextHelpers.TrimArtifactBlock(task.LastExecution.Output, CurrentEvidenceMaxChars));
+            lines.Add(task.LastExecution.AuthoritativeOutput is { } authoritativeOutput
+                ? WorkerContextHelpers.TrimArtifactBlock(authoritativeOutput, CurrentEvidenceMaxChars, preserveCompleteArtifacts)
+                : "Complete model output is unavailable; the bounded preview is not authoritative context.");
         }
 
         if (task.LastDispatch is not null)
@@ -326,12 +347,16 @@ internal sealed class WorkerArtifactWriter
 
             lines.Add(string.Empty);
             lines.Add("### Stdout");
-            lines.Add(WorkerContextHelpers.TrimArtifactBlock(task.LastVerification.StandardOutput, CurrentEvidenceMaxChars));
-            if (!string.IsNullOrWhiteSpace(task.LastVerification.StandardError))
+            lines.Add(task.LastVerification.AuthoritativeStandardOutput ??
+                $"[authoritative stdout unavailable: {task.LastVerification.FullStandardOutputUnavailableReason ?? "unknown"}]");
+            if (!string.IsNullOrWhiteSpace(task.LastVerification.AuthoritativeStandardError))
             {
                 lines.Add(string.Empty);
                 lines.Add("### Stderr");
-                lines.Add(WorkerContextHelpers.TrimArtifactBlock(task.LastVerification.StandardError, CurrentEvidenceMaxChars));
+                lines.Add(WorkerContextHelpers.TrimArtifactBlock(
+                    task.LastVerification.AuthoritativeStandardError,
+                    CurrentEvidenceMaxChars,
+                    preserveCompleteArtifacts));
             }
         }
 
@@ -637,7 +662,8 @@ internal sealed class WorkerArtifactWriter
     private static string BuildPriorTaskEvidence(
         IReadOnlyList<TaskSpec> goalTasks,
         TaskId taskId,
-        IReadOnlyDictionary<TaskId, DurablePlannerPlanResolution> durablePlannerPlans)
+        IReadOnlyDictionary<TaskId, DurablePlannerPlanResolution> durablePlannerPlans,
+        bool preserveCompleteArtifacts)
     {
         var priorCompletedTasks = goalTasks
             .TakeWhile(t => t.Id != taskId)
@@ -674,7 +700,8 @@ internal sealed class WorkerArtifactWriter
                     lines.Add(resolution.Plan);
                     lines.Add(string.Empty);
                     lines.Add("### Planner WORKER_RESULT Receipt");
-                    lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, SummaryFieldMaxChars * 4));
+                    lines.Add(verification.AuthoritativeStandardOutput ??
+                        $"[authoritative stdout unavailable: {verification.FullStandardOutputUnavailableReason ?? "unknown"}]");
                 }
                 else
                 {
@@ -685,14 +712,18 @@ internal sealed class WorkerArtifactWriter
             else
             {
                 lines.Add("### Stdout");
-                lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardOutput, PriorVerificationMaxChars));
+                lines.Add(verification.AuthoritativeStandardOutput ??
+                    $"[authoritative stdout unavailable: {verification.FullStandardOutputUnavailableReason ?? "unknown"}]");
             }
 
-            if (!string.IsNullOrWhiteSpace(verification.StandardError))
+            if (!string.IsNullOrWhiteSpace(verification.AuthoritativeStandardError))
             {
                 lines.Add(string.Empty);
                 lines.Add("### Stderr");
-                lines.Add(WorkerContextHelpers.TrimArtifactBlock(verification.StandardError, PriorVerificationMaxChars));
+                lines.Add(WorkerContextHelpers.TrimArtifactBlock(
+                    verification.AuthoritativeStandardError,
+                    PriorVerificationMaxChars,
+                    preserveCompleteArtifacts));
             }
         }
 
@@ -772,10 +803,12 @@ internal sealed class WorkerArtifactWriter
         out string research,
         out string diagnostic)
     {
+        research = string.Empty;
+        diagnostic = verification.FullStandardOutputUnavailableReason ?? "authoritative stdout unavailable";
         if (!string.IsNullOrWhiteSpace(verification.StandardOutputPath) &&
             File.Exists(verification.StandardOutputPath))
         {
-            var captured = ResearcherOutputContract.ReadCapturedOutputTail(verification.StandardOutputPath);
+            var captured = File.ReadAllText(verification.StandardOutputPath);
             if (ResearcherOutputContract.TryExtractDurableResearch(captured, out research, out diagnostic) &&
                 ResearcherOutputContract.TryValidate(research, out research, out diagnostic))
             {
@@ -783,8 +816,9 @@ internal sealed class WorkerArtifactWriter
             }
         }
 
-        if (ResearcherOutputContract.TryExtractDurableResearch(
-                verification.StandardOutput,
+        if (verification.AuthoritativeStandardOutput is { } authoritativeOutput &&
+            ResearcherOutputContract.TryExtractDurableResearch(
+                authoritativeOutput,
                 out research,
                 out diagnostic) &&
             ResearcherOutputContract.TryValidate(research, out research, out diagnostic))
@@ -792,7 +826,6 @@ internal sealed class WorkerArtifactWriter
             return true;
         }
 
-        research = string.Empty;
         return false;
     }
 
@@ -806,7 +839,7 @@ internal sealed class WorkerArtifactWriter
         if (!string.IsNullOrWhiteSpace(verification.StandardOutputPath) &&
             File.Exists(verification.StandardOutputPath))
         {
-            var capturedOutput = PlannerOutputContract.ReadCapturedOutputTail(verification.StandardOutputPath);
+            var capturedOutput = File.ReadAllText(verification.StandardOutputPath);
             if (TryExtractAndRevalidateDurablePlannerPlan(
                     capturedOutput,
                     verification.WorkingDirectory,
@@ -817,11 +850,13 @@ internal sealed class WorkerArtifactWriter
             }
         }
 
-        if (TryExtractAndRevalidateDurablePlannerPlan(
-                verification.StandardOutput,
+        var verificationDiagnostic = verification.FullStandardOutputUnavailableReason ?? "authoritative stdout unavailable";
+        if (verification.AuthoritativeStandardOutput is { } authoritativeOutput &&
+            TryExtractAndRevalidateDurablePlannerPlan(
+                authoritativeOutput,
                 verification.WorkingDirectory,
                 out plan,
-                out var verificationDiagnostic))
+                out verificationDiagnostic))
         {
             return true;
         }
@@ -867,7 +902,10 @@ internal sealed class WorkerArtifactWriter
         string Research,
         string Diagnostic);
 
-    private static List<string> CopyGuidanceFiles(string workingDirectory, string contextDirectory)
+    private static List<string> CopyGuidanceFiles(
+        string workingDirectory,
+        string contextDirectory,
+        bool preserveCompleteArtifacts)
     {
         var copied = new List<string>();
         foreach (var fileName in new[] { "AGENTS.md" })
@@ -879,7 +917,10 @@ internal sealed class WorkerArtifactWriter
             }
 
             var targetPath = Path.Combine(contextDirectory, fileName);
-            WriteText(targetPath, WorkerContextHelpers.TrimArtifactBlock(File.ReadAllText(sourcePath), GuidanceFileMaxChars));
+            WriteText(targetPath, WorkerContextHelpers.TrimArtifactBlock(
+                File.ReadAllText(sourcePath),
+                GuidanceFileMaxChars,
+                preserveCompleteArtifacts));
             copied.Add(fileName);
         }
 
@@ -1134,14 +1175,14 @@ internal sealed class WorkerArtifactWriter
         };
     }
 
-    private static string TrimDigestText(string value)
+    private static string TrimDigestText(string value, bool preserveCompleteArtifacts)
     {
-        return WorkerContextHelpers.TrimArtifactBlock(value, DigestTextMaxChars).ReplaceLineEndings(" ");
+        return WorkerContextHelpers.TrimArtifactBlock(value, DigestTextMaxChars, preserveCompleteArtifacts).ReplaceLineEndings(" ");
     }
 
-    private static string TrimDigestEvidence(string value)
+    private static string TrimDigestEvidence(string value, bool preserveCompleteArtifacts)
     {
-        return WorkerContextHelpers.TrimArtifactBlock(value, DigestEvidenceMaxChars).ReplaceLineEndings(" ");
+        return WorkerContextHelpers.TrimArtifactBlock(value, DigestEvidenceMaxChars, preserveCompleteArtifacts).ReplaceLineEndings(" ");
     }
 
     private static string TrimDigestTitle(string value)

@@ -16,7 +16,7 @@ public sealed class WorkerPromptInputBudgetExceededException : InvalidOperationE
         : base(
             $"Assembled worker prompt for task '{taskId.Value}' is {tokenCount:N0} tokens, " +
             $"exceeding the {tokenBudget:N0}-token input budget for {providerName}/{modelName}; " +
-            "all injectable context sections were removed before dispatch. Shorten the task brief before redispatching.")
+            "required context is lossless and cannot be removed before dispatch. Shorten the authoritative brief or use mandatory-file delivery before redispatching.")
     {
         GoalId = goalId;
         TaskId = taskId;
@@ -58,7 +58,6 @@ public static class WorkerPromptInputBudget
     private const int OpenAiContextWindowTokens = 200_000;
     private const int OllamaContextWindowTokens = 8_192;
     private const int ApproximateCharactersPerToken = 4;
-
     private static readonly IReadOnlyList<ContextSectionRule> DropRules =
     [
         new("evidence", ["Prior Task Evidence", "Prior Task Handoff", "Last Verification", "Last Model Output", "Last Dispatch"]),
@@ -81,51 +80,47 @@ public static class WorkerPromptInputBudget
             return new WorkerPromptInputBudgetResult(brief, originalTokenCount, originalTokenCount, tokenBudget, []);
         }
 
-        var content = brief.Content;
-        var droppedSections = new List<string>();
-        foreach (var rule in DropRules)
-        {
-            var trimmed = DropSections(content, rule.Headings, out var droppedCount);
-            if (droppedCount == 0)
-            {
-                continue;
-            }
-
-            content = trimmed;
-            droppedSections.Add(rule.Name);
-
-            var tokenCount = CountTokens(content);
-            if (tokenCount <= tokenBudget)
-            {
-                var trimmedBrief = brief with { Content = content };
-                LogTrim(brief.GoalId, brief.TaskId, originalTokenCount, tokenCount, droppedSections);
-                return new WorkerPromptInputBudgetResult(trimmedBrief, originalTokenCount, tokenCount, tokenBudget, droppedSections);
-            }
-        }
-
-        var finalTokenCount = CountTokens(content);
-        if (droppedSections.Count > 0)
-        {
-            LogTrim(brief.GoalId, brief.TaskId, originalTokenCount, finalTokenCount, droppedSections);
-        }
-
-        if (finalTokenCount > tokenBudget)
+        if (brief.Content.StartsWith("## Worker Context Package", StringComparison.Ordinal))
         {
             throw new WorkerPromptInputBudgetExceededException(
                 brief.GoalId,
                 brief.TaskId,
                 provider,
                 model,
-                finalTokenCount,
+                originalTokenCount,
                 tokenBudget);
         }
 
+        var content = brief.Content;
+        var droppedSections = new List<string>();
+        foreach (var rule in DropRules)
+        {
+            content = DropSections(content, rule.Headings, out var droppedCount);
+            if (droppedCount == 0)
+            {
+                continue;
+            }
+
+            droppedSections.Add(rule.Name);
+            var tokenCount = CountTokens(content);
+            if (tokenCount <= tokenBudget)
+            {
+                LogTrim(brief.GoalId, brief.TaskId, originalTokenCount, tokenCount, droppedSections);
+                return new WorkerPromptInputBudgetResult(
+                    brief with { Content = content }, originalTokenCount, tokenCount, tokenBudget, droppedSections);
+            }
+        }
+
+        var finalTokenCount = CountTokens(content);
+        LogTrim(brief.GoalId, brief.TaskId, originalTokenCount, finalTokenCount, droppedSections);
+        if (finalTokenCount > tokenBudget)
+        {
+            throw new WorkerPromptInputBudgetExceededException(
+                brief.GoalId, brief.TaskId, provider, model, finalTokenCount, tokenBudget);
+        }
+
         return new WorkerPromptInputBudgetResult(
-            brief with { Content = content },
-            originalTokenCount,
-            finalTokenCount,
-            tokenBudget,
-            droppedSections);
+            brief with { Content = content }, originalTokenCount, finalTokenCount, tokenBudget, droppedSections);
     }
 
     public static int CountTokens(string content)
@@ -162,12 +157,11 @@ public static class WorkerPromptInputBudget
 
     private static string DropSections(string content, IReadOnlySet<string> headings, out int droppedCount)
     {
-        var lines = SplitLines(content);
         var output = new StringBuilder(content.Length);
         droppedCount = 0;
         var dropping = false;
-
-        foreach (var line in lines)
+        using var reader = new StringReader(content);
+        while (reader.ReadLine() is { } line)
         {
             if (TryGetSecondLevelHeading(line, out var heading))
             {
@@ -181,39 +175,17 @@ public static class WorkerPromptInputBudget
 
             if (!dropping)
             {
-                output.Append(line);
+                output.AppendLine(line);
             }
         }
 
         return output.ToString().TrimEnd('\r', '\n');
     }
 
-    private static List<string> SplitLines(string content)
-    {
-        var lines = new List<string>();
-        using var reader = new StringReader(content);
-        while (reader.ReadLine() is { } line)
-        {
-            lines.Add(line + Environment.NewLine);
-        }
-
-        if (content.Length > 0 && !content.EndsWith('\n'))
-        {
-            var lastLineStart = content.LastIndexOf('\n') + 1;
-            if (lastLineStart > 0 && lines.Count > 0)
-            {
-                lines[^1] = content[lastLineStart..];
-            }
-        }
-
-        return lines;
-    }
-
     private static bool TryGetSecondLevelHeading(string line, out string heading)
     {
         var trimmed = line.Trim();
-        if (!trimmed.StartsWith("## ", StringComparison.Ordinal) ||
-            trimmed.StartsWith("### ", StringComparison.Ordinal))
+        if (!trimmed.StartsWith("## ", StringComparison.Ordinal) || trimmed.StartsWith("### ", StringComparison.Ordinal))
         {
             heading = string.Empty;
             return false;
@@ -228,16 +200,13 @@ public static class WorkerPromptInputBudget
         TaskId taskId,
         int originalTokenCount,
         int tokenCount,
-        IReadOnlyList<string> droppedSections)
-    {
-        Trace.TraceInformation(
+        IReadOnlyList<string> droppedSections) => Trace.TraceInformation(
             "Worker prompt context trimmed for goal {0}, task {1}: originalTokens={2}, trimmedTokens={3}, droppedSections={4}",
             goalId.Value,
             taskId.Value,
             originalTokenCount,
             tokenCount,
             string.Join(", ", droppedSections));
-    }
 
     private sealed record ContextSectionRule(string Name, IReadOnlySet<string> Headings)
     {
@@ -246,4 +215,5 @@ public static class WorkerPromptInputBudget
         {
         }
     }
+
 }

@@ -6,7 +6,7 @@ public sealed record ModelOptions(double Temperature = 0.2, int? MaxOutputTokens
 
 public sealed record ModelRequest(string SystemPrompt, IReadOnlyList<ModelMessage> Messages, ModelOptions Options);
 
-public sealed record ModelUsage(int? InputTokens, int? OutputTokens);
+public sealed record ModelUsage(int? InputTokens, int? OutputTokens, int? CachedInputTokens = null);
 
 public sealed record ModelResponse(string Text, ModelUsage? Usage, string StopReason);
 
@@ -32,8 +32,12 @@ public sealed record TaskExecutionRecord(
     DateTimeOffset CompletedAt,
     TaskComplexity? TaskComplexity = null,
     int? MaxOutputTokens = null,
-    int? PromptCharacterCount = null)
+    int? PromptCharacterCount = null,
+    string? FullOutput = null,
+    bool OutputIsAuthoritative = true)
 {
+    public string? AuthoritativeOutput { get; init; } = FullOutput ?? (OutputIsAuthoritative ? Output : null);
+
     public string Output { get; init; } = VerificationTextBounds.BoundText(Output, path: null);
 }
 
@@ -71,8 +75,20 @@ public sealed record TaskVerificationRecord(
     string? HumanInputBlockerFingerprint = null,
     int? ObservedRootExitCode = null,
     bool ReconciledToSuccess = false,
-    string? ReconciliationOriginRule = null)
+    string? ReconciliationOriginRule = null,
+    string? FullStandardOutput = null,
+    string? FullStandardError = null,
+    string? FullStandardOutputUnavailableReason = null,
+    string? FullStandardErrorUnavailableReason = null,
+    bool StandardOutputIsAuthoritative = true,
+    bool StandardErrorIsAuthoritative = true)
 {
+    public string? AuthoritativeStandardOutput { get; init; } = FullStandardOutput ??
+        (StandardOutputIsAuthoritative && FullStandardOutputUnavailableReason is null ? StandardOutput : null);
+
+    public string? AuthoritativeStandardError { get; init; } = FullStandardError ??
+        (StandardErrorIsAuthoritative && FullStandardErrorUnavailableReason is null ? StandardError : null);
+
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
     public string StandardError { get; init; } = VerificationTextBounds.BoundText(StandardError, StandardErrorPath);
@@ -111,7 +127,8 @@ public sealed record TaskDispatchRecord(
     int BriefVersion = 1,
     string? BriefSnapshot = null,
     string? ReviewFindingTouchProofDiagnostic = null,
-    ReviewRetryCapReceipt? ReviewRetryCap = null)
+    ReviewRetryCapReceipt? ReviewRetryCap = null,
+    WorkerContextPackageReceipt? ContextPackageReceipt = null)
 {
     public int BriefVersion { get; internal set; } = BriefVersion;
 

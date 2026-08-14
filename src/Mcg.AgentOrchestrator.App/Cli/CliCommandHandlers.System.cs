@@ -644,7 +644,9 @@ internal static partial class CliCommandHandlers
                             0,
                             smokeEvidence,
                             string.Empty,
-                            DateTimeOffset.UtcNow));
+                            DateTimeOffset.UtcNow,
+                            FullStandardOutput: smokeEvidence,
+                            FullStandardError: string.Empty));
                     ConsoleViews.PrintTask(context.CurrentGoal, smokeTask);
                     return true;
                 }

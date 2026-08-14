@@ -96,15 +96,18 @@ public sealed class LocalProcessVerifier
         elapsed.Stop();
         completedAt = DateTimeOffset.UtcNow;
 
+        var standardOutput = BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, result.ExitCode, result.Stdout, result.Stderr) +
+            (result.TimedOut ? BuildTimeoutEvidence(result) : string.Empty) +
+            result.Stdout;
         return new TaskVerificationRecord(
             preparedCommand.Command,
             workingDirectory,
             result.ExitCode,
-            BuildBrokerEvidence(preparedCommand, elapsed.Elapsed, result.ExitCode, result.Stdout, result.Stderr) +
-                (result.TimedOut ? BuildTimeoutEvidence(result) : string.Empty) +
-                result.Stdout,
+            standardOutput,
             result.Stderr,
-            completedAt);
+            completedAt,
+            FullStandardOutput: standardOutput,
+            FullStandardError: result.Stderr);
     }
 
     private async Task<CommandResult> RunPreparedCommandAsync(
