@@ -1153,10 +1153,19 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         var contextDirectory = Path.Combine(worktree, ".orchestrator-context", goal.Id.Value);
         var priorEvidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md"));
         var prompt = File.ReadAllText(prepared.PromptPath!);
+        var plannerSection = Assert.Single(prepared.Task.LastDispatch!.ContextPackageReceipt!.Sections.Where(section =>
+            section.LogicalIdentity == "context/planner-plan.md"));
         Assert.Contains("### Durable Planner Plan", priorEvidence, StringComparison.Ordinal);
         Assert.Contains("STOP-UNIQUE-PLAN-SEQUENCE-7421", priorEvidence, StringComparison.Ordinal);
         Assert.DoesNotContain("### Stdout", priorEvidence, StringComparison.Ordinal);
-        Assert.Contains("complete Durable Planner Plan", prompt, StringComparison.Ordinal);
+        Assert.Equal(ContextDeliveryMode.MandatoryFile, plannerSection.DeliveryMode);
+        Assert.Contains("MANDATORY READ: identity=context/planner-plan.md", prompt, StringComparison.Ordinal);
+        Assert.Contains($"sha256={plannerSection.ContentHash}", prompt, StringComparison.Ordinal);
+        Assert.Contains($"path={plannerSection.MandatoryRelativePath}", prompt, StringComparison.Ordinal);
+        var materializedPlan = File.ReadAllText(Path.Combine(
+            worktree,
+            plannerSection.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar)));
+        Assert.Contains("STOP-UNIQUE-PLAN-SEQUENCE-7421", materializedPlan, StringComparison.Ordinal);
         Assert.Null(developer.LastProcess);
 
         // Corrupting the delivery materialization must recover from the persisted authoritative

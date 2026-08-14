@@ -44,7 +44,8 @@ public sealed class AdvanceLoopTests
             profiles,
             workspace,
             "Start subscription handoff on create",
-            simple: false);
+            simple: false,
+            allowLargePaidSubscriptionStart: true);
         researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
 
         Assert.Equal(GoalStatus.Active, goal.Status);
