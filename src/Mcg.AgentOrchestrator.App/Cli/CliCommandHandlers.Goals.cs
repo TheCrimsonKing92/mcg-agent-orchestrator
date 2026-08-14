@@ -205,10 +205,18 @@ private static void PrintScopeCollisionAdvisory(
     CliExecutionContext context,
     string rawObjective,
     string? intakeItemId = null,
-    string? heading = null)
+    string? heading = null,
+    IReadOnlyDictionary<string, GoalScopeLifecycleObservation>? lifecycleObservations = null)
 {
+    lifecycleObservations ??= GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservations(
+        context.Workspace,
+        GoalScopeCollisionAdvisor.SelectComparisonCandidates(context.Kernel.Goals, intakeItemId));
     ConsoleViews.PrintGoalScopeCollisionReport(
-        GoalScopeCollisionAdvisor.Build([rawObjective], context.Kernel.Goals, intakeItemId),
+        GoalScopeCollisionAdvisor.Build(
+            [rawObjective],
+            context.Kernel.Goals,
+            intakeItemId,
+            lifecycleObservations),
         intakeItemId,
         heading);
 }

@@ -1825,6 +1825,12 @@ public sealed class GoalScopeCollisionConsoleViewTests
         Xunit.Assert.Contains("heading=\"Feature heading\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"intakeItemId\":\"backlog-123\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("overlap-detected", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("uncheckableGoals=0", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("uncomparedGoals=0", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"inputGoalCount\":1", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"eligibleGoalCount\":1", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"uncheckableGoalCount\":0", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"uncomparedGoalCount\":0", output, StringComparison.Ordinal);
         Xunit.Assert.Contains(conflictingGoal.Id.Value[..8], output, StringComparison.Ordinal);
         Xunit.Assert.Contains("src/Feature/File.cs", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("Explicit", output, StringComparison.Ordinal);

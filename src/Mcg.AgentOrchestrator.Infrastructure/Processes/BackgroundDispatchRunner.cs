@@ -233,7 +233,8 @@ public sealed class BackgroundDispatchRunner
         TaskId taskId,
         string logRoot,
         Action<AgentOrchestratorKernel, GoalId, TaskId, DispatchRecordCheckpointPhase>? checkpointBeforeWorkerStart = null,
-        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null)
+        Func<GoalId, TaskId, InterruptedDispatchStateRead>? readCurrentState = null,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         var task = kernel.GetTask(goalId, taskId);
         var dispatch = task.LastDispatch
@@ -287,7 +288,7 @@ public sealed class BackgroundDispatchRunner
         // OS worker sandbox: implementation roles receive a Low-labeled writable worktree. Read-only
         // Codex roles also run Low so Codex can skip its expensive nested Windows sandbox setup, but
         // their worktree stays Medium and MIC therefore denies writes.
-        var sandbox = WorkerSandboxOptions.FromEnvironment();
+        var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
         var sandboxProvider = ResolveSandboxProvider(workerProvider);
         var sandboxWorktreeWritable = IsSandboxWorktreeWritable(task.RequiredRole);
         var useSandbox = ShouldUseOsSandbox(

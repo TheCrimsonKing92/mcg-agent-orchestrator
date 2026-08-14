@@ -21,13 +21,19 @@ internal static partial class ConsoleViews
             : $" item={intakeItemId ?? "unknown"} heading={JsonSerializer.Serialize(heading ?? string.Empty)}";
         Console.WriteLine(
             $"Scope collision advisory:{subject} {report.VerdictToken} conflicts={report.Collisions.Count} " +
-            $"comparedGoals={report.ComparedGoalCount} explicitConflicts={report.ExplicitCollisionCount}");
+            $"inputGoals={report.InputGoalCount} eligibleGoals={report.EligibleGoalCount} " +
+            $"comparedGoals={report.ComparedGoalCount} uncheckableGoals={report.UncheckableGoalCount} " +
+            $"uncomparedGoals={report.UncomparedGoalCount} explicitConflicts={report.ExplicitCollisionCount}");
         Console.WriteLine(JsonSerializer.Serialize(new
         {
             intakeItemId,
             heading,
             verdict = report.VerdictToken,
+            report.InputGoalCount,
+            report.EligibleGoalCount,
             report.ComparedGoalCount,
+            report.UncheckableGoalCount,
+            report.UncomparedGoalCount,
             report.ExplicitCollisionCount,
             report.ConflictingGoalIds,
             collisions = report.Collisions.Select(collision => new

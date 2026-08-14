@@ -13,39 +13,54 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     ];
 
     [Xunit.Fact]
-    public void PlannerContract_ExactRejectedE5c18520NewStoreMarker_Passes()
+    public void PlannerContract_ArchivedE5c18520NewStoreMarker_Passes()
     {
-        var fixtureBytes = ReadCanonicalLiveFixtureBytes(E5c18520FixtureName);
-        Xunit.Assert.Equal(
-            "86A0C693C22296BC7E6517EB7A36384B99057288E057237278F364B3B65844F1",
-            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(fixtureBytes)));
-        var plan = System.Text.Encoding.UTF8.GetString(fixtureBytes);
+        var plan = ReadCanonicalArchivedFixture(
+            E5c18520FixtureName,
+            "86A0C693C22296BC7E6517EB7A36384B99057288E057237278F364B3B65844F1");
 
-        var result = PlannerOutputContract.Resolve(
+        var succeeded = PlannerOutputContract.TryValidate(
             plan,
-            string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot(),
+            out _,
+            out var diagnostic,
             acceptanceCriteria: E5c18520AcceptanceCriteria);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.True(succeeded, diagnostic);
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExactRejectedE5c18520WithoutArtifactKind_ReproducesRejection()
+    public void PlannerContract_LiveNewBehaviorWithoutArtifactKind_IsRejected()
     {
-        var plan = ReadExactLiveFixture(E5c18520FixtureName).Replace(
-            "`src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AcceptanceOwnershipStore.cs` — new SQLite-backed cross-process store.",
-            "`src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AcceptanceOwnershipStore.cs` — new behavior for cross-process claims.",
-            StringComparison.Ordinal);
+        var workingDirectory = CreateTempDirectory();
+        var targetBody =
+            "- Extend `src/AcceptanceOwnershipStore.cs` — new behavior for cross-process claims.";
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
 
         var result = PlannerOutputContract.Resolve(
             plan,
             string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot(),
-            acceptanceCriteria: E5c18520AcceptanceCriteria);
+            workingDirectory);
 
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains("AcceptanceOwnershipStore.cs", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            "target citation 'src/AcceptanceOwnershipStore.cs' does not exist",
+            result.Diagnostic,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("- Extend `src/NewStore.cs` — new durable ownership store.")]
+    [Xunit.InlineData("- Extend `src/NewFixture.cs` (new file) with focused contract coverage.")]
+    [Xunit.InlineData("- Create `src/CreatedDocument.md` with the verification receipt.")]
+    [Xunit.InlineData("- Add new file `src/AddedScript.ps1` for the verification workflow.")]
+    public void PlannerContract_NewFileMarkerVariantsPermitMissingTargets(string targetBody)
+    {
+        var workingDirectory = CreateTempDirectory();
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
     }
 
     [Xunit.Fact]
@@ -89,16 +104,15 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExactLive485363d4OrderedList_PassesWithoutSequenceKeywords()
+    public void PlannerContract_Archived485363d4OrderedList_PassesWithoutSequenceKeywords()
     {
-        var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805022806.out.txt");
+        var plan = ReadCanonicalArchivedFixture(
+            "485363d4-ba8e416a-20260805022806.out.txt",
+            "DF5A804E3066F2C7895D6CC0961CCD3E28A44DBDA2751FBB5D19C38910FF4A99");
 
-        var result = PlannerOutputContract.Resolve(
-            plan,
-            string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot());
+        var succeeded = PlannerOutputContract.TryValidate(plan, out _, out var diagnostic);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.True(succeeded, diagnostic);
     }
 
     [Xunit.Fact]
@@ -114,18 +128,18 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains("must describe an integration sequence", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("sequential numbered list", result.Diagnostic, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
-    public void PlannerContract_NumberedIntegrationListWithSubstantiveLaterText_Passes()
+    public void PlannerContract_NumberedIntegrationLineWithSubstantiveProse_Passes()
     {
         var workingDirectory = CreateTempDirectory();
         File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
         var plan = ReplaceSectionBody(
             PlannerContractPlanFixture(),
             "## Integration seams",
-            "1. Persist the validated receipt so later roles consume the complete Planner evidence.\n2. Build the downstream context from that durable receipt and verify its exact content.");
+            "1. Persist the shared substance predicate.\nThe premise, ownership, external, and stop sections then route through it before dispatch conversion runs.");
 
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
@@ -140,51 +154,71 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var plan = ReplaceSectionBody(
             PlannerContractPlanFixture(),
             "## Integration seams",
-            "1. Persist the validated receipt so later roles consume complete Planner evidence.\n3. Build downstream context using that durable receipt and verify its exact content.");
+            "1. Persist receipt evidence here.\n3. Persist receipt evidence there.");
 
         var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
 
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains("must describe an integration sequence", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains("sequential numbered list", result.Diagnostic, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact]
-    public void PlannerContract_ExactLive485363d4EmDashNewFileMarkers_Pass()
+    [Xunit.Theory]
+    [Xunit.InlineData("## Premise validity", "valid valid valid valid valid valid valid valid valid valid")]
+    [Xunit.InlineData("## Ownership and lifecycle", "owns owns owns owns owns owns owns owns owns owns")]
+    [Xunit.InlineData("## External and edge contracts", "timeout timeout timeout timeout timeout timeout timeout timeout")]
+    [Xunit.InlineData("## Integration seams", "then then then then then then then then then then")]
+    [Xunit.InlineData("## Risks and stop conditions", "stop stop stop stop stop stop stop stop stop stop")]
+    [Xunit.InlineData("## Premise validity", "1 22 333 4444 55555 666666 7777777 88888888")]
+    public void PlannerContract_MarkerOnlySectionBodies_Fail(string heading, string body)
     {
-        var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805011642.out.txt");
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), heading, body);
 
         var result = PlannerOutputContract.Resolve(
             plan,
             string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot());
+            workingDirectory,
+            acceptanceCriteria: ["Implement the behavior."]);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.False(result.Succeeded);
+        Xunit.Assert.Contains("at least 8 distinct words", result.Diagnostic, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExactLive485363d4ContextualSiblings_Pass()
+    public void PlannerContract_Archived485363d4EmDashNewFileMarkers_Pass()
     {
-        var plan = ReadExactLiveFixture("485363d4-ba8e416a-20260805010032.out.txt");
+        var plan = ReadCanonicalArchivedFixture(
+            "485363d4-ba8e416a-20260805011642.out.txt",
+            "D34219B3D84C1DB41A03F69A4A6056A32744C4B459201E52B04D8D1BD5279210");
 
-        var result = PlannerOutputContract.Resolve(
-            plan,
-            string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot());
+        var succeeded = PlannerOutputContract.TryValidate(plan, out _, out var diagnostic);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.True(succeeded, diagnostic);
     }
 
     [Xunit.Fact]
-    public void PlannerContract_ExactLive658501ceParenthesizedNewFileMarker_Passes()
+    public void PlannerContract_Archived485363d4ContextualSiblings_Pass()
     {
-        var plan = ReadExactLiveFixture("658501ce-f6708f44-20260805012800.out.txt");
+        var plan = ReadCanonicalArchivedFixture(
+            "485363d4-ba8e416a-20260805010032.out.txt",
+            "6DBB456263999A69D0A6CDA8216A413A8DE27C3C2236D4D8BE211218E2B7A4BA");
 
-        var result = PlannerOutputContract.Resolve(
-            plan,
-            string.Empty,
-            InfrastructureTestSupport.FindRepositoryRoot());
+        var succeeded = PlannerOutputContract.TryValidate(plan, out _, out var diagnostic);
 
-        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
+        Xunit.Assert.True(succeeded, diagnostic);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_Archived658501ceParenthesizedNewFileMarker_Passes()
+    {
+        var plan = ReadCanonicalArchivedFixture(
+            "658501ce-f6708f44-20260805012800.out.txt",
+            "55A29354C46758800777C6332EE4E7D8F760DF216F29ED620C6A4DC0FFB3F6D9");
+
+        var succeeded = PlannerOutputContract.TryValidate(plan, out _, out var diagnostic);
+
+        Xunit.Assert.True(succeeded, diagnostic);
     }
 
     [Xunit.Fact]
@@ -585,6 +619,11 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
         var normalized = plan.ReplaceLineEndings("\n");
         var bodyStart = normalized.IndexOf(heading, StringComparison.Ordinal) + heading.Length;
         var nextHeading = normalized.IndexOf("\n## ", bodyStart, StringComparison.Ordinal);
+        if (nextHeading < 0)
+        {
+            nextHeading = normalized.Length;
+        }
+
         return normalized[..bodyStart] + "\n\n" + replacement.Trim() + "\n" + normalized[nextHeading..];
     }
 
@@ -595,10 +634,13 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             "PlannerOutputContract",
             fileName);
 
-    private static byte[] ReadCanonicalLiveFixtureBytes(string fileName) =>
-        System.Text.Encoding.UTF8.GetBytes(
+    private static string ReadCanonicalArchivedFixture(string fileName, string expectedSha256)
+    {
+        var fixtureBytes = System.Text.Encoding.UTF8.GetBytes(
             File.ReadAllText(PlannerFixturePath(fileName)).ReplaceLineEndings("\n"));
-
-    private static string ReadExactLiveFixture(string fileName) =>
-        File.ReadAllText(PlannerFixturePath(fileName));
+        Xunit.Assert.Equal(
+            expectedSha256,
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(fixtureBytes)));
+        return System.Text.Encoding.UTF8.GetString(fixtureBytes);
+    }
 }

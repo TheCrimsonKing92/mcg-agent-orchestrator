@@ -405,7 +405,8 @@ public static class WorkerProfileDispatcher
         string promptRoot,
         string workingDirectory,
         DateTimeOffset dispatchedAt,
-        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         var results = new List<WorkerProfileDispatchResult>();
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList())
@@ -418,7 +419,8 @@ public static class WorkerProfileDispatcher
                 promptRoot,
                 workingDirectory,
                 dispatchedAt,
-                citedPriorEvidenceResolver: citedPriorEvidenceResolver));
+                citedPriorEvidenceResolver: citedPriorEvidenceResolver,
+                sandboxOptions: sandboxOptions));
         }
 
         return results;
@@ -1052,7 +1054,8 @@ public static class WorkerProfileDispatcher
         IReadOnlySet<TaskId>? taskIdsToPrepare = null,
         Func<string, bool>? commandExists = null,
         int? reviewAutoRetryStopRound = null,
-        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         return PrepareSubscriptionReadyBatch(
             kernel,
@@ -1065,7 +1068,8 @@ public static class WorkerProfileDispatcher
             taskIdsToPrepare,
             commandExists,
             reviewAutoRetryStopRound,
-            citedPriorEvidenceResolver).Dispatches;
+            citedPriorEvidenceResolver,
+            sandboxOptions).Dispatches;
     }
 
     public static WorkerProfileReadyBatchResult PrepareSubscriptionReadyBatch(
@@ -1079,7 +1083,8 @@ public static class WorkerProfileDispatcher
         IReadOnlySet<TaskId>? taskIdsToPrepare = null,
         Func<string, bool>? commandExists = null,
         int? reviewAutoRetryStopRound = null,
-        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         var selections = goal.Tasks
             .Where(task => task.Status == WorkTaskStatus.Assigned)
@@ -1096,7 +1101,7 @@ public static class WorkerProfileDispatcher
         // here — so it is redundant under the sandbox. Relaxing it lets the conductor autonomously
         // dispatch tasks whose briefs legitimately mention .git (e.g. repo-root resolution goals)
         // instead of dropping them from the ready batch and escalating a generic "no ready tasks".
-        var sandbox = WorkerSandboxOptions.FromEnvironment();
+        var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
         var sandboxConfinesWrites = sandbox.Enabled;
 
         var results = new List<WorkerProfileDispatchResult>();

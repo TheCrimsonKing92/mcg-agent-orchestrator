@@ -108,6 +108,48 @@ ordinary tests; let project-level execution be the scheduling unit; run projects
 declared resource classes. Most of the lane compiler, resource-key scheduler, time balancing, retry policy
 and cache journal then disappears.
 
+### Measured: the floor is one serial chain, and it is not where it looks
+
+Measured from `shard-complete` events on the goal `22d6a9d8` acceptance run, 2026-08-13:
+
+    Goal lifecycle commands   343.6s  |  chained: both lanes hold
+    Goal worktree cleanup     454.6s  |  xunit:GoalWorktreeCleanupHooks
+                              ------
+    chain                     798.2s     vs 798.4s measured shard phase
+
+Those two lanes are **99.98% of the shard phase** and can never overlap, so the other fifteen shards —
+including the longest single shard at 473s — run entirely inside their shadow. The gate's shard wall-clock is
+this one chain to within 0.2 seconds.
+
+**The manifest cannot fix it.** Goal `d2aa7ab9` removed the shared `exclusiveResourceKeys` entry from the
+smaller lane and the change was rejected by an executable invariant:
+`AcceptanceGateEngineSettingsTests.cs:194`,
+`AcceptanceGateEngine_disabled_collections_spanning_lanes_share_an_exclusive_resource`. That test enumerates
+every collection declared `DisableParallelization: true` and requires lanes containing classes from one such
+collection to share an exclusive key.
+
+The reasoning inverts the obvious hypothesis. `DisableParallelization` serializes only **within** a process.
+The two lanes execute as separate MTP processes, so splitting a disabled collection across them destroys the
+guarantee the collection exists to provide. Separate processes are not why the key is unnecessary — they are
+why it is necessary. Two independent analyses (an agent bottleneck search and this author) reached the
+opposite conclusion from source reading alone; only the invariant test caught it.
+
+The causal chain, therefore:
+
+    process-wide cleanup hooks mutated by tests
+      -> collection must set DisableParallelization
+      -> its classes span two lanes
+      -> invariant requires those lanes to share an exclusive key
+      -> the lanes serialize
+      -> 798.2s of a 798.4s shard phase
+
+**Open question, unresolved.** `d2aa7ab9`'s Developer reported tracing the constraint to a *host-global*
+operation reachable from both lanes' cleanup paths (`GoalWorktrees.Cleanup.cs:267`), not merely a
+process-scoped fixture. If that holds, hermeticizing test fixtures will **not** free the lanes and the floor
+is harder to move than the chain above implies. If the shared resource is process-scoped after all,
+hermeticization dissolves collection, key, serialization and floor together. **Settle this before investing
+in hermeticization as a latency lever** — it is the single fact that decides whether that work pays.
+
 ## Stack 4 — "slot" is one number pretending to be three resources
 
 `DotnetBuildEnvironmentManager.cs:93-95`:
@@ -120,15 +162,59 @@ One integer serves artifact identity, build concurrency, and whole-gate admissio
 inherited from a **retired** firewall-era mechanism, preserved under a compatibility alias with a single live
 caller (`ConductorParallelAcceptanceAttempts.cs:360`).
 
-Worse, the coupling rests on a **comment that is false**. `ConductorBatchLoop.cs:30` pins gate parallelism to
-build concurrency on the stated grounds that every gate holds a build slot. `GoalAcceptanceVerifier.cs:3755`
-explicitly *releases* the permit before running the tests. The conductor still admits at most two whole
-acceptance attempts (`ConductorBatchLoop.cs:2631`, `:2842`), so throughput is rationed against a resource the
-20-minute test phase is not holding.
+**This section was wrong twice on 2026-08-13, in opposite directions. Read the whole note before citing it.**
+
+*Round one (sol, as originally published here).* Claimed the coupling rests on a false comment: that
+`ConductorBatchLoop.cs:30` pins gate parallelism to build concurrency on the grounds that every gate holds a
+build slot, while `GoalAcceptanceVerifier.cs:3755` releases the permit before tests. The **citation** was
+wrong — line 3755 is the signature of `RunManagedMtpExecutableCheckAsync`. Published without being checked.
+
+*Round two (my correction).* Having found the citation bogus, I discarded the claim and asserted the opposite
+from lease receipts for goal `22d6a9d8`:
+
+    20:44:14  ACCEPTANCE_LEASE_ACQUIRE   permit=build-0
+    21:00:01  ACCEPTANCE_LEASE_RELEASE   permit=build-0
+
+and concluded the permit is held for the whole 15m47s gate and the comment is accurate. **Also wrong.**
+
+*What is actually true.* There are **two releases of the same lease, and only one emits a receipt.**
+
+    // GoalAcceptanceVerifier.cs:1173-1177 — early release, NO event emitted
+    if (prebuild.Run.Result.Passed)
+    {
+        VerifyPrebuiltMtpExecutables(shardChecks, primaryBuildPhase);
+        primaryLease.ReleaseExecutionLock();
+    }
+
+    // ConductorParallelAcceptanceAttempts.cs:957-966 — outer terminal disposal, emits ACCEPTANCE_LEASE_RELEASE
+    stableSlotLease.Dispose();
+    EmitAttemptLeaseReceipt("release", ...);
+
+So on the happy path the permit is freed **before the shard loop**, silently, and the only receipt fires at
+gate end regardless. Sol's substance was right and its citation was wrong; my refutation measured the outer
+disposal and mistook it for the permit's lifetime. An independent Researcher on goal `15c4a259` reached the
+same conclusion from source and reported the brief's premise invalid.
+
+The early release is skipped when any of these hold (`GoalAcceptanceVerifier.cs:1162`, `:1173`, `:461-463`):
+a failing prebuild; any shard not using MTP; or `primaryBuildPhase` null, which requires `GateUsesStableSlot`.
+
+*What follows.* The open question is no longer "should the permit be narrowed" — it already is, conditionally.
+It is **which runs take a skip branch, and why there is no receipt for the release that matters.** A state
+change invisible to every observer produced two contradictory published conclusions inside one hour. Emitting
+a receipt at `GoalAcceptanceVerifier.cs:1176` is plausibly worth more than any lifetime refactor. Tracked as
+goal `15c4a259`.
 
 **Right design:** three types. `BuildPermitPool` (capacity 2, held only during builds); `AcceptanceAdmission`
 (independently configured from measured CPU/memory); immutable content-keyed `BuildArtifactId`. Remove
-`stableSlotIndex` from acceptance APIs.
+`stableSlotIndex` from acceptance APIs. Note that `ReleaseExecutionLock()` and `Dispose()` being the same
+underlying operation on one object, with different observability, is itself an instance of this document's
+thesis: distinct concepts collapsed into one type, then reconstructed by inference.
+
+**Method note.** This document argues that the recurring flaw is records asserting what nobody verified. This
+section has now been that failure twice: once by republishing an unchecked citation, once by refuting a
+correct claim because its citation was wrong and then measuring the wrong object. **A bad citation is not a
+false claim.** Treat every file:line here as a claim to check — including the ones that survived, and
+including this note.
 
 ## Stack 5 — mutable build output turned two-phase MTP into a lease protocol
 
@@ -192,7 +278,7 @@ Preserved deliberately; these are the least settled claims.
 
 | Lead | Verdict |
 |---|---|
-| Retired two-slot grid caused the lease pile | **Partly confirmed.** Artifact roots are per-goal now, so the "slot = artifact isolation" framing was stale. The live defect is gate admission coupled to a two-permit build pool via a false comment. |
+| Retired two-slot grid caused the lease pile | **Partly confirmed, and sol's counter-claim was itself wrong.** Artifact roots are per-goal now, so the "slot = artifact isolation" framing was stale. But the comment at `ConductorBatchLoop.cs:30` is accurate — lease events show the permit held for the whole gate. The live defect is permit *lifetime*, not a false comment. See the correction in Stack 4. |
 | Criterion prose is mined into pattern-absence checks | **Root cause refuted, observation real.** `AcceptanceCriteriaParser.TryClassify` (`:134-149`) emits only `test-removal`, `file-exists`, `command-exit` — no pattern type. But `RunGrepCheckAsync` (`GoalAcceptanceVerifier.cs:3512-3543`) does run `git grep` and emits the exact `"pattern still present"` string observed in a live receipt for pattern `[Xunit.Theory]`. The mechanism exists and fired; how it was reached is still untraced. Its results are advisory. |
 | Worker test ban caused the gate lease machinery | **Causally refuted.** Independent acceptance would be required regardless. The ban costs feedback latency, not gate architecture. |
 | Two-phase MTP execution caused the artifact machinery | **Partly confirmed.** Two-phase is fine; mutable in-place reuse is the wrong decision. `Invoke-IsolatedDotnet.ps1` is operator tooling, not the conductor hot path, and should not be counted as such. |
@@ -217,6 +303,15 @@ than an observation.**
 - The intake scope-collision check returned a confident verdict having compared 24 of 77 goals, counted
   Parked goals as conflicts, and treated goals with no declared scopes as non-conflicting.
 - `ConductorBatchLoop.cs:30`'s comment asserts a coupling the verifier explicitly breaks.
+- `PlannerOutputContract` claimed to validate the meaning of premise, ownership, external/edge,
+  integration, and stop-condition sections, but admitted or rejected them through short noun lists.
+  Packaged evidence for goal `6dc59292` shows consecutive child-exit-0 Planner attempts rejected on
+  the external/edge check even though their section bodies describe removed CLI commands,
+  unrecognized-command behavior, and firewall-rule effects. The corrected contract checks the
+  directly observable structure instead: body length plus lexical diversity for open prose, with
+  specialized citation, verification-class, and numbered-list checks retained. Semantic adequacy
+  remains a Reviewer judgment. The packaged evidence does not include the complete prior stdout, so
+  this audit does not repeat the unverified claim that all ten criterion mappings were present.
 
 A check that cannot examine its whole domain must say so **in its verdict**, not only in a payload field.
 `no-overlap-detected` and `no-overlap-found-in-the-third-we-looked-at` are different claims.

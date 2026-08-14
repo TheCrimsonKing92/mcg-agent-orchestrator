@@ -739,7 +739,13 @@ internal static class GoalMonitoringSubscriptionCommand
         };
     }
 
-    internal static GoalLifecycleFacts ReadLifecycleFacts(OrchestratorWorkspace workspace, Goal goal)
+    internal static GoalLifecycleFacts ReadLifecycleFacts(OrchestratorWorkspace workspace, Goal goal) =>
+        ReadLifecycleFacts(workspace, goal, hasOpenClarification: null);
+
+    private static GoalLifecycleFacts ReadLifecycleFacts(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        bool? hasOpenClarification)
     {
         var executionDirectory = workspace.ExecutionDirectory;
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
@@ -748,15 +754,98 @@ internal static class GoalMonitoringSubscriptionCommand
         var isMerged = GoalOperationJournal.HasCompletedLandingEvidence(journal);
         var isRecorded = GoalOperationJournal.HasCompletedRecordEvidence(journal);
         var isCleanedUp = GoalOperationJournal.HasCompletedCleanupEvidence(journal);
-        var hasOpenClarification = GoalRefinementGate.HasOpenClarification(workspace, goal);
+        var resolvedHasOpenClarification = hasOpenClarification ??
+            GoalRefinementGate.HasOpenClarification(workspace, goal);
         var isBlocked = GoalAcceptanceStatusProjector.HasCurrentBlockingAcceptanceState(goal, executionDirectory, journal) ||
             journal.LatestByOperation.Any(entry =>
                 entry.Status == GoalOperationStatus.Failed &&
                 (entry.Operation.Contains("land", StringComparison.OrdinalIgnoreCase) ||
                  entry.Operation.Contains("cleanup", StringComparison.OrdinalIgnoreCase) ||
                  entry.Operation.Contains("workspace:remove", StringComparison.OrdinalIgnoreCase)));
-        return new GoalLifecycleFacts(workspaceExists, isBlocked, isMerged, isRecorded, isCleanedUp, hasOpenClarification);
+        return new GoalLifecycleFacts(workspaceExists, isBlocked, isMerged, isRecorded, isCleanedUp, resolvedHasOpenClarification);
     }
+
+    internal static GoalScopeLifecycleObservation ReadScopeCollisionLifecycleObservation(
+        OrchestratorWorkspace workspace,
+        Goal goal)
+    {
+        if (!RequiresScopeCollisionLifecycleFacts(goal))
+        {
+            return new GoalScopeLifecycleObservation(GoalLifecycle.ResolveState(goal));
+        }
+
+        try
+        {
+            return ReadScopeCollisionLifecycleObservation(
+                workspace,
+                goal,
+                GoalRefinementGate.HasOpenClarification(workspace, goal));
+        }
+        catch (Exception ex)
+        {
+            return UnavailableScopeCollisionLifecycleObservation(ex);
+        }
+    }
+
+    internal static IReadOnlyDictionary<string, GoalScopeLifecycleObservation> ReadScopeCollisionLifecycleObservations(
+        OrchestratorWorkspace workspace,
+        IReadOnlyCollection<Goal> goals)
+    {
+        var distinctGoals = goals
+            .DistinctBy(goal => goal.Id)
+            .ToArray();
+        IReadOnlySet<GoalId> openClarificationGoalIds;
+        try
+        {
+            openClarificationGoalIds = GoalRefinementGate.OpenClarificationGoalIds(
+                workspace,
+                distinctGoals.Select(goal => goal.Id));
+        }
+        catch (Exception ex)
+        {
+            return distinctGoals.ToDictionary(
+                goal => goal.Id.Value,
+                _ => UnavailableScopeCollisionLifecycleObservation(ex),
+                StringComparer.Ordinal);
+        }
+
+        return distinctGoals.ToDictionary(
+            goal => goal.Id.Value,
+            goal => ReadScopeCollisionLifecycleObservation(
+                workspace,
+                goal,
+                openClarificationGoalIds.Contains(goal.Id)),
+            StringComparer.Ordinal);
+    }
+
+    private static GoalScopeLifecycleObservation ReadScopeCollisionLifecycleObservation(
+        OrchestratorWorkspace workspace,
+        Goal goal,
+        bool hasOpenClarification)
+    {
+        if (!RequiresScopeCollisionLifecycleFacts(goal))
+        {
+            return new GoalScopeLifecycleObservation(GoalLifecycle.ResolveState(goal));
+        }
+
+        try
+        {
+            return new GoalScopeLifecycleObservation(
+                GoalLifecycle.ResolveState(
+                    goal,
+                    ReadLifecycleFacts(workspace, goal, hasOpenClarification)));
+        }
+        catch (Exception ex)
+        {
+            return UnavailableScopeCollisionLifecycleObservation(ex);
+        }
+    }
+
+    private static bool RequiresScopeCollisionLifecycleFacts(Goal goal) =>
+        goal.Status == GoalStatus.Verified;
+
+    private static GoalScopeLifecycleObservation UnavailableScopeCollisionLifecycleObservation(Exception ex) =>
+        new(State: null, UnavailableReason: ex.GetType().Name);
 
     private static bool IsNewForCursor(GoalStateSubscriptionEvent evt, long timelineCursor, long runEventCursor, long processCursor)
     {
