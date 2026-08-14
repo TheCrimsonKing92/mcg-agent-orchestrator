@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using Mcg.AgentOrchestrator.App.Orchestration;
 using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Infrastructure;
@@ -8,6 +9,13 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection("EnvMutation")]
 public sealed class WorkerProcessJobsTests : IDisposable
 {
+    private const string NegativeWaitAssertionExemption = "test-design-discipline: allow-negative-wait";
+    private static readonly Regex NegativeWaitAssertionPattern = new(
+        @"\b(?:Xunit\.)?" + "Assert" + @"\s*\.\s*" + "False" +
+        @"\s*\(\s*(?:(?!;)[\s\S]){0,500}?\b(?:" + "WaitForExit" +
+        @"(?:Async)?|" + "SpinUntil" + "|" + "Wait" + @")\s*\(",
+        RegexOptions.CultureInvariant);
+
     private readonly string? _originalProtectedPid = Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_PROTECTED_PID");
 
     public WorkerProcessJobsTests()
@@ -491,7 +499,6 @@ public sealed class WorkerProcessJobsTests : IDisposable
                        evt.Status == "degraded" &&
                        evt.Detail == registrationDiagnostic);
             Assert.False(wrapper.HasExited);
-            Assert.False(wrapper.WaitForExit(100));
             Assert.True(IsRunning(Assert.IsType<int>(childPid)));
 
             WorkerProcessJobs.Release(wrapper.Id);
@@ -689,11 +696,9 @@ public sealed class WorkerProcessJobsTests : IDisposable
                        evt.Status == "degraded" &&
                        evt.Detail == registrationDiagnostic);
             Assert.False(wrapper.HasExited);
-            Assert.False(wrapper.WaitForExit(100));
 
             Assert.True(WorkerProcessJobs.TryDetachForGracefulStop(wrapper.Id, out var detachFailure), detachFailure);
             Assert.False(WorkerProcessJobs.HasRegisteredJob(wrapper.Id));
-            Assert.False(wrapper.WaitForExit(100));
             Assert.True(IsRunning(wrapper.Id));
         }
         finally
@@ -753,7 +758,6 @@ public sealed class WorkerProcessJobsTests : IDisposable
                        evt.Status == "degraded" &&
                        evt.Detail == registrationDiagnostic);
             Assert.False(wrapper.HasExited);
-            Assert.False(wrapper.WaitForExit(100));
 
             WorkerProcessJobs.Release(wrapper.Id);
             Assert.True(WaitUntilNotRunning(wrapper.Id, TimeSpan.FromSeconds(5)));
@@ -1727,6 +1731,87 @@ public sealed class WorkerProcessJobsTests : IDisposable
     public void WorkerProcessJobsProductionCallersObserveRegistrationFailure()
     {
         AssertProductionCallersObserveRegistrationFailure();
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_test_sources_reject_negative_wait_assertions")]
+    public void WorkerProcessJobsTestSourcesRejectNegativeWaitAssertions()
+    {
+        var repoRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        var testRoot = Path.Combine(repoRoot, "tests");
+        var separator = Path.DirectorySeparatorChar;
+        var offenders = new List<string>();
+
+        foreach (var path in Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories)
+                     .Where(path => !path.Contains($"{separator}bin{separator}", StringComparison.OrdinalIgnoreCase))
+                     .Where(path => !path.Contains($"{separator}obj{separator}", StringComparison.OrdinalIgnoreCase)))
+        {
+            var source = File.ReadAllText(path);
+            foreach (Match match in NegativeWaitAssertionPattern.Matches(source))
+            {
+                if (HasNegativeWaitAssertionExemption(source, match.Index))
+                {
+                    continue;
+                }
+
+                var lineNumber = source.Take(match.Index).Count(character => character == '\n') + 1;
+                offenders.Add($"{Path.GetRelativePath(repoRoot, path)}:{lineNumber}");
+            }
+        }
+
+        Assert.True(
+            offenders.Count == 0,
+            "Negative wait assertions are forbidden because they cannot prove liveness. Offenders: " +
+            string.Join(", ", offenders));
+    }
+
+    [Xunit.Theory(DisplayName = "WorkerProcessJobs_negative_wait_source_guard_recognizes_forbidden_members")]
+    [Xunit.InlineData("WaitForExit")]
+    [Xunit.InlineData("WaitForExitAsync")]
+    [Xunit.InlineData("SpinUntil")]
+    [Xunit.InlineData("Wait")]
+    public void WorkerProcessJobsNegativeWaitSourceGuardRecognizesForbiddenMembers(string memberName)
+    {
+        var source = string.Concat("Assert", ".False(subject.", memberName, "(100));");
+
+        Assert.True(NegativeWaitAssertionPattern.IsMatch(source));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_negative_wait_source_guard_allows_state_assertions")]
+    public void WorkerProcessJobsNegativeWaitSourceGuardAllowsStateAssertions()
+    {
+        var source = string.Concat("Assert", ".False(process.HasExited);");
+
+        Assert.False(NegativeWaitAssertionPattern.IsMatch(source));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_negative_wait_source_guard_allows_documented_exemption")]
+    public void WorkerProcessJobsNegativeWaitSourceGuardAllowsDocumentedExemption()
+    {
+        var source = string.Concat(
+            "// ",
+            NegativeWaitAssertionExemption,
+            " - deterministic single-threaded fallback\n",
+            "Assert",
+            ".False(subject.Wait(10));");
+        var match = NegativeWaitAssertionPattern.Match(source);
+
+        Assert.True(match.Success);
+        Assert.True(HasNegativeWaitAssertionExemption(source, match.Index));
+    }
+
+    private static bool HasNegativeWaitAssertionExemption(string source, int assertionIndex)
+    {
+        var assertionLineStart = source.LastIndexOf('\n', Math.Max(0, assertionIndex - 1));
+        if (assertionLineStart <= 0)
+        {
+            return false;
+        }
+
+        var previousLineStart = source.LastIndexOf('\n', assertionLineStart - 1) + 1;
+        var previousLine = source.AsSpan(previousLineStart, assertionLineStart - previousLineStart).Trim();
+        var exemptionPrefix = $"// {NegativeWaitAssertionExemption} - ";
+        return previousLine.StartsWith(exemptionPrefix, StringComparison.Ordinal) &&
+               previousLine.Length > exemptionPrefix.Length;
     }
 
     private static void AssertProductionCallersObserveRegistrationFailure(

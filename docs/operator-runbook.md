@@ -400,13 +400,15 @@ Three independent constraints bound useful parallelism:
 
 **Build capacity and test artifacts.** Builds share two machine-wide file locks under the isolated dotnet root. Test execution is not slot-confined: acceptance receipts live beneath `.orchestrator/acceptance-gate-attempts/<goal-id>/`, pre-review focused receipts beneath `.orchestrator/pre-review-evidence-attempts/<goal-id>/`, and operator test commands use invocation-owned directories. Both receipt roots follow the goal artifact retention plan and `Show-TestDurations.ps1` reads both by default. Per-goal build artifacts remain reusable under the isolated dotnet goal root.
 
-After the slot-free gate has soaked cleanly for at least three days, an administrator may remove the obsolete inbound rules once:
+Two historical Windows Firewall rule populations can remain on an operator machine. Rules named `MCG-testhost-slot*` belong to the retired stable-slot test hosts and become removable after the slot-free gate has soaked cleanly for at least three days. Prompt-generated, per-executable rules are separate: they may still serve deliberately retained application or worktree executables and must remain until an administrator confirms that each executable path is no longer used.
+
+An administrator may partially reverse the obsolete rule population once:
 
 ```powershell
 .\scripts\Remove-TestSlotFirewallRules.ps1
 ```
 
-The script is idempotent, matches only `MCG-testhost-slot*`, and writes every removed rule definition to `.orchestrator/firewall-rule-removal/` before reporting success. Keep that receipt so a rule can be reconstructed if the soak premise proves wrong. This is a one-time operator action; the orchestrator never mutates firewall policy at runtime.
+The script is idempotent, matches only `MCG-testhost-slot*`, and writes every removed rule definition to `.orchestrator/firewall-rule-removal/` before reporting success. Keep that receipt so a rule can be reconstructed if the soak premise proves wrong. It does not inspect or remove prompt-generated per-executable rules. Reversing those requires an elevated, rule-by-rule review in Windows Firewall: verify the executable path is retired, export or otherwise preserve the rule definition, and remove only that confirmed rule. This is a one-time operator action; the orchestrator never mutates firewall policy at runtime.
 
 **Provider rate-limit.** Each worker holds a `claude-cli` or `codex-cli` subscription session. Under heavy load the shared subscription can hit the provider's session rate-limit, causing workers to exit with zero bytes of output and retry in a loop. If you observe this pattern (workers exit-1 repeatedly with empty output), reduce the number of concurrent in-flight goals or stagger goal intake. There is no orchestrator-side setting that bypasses the upstream limit.
 

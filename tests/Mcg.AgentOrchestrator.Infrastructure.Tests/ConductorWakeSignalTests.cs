@@ -42,9 +42,13 @@ public sealed class ConductorWakeSignalTests
             using var wakeSignal = new FileSystemWatcherConductorWakeSignal(root, _ => { });
             wakeSignal.UpdateTrackedExitArtifacts([tracked]);
 
-            File.WriteAllText(untracked, "0");
+            var signalIfTracked = typeof(FileSystemWatcherConductorWakeSignal).GetMethod(
+                "SignalIfTracked",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.NotNull(signalIfTracked);
 
-            Assert.False(wakeSignal.Wait(TimeSpan.FromMilliseconds(250)));
+            signalIfTracked.Invoke(wakeSignal, [untracked]);
+            AssertSignalDrained(wakeSignal);
         }
         finally
         {
@@ -86,7 +90,7 @@ public sealed class ConductorWakeSignalTests
 
             Assert.True(wakeSignal.Wait(TimeSpan.FromSeconds(ConductorBatchLoop.WatchStopPollIntervalSeconds)));
             Assert.False(File.Exists(wakePath));
-            Assert.False(wakeSignal.Wait(TimeSpan.FromMilliseconds(10)));
+            AssertSignalDrained(wakeSignal);
         }
         finally
         {
@@ -109,6 +113,7 @@ public sealed class ConductorWakeSignalTests
                 warnings.Add);
 
             wakeSignal.UpdateTrackedExitArtifacts([]);
+            // test-design-discipline: allow-negative-wait - no concurrent producer exists, so fallback deterministically reports no wake instead of hot-spinning.
             Assert.False(wakeSignal.Wait(TimeSpan.FromMilliseconds(10)));
             Assert.Contains(warnings, warning =>
                 warning.Contains("continuing with timed polling", StringComparison.Ordinal));
@@ -140,6 +145,21 @@ public sealed class ConductorWakeSignalTests
         {
             TryDeleteDirectory(root);
         }
+    }
+
+    private static void AssertSignalDrained(FileSystemWatcherConductorWakeSignal wakeSignal)
+    {
+        var signaled = typeof(FileSystemWatcherConductorWakeSignal).GetField(
+            "_signaled",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        var signal = typeof(FileSystemWatcherConductorWakeSignal).GetField(
+            "_signal",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+        Assert.NotNull(signaled);
+        Assert.NotNull(signal);
+        Assert.Equal(0, Assert.IsType<int>(signaled.GetValue(wakeSignal)));
+        Assert.Equal(0, Assert.IsType<SemaphoreSlim>(signal.GetValue(wakeSignal)).CurrentCount);
     }
 
     private static string CreateTempDirectory(string prefix)
