@@ -20,6 +20,10 @@ public sealed class GoalAcceptanceVerifierCollection : Xunit.ICollectionFixture<
 [Xunit.CollectionDefinition(TestCollections.GoalWorktreeCleanupHooks, DisableParallelization = true)]
 public sealed class GoalWorktreeCleanupHooksCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
 
+// Build-lease tests need a process-local isolated root but do not mutate cleanup-hook state.
+[Xunit.CollectionDefinition(TestCollections.IsolatedDotnetRoot, DisableParallelization = true)]
+public sealed class IsolatedDotnetRootCollection : Xunit.ICollectionFixture<IsolatedDotnetRootFixture>;
+
 // Job Object accounting tests use process-wide worker job registries, real fake worker processes,
 // and slot-pinned gate processes; keep them serial and isolated from the host slot lanes.
 [Xunit.CollectionDefinition(TestCollections.JobAccounting, DisableParallelization = true)]

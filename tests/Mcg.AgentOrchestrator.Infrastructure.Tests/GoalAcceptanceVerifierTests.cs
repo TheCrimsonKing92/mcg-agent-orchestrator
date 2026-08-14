@@ -1335,7 +1335,7 @@ internal sealed class RecordingTimeProvider : TimeProvider
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase
 {
     private const string CheckedInCliLaneFilter =
-        "FullyQualifiedName~CliCommandTests&FullyQualifiedName!~CliCommandTestsGoalLifecycleCommands&FullyQualifiedName!~CliCommandTestsPersistentRunnerCommands&FullyQualifiedName!~CliCommandTestsSubscriptionDispatchCommands&FullyQualifiedName!~CliCommandTestsTerminalSweepCommands";
+        "FullyQualifiedName~CliCommandTests&FullyQualifiedName!~CliCommandTestsGoalLifecycleCleanupHooks&FullyQualifiedName!~CliCommandTestsPersistentRunnerCommands&FullyQualifiedName!~CliCommandTestsSubscriptionDispatchCommands&FullyQualifiedName!~CliCommandTestsTerminalSweepCommands";
     private const string CheckedInGoalAcceptanceVerifierLaneFilter =
         "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~RealProcessShardAlphaSmokeTests|FullyQualifiedName~RealProcessShardBetaSmokeTests|FullyQualifiedName~WorkerDispatchJobAccountingTests";
     private const string CheckedInGoalAcceptanceBuildSlotsLaneFilter =
@@ -3616,6 +3616,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 "infrastructure tests: Conduct watch sweep scoping",
                 "infrastructure tests: Goal lifecycle commands",
                 "infrastructure tests: Goal worktree cleanup",
+                "infrastructure tests: Goal worktree parallel",
                 "infrastructure tests: Worker profiles",
                 "infrastructure tests: Worker dispatch fixtures",
                 "infrastructure tests: Process spawning",

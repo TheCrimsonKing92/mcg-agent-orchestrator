@@ -11,7 +11,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 
 
-[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
 {
     [Xunit.Fact(DisplayName = "InvokeRepoScript_runs_FindOrchestratorLocks_without_synthetic_argument")]
@@ -737,6 +736,11 @@ public sealed class GoalWorktreeTestsSqliteTooling : GoalWorktreeTestBase
         }
     }
 
+}
+
+[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
+public sealed class GoalWorktreeTestsCleanupHookDelegates : GoalWorktreeTestBase
+{
     [Xunit.Fact(DisplayName = "DeleteDirectory_removes_tree_containing_read_only_files")]
     public void DeleteDirectoryRemovesTreeContainingReadOnlyFiles()
     {

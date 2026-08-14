@@ -15,7 +15,7 @@ that separate MTP processes do not share a resource.
 
 | Collection / current key | Guarded identity and lifecycle | Required cross-process invariant | Source boundary | Adjudication | Required negative control |
 | --- | --- | --- | --- | --- | --- |
-| `GoalWorktreeCleanupHooks` / `xunit:GoalWorktreeCleanupHooks` | Static cleanup-hook replacements and acceptance build leases; the collection fixture sets a GUID-rooted dotnet directory for the process and restores it on disposal. | Hook mutation stays process-local; every worktree, build lease, and cleanup target is uniquely rooted or protected by a real cross-process lease for its complete lifetime. | `AssemblyInfo.cs::GoalWorktreeCleanupHooksCollection`, `TestCollections.cs::IsolatedDotnetRootFixture`, `CliCommandTests.GoalLifecycleCommands.cs::CliAcceptancePinsSelectedStableSlotAndRecordsReceipt` | **Retain.** The visible slot root is isolated, but the two lane filters lack the required real-process overlap and cleanup receipt covering every member. The 575.7-second chain is therefore retained. | In a disposable worktree under representative host load, run `Goal lifecycle commands` and `Goal worktree cleanup` concurrently for 50-100 clean iterations; require nonzero counts, complete TRX files, overlap, restored environment, released leases, and no worktree/temp-root residue. Any flake retains the key; remove no other key in the same change. |
+| `GoalWorktreeCleanupHooks` / `xunit:GoalWorktreeCleanupHooks` | Static cleanup-hook replacements and acceptance build leases; the collection fixture sets a GUID-rooted dotnet directory for the process and restores it on disposal. | Hook mutation stays process-local; every worktree, build lease, and cleanup target is uniquely rooted or protected by a real cross-process lease for its complete lifetime. | `AssemblyInfo.cs::GoalWorktreeCleanupHooksCollection`, `TestCollections.cs::IsolatedDotnetRootFixture`, `CliCommandTestsGoalLifecycleCleanupHooks*`, `GoalWorktreeTestsCleanupHookDelegates` | **Retain.** The visible slot root is isolated, but the two lane filters lack the required real-process overlap and cleanup receipt covering every member. The pre-split 575.7-second chain is therefore retained as the comparison baseline. | In a disposable worktree under representative host load, run `Goal lifecycle commands` and `Goal worktree cleanup` concurrently for 50-100 clean iterations; require nonzero counts, complete TRX files, overlap, restored environment, released leases, and no worktree/temp-root residue. Any flake retains the key; remove no other key in the same change. |
 | `EnvMutation` / `xunit:EnvMutation` | Process environment and other process-wide test seams, restored by per-test scopes. | Environment, current-directory, and static mutations stay process-local and are restored; every path, port, store, or named OS object visible across processes is unique or independently leased. | `AssemblyInfo.cs::EnvMutationCollection`, `WorkerDispatchTestsDispatchPreparation`, `WorkerDispatchTestsModelSelectionEnvMutation` | **Retain.** Environment variables are process-local across MTP shards, but the complete lane membership has not been cleared of fixed paths, ports, or named OS resources. | In a disposable worktree under representative host load, run `Worker profiles` and `Worker dispatch fixtures` concurrently for 50-100 clean iterations and compare the parent environment before/after; require no fixed-path, process, port, or store leakage. Any flake retains the key; remove no other key in the same change. |
 | `ProcessSpawning` / `xunit:ProcessSpawning` | Child processes plus process registries, launcher configuration, temporary repositories, and any endpoints they own. | Every child, PID registry, launcher file, repository, endpoint, and handle has a unique owning run and is drained, joined, and removed before that run ends. | `AssemblyInfo.cs::ProcessSpawningCollection`, `ConductorDriverTests`, `DispatchProcessHostTests`, `ProcessTreeGuiSuppressionTests` | **Retain.** Process creation is not itself shared state, but the broad collection has not been proven free of shared registries, endpoints, or launcher files across real processes. | In a disposable worktree under representative host load, run each former partner-lane pair concurrently for 50-100 clean iterations; require owned-process exit receipts, drained output, no inherited live handles, complete TRX files, and no repository/port/registry residue. Any flake retains the key; remove no other key in the same change. |
 | `DotnetBuildSlots` / `xunit:DotnetBuildSlots` | Build-slot locks and artifacts beneath the fixture's GUID root, restored and deleted when the collection process exits. | Every slot path, lock, and artifact resolves below the per-process GUID root, including subprocesses; no execution falls back to the host slot root. | `AssemblyInfo.cs::DotnetBuildSlotsCollection`, `TestCollections.cs::IsolatedDotnetRootFixture`, `DotnetBuildEnvironmentManagerTests` | **Retain.** Source shows a run-scoped override, but fallback and subprocess inheritance across every test in the two keyed lanes have not been demonstrated by a real overlap receipt. | In a disposable worktree under representative host load, run `Dotnet build slots` with `Remainder` concurrently for 50-100 clean iterations; require distinct resolved roots, complete TRX files, released locks, and no host-slot artifacts. Any flake retains the key; remove no other key in the same change. |
@@ -63,14 +63,37 @@ xunit:DotnetBuildSlots          Dotnet build slots 201.2s + Remainder 176.6s    
 xunit:JobAccounting             Goal acceptance build slots 326.0s + Goal acceptance verifier 30.5s = 356.5s
 ```
 
+### Goal `6bb531ff` lane-composition amendment
+
+The table above remains the measured **before** receipt. This candidate separates tests by resource ownership
+without removing `xunit:GoalWorktreeCleanupHooks`:
+
+- `Cli` gains 84 source-declared goal-lifecycle test attributes. The 24 hook-owning attributes plus 280 tests
+  selected from the lane's other class families stay in `Goal lifecycle commands` (388 old-lane attributes in
+  total). Three of the moved tests that create build leases use the process-local `IsolatedDotnetRoot` fixture
+  collection and assert cleanup success; they do not rejoin the cross-process key.
+- `Goal worktree parallel` owns the 8 `GoalWorktreeTestsCreationResolution` and 16
+  `GoalWorktreeTestsSqliteTooling` attributes and declares no exclusive key. The remaining 125 source-declared
+  worktree-cleanup attributes stay in `Goal worktree cleanup`.
+- Until the operator-owned receipt exists, the manifest apportions the old measured lane values by those
+  source-declared memberships: `Cli` 65.2s (its measured 11.4s baseline plus the moved share) /
+  `Goal lifecycle commands` 194.6s and
+  `Goal worktree parallel` 52.7s / `Goal worktree cleanup` 274.6s. These are scheduling estimates, not a
+  measured performance claim. Their pre-split aggregates remain 259.8s and 327.3s (rounding aside).
+
+The provisional keyed chain is therefore `194.6 + 274.6 = 469.2s`, versus the measured 575.7s before chain.
+Acceptance must replace the four provisional lane estimates with `PHASE_PROGRESS`/`shard-complete` values and
+report the actual keyed-chain reduction. A small or absent measured reduction closes this slice without
+re-architecting the retained cleanup-hook dependency.
+
 ### Post-change comparison method
 
-The operator-owned acceptance run must record the exact commit and retain all 17 parent `shard-complete`
-lines, the separate ProviderEnvironment project-check receipt, the `phase=shards-complete elapsed_ms` line,
-and the terminal `EVIDENCE_END duration_s` line. First verify that the 17 remaining named lanes and the
-extracted project emitted successful gating verdicts. Sum the 17 shard elapsed values for parent-shard work
-and record the extracted check separately; reconstruct every exclusive-key chain from the manifest and the
-parent shard values. The shard-phase
+The operator-owned acceptance run must record the exact commit and retain every manifest-declared parent
+`shard-complete` line, each separate extracted-project check receipt, the `phase=shards-complete elapsed_ms`
+line, and the terminal `EVIDENCE_END duration_s` line. First verify that every named lane and extracted project
+emitted a successful gating verdict. Sum the parent-shard elapsed values for parent-shard work and record the
+extracted checks separately; reconstruct every exclusive-key chain from the manifest and the parent shard
+values. The shard-phase
 wall clock is `shards-complete elapsed_ms`; `EVIDENCE_END duration_s` is the end-to-end cross-check and must
 not be substituted for the shard-phase number.
 
