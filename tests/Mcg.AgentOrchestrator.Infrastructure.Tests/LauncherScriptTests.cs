@@ -236,12 +236,17 @@ public sealed class LauncherScriptTests
         using var sandbox = CreateResumeSandbox(
             $"Write-Output 'PROCESS id=123 parent=1 name=powershell created={createdAt:O} path=powershell.exe command=conduct --loop'");
         WriteLastDriveJournal(sandbox.RepositoryRoot, "batch60");
+        WriteConductEvent(sandbox.RepositoryRoot, DateTime.UtcNow);
 
         var result = RunInvokeRepoScript(sandbox.RepositoryRoot, "scripts\\Resume-OrchestratorLoop.ps1");
 
         Assert.Equal(0, result.ExitCode);
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
         Assert.Contains("RESUME_SKIPPED reason=conduct-loop-healthy incumbentPid=123", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains(
+            "RESUME_SKIPPED reason=conduct-loop-healthy incumbentPid=123",
+            File.ReadAllText(Path.Combine(sandbox.RepositoryRoot, ".orchestrator", "logs", "auto-resume.log")),
+            StringComparison.Ordinal);
         Assert.False(File.Exists(sandbox.StartInvocationPath), "Resume should not relaunch when a conduct loop is running.");
     }
 
@@ -262,10 +267,7 @@ public sealed class LauncherScriptTests
         {
             WriteLastDriveJournal(sandbox.RepositoryRoot, "batch60", pollSeconds: 1);
             var orchestratorPath = Path.Combine(sandbox.RepositoryRoot, ".orchestrator");
-            var eventLogPath = Path.Combine(orchestratorPath, "logs", "conduct-events.log");
-            Directory.CreateDirectory(Path.GetDirectoryName(eventLogPath)!);
-            File.WriteAllText(eventLogPath, "stale event");
-            File.SetLastWriteTimeUtc(eventLogPath, DateTime.UtcNow.AddHours(-1));
+            WriteConductEvent(sandbox.RepositoryRoot, DateTime.UtcNow.AddHours(-1));
             File.WriteAllLines(
                 Path.Combine(orchestratorPath, "conduct-loop.lock"),
                 [
@@ -319,6 +321,7 @@ public sealed class LauncherScriptTests
         {
             WriteLastDriveJournal(sandbox.RepositoryRoot, "batch60", pollSeconds: 1);
             var orchestratorPath = Path.Combine(sandbox.RepositoryRoot, ".orchestrator");
+            WriteConductEvent(sandbox.RepositoryRoot, DateTime.UtcNow.AddHours(-1));
             File.WriteAllLines(
                 Path.Combine(orchestratorPath, "conduct-loop.lock"),
                 [
@@ -378,6 +381,7 @@ public sealed class LauncherScriptTests
         using var sandbox = CreateResumeSandbox(
             $"Write-Output 'PROCESS id=123 parent=1 name=powershell created={createdAt:O} path=powershell.exe command=conduct --loop'");
         WriteLastDriveJournal(sandbox.RepositoryRoot, "batch60");
+        WriteConductEvent(sandbox.RepositoryRoot, DateTime.UtcNow);
         var stopPath = Path.Combine(sandbox.RepositoryRoot, ".conduct-stop");
         File.WriteAllText(stopPath, "stop");
         File.SetLastWriteTimeUtc(stopPath, DateTime.UtcNow.AddHours(-1));
@@ -428,6 +432,44 @@ public sealed class LauncherScriptTests
         Assert.Contains("RESUME_FAILED reason=recovery-unavailable", result.Stdout, StringComparison.Ordinal);
         Assert.True(File.Exists(stopPath), "The operator stop must remain until the operator removes it.");
         Assert.False(File.Exists(sandbox.StartInvocationPath), "Auto-resume must not consume an operator stop and relaunch.");
+    }
+
+    [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_refuses_recovery_when_liveness_evidence_is_unavailable")]
+    public void ResumeOrchestratorLoopRefusesRecoveryWhenLivenessEvidenceIsUnavailable()
+    {
+        var createdAt = DateTimeOffset.UtcNow.AddHours(-1);
+        using var sandbox = CreateResumeSandbox(
+            $"Write-Output 'PROCESS id=123 parent=1 name=powershell created={createdAt:O} path=powershell.exe command=conduct --loop'");
+        WriteLastDriveJournal(sandbox.RepositoryRoot, "batch60", pollSeconds: 1);
+
+        var result = RunInvokeRepoScript(
+            sandbox.RepositoryRoot,
+            "scripts\\Resume-OrchestratorLoop.ps1",
+            "-StaleAfterPollIntervals",
+            "1");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("RESUME_BLOCKED reason=liveness-evidence-unavailable incumbentPid=123", result.Stdout, StringComparison.Ordinal);
+        Assert.False(File.Exists(sandbox.StartInvocationPath), "Missing evidence must not authorize termination or relaunch.");
+    }
+
+    [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_receipts_invalid_journal_failure")]
+    public void ResumeOrchestratorLoopReceiptsInvalidJournalFailure()
+    {
+        using var sandbox = CreateResumeSandbox("Write-Output 'No matching repo processes found.'");
+        var journalPath = Path.Combine(sandbox.RepositoryRoot, ".orchestrator", "last-drive.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(journalPath)!);
+        File.WriteAllText(journalPath, "{ truncated");
+
+        var result = RunInvokeRepoScript(sandbox.RepositoryRoot, "scripts\\Resume-OrchestratorLoop.ps1");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("RESUME_FAILED reason=recovery-unavailable", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains(
+            "RESUME_FAILED reason=recovery-unavailable",
+            File.ReadAllText(Path.Combine(sandbox.RepositoryRoot, ".orchestrator", "logs", "auto-resume.log")),
+            StringComparison.Ordinal);
+        Assert.False(File.Exists(sandbox.StartInvocationPath), "An invalid journal must not relaunch the loop.");
     }
 
     [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_relaunches_from_journal_with_incremented_batch_name")]
@@ -1756,6 +1798,14 @@ public sealed class LauncherScriptTests
             arguments = new[] { "conduct", "--loop", "--watch", "--policy", "Permissive", "--poll-seconds", pollSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), "--max-duration", "5400" }
         });
         File.WriteAllText(journalPath, json);
+    }
+
+    private static void WriteConductEvent(string repositoryRoot, DateTime writtenAtUtc)
+    {
+        var eventLogPath = Path.Combine(repositoryRoot, ".orchestrator", "logs", "conduct-events.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(eventLogPath)!);
+        File.WriteAllText(eventLogPath, "event");
+        File.SetLastWriteTimeUtc(eventLogPath, writtenAtUtc);
     }
 
     private static ProcessResult RunInvokeRepoScript(string repositoryRoot, string relativeScriptPath, params string[] arguments) =>

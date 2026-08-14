@@ -164,12 +164,21 @@ function Get-ConductLiveness {
     )
 
     $eventLogPath = Join-Path $RepositoryRoot ".orchestrator\logs\conduct-events.log"
-    $lastProgressAt = $Process.CreatedAt
-    if (Test-Path -LiteralPath $eventLogPath -PathType Leaf) {
-        $eventWrittenAt = [DateTimeOffset](Get-Item -LiteralPath $eventLogPath).LastWriteTimeUtc
-        if ($null -eq $lastProgressAt -or $eventWrittenAt -gt $lastProgressAt) {
-            $lastProgressAt = $eventWrittenAt
+    $threshold = [TimeSpan]::FromSeconds([double]$PollSeconds * $PollIntervals)
+    if (-not (Test-Path -LiteralPath $eventLogPath -PathType Leaf)) {
+        return [pscustomobject]@{
+            EvidenceAvailable = $false
+            IsHealthy = $false
+            Age = $null
+            Threshold = $threshold
+            EventLogPath = $eventLogPath
         }
+    }
+
+    $lastProgressAt = $Process.CreatedAt
+    $eventWrittenAt = [DateTimeOffset](Get-Item -LiteralPath $eventLogPath).LastWriteTimeUtc
+    if ($null -eq $lastProgressAt -or $eventWrittenAt -gt $lastProgressAt) {
+        $lastProgressAt = $eventWrittenAt
     }
 
     if ($null -eq $lastProgressAt) {
@@ -177,7 +186,7 @@ function Get-ConductLiveness {
             EvidenceAvailable = $false
             IsHealthy = $false
             Age = $null
-            Threshold = [TimeSpan]::FromSeconds([double]$PollSeconds * $PollIntervals)
+            Threshold = $threshold
             EventLogPath = $eventLogPath
         }
     }
@@ -186,7 +195,6 @@ function Get-ConductLiveness {
     if ($age -lt [TimeSpan]::Zero) {
         $age = [TimeSpan]::Zero
     }
-    $threshold = [TimeSpan]::FromSeconds([double]$PollSeconds * $PollIntervals)
     return [pscustomobject]@{
         EvidenceAvailable = $true
         IsHealthy = $age -le $threshold
@@ -331,20 +339,20 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $stopFilePath = Join-Path $repoRoot ".conduct-stop"
 $resolvedJournalPath = Resolve-JournalPath -RepositoryRoot $repoRoot -ConfiguredPath $JournalPath
 $journal = $null
-if (Test-Path -LiteralPath $resolvedJournalPath -PathType Leaf) {
-    $journal = Get-Content -LiteralPath $resolvedJournalPath -Raw | ConvertFrom-Json
-}
-$arguments = if ($null -eq $journal) {
-    @()
-}
-else {
-    @($journal.arguments | ForEach-Object { [string]$_ })
-}
-$journalIsConductLoop = $arguments.Count -ge 2 -and
-    $arguments[0].Equals("conduct", [System.StringComparison]::OrdinalIgnoreCase) -and
-    [bool]($arguments | Where-Object { $_.Equals("--loop", [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1)
+$arguments = @()
+$journalIsConductLoop = $false
 
 try {
+    if (Test-Path -LiteralPath $resolvedJournalPath -PathType Leaf) {
+        $journal = Get-Content -LiteralPath $resolvedJournalPath -Raw | ConvertFrom-Json
+    }
+    if ($null -ne $journal) {
+        $arguments = @($journal.arguments | ForEach-Object { [string]$_ })
+        $journalIsConductLoop = $arguments.Count -ge 2 -and
+            $arguments[0].Equals("conduct", [System.StringComparison]::OrdinalIgnoreCase) -and
+            [bool]($arguments | Where-Object { $_.Equals("--loop", [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1)
+    }
+
     $processes = @(Get-ConductLoopProcesses -RepositoryRoot $repoRoot)
     $lockOwner = Get-ConductLockOwner -RepositoryRoot $repoRoot
     $conductProcess = $null
@@ -380,7 +388,8 @@ try {
         }
         if ($liveness.IsHealthy) {
             $ageSeconds = [Math]::Floor($liveness.Age.TotalSeconds)
-            Write-Output "RESUME_SKIPPED reason=conduct-loop-healthy incumbentPid=$($conductProcess.Id) eventAgeSeconds=$ageSeconds"
+            Write-ResumeReceipt -RepositoryRoot $repoRoot -Message (
+                "RESUME_SKIPPED reason=conduct-loop-healthy incumbentPid=$($conductProcess.Id) eventAgeSeconds=$ageSeconds")
             exit 0
         }
         if (-not $journalIsConductLoop) {
@@ -422,11 +431,13 @@ if ($arguments.Count -lt 2 -or
 $nextName = Resolve-NextBatchName -CurrentName ([string]$journal.name)
 $startScriptPath = Join-Path $repoRoot "scripts\Start-OrchestratorCommand.ps1"
 if ($null -ne $journal.appDll -and -not [string]::IsNullOrWhiteSpace([string]$journal.appDll)) {
-    Write-Output "RESUME_LAUNCH task=$TaskName journal=$resolvedJournalPath name=$nextName"
+    Write-ResumeReceipt -RepositoryRoot $repoRoot -Message (
+        "RESUME_LAUNCH task=$TaskName journal=$resolvedJournalPath name=$nextName")
     & $startScriptPath -Name $nextName -AppDll ([string]$journal.appDll) @arguments
 }
 else {
-    Write-Output "RESUME_LAUNCH task=$TaskName journal=$resolvedJournalPath name=$nextName"
+    Write-ResumeReceipt -RepositoryRoot $repoRoot -Message (
+        "RESUME_LAUNCH task=$TaskName journal=$resolvedJournalPath name=$nextName")
     & $startScriptPath -Name $nextName @arguments
 }
 if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) {
