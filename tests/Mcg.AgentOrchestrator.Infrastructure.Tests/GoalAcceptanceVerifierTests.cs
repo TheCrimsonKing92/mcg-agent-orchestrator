@@ -6594,15 +6594,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         }
     }
 
-    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_union_filter_for_multiple_mapped_app_subsystems")]
-    public async Task GoalAcceptanceVerifierRunsUnionFilterForMultipleMappedAppSubsystems()
+    [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_runs_project_specific_filters_for_multiple_mapped_app_subsystems")]
+    public async Task GoalAcceptanceVerifierRunsProjectSpecificFiltersForMultipleMappedAppSubsystems()
     {
         var root = CreateStandardManifestWorkspace();
         var calls = new List<string[]>();
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
             calls.Add(args);
-            if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests"))
+            if (IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests") ||
+                IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Dashboard.Tests"))
             {
                 WriteMtpTrx(args);
                 return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(0, "Focused App tests passed. Passed! - Failed: 0, Passed: 6, Skipped: 0, Total: 6."));
@@ -6625,21 +6626,21 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             ]);
 
         Assert.True(result.Passed);
-        var call = Assert.Single(calls, candidate => IsMtpExecutableCall(candidate, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+        var infrastructureCall = Assert.Single(calls, candidate => IsMtpExecutableCall(candidate, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+        var dashboardCall = Assert.Single(calls, candidate => IsMtpExecutableCall(candidate, "Mcg.AgentOrchestrator.Dashboard.Tests"));
         Assert.DoesNotContain(calls, candidate => candidate.Contains("Mcg.AgentOrchestrator.sln", StringComparer.OrdinalIgnoreCase));
-        // The parenthesized union filter translates to repeated MTP class filters (union) plus the
-        // per-group Category exclusion (intersection); grouping parens carry no token-level meaning.
-        AssertArgumentPair(call, "--filter-class", "*CliCommandTests*");
-        AssertArgumentPair(call, "--filter-class", "*CliHelpTests*");
-        AssertArgumentPair(call, "--filter-class", "*DashboardRenderingTests*");
-        AssertArgumentPair(call, "--filter-class", "*DashboardHostTests*");
-        AssertArgumentPair(call, "--filter-not-trait", "Category=HostIntegration");
-        AssertArgumentPair(call, "--filter-class", "*DashboardValidationHarnessTests*");
-        Assert.Contains(result.Checks!, check => check.Name == "focused CLI+dashboard infrastructure tests");
+        AssertArgumentPair(infrastructureCall, "--filter-class", "*CliCommandTests*");
+        AssertArgumentPair(infrastructureCall, "--filter-class", "*CliHelpTests*");
+        AssertArgumentPair(dashboardCall, "--filter-class", "*DashboardRenderingTests*");
+        AssertArgumentPair(dashboardCall, "--filter-class", "*DashboardHostTests*");
+        AssertArgumentPair(dashboardCall, "--filter-not-trait", "Category=HostIntegration");
+        AssertArgumentPair(dashboardCall, "--filter-class", "*DashboardValidationHarnessTests*");
+        Assert.Contains(result.Checks!, check => check.Name == "focused CLI infrastructure tests");
+        Assert.Contains(result.Checks!, check => check.Name == "focused dashboard infrastructure tests");
         var infrastructureReceipt = Assert.Single(result.Checks!, check => check.Name == "infrastructure tests");
         Assert.True(infrastructureReceipt.Passed);
         Assert.Contains(
-            "covered by: focused CLI+dashboard infrastructure tests",
+            "covered by: focused CLI infrastructure tests",
             infrastructureReceipt.ResultSummary ?? "",
             StringComparison.Ordinal);
         Assert.Contains(
