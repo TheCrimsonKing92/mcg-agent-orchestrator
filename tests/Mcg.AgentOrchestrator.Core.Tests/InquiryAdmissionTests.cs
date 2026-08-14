@@ -69,7 +69,7 @@ public sealed class InquiryAdmissionTests
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey));
+            new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey));
         kernel.ActivateGoal(goal.Id, [agent]);
         var task = goal.Tasks.Single();
         var dispatch = new TaskDispatchRecord(
@@ -77,7 +77,7 @@ public sealed class InquiryAdmissionTests
             "codex exec",
             "C:\\repo",
             DispatchedAt,
-            ModelName: "gpt-5.5",
+            ModelName: OpenAiSubscriptionModelAlias,
             WorkerProviderKind: ProviderKind.OpenAICodexCli,
             ProviderSessionId: "session-12345678",
             WorktreeHeadSha: "abc123");
@@ -86,7 +86,7 @@ public sealed class InquiryAdmissionTests
             task.Id,
             task.RequiredRole,
             ProviderKind.OpenAICodexCli,
-            "gpt-5.5",
+            OpenAiSubscriptionModelAlias,
             "C:\\repo",
             "def456",
             CapturedHeadIsAncestorOfCurrentHead: true,

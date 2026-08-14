@@ -1206,7 +1206,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly)
     ]);
     AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);
@@ -1266,7 +1266,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
         new AgentId("primary-planner"),
         "Primary Planner",
         AgentRole.Planner,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("primary-planner"));
     var alternate = primary with
@@ -1336,7 +1336,7 @@ private static AgentDefinition CreateSubscriptionAgent(AgentRole role)
             new AgentId("developer"),
             "Developer",
             AgentRole.Developer,
-            new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
             ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly)
     ]);
     AgentCatalogStore.Save(workspace.AgentCatalogPath, agents);

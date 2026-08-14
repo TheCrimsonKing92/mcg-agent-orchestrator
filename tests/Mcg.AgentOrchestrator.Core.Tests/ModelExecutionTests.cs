@@ -241,7 +241,7 @@ public sealed class ModelExecutionTests
         "Developer",
         AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024),
-        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+        ComplexModel: new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
     var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
@@ -254,7 +254,7 @@ public sealed class ModelExecutionTests
     Assert.Contains("complex-api-task-middle", prompt, StringComparison.Ordinal);
     Assert.Contains("software-development orchestrator", provider.LastRequest.SystemPrompt, StringComparison.Ordinal);
     Assert.Contains("Avoid generic status summaries", provider.LastRequest.SystemPrompt, StringComparison.Ordinal);
-    Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
+    Assert.Equal(OpenAiSubscriptionModelAlias, provider.LastRequest.Options.ModelName);
 }
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_avoids_repeating_task_description_in_lifecycle_events")]
     public async Task ExecuteAssignedTaskAvoidsRepeatingTaskDescriptionInLifecycleEvents()
@@ -295,7 +295,7 @@ public sealed class ModelExecutionTests
         AgentId.New(),
         "Subscription Developer",
         AgentRole.Developer,
-        new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey),
+        new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
         ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
         Subscription: new SubscriptionLaunchProfile("codex-cli"));
     kernel.ActivateGoal(goal.Id, [agent]);
@@ -506,7 +506,7 @@ public sealed class ModelExecutionTests
         "Developer",
         AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024),
-        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+        ComplexModel: new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
     var note = $"complex-event-start {new string('c', 110)} complex-event-middle {new string('m', 50)} complex-event-tail";
@@ -584,7 +584,7 @@ public sealed class ModelExecutionTests
         "Developer",
         AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 768),
-        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+        ComplexModel: new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
     var plan = $"complex-api-plan-start {new string('v', 460)} complex-api-plan-middle {new string('w', 260)} complex-api-plan-tail";
@@ -599,7 +599,7 @@ public sealed class ModelExecutionTests
     Assert.Contains("complex-api-plan-middle", prompt, StringComparison.Ordinal);
     Assert.Contains("complex-api-plan-tail", prompt, StringComparison.Ordinal);
     Assert.True(!prompt.Contains("[truncated", StringComparison.Ordinal));
-    Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
+    Assert.Equal(OpenAiSubscriptionModelAlias, provider.LastRequest.Options.ModelName);
 }
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_excludes_unrelated_task_timeline_from_prompt")]
@@ -670,7 +670,7 @@ public sealed class ModelExecutionTests
         "Developer",
         AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 768),
-        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+        ComplexModel: new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
     var provider = new FakeModelProvider("OpenAI", "Implemented requested change.");
@@ -682,7 +682,7 @@ public sealed class ModelExecutionTests
     Assert.Contains("GoalCreated", prompt, StringComparison.Ordinal);
     Assert.Contains("TaskDelegated", prompt, StringComparison.Ordinal);
     Assert.Contains("TaskStarted", prompt, StringComparison.Ordinal);
-    Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
+    Assert.Equal(OpenAiSubscriptionModelAlias, provider.LastRequest.Options.ModelName);
 }
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_smaller_timeline_budget_for_simple_tasks")]
@@ -731,7 +731,7 @@ public sealed class ModelExecutionTests
         "Developer",
         AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024),
-        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+        ComplexModel: new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
     kernel.ActivateGoal(goal.Id, [agent]);
     var task = goal.Tasks.Single();
     AddRetryNotes(kernel, goal.Id, task.Id, "complex-api-note", 10);
@@ -743,7 +743,7 @@ public sealed class ModelExecutionTests
     var prompt = provider.LastRequest!.Messages.Single().Content;
     Assert.Contains("complex-api-note-01", prompt, StringComparison.Ordinal);
     Assert.Contains("complex-api-note-10", prompt, StringComparison.Ordinal);
-    Assert.Equal("gpt-5.5", provider.LastRequest.Options.ModelName);
+    Assert.Equal(OpenAiSubscriptionModelAlias, provider.LastRequest.Options.ModelName);
 }
 
     [Xunit.Fact(DisplayName = "ExecuteAssignedTask_uses_complex_model_only_for_complex_tasks")]
@@ -761,7 +761,7 @@ public sealed class ModelExecutionTests
         "Cost-aware Developer",
         AgentRole.Developer,
         new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text, SubscriptionMode.ApiKey, "medium", 1024),
-        ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
+        ComplexModel: new ModelProfile("OpenAI", OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey, "high", 1200));
     kernel.ActivateGoal(goal.Id, [agent]);
     var provider = new FakeModelProvider("OpenAI", "done");
     var runner = new AgentTaskRunner(kernel, [agent], new InMemoryModelProviderRegistry([provider]));
@@ -780,10 +780,10 @@ public sealed class ModelExecutionTests
     await runner.RunAsync(goal.Id, goal.Tasks[1].Id);
 
     var complexPrompt = provider.LastRequest!.Messages.Single().Content;
-    Assert.Equal("gpt-5.5", provider.LastRequest!.Options.ModelName);
+    Assert.Equal(OpenAiSubscriptionModelAlias, provider.LastRequest!.Options.ModelName);
     Assert.Equal("high", provider.LastRequest.Options.ReasoningEffort);
     Assert.Equal(1200, provider.LastRequest.Options.MaxOutputTokens);
-    Assert.Equal("gpt-5.5", goal.Tasks[1].LastExecution!.ModelName);
+    Assert.Equal(OpenAiSubscriptionModelAlias, goal.Tasks[1].LastExecution!.ModelName);
     Assert.Equal(TaskComplexity.Complex, goal.Tasks[1].LastExecution!.TaskComplexity);
     Assert.Contains("dashboard or orchestrator blocks the ideal path", complexPrompt, StringComparison.Ordinal);
     Assert.True(!complexPrompt.Contains("Keep the response concise", StringComparison.Ordinal));

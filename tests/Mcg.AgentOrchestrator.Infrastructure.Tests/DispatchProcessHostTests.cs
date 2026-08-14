@@ -1459,12 +1459,13 @@ public sealed class DispatchProcessHostTests
             child.Refresh();
             Assert.False(child.HasExited, $"Grandchild reap probe exited before its window state could be checked. pid={childPid}");
             Assert.Equal(IntPtr.Zero, child.MainWindowHandle);
+            var probeIdentity = string.Empty;
             Assert.True(
-                WaitUntil(() => File.Exists(probeIdentityPath), fixtureTimeout),
+                WaitUntil(() => TryReadFixtureArtifact(probeIdentityPath, out probeIdentity), fixtureTimeout),
                 $"Grandchild identity marker timed out after {fixtureTimeout.TotalSeconds:0} seconds: '{probeIdentityPath}'.");
             Assert.Contains(
                 "Dispatch-host process-tree-reaping test fixture; safe to terminate.",
-                File.ReadAllText(probeIdentityPath),
+                probeIdentity,
                 StringComparison.Ordinal);
 
             IReadOnlyList<int> lastOwnedPids = [];

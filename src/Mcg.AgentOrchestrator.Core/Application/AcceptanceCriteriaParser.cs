@@ -5,7 +5,8 @@ public sealed record AcceptanceCriterion(
     string Type,
     string? Command = null,
     string? Pattern = null,
-    string? Path = null);
+    string? Path = null,
+    string? TestIdentity = null);
 
 public static class AcceptanceCriteriaParser
 {
@@ -132,15 +133,12 @@ public static class AcceptanceCriteriaParser
 
     private static AcceptanceCriterion? TryClassify(string bulletText)
     {
-        var lower = bulletText.ToLowerInvariant();
         var tokens = ExtractBacktickTokens(bulletText);
 
-        if (TryMatchGrepAbsent(lower, tokens, out var absentPattern))
-            return new AcceptanceCriterion(bulletText, "grep-absent", Pattern: absentPattern);
+        if (TryMatchTestRemoval(bulletText, out var testIdentity))
+            return new AcceptanceCriterion(bulletText, "test-removal", TestIdentity: testIdentity);
 
-        if (TryMatchGrepPresent(lower, tokens, out var presentPattern))
-            return new AcceptanceCriterion(bulletText, "grep-present", Pattern: presentPattern);
-
+        var lower = bulletText.ToLowerInvariant();
         if (TryMatchFileExists(lower, tokens, out var filePath))
             return new AcceptanceCriterion(bulletText, "file-exists", Path: filePath);
 
@@ -150,46 +148,27 @@ public static class AcceptanceCriteriaParser
         return null;
     }
 
-    private static bool TryMatchGrepAbsent(
-        string lower,
-        List<string> tokens,
-        out string? pattern)
+    private static bool TryMatchTestRemoval(string bulletText, out string? testIdentity)
     {
-        pattern = null;
-
-        var hasNo = lower.Contains(" no ", StringComparison.Ordinal) ||
-                    lower.StartsWith("no ", StringComparison.Ordinal);
-
-        var hasAbsenceSignal =
-            lower.Contains("grep", StringComparison.Ordinal) ||
-            lower.Contains("remains", StringComparison.Ordinal) ||
-            lower.Contains("absent", StringComparison.Ordinal) ||
-            lower.Contains("removed", StringComparison.Ordinal);
-
-        if (!hasNo || !hasAbsenceSignal)
+        const string Marker = "test-removal:";
+        testIdentity = null;
+        var trimmed = bulletText.Trim();
+        if (!trimmed.StartsWith(Marker, StringComparison.OrdinalIgnoreCase))
             return false;
 
-        return TryPickCodePattern(tokens, out pattern);
-    }
+        var declaredIdentity = trimmed[Marker.Length..].Trim();
+        if (declaredIdentity.Length >= 2 &&
+            declaredIdentity[0] == '`' &&
+            declaredIdentity[^1] == '`')
+        {
+            declaredIdentity = declaredIdentity[1..^1].Trim();
+        }
 
-    private static bool TryMatchGrepPresent(
-        string lower,
-        List<string> tokens,
-        out string? pattern)
-    {
-        pattern = null;
-
-        var hasNo = lower.Contains(" no ", StringComparison.Ordinal) ||
-                    lower.StartsWith("no ", StringComparison.Ordinal);
-
-        var hasGrepConfirms = lower.Contains("grep confirm", StringComparison.Ordinal);
-        var hasStillRef = lower.Contains("still reference", StringComparison.Ordinal) ||
-                          lower.Contains("still call", StringComparison.Ordinal);
-
-        if ((!hasGrepConfirms && !hasStillRef) || hasNo)
+        if (string.IsNullOrWhiteSpace(declaredIdentity))
             return false;
 
-        return TryPickCodePattern(tokens, out pattern);
+        testIdentity = declaredIdentity;
+        return true;
     }
 
     private static bool TryMatchFileExists(
@@ -238,22 +217,6 @@ public static class AcceptanceCriteriaParser
 
         command = firstToken;
         return true;
-    }
-
-    private static bool TryPickCodePattern(List<string> tokens, out string? pattern)
-    {
-        pattern = null;
-        for (var i = tokens.Count - 1; i >= 0; i--)
-        {
-            var token = tokens[i];
-            if (!IsKnownExecutable(token.Split([' '], 2)[0]) && !LooksLikeFilePath(token))
-            {
-                pattern = token;
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static bool LooksLikeFilePath(string token)

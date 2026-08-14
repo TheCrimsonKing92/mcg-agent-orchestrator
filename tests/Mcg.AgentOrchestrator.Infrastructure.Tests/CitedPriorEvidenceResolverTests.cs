@@ -351,14 +351,14 @@ public sealed class CitedPriorEvidenceResolverTests : WorkerDispatchTestSupport
     }
 
     private static string WorkerResult() =>
-        """
+        $"""
         WORKER_RESULT:
         files: none
         commands: none
         tests: deferred - historical verification
         commit: none
         blockers: none
-        model_fit: OpenAI/gpt-5.6-sol - adequate - historical fixture
+        model_fit: OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias} - adequate - historical fixture
         skills: none
         confidence: high
         END_WORKER_RESULT

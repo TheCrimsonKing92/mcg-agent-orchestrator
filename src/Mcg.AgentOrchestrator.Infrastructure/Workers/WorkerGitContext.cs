@@ -159,9 +159,7 @@ internal sealed class WorkerGitContext
 
         if (string.Equals(previousReviewedCommit, currentCommit, StringComparison.OrdinalIgnoreCase))
         {
-            return new ReviewerRoundTouchScope(
-                [],
-                $"Round-diff touch proof unavailable because the carried and current reviewed commits are identical ({currentCommit}).");
+            return new ReviewerRoundTouchScope([]);
         }
 
         var touched = new List<ReviewFindingLocation>();

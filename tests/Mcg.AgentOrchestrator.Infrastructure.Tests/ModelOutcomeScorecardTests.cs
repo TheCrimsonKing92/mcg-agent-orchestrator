@@ -44,13 +44,13 @@ public sealed class ModelOutcomeScorecardTests
         kernel.ActivateGoal(goal2.Id, DefaultAgents);
         kernel.ActivateGoal(goal3.Id, DefaultAgents);
 
-        RecordFailedDispatch(kernel, goal1, goal1.Tasks[0], "OpenAI", "gpt-5.5");
-        RecordFailedDispatch(kernel, goal2, goal2.Tasks[0], "OpenAI", "gpt-5.5");
-        RecordCompletedDispatch(kernel, goal3, goal3.Tasks[0], "OpenAI", "gpt-5.5");
+        RecordFailedDispatch(kernel, goal1, goal1.Tasks[0], "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias);
+        RecordFailedDispatch(kernel, goal2, goal2.Tasks[0], "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias);
+        RecordCompletedDispatch(kernel, goal3, goal3.Tasks[0], "OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias);
 
         var scorecard = kernel.BuildModelOutcomeScorecard();
 
-        var record = scorecard.Single(r => r.ProviderName == "OpenAI" && r.ModelName == "gpt-5.5");
+        var record = scorecard.Single(r => r.ProviderName == "OpenAI" && r.ModelName == AgentCatalog.OpenAiSubscriptionModelAlias);
         Assert.Equal(ModelOutcomeRecommendation.Avoid, record.Recommendation);
         Assert.Equal(1, record.Completed);
         Assert.Equal(2, record.Failed);

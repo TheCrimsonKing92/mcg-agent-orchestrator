@@ -1,5 +1,7 @@
 using Mcg.AgentOrchestrator.App.Orchestration;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 public sealed class GoalScopeCollisionAdvisorTests
 {
@@ -75,7 +77,8 @@ public sealed class GoalScopeCollisionAdvisorTests
             [goal]);
 
         var collision = Xunit.Assert.Single(report.Collisions);
-        Xunit.Assert.Equal(ScopeCollisionVerdict.OverlapDetected, report.Verdict);
+        Xunit.Assert.Equal(ScopeCollisionVerdict.OverlapDetectedIncomplete, report.Verdict);
+        Xunit.Assert.Equal("overlap-detected-incomplete", report.VerdictToken);
         Xunit.Assert.Equal(FileScopeProvenance.Inferred, collision.ConflictingProvenance);
     }
 
@@ -196,28 +199,233 @@ public sealed class GoalScopeCollisionAdvisorTests
         var expected = new[]
         {
             (first.Id.Value, ScopeCollisionKind.ExactFile, "src/Shared.cs", "src/Shared.cs"),
-            (first.Id.Value, ScopeCollisionKind.DirectoryPrefix, "src/Alpha/File.cs", "src/Alpha"),
             (second.Id.Value, ScopeCollisionKind.ExactFile, "src/Shared.cs", "src/Shared.cs"),
+            (first.Id.Value, ScopeCollisionKind.DirectoryPrefix, "src/Alpha/File.cs", "src/Alpha"),
             (second.Id.Value, ScopeCollisionKind.DirectoryPrefix, "src/Beta/File.cs", "src/Beta")
         };
         Xunit.Assert.Equal(expected, Project(ordered));
         Xunit.Assert.Equal(expected, Project(reversed));
     }
 
-    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_caps_candidate_comparison_conservatively")]
-    public void CapsCandidateComparisonConservatively()
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_compares_every_eligible_goal")]
+    public void ComparesEveryEligibleGoal()
     {
         var goals = Enumerable.Range(0, 25)
             .Select(index => CreateGoal(
-                $"Change src/Candidate{index}/File.cs.",
+                index == 24
+                    ? "Change src/Proposed/File.cs."
+                    : $"Change src/Candidate{index}/File.cs.",
                 index.ToString("D32")))
             .ToArray();
 
         var report = GoalScopeCollisionAdvisor.Build(["Change src/Proposed/File.cs."], goals);
 
-        Xunit.Assert.Equal(24, report.ComparedGoalCount);
-        Xunit.Assert.Equal(ScopeCollisionVerdict.InsufficientEvidence, report.Verdict);
-        Xunit.Assert.Contains(report.EvidenceGaps, gap => gap.Gap == ScopeEvidenceGap.ComparisonTruncated);
+        Xunit.Assert.Equal(25, report.ComparedGoalCount);
+        Xunit.Assert.Equal(ScopeCollisionVerdict.OverlapDetected, report.Verdict);
+        Xunit.Assert.Equal(goals[24].Id.Value, Xunit.Assert.Single(report.Collisions).GoalId);
+        Xunit.Assert.DoesNotContain(report.EvidenceGaps, gap => gap.Gap == ScopeEvidenceGap.ComparisonTruncated);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_excludes_parked_goals_from_conflicts")]
+    public void ExcludesParkedGoalsFromConflicts()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var parked = kernel.CreateGoal(
+            new GoalId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            "Change src/Feature/File.cs.",
+            [new TaskSpec(TaskId.New(), "Parked work.", AgentRole.Developer)]);
+        kernel.ParkGoal(parked.Id, "Deferred by operator.");
+        var live = kernel.CreateGoal(
+            new GoalId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            "Change src/Feature/File.cs.",
+            [new TaskSpec(TaskId.New(), "Live work.", AgentRole.Developer)]);
+
+        var report = GoalScopeCollisionAdvisor.Build(
+            ["Change src/Feature/File.cs."],
+            kernel.Goals);
+
+        Xunit.Assert.Equal(2, report.InputGoalCount);
+        Xunit.Assert.Equal(1, report.EligibleGoalCount);
+        Xunit.Assert.Equal(1, report.ComparedGoalCount);
+        Xunit.Assert.Equal(live.Id.Value, Xunit.Assert.Single(report.Collisions).GoalId);
+        Xunit.Assert.DoesNotContain(report.Collisions, collision => collision.GoalId == parked.Id.Value);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_qualifies_overlap_when_live_goal_is_uncheckable")]
+    public void QualifiesOverlapWhenLiveGoalIsUncheckable()
+    {
+        var scoped = CreateGoal("Change src/Feature/File.cs.");
+        var scopeless = CreateGoal("No repository path is declared.");
+
+        var report = GoalScopeCollisionAdvisor.Build(
+            ["Change src/Feature/File.cs."],
+            [scoped, scopeless]);
+
+        Xunit.Assert.Equal(ScopeCollisionVerdict.OverlapDetectedIncomplete, report.Verdict);
+        Xunit.Assert.Equal("overlap-detected-incomplete", report.VerdictToken);
+        Xunit.Assert.Equal(2, report.InputGoalCount);
+        Xunit.Assert.Equal(2, report.EligibleGoalCount);
+        Xunit.Assert.Equal(2, report.ComparedGoalCount);
+        Xunit.Assert.Equal(1, report.UncheckableGoalCount);
+        Xunit.Assert.Equal(0, report.UncomparedGoalCount);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_excludes_projected_cleaned_up_goals")]
+    public void ExcludesProjectedCleanedUpGoals()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var cleanedUp = kernel.CreateGoal(
+            "Change src/Feature/File.cs.",
+            [new TaskSpec(TaskId.New(), "Completed work.", AgentRole.Developer)]);
+        var task = cleanedUp.Tasks.Single();
+        kernel.RecordTaskVerification(
+            cleanedUp.Id,
+            task.Id,
+            new TaskVerificationRecord("manual", Environment.CurrentDirectory, 0, "pass", "", DateTimeOffset.UtcNow));
+        kernel.ReconcileGoalVerificationStatus(cleanedUp.Id, "All task gates passed.");
+        var observations = new Dictionary<string, GoalScopeLifecycleObservation>(StringComparer.Ordinal)
+        {
+            [cleanedUp.Id.Value] = new(GoalLifecycleState.CleanedUp)
+        };
+
+        var report = GoalScopeCollisionAdvisor.Build(
+            ["Change src/Feature/File.cs."],
+            kernel.Goals,
+            lifecycleObservations: observations);
+
+        Xunit.Assert.Equal(GoalStatus.Verified, cleanedUp.Status);
+        Xunit.Assert.Equal(0, report.EligibleGoalCount);
+        Xunit.Assert.Equal(0, report.ComparedGoalCount);
+        Xunit.Assert.Empty(report.Collisions);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_journal_observer_excludes_cleaned_up_goal")]
+    public void JournalObserverExcludesCleanedUpGoal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-scope-collision-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(
+                "Change src/Feature/File.cs.",
+                [new TaskSpec(TaskId.New(), "Completed work.", AgentRole.Developer)]);
+            var task = goal.Tasks.Single();
+            kernel.RecordTaskVerification(
+                goal.Id,
+                task.Id,
+                new TaskVerificationRecord("manual", root, 0, "pass", "", DateTimeOffset.UtcNow));
+            kernel.ReconcileGoalVerificationStatus(goal.Id, "All task gates passed.");
+            GoalOperationJournal.Completed(root, goal, "conductor:land");
+            GoalOperationJournal.Completed(root, goal, "conductor:record");
+            GoalOperationJournal.Completed(root, goal, "conductor:cleanup");
+
+            var observation = GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservation(workspace, goal);
+            var report = GoalScopeCollisionAdvisor.Build(
+                ["Change src/Feature/File.cs."],
+                [goal],
+                lifecycleObservations: new Dictionary<string, GoalScopeLifecycleObservation>(StringComparer.Ordinal)
+                {
+                    [goal.Id.Value] = observation
+                });
+
+            Xunit.Assert.True(observation.IsAvailable);
+            Xunit.Assert.Equal(GoalLifecycleState.CleanedUp, observation.State);
+            Xunit.Assert.Equal(0, report.EligibleGoalCount);
+            Xunit.Assert.Empty(report.Collisions);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_journal_observer_skips_external_facts_for_non_verified_goal")]
+    public void JournalObserverSkipsExternalFactsForNonVerifiedGoal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-scope-collision-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(
+                "Change src/Feature/File.cs.",
+                [new TaskSpec(TaskId.New(), "Implement planned work.", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            goal = kernel.GetGoal(goal.Id);
+            GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Fixture blocking lifecycle fact.");
+
+            var observation = GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservation(workspace, goal);
+
+            Xunit.Assert.Equal(GoalStatus.Active, goal.Status);
+            Xunit.Assert.True(observation.IsAvailable);
+            Xunit.Assert.Equal(GoalLifecycleState.Created, observation.State);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_missing_lifecycle_evidence_qualifies_overlap")]
+    public void MissingLifecycleEvidenceQualifiesOverlap()
+    {
+        var goal = CreateGoal("Change src/Feature/File.cs.");
+        var observations = new Dictionary<string, GoalScopeLifecycleObservation>(StringComparer.Ordinal)
+        {
+            [goal.Id.Value] = new(State: null, UnavailableReason: "fixture-unavailable")
+        };
+
+        var report = GoalScopeCollisionAdvisor.Build(
+            ["Change src/Feature/File.cs."],
+            [goal],
+            lifecycleObservations: observations);
+
+        Xunit.Assert.Equal(ScopeCollisionVerdict.OverlapDetectedIncomplete, report.Verdict);
+        Xunit.Assert.Contains(
+            report.EvidenceGaps,
+            gap => gap.GoalId == goal.Id.Value && gap.Gap == ScopeEvidenceGap.LifecycleEvidenceUnavailable);
+        Xunit.Assert.Single(report.Collisions);
+    }
+
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_ranks_exact_and_trusted_conflicts_globally")]
+    public void RanksExactAndTrustedConflictsGlobally()
+    {
+        var inferredExact = CreateGoal(
+            GeneratedObjective("src/Feature/File.cs"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        var explicitExact = CreateGoal(
+            "Change src/Feature/File.cs.",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        var inferredPrefix = CreateGoal(
+            GeneratedObjective("src/Feature"),
+            "00000000000000000000000000000000");
+
+        var report = GoalScopeCollisionAdvisor.Build(
+            ["Change src/Feature/File.cs."],
+            [inferredPrefix, inferredExact, explicitExact]);
+
+        Xunit.Assert.Collection(
+            report.Collisions,
+            collision =>
+            {
+                Xunit.Assert.Equal(explicitExact.Id.Value, collision.GoalId);
+                Xunit.Assert.Equal(ScopeCollisionKind.ExactFile, collision.Kind);
+                Xunit.Assert.Equal(FileScopeProvenance.Explicit, collision.ConflictingProvenance);
+            },
+            collision =>
+            {
+                Xunit.Assert.Equal(inferredExact.Id.Value, collision.GoalId);
+                Xunit.Assert.Equal(ScopeCollisionKind.ExactFile, collision.Kind);
+                Xunit.Assert.Equal(FileScopeProvenance.Inferred, collision.ConflictingProvenance);
+            },
+            collision =>
+            {
+                Xunit.Assert.Equal(inferredPrefix.Id.Value, collision.GoalId);
+                Xunit.Assert.Equal(ScopeCollisionKind.DirectoryPrefix, collision.Kind);
+            });
     }
 
     private static Goal CreateGoal(string objective, string? id = null)

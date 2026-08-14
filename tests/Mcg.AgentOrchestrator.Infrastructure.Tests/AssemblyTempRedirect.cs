@@ -35,6 +35,110 @@ internal static class AssemblyTempRedirect
 
         Environment.SetEnvironmentVariable("TMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
         Environment.SetEnvironmentVariable("TEMP", selection.SelectedRoot, EnvironmentVariableTarget.Process);
+
+        // The root is owned by this process: delete it on exit, and reap roots whose owning
+        // process is gone. Both are required — exit handlers do not run for killed processes,
+        // and this repository cancels dispatches and times out gates routinely.
+        ReapOrphanedRoots(selection.SelectedRoot);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDeleteTree(selection.SelectedRoot);
+    }
+
+    internal static IReadOnlyList<string> SelectReapableRoots(
+        IEnumerable<string> siblingDirectoryNames,
+        int currentProcessId,
+        Func<int, bool> isProcessAlive)
+    {
+        ArgumentNullException.ThrowIfNull(siblingDirectoryNames);
+        ArgumentNullException.ThrowIfNull(isProcessAlive);
+
+        var reapable = new List<string>();
+        foreach (var name in siblingDirectoryNames)
+        {
+            // Anything not matching the owned-root shape belongs to someone else. Leave it.
+            if (!TryParseProcessTempRootName(name, out var processId))
+            {
+                continue;
+            }
+
+            if (processId == currentProcessId || isProcessAlive(processId))
+            {
+                continue;
+            }
+
+            reapable.Add(name);
+        }
+
+        return reapable;
+    }
+
+    internal static bool TryParseProcessTempRootName(string? directoryName, out int processId)
+    {
+        processId = 0;
+        if (string.IsNullOrEmpty(directoryName) || directoryName[0] != 'p')
+        {
+            return false;
+        }
+
+        return int.TryParse(
+                directoryName.AsSpan(1),
+                System.Globalization.NumberStyles.HexNumber,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out processId)
+            && processId > 0;
+    }
+
+    private static void ReapOrphanedRoots(string selectedRoot)
+    {
+        try
+        {
+            var sharedRoot = Path.GetDirectoryName(selectedRoot);
+            if (string.IsNullOrEmpty(sharedRoot) || !Directory.Exists(sharedRoot))
+            {
+                return;
+            }
+
+            var siblings = Directory.EnumerateDirectories(sharedRoot).Select(Path.GetFileName).OfType<string>();
+            foreach (var orphan in SelectReapableRoots(siblings, Environment.ProcessId, IsProcessAlive))
+            {
+                TryDeleteTree(Path.Combine(sharedRoot, orphan));
+            }
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            // Reaping is best-effort; never fail a test run over temp housekeeping.
+        }
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static void TryDeleteTree(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            // A live sibling may hold a handle; the next run reaps it.
+        }
     }
 
     internal static TempRootSelectionResult SelectWritableRoot(

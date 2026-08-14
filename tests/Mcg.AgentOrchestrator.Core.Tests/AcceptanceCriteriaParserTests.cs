@@ -2,24 +2,21 @@ using Mcg.AgentOrchestrator.Core;
 
 public sealed class AcceptanceCriteriaParserTests
 {
-    [Xunit.Fact(DisplayName = "AcceptanceCriteriaParser_emits_grep_absent_from_grep_confirms_no_bullet")]
-    public void AcceptanceCriteriaParserEmitsGrepAbsentFromGrepConfirmsNoBullet()
+    [Xunit.Fact]
+    public void Parse_CodeTokensInProse_EmitsNoPatternCheck()
     {
         var text = """
             ## Some Goal
 
             ## Acceptance
             - grep confirms no path still calls `new JsonSerializerOptions`
+            - No test identity is lost beyond `[Xunit.Fact]` or `[Xunit.Theory]` declarations removed by the diff.
             - dotnet build clean and passes
             """;
 
         var criteria = AcceptanceCriteriaParser.Parse(text);
 
-        var grepAbsent = Xunit.Assert.Single(criteria);
-        Assert.Equal("grep-absent", grepAbsent.Type);
-        Assert.Equal("new JsonSerializerOptions", grepAbsent.Pattern);
-        Xunit.Assert.Null(grepAbsent.Command);
-        Xunit.Assert.Null(grepAbsent.Path);
+        Assert.Empty(criteria);
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceCriteriaParser_returns_empty_for_brief_with_no_acceptance_section")]
@@ -141,19 +138,20 @@ public sealed class AcceptanceCriteriaParserTests
         Assert.Equal("git diff --check", single.Command);
     }
 
-    [Xunit.Fact(DisplayName = "AcceptanceCriteriaParser_emits_grep_present_from_still_references_bullet")]
-    public void AcceptanceCriteriaParserEmitsGrepPresentFromStillReferencesBullet()
+    [Xunit.Fact]
+    public void Parse_ExplicitTestRemoval_EmitsStructuredIdentity()
     {
         var text = """
             ## Acceptance
-            - code still references `ILegacyService` for backward compat.
+            - test-removal: `Example.Tests.RemoteMirrorTests.PushesMirror`
             """;
 
         var criteria = AcceptanceCriteriaParser.Parse(text);
 
         var single = Xunit.Assert.Single(criteria);
-        Assert.Equal("grep-present", single.Type);
-        Assert.Equal("ILegacyService", single.Pattern);
+        Assert.Equal("test-removal", single.Type);
+        Assert.Equal("Example.Tests.RemoteMirrorTests.PushesMirror", single.TestIdentity);
+        Xunit.Assert.Null(single.Pattern);
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceCriteriaParser_preserves_numbered_declared_criteria_and_continuations")]

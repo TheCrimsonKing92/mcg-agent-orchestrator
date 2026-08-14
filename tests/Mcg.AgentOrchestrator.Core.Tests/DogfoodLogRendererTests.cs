@@ -98,13 +98,13 @@ public sealed class DogfoodLogRendererTests
             "All tests passed.",
             string.Empty,
             clock.UtcNow,
-            ModelFitNote: "Model fit: OpenAI/gpt-5.5 - adequate - focused test suite");
+            ModelFitNote: "Model fit: OpenAI/gpt-5.5 - adequate - focused test suite"); // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
         kernel.RecordTaskVerification(goal.Id, task.Id, verification);
 
         var entry = DogfoodLogRenderer.Render(goal, DogfoodLandingEvidence.Unknown);
         var text = entry.Render();
 
-        Assert.True(text.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused test suite", StringComparison.Ordinal),
+        Assert.True(text.Contains("Model fit: OpenAI/gpt-5.5 - adequate - focused test suite", StringComparison.Ordinal), // Deliberate fixture text pins historical/parser behavior independently of the live catalog.
             "must use the pre-extracted ModelFitNote");
     }
 

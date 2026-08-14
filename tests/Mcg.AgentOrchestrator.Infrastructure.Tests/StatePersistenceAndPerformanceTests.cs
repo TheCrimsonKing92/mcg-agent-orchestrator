@@ -171,7 +171,7 @@ public sealed class StatePersistenceAndPerformanceTests
             new ModelProfile("OpenAI", "gpt-5.4-mini", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high"),
             ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
             Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.StaleOpenAiCodexSubscriptionModelAlias, "high"),
-            ComplexModel: new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high", AgentCatalog.ComplexApiMaxOutputTokens));
+            ComplexModel: new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "high", AgentCatalog.ComplexApiMaxOutputTokens));
 
         AgentCatalogStore.Save(
             agentPath,
@@ -195,9 +195,9 @@ public sealed class StatePersistenceAndPerformanceTests
                 new AgentId("openai-tester-old"),
                 "OpenAI tester old",
                 AgentRole.Tester,
-                new ModelProfile("OpenAI", "gpt-5.5", ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "medium"),
+                new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text | ModelCapability.Code | ModelCapability.ToolUse, SubscriptionMode.ApiKey, "medium"),
                 ExecutionPolicy: AgentExecutionPolicy.PreferSubscription,
-                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium")),
+                Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "medium")),
             new(
                 new AgentId("anthropic-reviewer"),
                 "Anthropic reviewer",
@@ -583,7 +583,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, subscription.ReasoningEffort);
         Assert.True(agent.ComplexModel is not null);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);
-        Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName);
+        Assert.Equal("gpt-5.5", agent.ComplexModel.ModelName); // Deliberate paid API complex-model name from the seeded catalog, independent of the subscription alias.
         Assert.Equal(AgentCatalog.ComplexReasoningEffort, agent.ComplexModel.ReasoningEffort);
         Assert.Equal(AgentCatalog.ComplexApiMaxOutputTokens, agent.ComplexModel.MaxOutputTokens);
     }

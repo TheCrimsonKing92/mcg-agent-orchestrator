@@ -9,14 +9,14 @@ public sealed class ChaosGateWorkerResultMalformedTests : ChaosGateTestBase
     {
         var root = CreateSeededRepo();
         const string malformed =
-            """
+            $"""
             WORKER_RESULT:
             files: src/Feature.cs
             commands: dotnet build
             tests: Passed
             commit: none
             blockers: none
-            model_fit: OpenAI/gpt-5.5 - adequate - chaos test fixture
+            model_fit: OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias} - adequate - chaos test fixture
             END_WORKER_RESULT
             """;
         var (kernel, goal, task, _) = CreateChaosDispatch(

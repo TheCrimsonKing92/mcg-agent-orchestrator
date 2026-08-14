@@ -972,14 +972,14 @@ public sealed class GoalRefinementTests
         var completer = new SubscriptionCliCompleter(
             "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory} (Get-Content -Raw {promptPath})",
             "codex-cli",
-            "gpt-5.5",
+            AgentCatalog.OpenAiSubscriptionModelAlias,
             "medium",
             FakeRunner);
 
         await completer.CompleteAsync("Return JSON", "codex-prompt.md", default);
 
         Xunit.Assert.True(capturedCommand is not null);
-        Xunit.Assert.True(capturedCommand!.Contains("--model 'gpt-5.5'", StringComparison.Ordinal));
+        Xunit.Assert.True(capturedCommand!.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", StringComparison.Ordinal));
         Xunit.Assert.True(capturedCommand.Contains("--sandbox 'read-only'", StringComparison.Ordinal));
         Xunit.Assert.True(capturedCommand.Contains("model_reasoning_effort='medium'", StringComparison.Ordinal));
     }
@@ -1038,7 +1038,7 @@ public sealed class GoalRefinementTests
                 ModelLane.Capable,
                 new ModelProfile("missing-api-provider", "intended-api-model", ModelCapability.Text, SubscriptionMode.ApiKey),
                 Name: ModelFunctionPurposes.SpecRefiner,
-                Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5.5", "medium"))
+                Subscription: new SubscriptionLaunchProfile("codex-cli", AgentCatalog.OpenAiSubscriptionModelAlias, "medium"))
         ]);
         var profiles = new WorkerProfileCatalog([
             new WorkerProfile("claude-cli", "claude --model {subscriptionModelName} --permission-mode {permissionMode} -p (Get-Content -Raw {promptPath})"),
@@ -1081,7 +1081,7 @@ public sealed class GoalRefinementTests
         var provider = WorkerProviderCatalog.Default().ResolveProfile(capturedSubscription!.WorkerProfileName);
         Xunit.Assert.Equal(ProviderKind.OpenAICodexCli, provider.Identity.Kind);
         Xunit.Assert.True(capturedCommand is not null);
-        Xunit.Assert.Contains("--model 'gpt-5.5'", capturedCommand!);
+        Xunit.Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", capturedCommand!);
         Xunit.Assert.Equal("The typed subscription refiner was used.", kernel.GetGoal(goalId).RefinedSpec!.BehavioralContract);
     }
 
@@ -1825,6 +1825,12 @@ public sealed class GoalScopeCollisionConsoleViewTests
         Xunit.Assert.Contains("heading=\"Feature heading\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("\"intakeItemId\":\"backlog-123\"", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("overlap-detected", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("uncheckableGoals=0", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("uncomparedGoals=0", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"inputGoalCount\":1", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"eligibleGoalCount\":1", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"uncheckableGoalCount\":0", output, StringComparison.Ordinal);
+        Xunit.Assert.Contains("\"uncomparedGoalCount\":0", output, StringComparison.Ordinal);
         Xunit.Assert.Contains(conflictingGoal.Id.Value[..8], output, StringComparison.Ordinal);
         Xunit.Assert.Contains("src/Feature/File.cs", output, StringComparison.Ordinal);
         Xunit.Assert.Contains("Explicit", output, StringComparison.Ordinal);
