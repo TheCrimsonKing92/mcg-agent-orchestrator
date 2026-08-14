@@ -549,7 +549,24 @@ public static class DotnetBuildEnvironmentManager
         TimeSpan? timeout,
         CancellationToken cancellationToken = default,
         TimeProvider? timeProvider = null,
-        Action<TimeSpan>? sleep = null)
+        Action<TimeSpan>? sleep = null) =>
+        TryAcquireLeaseExecutionLockCore(
+            environment,
+            timeout,
+            cancellationToken,
+            timeProvider,
+            sleep,
+            acceptancePriorityHeldByCaller: false,
+            emitSlotsBusyReceipt: true);
+
+    private static DotnetBuildLeaseAcquisition TryAcquireLeaseExecutionLockCore(
+        DotnetBuildEnvironment environment,
+        TimeSpan? timeout,
+        CancellationToken cancellationToken,
+        TimeProvider? timeProvider,
+        Action<TimeSpan>? sleep,
+        bool acceptancePriorityHeldByCaller,
+        bool emitSlotsBusyReceipt)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(environment.ExecutionLockPath)!);
         var clock = timeProvider ?? DefaultLeaseTimeProvider;
@@ -562,7 +579,7 @@ public static class DotnetBuildEnvironmentManager
         var forceCleanArtifacts = false;
         var pendingStaleExecutionLeaseReclaim = StaleExecutionLeaseReclaim.None;
         FileStream? acceptancePriorityStream = null;
-        var acceptancePriorityHeld = false;
+        var acceptancePriorityHeld = acceptancePriorityHeldByCaller;
         try
         {
             while (true)
@@ -586,7 +603,7 @@ public static class DotnetBuildEnvironmentManager
                         acceptancePriorityStream = null;
                         if (clock.GetUtcNow() >= timeoutAt)
                         {
-                            return EmitSlotsBusy(environment.LeaseId);
+                            return CreateSlotsBusy(environment, emitSlotsBusyReceipt);
                         }
 
                         delay(SlotBusyPollDelay);
@@ -609,7 +626,7 @@ public static class DotnetBuildEnvironmentManager
                 {
                     if (clock.GetUtcNow() >= timeoutAt)
                     {
-                        return EmitSlotsBusy(environment.LeaseId);
+                        return CreateSlotsBusy(environment, emitSlotsBusyReceipt);
                     }
 
                     delay(SlotBusyPollDelay);
@@ -622,7 +639,7 @@ public static class DotnetBuildEnvironmentManager
             {
                 if (clock.GetUtcNow() >= timeoutAt)
                 {
-                    return EmitSlotsBusy(environment.LeaseId);
+                    return CreateSlotsBusy(environment, emitSlotsBusyReceipt);
                 }
 
                 delay(SlotBusyPollDelay);
@@ -649,7 +666,7 @@ public static class DotnetBuildEnvironmentManager
                     if (artifactPrepBusyAttempts >= ArtifactPrepBusyRetryLimit ||
                         clock.GetUtcNow() >= timeoutAt)
                     {
-                        return EmitSlotsBusy(environment.LeaseId);
+                        return CreateSlotsBusy(environment, emitSlotsBusyReceipt);
                     }
 
                     delay(ArtifactPrepBusyRetryDelay);
@@ -699,7 +716,7 @@ public static class DotnetBuildEnvironmentManager
                     if (artifactPrepBusyAttempts >= ArtifactPrepBusyRetryLimit ||
                         clock.GetUtcNow() >= timeoutAt)
                     {
-                        return EmitSlotsBusy(environment.LeaseId);
+                        return CreateSlotsBusy(environment, emitSlotsBusyReceipt);
                     }
 
                     delay(ArtifactPrepBusyRetryDelay);
@@ -717,9 +734,9 @@ public static class DotnetBuildEnvironmentManager
         }
         finally
         {
-            if (acceptancePriorityHeld)
+            if (acceptancePriorityStream is not null && acceptancePriorityHeld)
             {
-                acceptancePriorityStream!.Unlock(0, 1);
+                acceptancePriorityStream.Unlock(0, 1);
             }
 
             acceptancePriorityStream?.Dispose();
@@ -730,46 +747,83 @@ public static class DotnetBuildEnvironmentManager
         DotnetBuildEnvironment environment,
         TimeSpan? timeout,
         CancellationToken cancellationToken = default,
-        Action? onWait = null)
+        Action? onWait = null,
+        TimeProvider? timeProvider = null,
+        Action<TimeSpan>? sleep = null)
     {
         ArgumentNullException.ThrowIfNull(environment);
         var preferredPermit = environment.BuildPermitIndex ?? BuildSlotIndex(environment.SlotOwnerToken);
+        var clock = timeProvider ?? DefaultLeaseTimeProvider;
+        var delay = sleep ?? DefaultLeaseSleep;
         var waitTimeout = timeout ?? DefaultSlotBusyPollTimeout;
-        var timeoutAt = DateTimeOffset.UtcNow.Add(waitTimeout);
+        var timeoutAt = clock.GetUtcNow().Add(waitTimeout);
         var waitingReported = false;
-        while (true)
+        var priorityReservations = new FileStream?[BuildConcurrencySlotCount];
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            for (var offset = 0; offset < BuildConcurrencySlotCount; offset++)
+            while (true)
             {
-                var permit = (preferredPermit + offset) % BuildConcurrencySlotCount;
-                var candidate = environment with
+                cancellationToken.ThrowIfCancellationRequested();
+                for (var offset = 0; offset < BuildConcurrencySlotCount; offset++)
                 {
-                    ExecutionLockPath = BuildSlotExecutionLockPath(permit),
-                    BuildPermitIndex = permit
-                };
-                var acquisition = TryAcquireLeaseExecutionLock(
-                    candidate,
-                    TimeSpan.Zero,
-                    cancellationToken);
-                if (acquisition is not DotnetBuildLeaseAcquisition.SlotsBusy)
-                {
-                    return acquisition;
+                    var permit = (preferredPermit + offset) % BuildConcurrencySlotCount;
+                    var priorityPath = BuildSlotExecutionLockPath(permit) + ".acceptance-priority.lock";
+                    if (priorityReservations[permit] is null)
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(priorityPath)!);
+                        FileStream? reservation = null;
+                        try
+                        {
+                            reservation = new FileStream(
+                                priorityPath,
+                                FileMode.OpenOrCreate,
+                                FileAccess.ReadWrite,
+                                FileShare.ReadWrite);
+                            reservation.Lock(0, 1);
+                            priorityReservations[permit] = reservation;
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                            reservation?.Dispose();
+                            continue;
+                        }
+                    }
+                    var candidate = environment with
+                    {
+                        ExecutionLockPath = BuildSlotExecutionLockPath(permit),
+                        BuildPermitIndex = permit
+                    };
+                    var acquisition = TryAcquireLeaseExecutionLockCore(
+                        candidate,
+                        TimeSpan.Zero,
+                        cancellationToken,
+                        clock,
+                        delay,
+                        acceptancePriorityHeldByCaller: true,
+                        emitSlotsBusyReceipt: false);
+                    if (acquisition is not DotnetBuildLeaseAcquisition.SlotsBusy)
+                    {
+                        return acquisition;
+                    }
                 }
-            }
 
-            if (!waitingReported)
-            {
-                onWait?.Invoke();
-                waitingReported = true;
-            }
+                if (!waitingReported)
+                {
+                    onWait?.Invoke();
+                    waitingReported = true;
+                }
 
-            if (DateTimeOffset.UtcNow >= timeoutAt)
-            {
-                return EmitSlotsBusy(environment.LeaseId, BuildConcurrencySlotCount);
-            }
+                if (clock.GetUtcNow() >= timeoutAt)
+                {
+                    return EmitSlotsBusy(environment.LeaseId, BuildConcurrencySlotCount);
+                }
 
-            Thread.Sleep(100);
+                delay(SlotBusyPollDelay);
+            }
+        }
+        finally
+        {
+            ReleaseAcceptancePriorityReservations(priorityReservations);
         }
     }
 
@@ -995,6 +1049,42 @@ public static class DotnetBuildEnvironmentManager
         Console.WriteLine(
             $"SLOTS_BUSY wantedBy={wantedBy} busySlots={FormatBusySlots(busySlots)} pid={Environment.ProcessId}");
         return new DotnetBuildLeaseAcquisition.SlotsBusy(wantedBy, busySlots);
+    }
+
+    private static DotnetBuildLeaseAcquisition.SlotsBusy CreateSlotsBusy(
+        DotnetBuildEnvironment environment,
+        bool emitReceipt)
+    {
+        if (emitReceipt)
+        {
+            return EmitSlotsBusy(environment.LeaseId);
+        }
+
+        var busySlots = environment.BuildPermitIndex is { } permitIndex
+            ? [new DotnetBuildStableSlotWait(permitIndex, null)]
+            : Array.Empty<DotnetBuildStableSlotWait>();
+        return new DotnetBuildLeaseAcquisition.SlotsBusy(environment.LeaseId, busySlots);
+    }
+
+    private static void ReleaseAcceptancePriorityReservations(FileStream?[] reservations)
+    {
+        for (var index = reservations.Length - 1; index >= 0; index--)
+        {
+            var reservation = reservations[index];
+            if (reservation is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                reservation.Unlock(0, 1);
+            }
+            finally
+            {
+                reservation.Dispose();
+            }
+        }
     }
 
     private static DotnetBuildLeaseAcquisition.BuildLockBlocked EmitBuildLockBlocked(

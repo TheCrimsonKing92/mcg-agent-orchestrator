@@ -3682,10 +3682,14 @@ public sealed class ConductorBatchLoopTests
             DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(slot0, TimeSpan.Zero)).Lease;
         using var lease1 = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
             DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(slot1, TimeSpan.Zero)).Lease;
+        var clock = new RecordingTimeProvider();
+        var waitStartedAt = clock.GetUtcNow();
         var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
             attemptRoot,
             runInline: true,
-            buildPermitBusyTimeout: TimeSpan.Zero);
+            timeProvider: clock,
+            buildPermitBusyTimeout: DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
+            buildPermitSleep: clock.Advance);
         var ran = false;
 
         try
@@ -3707,7 +3711,12 @@ public sealed class ConductorBatchLoopTests
 
             Assert.False(ran);
             Assert.Contains("waitReason=all-permits-busy", output, StringComparison.Ordinal);
+            Assert.Contains("permit=build-0|build-1", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("permit=acceptance-", output, StringComparison.Ordinal);
             Assert.DoesNotContain("waitReason=designated-permit-busy-while-free", output, StringComparison.Ordinal);
+            Assert.Equal(
+                DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
+                clock.GetUtcNow() - waitStartedAt);
         }
         finally
         {
@@ -3718,9 +3727,16 @@ public sealed class ConductorBatchLoopTests
     [Xunit.Fact(DisplayName = "ParallelAcceptance_attempt_yields_to_live_cli_holder_and_reclaims_dead_holder")]
     public void ParallelAcceptanceAttemptYieldsToLiveCliHolderAndReclaimsDeadHolder()
     {
-        using var _ = IsolatedDotnetRootScope();
+        using var isolatedRoot = IsolatedDotnetRootScope();
         var (_, liveGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/LiveCli.cs");
         var (_, deadGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/DeadCli.cs");
+        for (var attempt = 1;
+             attempt < 128 && BuildPermitIndex(liveGoal) == BuildPermitIndex(deadGoal);
+             attempt++)
+        {
+            (_, deadGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/DeadCli.cs");
+        }
+        Assert.NotEqual(BuildPermitIndex(liveGoal), BuildPermitIndex(deadGoal));
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var liveCandidate = ConductorParallelAcceptanceCandidate.Create(liveGoal, 0, ["src/LiveCli.cs"], "branch-live", "main");
         var deadCandidate = ConductorParallelAcceptanceCandidate.Create(deadGoal, 0, ["src/DeadCli.cs"], "branch-dead", "main");
@@ -3728,6 +3744,7 @@ public sealed class ConductorBatchLoopTests
         var deadEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(deadGoal.Id, "dead-cli");
         var liveRan = false;
         var deadRan = false;
+        DotnetBuildEnvironment? reclaimedEnvironment = null;
 
         try
         {
@@ -3761,12 +3778,14 @@ public sealed class ConductorBatchLoopTests
                 (attemptCandidate, attemptPolicy, stableSlotLease, _) =>
                 {
                     Assert.NotNull(stableSlotLease);
+                    reclaimedEnvironment = stableSlotLease.Environment;
                     deadRan = true;
                     return PassingRun(attemptCandidate, attemptPolicy);
                 });
 
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, reclaimed.Attempt.Outcome);
             Assert.True(deadRan);
+            Assert.Equal(deadEnvironment.BuildPermitIndex, reclaimedEnvironment!.BuildPermitIndex);
         }
         finally
         {
