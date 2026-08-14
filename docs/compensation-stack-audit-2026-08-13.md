@@ -108,6 +108,48 @@ ordinary tests; let project-level execution be the scheduling unit; run projects
 declared resource classes. Most of the lane compiler, resource-key scheduler, time balancing, retry policy
 and cache journal then disappears.
 
+### Measured: the floor is one serial chain, and it is not where it looks
+
+Measured from `shard-complete` events on the goal `22d6a9d8` acceptance run, 2026-08-13:
+
+    Goal lifecycle commands   343.6s  |  chained: both lanes hold
+    Goal worktree cleanup     454.6s  |  xunit:GoalWorktreeCleanupHooks
+                              ------
+    chain                     798.2s     vs 798.4s measured shard phase
+
+Those two lanes are **99.98% of the shard phase** and can never overlap, so the other fifteen shards —
+including the longest single shard at 473s — run entirely inside their shadow. The gate's shard wall-clock is
+this one chain to within 0.2 seconds.
+
+**The manifest cannot fix it.** Goal `d2aa7ab9` removed the shared `exclusiveResourceKeys` entry from the
+smaller lane and the change was rejected by an executable invariant:
+`AcceptanceGateEngineSettingsTests.cs:194`,
+`AcceptanceGateEngine_disabled_collections_spanning_lanes_share_an_exclusive_resource`. That test enumerates
+every collection declared `DisableParallelization: true` and requires lanes containing classes from one such
+collection to share an exclusive key.
+
+The reasoning inverts the obvious hypothesis. `DisableParallelization` serializes only **within** a process.
+The two lanes execute as separate MTP processes, so splitting a disabled collection across them destroys the
+guarantee the collection exists to provide. Separate processes are not why the key is unnecessary — they are
+why it is necessary. Two independent analyses (an agent bottleneck search and this author) reached the
+opposite conclusion from source reading alone; only the invariant test caught it.
+
+The causal chain, therefore:
+
+    process-wide cleanup hooks mutated by tests
+      -> collection must set DisableParallelization
+      -> its classes span two lanes
+      -> invariant requires those lanes to share an exclusive key
+      -> the lanes serialize
+      -> 798.2s of a 798.4s shard phase
+
+**Open question, unresolved.** `d2aa7ab9`'s Developer reported tracing the constraint to a *host-global*
+operation reachable from both lanes' cleanup paths (`GoalWorktrees.Cleanup.cs:267`), not merely a
+process-scoped fixture. If that holds, hermeticizing test fixtures will **not** free the lanes and the floor
+is harder to move than the chain above implies. If the shared resource is process-scoped after all,
+hermeticization dissolves collection, key, serialization and floor together. **Settle this before investing
+in hermeticization as a latency lever** — it is the single fact that decides whether that work pays.
+
 ## Stack 4 — "slot" is one number pretending to be three resources
 
 `DotnetBuildEnvironmentManager.cs:93-95`:
