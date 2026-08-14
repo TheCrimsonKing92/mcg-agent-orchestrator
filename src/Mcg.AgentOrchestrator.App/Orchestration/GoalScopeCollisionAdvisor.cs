@@ -110,16 +110,7 @@ internal static class GoalScopeCollisionAdvisor
 
         AddProposedEvidenceGap(proposedScopes, gaps);
 
-        var eligibleGoals = goals
-            .Where(goal =>
-                !goal.IsTerminal &&
-                goal.Status != GoalStatus.Parked &&
-                (string.IsNullOrWhiteSpace(excludedSourceBacklogItemId) ||
-                 !string.Equals(
-                     goal.SourceBacklogItemId,
-                     excludedSourceBacklogItemId,
-                     StringComparison.Ordinal)))
-            .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+        var eligibleGoals = SelectComparisonCandidates(goals, excludedSourceBacklogItemId)
             .Where(goal => IsLifecycleEligible(goal, lifecycleObservations, gaps))
             .ToArray();
 
@@ -198,6 +189,21 @@ internal static class GoalScopeCollisionAdvisor
             orderedCollisions,
             gaps.ToArray());
     }
+
+    internal static IReadOnlyList<Goal> SelectComparisonCandidates(
+        IEnumerable<Goal> goals,
+        string? excludedSourceBacklogItemId = null) =>
+        goals
+            .Where(goal =>
+                !goal.IsTerminal &&
+                goal.Status != GoalStatus.Parked &&
+                (string.IsNullOrWhiteSpace(excludedSourceBacklogItemId) ||
+                 !string.Equals(
+                     goal.SourceBacklogItemId,
+                     excludedSourceBacklogItemId,
+                     StringComparison.Ordinal)))
+            .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+            .ToArray();
 
     private static bool IsLifecycleEligible(
         Goal goal,

@@ -205,12 +205,12 @@ private static void PrintScopeCollisionAdvisory(
     CliExecutionContext context,
     string rawObjective,
     string? intakeItemId = null,
-    string? heading = null)
+    string? heading = null,
+    IReadOnlyDictionary<string, GoalScopeLifecycleObservation>? lifecycleObservations = null)
 {
-    var lifecycleObservations = context.Kernel.Goals.ToDictionary(
-        goal => goal.Id.Value,
-        goal => GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservation(context.Workspace, goal),
-        StringComparer.Ordinal);
+    lifecycleObservations ??= GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservations(
+        context.Workspace,
+        GoalScopeCollisionAdvisor.SelectComparisonCandidates(context.Kernel.Goals, intakeItemId));
     ConsoleViews.PrintGoalScopeCollisionReport(
         GoalScopeCollisionAdvisor.Build(
             [rawObjective],
