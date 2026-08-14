@@ -9,6 +9,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection("EnvMutation")]
 public sealed class WorkerProcessJobsTests : IDisposable
 {
+    private const string NegativeWaitAssertionExemption = "test-design-discipline: allow-negative-wait";
     private static readonly Regex NegativeWaitAssertionPattern = new(
         @"\b(?:Xunit\.)?" + "Assert" + @"\s*\.\s*" + "False" +
         @"\s*\(\s*(?:(?!;)[\s\S]){0,500}?\b(?:" + "WaitForExit" +
@@ -1747,6 +1748,11 @@ public sealed class WorkerProcessJobsTests : IDisposable
             var source = File.ReadAllText(path);
             foreach (Match match in NegativeWaitAssertionPattern.Matches(source))
             {
+                if (HasNegativeWaitAssertionExemption(source, match.Index))
+                {
+                    continue;
+                }
+
                 var lineNumber = source.Take(match.Index).Count(character => character == '\n') + 1;
                 offenders.Add($"{Path.GetRelativePath(repoRoot, path)}:{lineNumber}");
             }
@@ -1776,6 +1782,36 @@ public sealed class WorkerProcessJobsTests : IDisposable
         var source = string.Concat("Assert", ".False(process.HasExited);");
 
         Assert.False(NegativeWaitAssertionPattern.IsMatch(source));
+    }
+
+    [Xunit.Fact(DisplayName = "WorkerProcessJobs_negative_wait_source_guard_allows_documented_exemption")]
+    public void WorkerProcessJobsNegativeWaitSourceGuardAllowsDocumentedExemption()
+    {
+        var source = string.Concat(
+            "// ",
+            NegativeWaitAssertionExemption,
+            " - deterministic single-threaded fallback\n",
+            "Assert",
+            ".False(subject.Wait(10));");
+        var match = NegativeWaitAssertionPattern.Match(source);
+
+        Assert.True(match.Success);
+        Assert.True(HasNegativeWaitAssertionExemption(source, match.Index));
+    }
+
+    private static bool HasNegativeWaitAssertionExemption(string source, int assertionIndex)
+    {
+        var assertionLineStart = source.LastIndexOf('\n', Math.Max(0, assertionIndex - 1));
+        if (assertionLineStart <= 0)
+        {
+            return false;
+        }
+
+        var previousLineStart = source.LastIndexOf('\n', assertionLineStart - 1) + 1;
+        var previousLine = source.AsSpan(previousLineStart, assertionLineStart - previousLineStart).Trim();
+        var exemptionPrefix = $"// {NegativeWaitAssertionExemption} - ";
+        return previousLine.StartsWith(exemptionPrefix, StringComparison.Ordinal) &&
+               previousLine.Length > exemptionPrefix.Length;
     }
 
     private static void AssertProductionCallersObserveRegistrationFailure(

@@ -113,6 +113,8 @@ public sealed class ConductorWakeSignalTests
                 warnings.Add);
 
             wakeSignal.UpdateTrackedExitArtifacts([]);
+            // test-design-discipline: allow-negative-wait - no concurrent producer exists, so fallback deterministically reports no wake instead of hot-spinning.
+            Assert.False(wakeSignal.Wait(TimeSpan.FromMilliseconds(10)));
             Assert.Contains(warnings, warning =>
                 warning.Contains("continuing with timed polling", StringComparison.Ordinal));
         }
