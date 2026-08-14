@@ -35,17 +35,17 @@ public sealed class PreReviewFocusedEvidenceVerifierTests : GoalAcceptanceVerifi
             var result = await verifier.RunFocusedEvidenceAsync(
                 root,
                 new GoalId("abcdef12abcdef12abcdef12abcdef12"),
-                "Core.Tests: mapped-project; Infrastructure.Tests: FullyQualifiedName~DashboardHostTests&Category!=HostIntegration");
+                "Core.Tests: mapped-project; Dashboard.Tests: FullyQualifiedName~DashboardHostTests&Category!=HostIntegration");
 
             Assert.True(result.Accepted);
             Assert.True(result.Passed);
             Assert.Equal(FindingEvidenceArm.Candidate, Assert.Single(result.Arms!).Arm);
             var coreCall = calls.Single(call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Core.Tests"));
             Assert.DoesNotContain("--filter-class", coreCall);
-            var infrastructureCall = calls.Single(call =>
-                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
-            AssertArgumentPair(infrastructureCall, "--filter-class", "*DashboardHostTests*");
-            AssertArgumentPair(infrastructureCall, "--filter-not-trait", "Category=HostIntegration");
+            var dashboardCall = calls.Single(call =>
+                IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Dashboard.Tests"));
+            AssertArgumentPair(dashboardCall, "--filter-class", "*DashboardHostTests*");
+            AssertArgumentPair(dashboardCall, "--filter-not-trait", "Category=HostIntegration");
             Assert.DoesNotContain(calls, call =>
                 call.Length >= 3 &&
                 call[0] == "dotnet" &&

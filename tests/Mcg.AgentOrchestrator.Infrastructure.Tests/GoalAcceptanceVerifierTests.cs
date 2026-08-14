@@ -5600,6 +5600,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj",
             "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
             "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
         ];
@@ -5753,11 +5755,13 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var buildCalls = calls
                 .Where(call => call.Length >= 2 && call[0] == "dotnet" && call[1] == "build")
                 .ToArray();
-            Assert.Equal(5, buildCalls.Length);
+            Assert.Equal(7, buildCalls.Length);
             Assert.All(buildCalls, call => Assert.DoesNotContain("Mcg.AgentOrchestrator.sln", call, StringComparer.OrdinalIgnoreCase));
             Assert.Contains(buildCalls, call => call.Contains("src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj"));
+            Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj"));
+            Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj"));
             Assert.Contains(buildCalls, call => call.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"));
             Assert.DoesNotContain(calls, call => call.Any(arg => arg.Contains(cacheRoot, StringComparison.OrdinalIgnoreCase)));
@@ -5770,9 +5774,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("Infrastructure=changed", output, StringComparison.Ordinal);
             Assert.Contains("App=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", output, StringComparison.Ordinal);
+            Assert.Contains("Dashboard.Tests=changed", output, StringComparison.Ordinal);
+            Assert.Contains("TestSupport=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=changed", output, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=changed", output, StringComparison.Ordinal);
-            Assert.Contains("built_projects=Infrastructure,App,Infrastructure.Tests,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", output, StringComparison.Ordinal);
+            Assert.Contains("built_projects=Infrastructure,App,Infrastructure.Tests,Dashboard.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", output, StringComparison.Ordinal);
         }
         finally
         {
@@ -5799,6 +5805,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj",
             "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
+            "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj",
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj"
         ];
@@ -5901,14 +5909,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains("App=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("Dashboard.Tests=miss", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("TestSupport=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=miss", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=miss", firstOutput, StringComparison.Ordinal);
-            Assert.Contains("built_projects=Core,Infrastructure,App,Core.Tests,Infrastructure.Tests,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", firstOutput, StringComparison.Ordinal);
+            Assert.Contains("built_projects=Core,Infrastructure,App,Core.Tests,Infrastructure.Tests,Dashboard.Tests,TestSupport,Infrastructure.ProviderEnvironment.Tests,Infrastructure.Cli.Tests", firstOutput, StringComparison.Ordinal);
             Assert.Contains("Core=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("App=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Core.Tests=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Tests=changed", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("Dashboard.Tests=hit", secondOutput, StringComparison.Ordinal);
+            Assert.Contains("TestSupport=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.ProviderEnvironment.Tests=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("Infrastructure.Cli.Tests=hit", secondOutput, StringComparison.Ordinal);
             Assert.Contains("built_projects=Infrastructure.Tests", secondOutput, StringComparison.Ordinal);
@@ -9023,7 +9035,8 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "checks": [
                 { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
                 { "name": "core tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
-                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
+                { "name": "infrastructure tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
+                { "name": "dashboard tests", "type": "dotnet-test", "project": "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", "arguments": ["--verbosity", "minimal", "--filter-not-trait", "Category=HostIntegration"] }
               ],
               "forbiddenChangedPathGlobs": [
                 "bin/**",

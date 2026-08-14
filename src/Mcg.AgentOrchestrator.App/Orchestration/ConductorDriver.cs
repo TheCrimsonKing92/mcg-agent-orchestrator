@@ -3970,7 +3970,9 @@ internal sealed class ConductorDriver
                 ? "Core.Tests"
                 : project.Contains("Infrastructure.Tests", StringComparison.OrdinalIgnoreCase)
                     ? "Infrastructure.Tests"
-                    : null;
+                    : project.Contains("Dashboard.Tests", StringComparison.OrdinalIgnoreCase)
+                        ? "Dashboard.Tests"
+                        : null;
             if (alias is null)
             {
                 return new PreReviewEvidenceContext(
