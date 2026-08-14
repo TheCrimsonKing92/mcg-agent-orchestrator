@@ -288,10 +288,9 @@ function Resolve-ConductStop {
 
     if ($null -eq $Process) {
         if ($targetPid -gt 0) {
-            Remove-Item -LiteralPath $StopFilePath -Force
             Write-ResumeReceipt -RepositoryRoot $RepositoryRoot -Message (
-                "RESUME_STOP_STALE targetPid=$targetPid reason=target-not-running action=removed")
-            return [pscustomobject]@{ BlocksCurrentProcess = $false }
+                "RESUME_BLOCKED reason=conduct-stop-target-not-running targetPid=$targetPid path=$StopFilePath")
+            throw "Targeted .conduct-stop remains in effect after conduct PID $targetPid exited; operator removal is required."
         }
 
         Write-ResumeReceipt -RepositoryRoot $RepositoryRoot -Message (
@@ -350,7 +349,10 @@ try {
     $lockOwner = Get-ConductLockOwner -RepositoryRoot $repoRoot
     $conductProcess = $null
     if ($null -ne $lockOwner) {
-        $conductProcess = @($processes | Where-Object { $_.Id -eq $lockOwner.Id } | Select-Object -First 1)[0]
+        $matchingProcesses = @($processes | Where-Object { $_.Id -eq $lockOwner.Id } | Select-Object -First 1)
+        if ($matchingProcesses.Count -gt 0) {
+            $conductProcess = $matchingProcesses[0]
+        }
     }
     elseif ($processes.Count -eq 1) {
         $conductProcess = $processes[0]

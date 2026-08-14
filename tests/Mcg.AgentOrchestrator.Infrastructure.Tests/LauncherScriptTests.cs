@@ -348,6 +348,29 @@ public sealed class LauncherScriptTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_relaunches_when_stale_lock_owner_is_not_running")]
+    public void ResumeOrchestratorLoopRelaunchesWhenStaleLockOwnerIsNotRunning()
+    {
+        using var sandbox = CreateResumeSandbox("Write-Output 'No matching repo processes found.'");
+        WriteLastDriveJournal(sandbox.RepositoryRoot, "batch009");
+        var orchestratorPath = Path.Combine(sandbox.RepositoryRoot, ".orchestrator");
+        File.WriteAllLines(
+            Path.Combine(orchestratorPath, "conduct-loop.lock"),
+            [
+                "999999",
+                DateTimeOffset.UtcNow.AddHours(-1).ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+                DateTimeOffset.UtcNow.AddHours(-1).ToString("O", System.Globalization.CultureInfo.InvariantCulture)
+            ]);
+
+        var result = RunInvokeRepoScript(sandbox.RepositoryRoot, "scripts\\Resume-OrchestratorLoop.ps1");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
+        Assert.DoesNotContain("RESUME_FAILED", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("RESUME_LAUNCH", result.Stdout, StringComparison.Ordinal);
+        Assert.True(File.Exists(sandbox.StartInvocationPath), "Resume should relaunch when the stale lock owner is no longer running.");
+    }
+
     [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_removes_stop_older_than_active_loop")]
     public void ResumeOrchestratorLoopRemovesStopOlderThanActiveLoop()
     {
@@ -383,8 +406,8 @@ public sealed class LauncherScriptTests
         Assert.False(File.Exists(sandbox.StartInvocationPath), "Resume should not relaunch while .conduct-stop exists.");
     }
 
-    [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_ignores_targeted_stop_after_target_exits")]
-    public void ResumeOrchestratorLoopIgnoresTargetedStopAfterTargetExits()
+    [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_preserves_targeted_stop_after_target_exits")]
+    public void ResumeOrchestratorLoopPreservesTargetedStopAfterTargetExits()
     {
         using var sandbox = CreateResumeSandbox("Write-Output 'No matching repo processes found.'");
         WriteLastDriveJournal(sandbox.RepositoryRoot, "batch009");
@@ -398,11 +421,11 @@ public sealed class LauncherScriptTests
 
         var result = RunInvokeRepoScript(sandbox.RepositoryRoot, "scripts\\Resume-OrchestratorLoop.ps1");
 
-        Assert.Equal(0, result.ExitCode);
-        Assert.Contains("RESUME_STOP_STALE targetPid=4242 reason=target-not-running action=removed", result.Stdout, StringComparison.Ordinal);
-        Assert.Contains("RESUME_LAUNCH", result.Stdout, StringComparison.Ordinal);
-        Assert.False(File.Exists(stopPath), "A PID-targeted stop is stale after its target exits.");
-        Assert.True(File.Exists(sandbox.StartInvocationPath), "Auto-resume should relaunch once the targeted stop is stale.");
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("RESUME_BLOCKED reason=conduct-stop-target-not-running targetPid=4242", result.Stdout, StringComparison.Ordinal);
+        Assert.Contains("RESUME_FAILED reason=recovery-unavailable", result.Stdout, StringComparison.Ordinal);
+        Assert.True(File.Exists(stopPath), "The operator stop must remain until the operator removes it.");
+        Assert.False(File.Exists(sandbox.StartInvocationPath), "Auto-resume must not consume an operator stop and relaunch.");
     }
 
     [Xunit.Fact(DisplayName = "ResumeOrchestratorLoop_relaunches_from_journal_with_incremented_batch_name")]
