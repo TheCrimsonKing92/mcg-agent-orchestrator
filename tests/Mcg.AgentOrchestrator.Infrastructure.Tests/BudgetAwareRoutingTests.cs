@@ -87,7 +87,7 @@ public sealed class BudgetAwareRoutingTests
     public void BudgetAwareRoutingScorecardAvoidOverridesCheapLane()
     {
         var kernel = new AgentOrchestratorKernel();
-        // Deliberate catalog-default documentation; Default OpenAI agents use gpt-5.5 as the subscription model (codex-cli ModelAlias)
+        // The Developer default is the scoped Sol subscription lane; Ideation remains on the legacy default alias.
         var agents = AgentCatalog.Default().Agents;
         var task = new TaskSpec(TaskId.New(), "Update docs for the new API endpoint", AgentRole.Developer);
         var goal = kernel.CreateGoal("Documentation update", [task]);
@@ -140,7 +140,7 @@ public sealed class BudgetAwareRoutingTests
         {
             new ModelOutcomeRecord(
                 "OpenAI",
-                AgentCatalog.OpenAiSubscriptionModelAlias,
+                AgentCatalog.OpenAiSolSubscriptionModelAlias,
                 Completed: 3,
                 Failed: 0,
                 SelfRatedAdequate: 3,
@@ -152,7 +152,7 @@ public sealed class BudgetAwareRoutingTests
                 DispatchLane: "codex-cli"),
             new ModelOutcomeRecord(
                 "OpenAI",
-                AgentCatalog.OpenAiSubscriptionModelAlias,
+                AgentCatalog.OpenAiSolSubscriptionModelAlias,
                 Completed: 0,
                 Failed: 3,
                 SelfRatedAdequate: 3,

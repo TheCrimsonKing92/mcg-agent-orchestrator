@@ -519,8 +519,13 @@ public static class WorkerProfileStore
 
         if (provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark)
         {
+            const string legacyStructuredOutputTemplate =
+                "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}";
+            var missingStructuredOutputFromKnownBuiltIn =
+                !profile.CommandTemplate.Contains("--json", StringComparison.OrdinalIgnoreCase) &&
+                profile.CommandTemplate.Equals(legacyStructuredOutputTemplate, StringComparison.OrdinalIgnoreCase);
             return !profile.CommandTemplate.Contains("{sandboxMode}", StringComparison.OrdinalIgnoreCase) ||
-                !profile.CommandTemplate.Contains("--json", StringComparison.OrdinalIgnoreCase) ||
+                missingStructuredOutputFromKnownBuiltIn ||
                 !profile.CommandTemplate.Contains("--cd", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("--model {subscriptionModelName}", StringComparison.OrdinalIgnoreCase) ||
                 !profile.CommandTemplate.Contains("model_reasoning_effort={subscriptionReasoningEffort}", StringComparison.OrdinalIgnoreCase) ||

@@ -1594,13 +1594,9 @@ public sealed class BackgroundDispatchRunner
         // snapshot. Kernel classification reparses the snapshot for directives and blockers.
         var fullStandardOutput = ReadCompleteLog(processRecord.StandardOutputPath);
         var fullStandardError = ReadCompleteLog(processRecord.StandardErrorPath);
-        var standardOutput = VerificationTextBounds.BoundText(
-            fullStandardOutput.Content ?? outputSnapshot.BoundedText,
-            processRecord.StandardOutputPath);
+        var standardOutput = outputSnapshot.BoundedText;
         var standardError = AppendDiagnostic(
-            AppendDiagnostic(VerificationTextBounds.BoundText(
-                fullStandardError.Content ?? errorSnapshot.BoundedText,
-                processRecord.StandardErrorPath), standardErrorDiagnostic),
+            AppendDiagnostic(errorSnapshot.BoundedText, standardErrorDiagnostic),
             finalPlannerRejectionDiagnostic);
         if (!exitArtifactAlreadyExisted)
         {

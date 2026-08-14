@@ -541,7 +541,7 @@ public sealed class DispatchProcessHostTests
             var contextPath = Path.Combine(root, "context.md");
             var bytes = Encoding.UTF8.GetBytes("sandbox-visible context");
             File.WriteAllBytes(contextPath, bytes);
-            var startInfo = new ProcessStartInfo { UseShellExecute = false, WorkingDirectory = root };
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root };
             startInfo.ArgumentList.Add("Write-Output 'provider-command-marker'");
             var parameters = new DispatchProcessHost.DispatchRunParameters(
                 "Write-Output 'provider-command-marker'",
@@ -607,7 +607,7 @@ public sealed class DispatchProcessHostTests
             var contextPath = Path.Combine(root, "context.md");
             var bytes = Encoding.UTF8.GetBytes("required context");
             File.WriteAllBytes(contextPath, bytes);
-            var startInfo = new ProcessStartInfo { UseShellExecute = false, WorkingDirectory = root };
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root };
             startInfo.ArgumentList.Add("Write-Output ok");
             var parameters = new DispatchProcessHost.DispatchRunParameters(
                 "Write-Output ok",

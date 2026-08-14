@@ -1169,7 +1169,7 @@ public sealed class WorkerContextPackageTests
         {
             var bytes = Encoding.UTF8.GetBytes("authority-bound bytes");
             File.WriteAllBytes(Path.Combine(root, "context.md"), bytes);
-            var startInfo = new ProcessStartInfo { UseShellExecute = false, WorkingDirectory = root };
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root };
             startInfo.ArgumentList.Add("Write-Output 'provider-launch-marker'");
             var parameters = HostParameters(root, new MandatoryContextFileDescriptor(
                 "context/required.md",

@@ -349,12 +349,25 @@ public sealed class TaskSpec
         {
             foreach (var dispatch in snapshot.DispatchHistory)
             {
-                task.RestoreDispatch(FromDispatchSnapshot(dispatch));
+                task._dispatchHistory.Add(FromDispatchSnapshot(dispatch));
             }
         }
-        else if (snapshot.LastDispatch is not null)
+
+        if (snapshot.LastDispatch is not null)
         {
-            task.RestoreDispatch(FromDispatchSnapshot(snapshot.LastDispatch));
+            var currentDispatch = FromDispatchSnapshot(snapshot.LastDispatch);
+            var historyIndex = task._dispatchHistory.FindIndex(
+                dispatch => dispatch.DispatchedAt == currentDispatch.DispatchedAt);
+            if (historyIndex >= 0)
+            {
+                task._dispatchHistory[historyIndex] = currentDispatch;
+            }
+            else
+            {
+                task._dispatchHistory.Add(currentDispatch);
+            }
+
+            task.LastDispatch = currentDispatch;
         }
 
         if (snapshot.LastProcess is not null)
@@ -613,12 +626,6 @@ public sealed class TaskSpec
         authoritativeText is null && unavailableReason is null
             ? "legacy-snapshot-authoritative-output-unavailable"
             : unavailableReason;
-
-    private void RestoreDispatch(TaskDispatchRecord dispatch)
-    {
-        LastDispatch = dispatch;
-        _dispatchHistory.Add(dispatch);
-    }
 
     private void ReplaceLastDispatch(TaskDispatchRecord dispatch)
     {
