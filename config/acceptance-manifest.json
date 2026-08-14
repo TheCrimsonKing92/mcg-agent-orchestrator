@@ -191,8 +191,8 @@
       },
       {
         "project": "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
-        "executablePathTemplate": "bin/{projectName}/{configuration}/Mcg.AgentOrchestrator.Dashboard.Tests{executableExtension}",
-        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/Mcg.AgentOrchestrator.Dashboard.Tests.exe",
+        "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
         "arguments": [
           "{executable}",
           "--no-ansi",
