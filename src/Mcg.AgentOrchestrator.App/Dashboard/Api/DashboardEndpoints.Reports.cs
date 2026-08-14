@@ -141,13 +141,21 @@ internal static partial class DashboardEndpoints
         }
 
         var current = await LoadAsync(services, context.RequestAborted);
+        var lifecycleCandidates = intake.Items
+            .SelectMany(item => GoalScopeCollisionAdvisor.SelectComparisonCandidates(current.Goals, item.Id))
+            .DistinctBy(goal => goal.Id)
+            .ToArray();
+        var lifecycleObservations = GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservations(
+            services.Workspace,
+            lifecycleCandidates);
         var reports = intake.Items
             .Select(item => (
                 Item: item,
                 Report: GoalScopeCollisionAdvisor.Build(
                     [item.SuggestedObjective],
                     current.Goals,
-                    item.Id)))
+                    item.Id,
+                    lifecycleObservations)))
             .ToArray();
         return Json(DashboardResponseMapper.ToGoalScopeCollisionAdvisoryDto(reports));
     }

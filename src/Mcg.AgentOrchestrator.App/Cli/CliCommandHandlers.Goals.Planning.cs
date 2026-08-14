@@ -113,9 +113,23 @@ private static bool HandleGoalPlan(CliExecutionContext context, IReadOnlyList<st
 
     var plan = GoalDependencyPlanner.Build(intake);
     ConsoleViews.PrintGoalDependencyPlan(plan);
+    var lifecycleCandidates = plan.Nodes
+        .SelectMany(node => GoalScopeCollisionAdvisor.SelectComparisonCandidates(
+            context.Kernel.Goals,
+            node.Intake.Id))
+        .DistinctBy(goal => goal.Id)
+        .ToArray();
+    var lifecycleObservations = GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservations(
+        context.Workspace,
+        lifecycleCandidates);
     foreach (var node in plan.Nodes)
     {
-        PrintScopeCollisionAdvisory(context, node.ReadyObjective, node.Intake.Id, node.Heading);
+        PrintScopeCollisionAdvisory(
+            context,
+            node.ReadyObjective,
+            node.Intake.Id,
+            node.Heading,
+            lifecycleObservations);
     }
 
     if (!createGoals && !createSimpleGoals)

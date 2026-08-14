@@ -14,6 +14,7 @@ internal enum ScopeEvidenceGap
     ProposedExplicitScopesMissing,
     ActiveScopesMissing,
     ActiveExplicitScopesMissing,
+    LifecycleEvidenceUnavailable,
     ComparisonTruncated,
     TextTruncated
 }
@@ -22,7 +23,15 @@ internal enum ScopeCollisionVerdict
 {
     NoOverlapDetected,
     OverlapDetected,
+    OverlapDetectedIncomplete,
     InsufficientEvidence
+}
+
+internal sealed record GoalScopeLifecycleObservation(
+    GoalLifecycleState? State,
+    string? UnavailableReason = null)
+{
+    public bool IsAvailable => State.HasValue;
 }
 
 internal sealed record ScopeCollision(
@@ -48,7 +57,11 @@ internal sealed record SliceBatchScopeCollision(
 
 internal sealed record GoalScopeCollisionReport(
     IReadOnlyList<DeclaredFileScope> ProposedScopes,
+    int InputGoalCount,
+    int EligibleGoalCount,
     int ComparedGoalCount,
+    int UncheckableGoalCount,
+    int UncomparedGoalCount,
     ScopeCollisionVerdict Verdict,
     IReadOnlyList<ScopeCollision> Collisions,
     IReadOnlyList<ScopeEvidenceGapNote> EvidenceGaps)
@@ -67,19 +80,20 @@ internal sealed record GoalScopeCollisionReport(
     {
         ScopeCollisionVerdict.NoOverlapDetected => "no-overlap-detected",
         ScopeCollisionVerdict.OverlapDetected => "overlap-detected",
+        ScopeCollisionVerdict.OverlapDetectedIncomplete => "overlap-detected-incomplete",
         _ => "insufficient-evidence"
     };
 }
 
 internal static class GoalScopeCollisionAdvisor
 {
-    private const int MaximumCandidateGoals = 24;
     private const int MaximumTextCharacters = 64_000;
 
     public static GoalScopeCollisionReport Build(
         IReadOnlyList<string> proposedText,
         IReadOnlyCollection<Goal> goals,
-        string? excludedSourceBacklogItemId = null)
+        string? excludedSourceBacklogItemId = null,
+        IReadOnlyDictionary<string, GoalScopeLifecycleObservation>? lifecycleObservations = null)
     {
         var gaps = new List<ScopeEvidenceGapNote>();
         var proposedScopes = GoalFileScopeInference.FromTextParts(
@@ -96,27 +110,13 @@ internal static class GoalScopeCollisionAdvisor
 
         AddProposedEvidenceGap(proposedScopes, gaps);
 
-        var eligibleGoals = goals
-            .Where(goal =>
-                !goal.IsTerminal &&
-                (string.IsNullOrWhiteSpace(excludedSourceBacklogItemId) ||
-                 !string.Equals(
-                     goal.SourceBacklogItemId,
-                     excludedSourceBacklogItemId,
-                     StringComparison.Ordinal)))
-            .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+        var eligibleGoals = SelectComparisonCandidates(goals, excludedSourceBacklogItemId)
+            .Where(goal => IsLifecycleEligible(goal, lifecycleObservations, gaps))
             .ToArray();
-        if (eligibleGoals.Length > MaximumCandidateGoals)
-        {
-            gaps.Add(new ScopeEvidenceGapNote(
-                null,
-                ScopeEvidenceGap.ComparisonTruncated,
-                $"Compared the first {MaximumCandidateGoals} active goals out of {eligibleGoals.Length}."));
-        }
 
-        var candidates = eligibleGoals.Take(MaximumCandidateGoals).ToArray();
         var collisions = new List<ScopeCollision>();
-        foreach (var goal in candidates)
+        var uncheckableGoalCount = 0;
+        foreach (var goal in eligibleGoals)
         {
             var candidateScopes = GoalFileScopeInference.FromGoal(
                 goal,
@@ -131,6 +131,11 @@ internal static class GoalScopeCollisionAdvisor
             }
 
             AddActiveEvidenceGap(goal, candidateScopes, gaps);
+            if (candidateScopes.Count == 0)
+            {
+                uncheckableGoalCount++;
+            }
+
             foreach (var proposedScope in proposedScopes)
             {
                 foreach (var candidateScope in candidateScopes)
@@ -157,24 +162,80 @@ internal static class GoalScopeCollisionAdvisor
         }
 
         var orderedCollisions = collisions
-            .OrderBy(collision => collision.GoalId, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(collision => collision.Kind)
+            .OrderBy(collision => collision.Kind)
+            .ThenByDescending(TrustedSideCount)
+            .ThenBy(collision => collision.ProposedProvenance)
+            .ThenBy(collision => collision.ConflictingProvenance)
+            .ThenBy(collision => collision.GoalId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(collision => collision.ProposedPath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(collision => collision.ConflictingPath, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var verdict = orderedCollisions.Length > 0
-            ? ScopeCollisionVerdict.OverlapDetected
+            ? gaps.Count == 0
+                ? ScopeCollisionVerdict.OverlapDetected
+                : ScopeCollisionVerdict.OverlapDetectedIncomplete
             : gaps.Count == 0
                 ? ScopeCollisionVerdict.NoOverlapDetected
                 : ScopeCollisionVerdict.InsufficientEvidence;
 
         return new GoalScopeCollisionReport(
             proposedScopes,
-            candidates.Length,
+            goals.Count,
+            eligibleGoals.Length,
+            eligibleGoals.Length,
+            uncheckableGoalCount,
+            0,
             verdict,
             orderedCollisions,
             gaps.ToArray());
     }
+
+    internal static IReadOnlyList<Goal> SelectComparisonCandidates(
+        IEnumerable<Goal> goals,
+        string? excludedSourceBacklogItemId = null) =>
+        goals
+            .Where(goal =>
+                !goal.IsTerminal &&
+                goal.Status != GoalStatus.Parked &&
+                (string.IsNullOrWhiteSpace(excludedSourceBacklogItemId) ||
+                 !string.Equals(
+                     goal.SourceBacklogItemId,
+                     excludedSourceBacklogItemId,
+                     StringComparison.Ordinal)))
+            .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool IsLifecycleEligible(
+        Goal goal,
+        IReadOnlyDictionary<string, GoalScopeLifecycleObservation>? lifecycleObservations,
+        ICollection<ScopeEvidenceGapNote> gaps)
+    {
+        if (lifecycleObservations is null)
+        {
+            return true;
+        }
+
+        if (!lifecycleObservations.TryGetValue(goal.Id.Value, out var observation) || !observation.IsAvailable)
+        {
+            var reason = observation?.UnavailableReason;
+            gaps.Add(new ScopeEvidenceGapNote(
+                goal.Id.Value,
+                ScopeEvidenceGap.LifecycleEvidenceUnavailable,
+                string.IsNullOrWhiteSpace(reason)
+                    ? $"Goal {GoalPrefix(goal)} lifecycle evidence is unavailable; it remains eligible."
+                    : $"Goal {GoalPrefix(goal)} lifecycle evidence is unavailable ({reason}); it remains eligible."));
+            return true;
+        }
+
+        return observation.State != GoalLifecycleState.CleanedUp;
+    }
+
+    private static int TrustedSideCount(ScopeCollision collision) =>
+        (IsTrusted(collision.ProposedProvenance) ? 1 : 0) +
+        (IsTrusted(collision.ConflictingProvenance) ? 1 : 0);
+
+    private static bool IsTrusted(FileScopeProvenance provenance) =>
+        provenance is FileScopeProvenance.Explicit or FileScopeProvenance.Derived;
 
     public static IReadOnlyList<SliceBatchScopeCollision> FindPairwiseOverlaps(
         IReadOnlyList<SliceBatchScope> scopes)
