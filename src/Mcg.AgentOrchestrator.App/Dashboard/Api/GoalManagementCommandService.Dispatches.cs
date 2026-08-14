@@ -749,7 +749,8 @@ private static ProcessBatchExecutionResult StartDispatches(
             task.Id,
             logRoot,
             batchCheckpoint,
-            readCurrentInterruptedDispatchState);
+            readCurrentInterruptedDispatchState,
+            sandboxOptions);
         if (startResult.RecoveryAction is { } action)
         {
             recoveryActions.Add(action);

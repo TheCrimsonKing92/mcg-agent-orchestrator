@@ -17,7 +17,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         false,
         WorkerSandboxOptions.DefaultAccount,
         WorkerSandboxOptions.DefaultCredentialTarget);
-    private static readonly WorkerSandboxOptions EnabledSandbox = DisabledSandbox with { Enabled = true };
+    private static readonly WorkerSandboxOptions EnabledSandbox = DisabledSandbox with { Enabled = OperatingSystem.IsWindows() };
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_preflight_allows_swept_terminal_goal_without_starting_worker")]
     public void WorkerProfileDispatcherPreflightAllowsSweptTerminalGoalWithoutStartingWorker()
@@ -50,7 +50,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
             claudeAuthProbe: () => new ClaudeCliAuthState(
                 HasAnthropicApiKey: true,
                 HasCliCredentialArtifact: false,
-                CredentialArtifactPath: null));
+                CredentialArtifactPath: null),
+            sandboxOptions: DisabledSandbox);
 
         Assert.Contains(sweep.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
         Assert.NotNull(prepared.PromptPath);
@@ -241,6 +242,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
             DispatchTestProfiles(),
             workingDirectory,
             DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+            sandboxOptions: DisabledSandbox,
             commandExists: _ => true);
 
         Assert.False(preflight.Allowed);
@@ -285,7 +287,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         [agent],
         WorkerProfileCatalog.Default(),
         workingDirectory,
-        DateTimeOffset.Parse("2026-06-13T12:00:00Z"));
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+        sandboxOptions: DisabledSandbox);
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -294,7 +297,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        DateTimeOffset.Parse("2026-06-13T12:00:00Z")));
+        DateTimeOffset.Parse("2026-06-13T12:00:00Z"),
+        sandboxOptions: DisabledSandbox));
 
     Assert.False(preflight.Allowed);
     Assert.Contains("missing required local skill", string.Join("\n", preflight.Findings), StringComparison.Ordinal);
@@ -868,7 +872,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         WorkerProfileCatalog.Default(),
         Path.Combine(dispatchRoot, "prompts"),
         dispatchRoot,
-        DateTimeOffset.UtcNow);
+        DateTimeOffset.UtcNow,
+        sandboxOptions: DisabledSandbox);
     var preparedRisk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, nextTask);
 
     Assert.True(nextTask.LastDispatch!.UsesComplexModel);
@@ -980,14 +985,16 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         profiles,
         promptRoot,
         workingDirectory,
-        retryAttemptAt);
+        retryAttemptAt,
+        sandboxOptions: DisabledSandbox);
     var preflight = WorkerProfileDispatcher.PreflightSubscriptionTask(
         goal,
         task,
         agents,
         profiles,
         workingDirectory,
-        retryAttemptAt);
+        retryAttemptAt,
+        sandboxOptions: DisabledSandbox);
 
     Assert.Equal(failureAt.AddMinutes(1), task.SubscriptionRetryAfter);
     Assert.False(item.CanPrepare);
@@ -1043,7 +1050,8 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
         profiles,
         promptRoot,
         workingDirectory,
-        retryAttemptAt);
+        retryAttemptAt,
+        sandboxOptions: DisabledSandbox);
 
     Assert.Equal(failureAt.AddMinutes(1), expiredRetryAfter);
     Assert.True(expiredRetryAfter < retryAttemptAt);
@@ -1324,7 +1332,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        failureAt.AddMinutes(30));
+        failureAt.AddMinutes(30),
+        sandboxOptions: DisabledSandbox);
 
     Assert.False(results.Any(result => result.Task.Id == developer.Id));
     Assert.Equal(WorkTaskStatus.Assigned, developer.Status);
@@ -1338,7 +1347,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        failureAt.AddMinutes(30)));
+        failureAt.AddMinutes(30),
+        sandboxOptions: DisabledSandbox));
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.Contains("subscription retry deferred until", ex.Message, StringComparison.Ordinal);
     Assert.Contains("source: verification history record 1 of 1", ex.Message, StringComparison.Ordinal);
@@ -1394,7 +1404,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         agents,
         WorkerProfileCatalog.Default(),
         workingDirectory,
-        failureAt.AddMinutes(10));
+        failureAt.AddMinutes(10),
+        sandboxOptions: DisabledSandbox);
     var results = WorkerProfileDispatcher.PrepareSubscriptionReadyTasks(
         kernel,
         goal,
@@ -1402,7 +1413,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        failureAt.AddMinutes(10));
+        failureAt.AddMinutes(10),
+        sandboxOptions: DisabledSandbox);
 
     Assert.False(sameProviderItem.CanPrepare);
     Assert.Equal(limitedTask.SubscriptionRetryAfter, sameProviderItem.RetryAfter);
@@ -1547,7 +1559,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        retryWindowPassed);
+        retryWindowPassed,
+        sandboxOptions: DisabledSandbox);
 
     Assert.Equal(2, item.RecoverableSubscriptionLimitFailureCount);
     Assert.False(item.CanPrepare);
@@ -1563,7 +1576,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        retryWindowPassed));
+        retryWindowPassed,
+        sandboxOptions: DisabledSandbox));
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.Contains("repeated recoverable subscription limits require operator review", ex.Message, StringComparison.Ordinal);
 
@@ -1578,7 +1592,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        retryWindowPassed);
+        retryWindowPassed,
+        sandboxOptions: DisabledSandbox);
 
     Assert.True(reviewedItem.CanPrepare);
     Assert.Equal(developer.Id, result.Task.Id);
@@ -1613,7 +1628,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt));
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox));
 
     Assert.Contains("Subscription preflight failed", ex.Message, StringComparison.Ordinal);
     Assert.Contains("goal workspace", ex.Message, StringComparison.Ordinal);
@@ -1652,7 +1668,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         promptRoot,
         workingDirectory,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox);
 
     Assert.Equal(WorkTaskStatus.Running, task.Status);
     Assert.True(task.LastDispatch is not null);
@@ -1678,7 +1695,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         agents,
         WorkerProfileCatalog.Default(),
         worktree,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox);
     var ex = Assert.ThrowsAny<InvalidOperationException>(() => WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -1687,7 +1705,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         WorkerProfileCatalog.Default(),
         promptRoot,
         worktree,
-        dispatchedAt));
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox));
 
     Assert.False(preflight.Allowed);
     Assert.True(preflight.Findings.Any(finding =>
@@ -1720,7 +1739,8 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
         agents,
         WorkerProfileCatalog.Default(),
         worktree,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox);
 
     Assert.True(preflight.Allowed);
     Assert.Contains("ok: worktree clean before dispatch", preflight.Findings);
@@ -1745,13 +1765,13 @@ private static TaskVerificationRecord ProviderConnectivityVerification(
     File.WriteAllText(cachePath, "cache");
 
     var cacheOnly = WorkerProfileDispatcher.PreflightSubscriptionTask(
-        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt);
+        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt, sandboxOptions: DisabledSandbox);
 
     Assert.True(cacheOnly.Allowed);
     File.WriteAllText(cachePath + ".source", "real work");
 
     var withSibling = WorkerProfileDispatcher.PreflightSubscriptionTask(
-        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt);
+        goal, task, agents, WorkerProfileCatalog.Default(), worktree, dispatchedAt, sandboxOptions: DisabledSandbox);
 
     Assert.False(withSibling.Allowed);
     Assert.Contains(withSibling.Findings, finding =>
