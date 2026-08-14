@@ -593,10 +593,13 @@ public sealed class RepositoryChangeClassifierTests
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"
         ]);
 
-        var check = Assert.Single(plan.Checks);
-        Assert.Equal("infrastructure tests", check.Name);
-        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
-        Assert.DoesNotContain("--filter", check.Command);
+        Assert.Equal(2, plan.Checks.Count);
+        var dashboardCheck = Assert.Single(plan.Checks, check => check.Name == "dashboard tests");
+        var infrastructureCheck = Assert.Single(plan.Checks, check => check.Name == "infrastructure tests");
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", dashboardCheck.Command);
+        Assert.DoesNotContain("--filter", dashboardCheck.Command);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", infrastructureCheck.Command);
+        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_disables_focused_app_filter_when_script_or_config_changes")]
@@ -611,13 +614,18 @@ public sealed class RepositoryChangeClassifierTests
             "src/Mcg.AgentOrchestrator.App/appsettings.json"
         ]);
 
-        foreach (var plan in new[] { scriptPlan, configPlan })
-        {
-            var check = Assert.Single(plan.Checks);
-            Assert.Equal("infrastructure tests", check.Name);
-            Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
-            Assert.DoesNotContain("--filter", check.Command);
-        }
+        var scriptCheck = Assert.Single(scriptPlan.Checks);
+        Assert.Equal("infrastructure tests", scriptCheck.Name);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", scriptCheck.Command);
+        Assert.DoesNotContain("--filter", scriptCheck.Command);
+
+        Assert.Equal(2, configPlan.Checks.Count);
+        var dashboardCheck = Assert.Single(configPlan.Checks, check => check.Name == "dashboard tests");
+        var infrastructureCheck = Assert.Single(configPlan.Checks, check => check.Name == "infrastructure tests");
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", dashboardCheck.Command);
+        Assert.DoesNotContain("--filter", dashboardCheck.Command);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", infrastructureCheck.Command);
+        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_touched_infrastructure_test_class_filter")]
