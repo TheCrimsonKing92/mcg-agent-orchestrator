@@ -547,8 +547,23 @@ public sealed class RepositoryChangeClassifierTests
         Assert.Contains("--filter", check.Command);
         Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardDispatchStartFailureEndpointTests", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("Category!=HostIntegration", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_touched_dashboard_test_class_filter")]
+    public void RepositoryTestImpactPlannerSelectsTouchedDashboardTestClassFilter()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/DashboardDispatchStartFailureEndpointTests.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused dashboard infrastructure tests", check.Name);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", check.Command);
+        Assert.Contains("--filter", check.Command);
+        Assert.Equal("FullyQualifiedName~DashboardDispatchStartFailureEndpointTests", check.Command[^1]);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_shared_infrastructure")]
@@ -696,25 +711,27 @@ public sealed class RepositoryChangeClassifierTests
         Assert.True(plan.Checks.Any(check => check.Name == "infrastructure tests"));
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_full_suite_is_two_per_project_checks_never_a_solution_run")]
-    public void RepositoryTestImpactPlannerFullSuiteIsTwoPerProjectChecksNeverASolutionRun()
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_full_suite_is_per_project_checks_never_a_solution_run")]
+    public void RepositoryTestImpactPlannerFullSuiteIsPerProjectChecksNeverASolutionRun()
     {
-        // Security-sensitive paths force the full suite. Both test projects are MTP, so a
+        // Security-sensitive paths force the full suite. The test projects are MTP, so a
         // project-less "dotnet test" always fails on .NET 10 with the VSTest-target error —
-        // the full suite must be expressed as the two per-project runs the MTP runner can route.
+        // the full suite must be expressed as per-project runs the MTP runner can route.
         var plan = RepositoryTestImpactPlanner.Plan([
             "src/Mcg.AgentOrchestrator.Infrastructure/Sandbox/WorkerSandboxPolicy.cs"
         ]);
 
         Assert.True(plan.RequiresBuild);
         Assert.True(plan.RequiresBroadVerification);
-        Assert.Equal(2, plan.Checks.Count);
+        Assert.Equal(3, plan.Checks.Count);
         Assert.All(plan.Checks, check =>
             Assert.True(check.Command.Any(argument => argument.EndsWith(".csproj", StringComparison.Ordinal))));
         Assert.True(plan.Checks.Any(check =>
             check.Command.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj")));
         Assert.True(plan.Checks.Any(check =>
             check.Command.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")));
+        Assert.True(plan.Checks.Any(check =>
+            check.Command.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj")));
     }
 
     [Xunit.Fact(DisplayName = "VerificationPolicyCompiler_compiles_different_policies_from_task_risk_and_scope")]

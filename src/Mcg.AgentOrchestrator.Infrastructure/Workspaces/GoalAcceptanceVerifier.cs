@@ -1642,7 +1642,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ? $"reviewer mapped project evidence: {ProjectLabel(item.Project)}"
                     : $"reviewer focused evidence: {ProjectLabel(item.Project)} {item.Filter.CanonicalText}",
                 Type = "dotnet-test",
-                // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
+                // Focused-evidence target projects (Core.Tests, Infrastructure.Tests, Dashboard.Tests) are MTP;
                 // without this the check defaults to the VSTest runner and fails on .NET 10 with
                 // "VSTest target is no longer supported", making every reviewer evidence run fail.
                 Runner = "mtp",
@@ -2630,6 +2630,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         !string.IsNullOrWhiteSpace(check.Project) &&
         (IsCoreTestProject(check.Project) ||
          IsInfrastructureTestProject(check.Project) ||
+         IsDashboardTestProject(check.Project) ||
          IsExtractedInfrastructureTestProject(check.Project));
 
     private static bool IsSkippedPolicyShardCheck(AcceptanceManifestCheck check, PolicyShardPlan policyShardPlan) =>
@@ -2754,7 +2755,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         };
     }
 
-    // Core.Tests and Infrastructure.Tests are Microsoft.Testing.Platform projects; synthesized
+    // Core.Tests, Infrastructure.Tests, and Dashboard.Tests are Microsoft.Testing.Platform projects; synthesized
     // dotnet-test checks for them must carry runner=mtp or they default to the VSTest runner and
     // fail on .NET 10 with "VSTest target is no longer supported".
     private static string ResolveDotnetTestRunner(string? project) =>

@@ -49,10 +49,10 @@ public static class RepositoryTestImpactPlanner
         "FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests";
 
     private const string DashboardFilter =
-        "FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration|FullyQualifiedName~DashboardValidationHarnessTests";
+        "FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration|FullyQualifiedName~DashboardDispatchStartFailureEndpointTests|FullyQualifiedName~DashboardValidationHarnessTests";
 
-    // The full suite is expressed as the two per-project runs rather than one solution-level
-    // "dotnet test": both test projects are Microsoft.Testing.Platform, and a project-less
+    // The full suite is expressed as per-project runs rather than one solution-level
+    // "dotnet test": the test projects are Microsoft.Testing.Platform, and a project-less
     // dotnet-test check cannot be routed to the MTP runner, so it always dies on .NET 10 with
     // "Testing with VSTest target is no longer supported".
 
@@ -91,15 +91,19 @@ public static class RepositoryTestImpactPlanner
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Core.Tests/"));
         var touchesInfrastructure = summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/") ||
             StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/"));
+        var touchesDashboardTests = summary.Files.Any(file =>
+            StartsWith(file.Path, "tests/Mcg.AgentOrchestrator.Dashboard.Tests/"));
         var coreTestFilter = BuildChangedTestClassFilter(summary, "tests/Mcg.AgentOrchestrator.Core.Tests/");
         var infrastructureTestFilter = BuildChangedTestClassFilter(summary, "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/");
+        var dashboardTestFilter = BuildChangedTestClassFilter(summary, "tests/Mcg.AgentOrchestrator.Dashboard.Tests/");
         var appSubsystems = summary.Files
             .Select(file => AppSubsystem(file.Path))
             .OfType<string>()
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var touchesApp = appSubsystems.Length > 0;
-        var touchesDashboard = appSubsystems.Any(IsDashboardSubsystem);
+        var touchesDashboardApp = appSubsystems.Any(IsDashboardSubsystem);
+        var touchesDashboard = touchesDashboardApp || touchesDashboardTests;
         var touchesNonDashboardApp = appSubsystems.Any(subsystem => !IsDashboardSubsystem(subsystem));
         var touchesScriptsOrConfig = summary.Files.Any(file =>
             file.Categories.Contains(RepositoryChangeCategory.Script) ||
@@ -127,11 +131,15 @@ public static class RepositoryTestImpactPlanner
 
         if (touchesDashboard)
         {
-            var useFocusedDashboardFilter = CanUseFocusedAppFilters(summary);
+            var mappedDashboardFilter = touchesDashboardApp
+                ? JoinFilters(DashboardFilter, dashboardTestFilter)
+                : dashboardTestFilter;
+            var useFocusedDashboardFilter =
+                mappedDashboardFilter is not null && CanUseFocusedAppFilters(summary);
             checks.Add(new RepositoryTestImpactCheck(
                 useFocusedDashboardFilter ? "focused dashboard infrastructure tests" : "dashboard tests",
                 useFocusedDashboardFilter
-                    ? [.. DashboardTests, "--filter", DashboardFilter]
+                    ? [.. DashboardTests, "--filter", mappedDashboardFilter!]
                     : DashboardTests,
                 useFocusedDashboardFilter
                     ? "Dashboard or API behavior changed; run the mapped Dashboard test classes."
@@ -217,6 +225,10 @@ public static class RepositoryTestImpactPlanner
                 new RepositoryTestImpactCheck(
                     "full dotnet tests: infrastructure",
                     InfrastructureTests,
+                    summary),
+                new RepositoryTestImpactCheck(
+                    "full dotnet tests: dashboard",
+                    DashboardTests,
                     summary)
             ]);
 

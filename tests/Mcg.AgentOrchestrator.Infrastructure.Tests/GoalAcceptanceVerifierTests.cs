@@ -6701,6 +6701,14 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 check.Passed &&
                 check.ResultSummary == $"covered by {laneCount} partitioned checks");
             Assert.Contains(result.Checks!, check => check.Name == "infrastructure tests: Remainder");
+            Assert.Contains(calls, call =>
+                call.Length > 2 &&
+                call[0] == "dotnet" &&
+                call[1] == "test" &&
+                call[2] == "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj");
+            Assert.Contains(result.Checks!, check =>
+                check.Name == "dashboard tests" &&
+                check.ResultSummary?.Contains("skipped: no changed file in dependency closure", StringComparison.Ordinal) != true);
         }
 
         await AssertFullShardRunAsync(
