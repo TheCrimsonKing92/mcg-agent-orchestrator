@@ -729,29 +729,48 @@ public static class DotnetBuildEnvironmentManager
     public static DotnetBuildLeaseAcquisition TryAcquireFirstAvailableBuildPermit(
         DotnetBuildEnvironment environment,
         TimeSpan? timeout,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? onWait = null)
     {
         ArgumentNullException.ThrowIfNull(environment);
         var preferredPermit = environment.BuildPermitIndex ?? BuildSlotIndex(environment.SlotOwnerToken);
-        for (var offset = 0; offset < BuildConcurrencySlotCount; offset++)
+        var waitTimeout = timeout ?? DefaultSlotBusyPollTimeout;
+        var timeoutAt = DateTimeOffset.UtcNow.Add(waitTimeout);
+        var waitingReported = false;
+        while (true)
         {
-            var permit = (preferredPermit + offset) % BuildConcurrencySlotCount;
-            var candidate = environment with
+            cancellationToken.ThrowIfCancellationRequested();
+            for (var offset = 0; offset < BuildConcurrencySlotCount; offset++)
             {
-                ExecutionLockPath = BuildSlotExecutionLockPath(permit),
-                BuildPermitIndex = permit
-            };
-            var acquisition = TryAcquireLeaseExecutionLock(
-                candidate,
-                timeout,
-                cancellationToken);
-            if (acquisition is not DotnetBuildLeaseAcquisition.SlotsBusy)
-            {
-                return acquisition;
+                var permit = (preferredPermit + offset) % BuildConcurrencySlotCount;
+                var candidate = environment with
+                {
+                    ExecutionLockPath = BuildSlotExecutionLockPath(permit),
+                    BuildPermitIndex = permit
+                };
+                var acquisition = TryAcquireLeaseExecutionLock(
+                    candidate,
+                    TimeSpan.Zero,
+                    cancellationToken);
+                if (acquisition is not DotnetBuildLeaseAcquisition.SlotsBusy)
+                {
+                    return acquisition;
+                }
             }
-        }
 
-        return EmitSlotsBusy(environment.LeaseId, BuildConcurrencySlotCount);
+            if (!waitingReported)
+            {
+                onWait?.Invoke();
+                waitingReported = true;
+            }
+
+            if (DateTimeOffset.UtcNow >= timeoutAt)
+            {
+                return EmitSlotsBusy(environment.LeaseId, BuildConcurrencySlotCount);
+            }
+
+            Thread.Sleep(100);
+        }
     }
 
     private static (int SlotIndex, int? OwnerProcessId, DateTimeOffset LastAcquiredAt) FindLeastRecentlyLeasedStableSlot(

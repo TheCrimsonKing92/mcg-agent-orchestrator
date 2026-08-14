@@ -3574,8 +3574,8 @@ public sealed class ConductorBatchLoopTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "ParallelAcceptance_second_attempt_yields_without_running_while_first_holds_slot")]
-    public void ParallelAcceptanceSecondAttemptYieldsWithoutRunningWhileFirstHoldsSlot()
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_colliding_goals_acquire_distinct_available_permits")]
+    public void ParallelAcceptanceCollidingGoalsAcquireDistinctAvailablePermits()
     {
         using var isolatedRoot = IsolatedDotnetRootScope();
         var (_, goalA) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/HoldA.cs");
@@ -3598,6 +3598,7 @@ public sealed class ConductorBatchLoopTests
         using var releaseFirst = new ManualResetEventSlim(false);
         using var firstHasLease = new ManualResetEventSlim(false);
         using var secondReachedPreSlot = new ManualResetEventSlim(false);
+        using var secondHasLease = new ManualResetEventSlim(false);
         var preSlotRuns = 0;
         var coordinator = ThreadedAcceptanceAttemptCoordinator(
             attemptRoot,
@@ -3615,6 +3616,7 @@ public sealed class ConductorBatchLoopTests
         var candidateB = ConductorParallelAcceptanceCandidate.Create(goalB, 0, ["src/HoldB.cs"], "branch-b", "main");
         var secondRan = false;
         DotnetBuildEnvironment? firstLeaseEnvironment = null;
+        DotnetBuildEnvironment? secondLeaseEnvironment = null;
 
         try
         {
@@ -3639,24 +3641,76 @@ public sealed class ConductorBatchLoopTests
             var second = coordinator.Evaluate(
                 candidateB,
                 ConductorAutonomyPolicy.Conservative,
-                (attemptCandidate, attemptPolicy, _, _) =>
+                (attemptCandidate, attemptPolicy, stableSlotLease, _) =>
                 {
+                    Assert.NotNull(stableSlotLease);
+                    secondLeaseEnvironment = stableSlotLease.Environment;
                     secondRan = true;
+                    secondHasLease.Set();
                     return PassingRun(attemptCandidate, attemptPolicy);
-                });
+                    });
             Assert.True(secondReachedPreSlot.Wait(TimeSpan.FromSeconds(5)));
-            var blocked = WaitForAttemptOutcome(coordinator, candidateB, ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot);
+            Assert.True(secondHasLease.Wait(TimeSpan.FromSeconds(5)));
+            var completed = WaitForAttemptOutcome(coordinator, candidateB, ConductorParallelAcceptanceAttemptOutcome.Passed);
 
             Assert.Equal(ConductorParallelAcceptanceAttemptDecisionKind.Started, second.Kind);
-            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, blocked.Attempt.Outcome);
-            Assert.False(secondRan);
+            Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, completed.Attempt.Outcome);
+            Assert.True(secondRan);
             Assert.Equal(2, Volatile.Read(ref preSlotRuns));
+            Assert.NotEqual(firstLeaseEnvironment.ExecutionLockPath, secondLeaseEnvironment!.ExecutionLockPath);
+            Assert.NotEqual(firstLeaseEnvironment.BuildPermitIndex, secondLeaseEnvironment.BuildPermitIndex);
             releaseFirst.Set();
         }
         finally
         {
             releaseFirst.Set();
             waitForAttempts();
+            TryDeleteDirectory(attemptRoot);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ParallelAcceptance_all_permits_busy_reports_typed_wait_reason")]
+    public void ParallelAcceptanceAllPermitsBusyReportsTypedWaitReason()
+    {
+        using var _ = IsolatedDotnetRootScope();
+        var (_, goal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/AllBusy.cs");
+        var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, ["src/AllBusy.cs"], "branch", "main");
+        var slot0 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var slot1 = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(1);
+        using var lease0 = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+            DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(slot0, TimeSpan.Zero)).Lease;
+        using var lease1 = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+            DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(slot1, TimeSpan.Zero)).Lease;
+        var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+            attemptRoot,
+            runInline: true,
+            buildPermitBusyTimeout: TimeSpan.Zero);
+        var ran = false;
+
+        try
+        {
+            var output = AsyncLocalConsoleRouter.Capture(() =>
+            {
+                var decision = coordinator.Evaluate(
+                    candidate,
+                    ConductorAutonomyPolicy.Conservative,
+                    (attemptCandidate, attemptPolicy, _, _) =>
+                    {
+                        ran = true;
+                        return PassingRun(attemptCandidate, attemptPolicy);
+                    });
+
+                Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, decision.Attempt.Outcome);
+                Assert.Equal(AcceptanceBuildPermitWaitReason.AllPermitsBusy, decision.Attempt.BuildPermitWaitReason);
+            });
+
+            Assert.False(ran);
+            Assert.Contains("waitReason=all-permits-busy", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("waitReason=designated-permit-busy-while-free", output, StringComparison.Ordinal);
+        }
+        finally
+        {
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -3677,9 +3731,15 @@ public sealed class ConductorBatchLoopTests
 
         try
         {
+            var otherLiveEnvironment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(
+                liveEnvironment.BuildPermitIndex == 0 ? 1 : 0);
             using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(liveEnvironment))
+            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(otherLiveEnvironment))
             {
-                var liveCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+                var liveCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                    attemptRoot,
+                    runInline: true,
+                    buildPermitBusyTimeout: TimeSpan.Zero);
                 var liveBlocked = liveCoordinator.Evaluate(
                     liveCandidate,
                     ConductorAutonomyPolicy.Conservative,
@@ -3689,6 +3749,7 @@ public sealed class ConductorBatchLoopTests
                         return PassingRun(attemptCandidate, attemptPolicy);
                     });
                 Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, liveBlocked.Attempt.Outcome);
+                Assert.Equal(AcceptanceBuildPermitWaitReason.AllPermitsBusy, liveBlocked.Attempt.BuildPermitWaitReason);
                 Assert.False(liveRan);
             }
 

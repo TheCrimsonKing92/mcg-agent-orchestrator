@@ -58,6 +58,12 @@ internal enum ConductorParallelAcceptanceAttemptDecisionKind
     TerminalWithoutRun
 }
 
+internal enum AcceptanceBuildPermitWaitReason
+{
+    AllPermitsBusy,
+    DesignatedPermitBusyWhileFree
+}
+
 internal sealed record ConductorParallelAcceptanceAttempt(
     string AttemptId,
     string GoalId,
@@ -92,7 +98,8 @@ internal sealed record ConductorParallelAcceptanceAttempt(
     long? MonotonicTimestampFrequency = null,
     string? ConductEventLogPath = null,
     string? SupersededBy = null,
-    ConductorEvidenceSupersessionCause? SupersessionCause = null)
+    ConductorEvidenceSupersessionCause? SupersessionCause = null,
+    AcceptanceBuildPermitWaitReason? BuildPermitWaitReason = null)
 {
     public string CandidateKey => $"{GoalId}:{BranchHeadSha ?? "unknown-branch"}:{MainHeadSha ?? "unknown-main"}";
 }
@@ -295,6 +302,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
     private readonly Action<ConductorParallelAcceptanceAttempt, string>? _heartbeatWritten;
     private readonly ConductorParallelAcceptanceAttemptCompletionGateForTests? _attemptCompletionGateForTests;
     private readonly Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?> _acquireStableSlotLease;
+    private readonly TimeSpan _buildPermitBusyTimeout;
     private readonly ConductEventLogWriter? _conductEventLogWriter;
 
     internal ConductorParallelAcceptanceAttemptCoordinator(
@@ -311,7 +319,8 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttemptCompletionGateForTests? attemptCompletionGateForTests = null,
         Func<ConductorParallelAcceptanceAttempt, ConductorParallelAcceptanceCandidate, DotnetBuildEnvironmentLease?>? acquireStableSlotLease = null,
         ConductEventLogWriter? conductEventLogWriter = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        TimeSpan? buildPermitBusyTimeout = null)
     {
         if (runInline && attemptCompletionGateForTests is not null)
         {
@@ -334,6 +343,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         _attemptCompletionGateForTests = attemptCompletionGateForTests;
         _acquireStableSlotLease = acquireStableSlotLease ?? AcquireAttemptStableSlotLease;
         _conductEventLogWriter = conductEventLogWriter;
+        _buildPermitBusyTimeout = buildPermitBusyTimeout ?? DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout;
     }
 
     internal ConductorParallelAcceptanceAttemptDecision Evaluate(
@@ -1028,9 +1038,15 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(
             candidate.Goal.Id,
             $"{purpose}-{attempt.AttemptId}");
-        var acquisition = DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(
             environment,
-            DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout);
+            _buildPermitBusyTimeout,
+            onWait: () => EmitAttemptLeaseReceipt(
+                "wait",
+                attempt,
+                candidate,
+                holderPid: null,
+                waitReason: AcceptanceBuildPermitWaitReason.AllPermitsBusy));
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
         {
             var permitName = PermitName(acquired.Lease.Environment);
@@ -1041,9 +1057,14 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
         if (acquisition is DotnetBuildLeaseAcquisition.SlotsBusy busy)
         {
-            var holderPid = busy.BusySlots.FirstOrDefault(slot =>
-                slot.SlotIndex == environment.BuildPermitIndex)?.OwnerProcessId;
-            EmitAttemptLeaseReceipt("yield", attempt, candidate, holderPid, PermitName(environment));
+            var busyPermit = busy.BusySlots.OrderBy(slot => slot.SlotIndex).FirstOrDefault();
+            EmitAttemptLeaseReceipt(
+                "yield",
+                attempt,
+                candidate,
+                busyPermit?.OwnerProcessId,
+                busyPermit is null ? PermitName(environment) : $"build-{busyPermit.SlotIndex}",
+                AcceptanceBuildPermitWaitReason.AllPermitsBusy);
             throw new DotnetBuildSlotsBusyException(busy);
         }
 
@@ -1101,13 +1122,15 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceAttempt attempt,
         ConductorParallelAcceptanceCandidate candidate,
         int? holderPid,
-        string? permitName = null)
+        string? permitName = null,
+        AcceptanceBuildPermitWaitReason? waitReason = null)
     {
         var pid = holderPid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
         var slot = permitName ?? $"acceptance-{candidate.SlotIndex}";
-        var line = $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} permit={slot} holderPid={pid}";
+        var waitReasonField = waitReason is null ? string.Empty : $" waitReason={WaitReasonName(waitReason.Value)}";
+        var line = $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} permit={slot} holderPid={pid}{waitReasonField}";
         Console.WriteLine(line);
-        PersistLeaseReceipt(attempt, line);
+        PersistLeaseReceipt(attempt, line, waitReason);
     }
 
     private static string PermitName(DotnetBuildEnvironment environment) =>
@@ -1115,7 +1138,18 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             ? $"build-{permitIndex}"
             : Path.GetFileNameWithoutExtension(environment.ExecutionLockPath);
 
-    private void PersistLeaseReceipt(ConductorParallelAcceptanceAttempt attempt, string line)
+    private static string WaitReasonName(AcceptanceBuildPermitWaitReason waitReason) =>
+        waitReason switch
+        {
+            AcceptanceBuildPermitWaitReason.AllPermitsBusy => "all-permits-busy",
+            AcceptanceBuildPermitWaitReason.DesignatedPermitBusyWhileFree => "designated-permit-busy-while-free",
+            _ => throw new ArgumentOutOfRangeException(nameof(waitReason), waitReason, "Unknown acceptance build permit wait reason.")
+        };
+
+    private void PersistLeaseReceipt(
+        ConductorParallelAcceptanceAttempt attempt,
+        string line,
+        AcceptanceBuildPermitWaitReason? waitReason)
     {
         lock (MetadataWriteGate)
         {
@@ -1135,6 +1169,7 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             WriteAttemptFile(current with
             {
                 LeaseReceipts = receipts,
+                BuildPermitWaitReason = waitReason ?? current.BuildPermitWaitReason,
                 LastHeartbeatAt = _utcNow()
             });
         }
