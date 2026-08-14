@@ -778,8 +778,9 @@ internal static partial class PlannerOutputContract
             "external and edge contracts" =>
                 HasMinimumLexicalDiversity(body),
             "integration seams" =>
-                HasMinimumLexicalDiversity(body) ||
-                HasSubstantivelyOrderedNumberedList(body),
+                !IntegrationPlaceholderMarker().IsMatch(body) &&
+                (HasMinimumLexicalDiversity(body) ||
+                 HasSubstantivelyOrderedNumberedList(body)),
             "verification commands and classes" =>
                 body.Contains('`') &&
                 (body.Contains("TEST-VERIFIABLE", StringComparison.OrdinalIgnoreCase) ||
@@ -892,7 +893,7 @@ internal static partial class PlannerOutputContract
             "external and edge contracts" =>
                 $"must contain at least {MinimumDistinctSectionWords} distinct words in its section body",
             "integration seams" =>
-                $"must contain at least {MinimumDistinctSectionWords} distinct words of prose, or a sequential numbered list with at least two non-placeholder items, in its section body",
+                $"must contain no TBD, TODO, or placeholder markers and either at least {MinimumDistinctSectionWords} distinct words of prose, or a sequential numbered list with at least two non-placeholder items, in its section body",
             "verification commands and classes" =>
                 "must include a backticked verification command or class and identify its verification class in its section body",
             "risks and stop conditions" =>

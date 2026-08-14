@@ -632,6 +632,26 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
     }
 
     [Xunit.Fact]
+    public void PlannerContract_LongRejectedSection_DiagnosticEllipsizesExcerpt()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var longBody = string.Join(' ', Enumerable.Repeat("uncited implementation detail", 20)) +
+            " TRAILING-SENTINEL";
+        var plan = PlannerContractPlanFixture().Replace(
+            "Inspect repository evidence `seed.txt`, `PlannerOutputContract.Resolve`, and `WorkerArtifactWriter.BuildPriorTaskEvidence`; these backticked citations identify the concrete implementation seams without guessing a nonexistent target file.",
+            longBody,
+            StringComparison.Ordinal);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("inspected section-body excerpt:", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("…", result.Diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("TRAILING-SENTINEL", result.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public void PlannerContract_NaturalSectionsWithoutSemanticMarkers_Pass()
     {
         var workingDirectory = CreateTempDirectory();
@@ -646,6 +666,28 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
 
         Assert.True(result.Succeeded, result.Diagnostic);
         Assert.Contains("codex-egress-proxy", result.Plan, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void PlannerContract_RewrittenExternalContractWithoutSemanticMarkers_Passes()
+    {
+        var workingDirectory = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(workingDirectory, "seed.txt"), "seed");
+        var plan = PlannerPlanWithoutSemanticMarkers().Replace(
+            "- `codex-egress-proxy` and `firewall-setup` become unrecognized commands; this is intentional.\n" +
+                "- No surviving command output, exit behavior, dispatch path, or persistent-state behavior may change.",
+            "Invoking `firewall-setup` or `codex-egress-proxy` becomes an unrecognized command; this is explicitly exempt from zero-behavior-change. " +
+                "No substitute output is added. No firewall rule is created, removed, or modified.",
+            StringComparison.Ordinal);
+
+        var result = PlannerOutputContract.Resolve(
+            plan,
+            string.Empty,
+            workingDirectory,
+            acceptanceCriteria: ["Implement the behavior."]);
+
+        Assert.True(result.Succeeded, result.Diagnostic);
+        Assert.Contains("No firewall rule is created", result.Plan, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -1117,11 +1159,10 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         Assert.Contains("complete Durable Planner Plan", prompt, StringComparison.Ordinal);
         Assert.Null(developer.LastProcess);
 
-        // The former acceptance-mapping tamper encoded the body-keyword defect. Keep this
-        // durable-receipt revalidation check on a section marker that remains in force.
+        // Keep durable-receipt revalidation pinned to the measurable section-substance rule.
         var tamperedOutput = File.ReadAllText(stdoutPath).Replace(
             "The premise is valid because the named source seams were inspected in the fixture repository and the task can be completed without inventing missing dependencies or external behavior.",
-            "The two launcher scripts already export the four requested names, and the source evidence establishes the concrete implementation seams without inventing dependencies.",
+            "TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD",
             StringComparison.Ordinal);
         File.WriteAllText(stdoutPath, tamperedOutput);
         new WorkerArtifactWriter().Write(goal, developer, worktree);
