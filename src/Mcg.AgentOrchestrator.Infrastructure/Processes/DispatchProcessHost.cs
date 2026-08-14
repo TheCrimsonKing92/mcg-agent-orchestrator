@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -70,16 +69,6 @@ public static class DispatchProcessHost
         string? ProviderSessionId = null,
         string? WorktreeHeadSha = null,
         string? DirtyStateHash = null,
-        // Codex egress proxy (default OFF). When enabled and Provider is Codex, the dispatch host starts a
-        // per-dispatch, in-process loopback CONNECT proxy and points the worker's HTTPS_PROXY at it to bound
-        // the codex mid-session API hang (reqwest sets no request/read timeout). The endpoint stays in this
-        // process and is set only on the child's ProcessStartInfo -- no ambient env var carries it, so the
-        // control path can't drift across test suites. Enforce=false runs Observe mode (measures idle gaps,
-        // never cuts); timeouts are in milliseconds.
-        bool CodexEgressProxyEnabled = false,
-        bool CodexEgressProxyEnforce = false,
-        int CodexEgressProxyIdleTimeoutMs = 120_000,
-        int CodexEgressProxyConnectTimeoutMs = 15_000,
         string Kind = WorkerDispatchKind,
         string? PrepGoalId = null,
         string? PrepTaskId = null,
@@ -357,79 +346,6 @@ public static class DispatchProcessHost
                     stderrPath,
                     $"Worker sandbox diagnostic: failed to provision SSL_CERT_FILE bundle: {ex.Message}");
             }
-        }
-    }
-
-    /// <summary>
-    /// Starts a per-dispatch loopback CONNECT proxy for a Codex worker and points its HTTPS_PROXY at the
-    /// ephemeral endpoint, so a black-holed codex API request is dropped and retried instead of hanging.
-    /// Returns null (and leaves the env untouched) when disabled, non-Codex, or if the proxy cannot bind --
-    /// in which case the worker falls back to direct egress and the dispatch reap still bounds a hang.
-    /// The endpoint is passed only on <paramref name="startInfo"/> (the child's own environment); nothing
-    /// ambient carries it. Caller owns disposal.
-    /// </summary>
-    internal static CodexEgressProxy? StartCodexEgressProxyIfEnabled(DispatchRunParameters parameters, ProcessStartInfo startInfo)
-    {
-        if (!parameters.CodexEgressProxyEnabled || parameters.Provider != WorkerSandboxProvider.Codex)
-        {
-            return null;
-        }
-
-        var idle = TimeSpan.FromMilliseconds(Math.Max(1_000, parameters.CodexEgressProxyIdleTimeoutMs));
-        var connect = TimeSpan.FromMilliseconds(Math.Max(1_000, parameters.CodexEgressProxyConnectTimeoutMs));
-        var mode = parameters.CodexEgressProxyEnforce ? CodexEgressProxyMode.Enforce : CodexEgressProxyMode.Observe;
-        var logPath = parameters.StdoutPath + ".egress.jsonl";
-        var logLock = new object();
-
-        var proxy = new CodexEgressProxy(
-            mode, idle, connect,
-            onTunnelClosed: record => AppendEgressTunnelRecord(logPath, logLock, record),
-            onDiagnostic: message => AppendDispatchStderrDiagnostic(parameters.StderrPath, $"codex-egress-proxy: {message}"));
-        try
-        {
-            var endpoint = proxy.Start();
-            var proxyUrl = $"http://127.0.0.1:{endpoint.Port}";
-            startInfo.Environment["HTTPS_PROXY"] = proxyUrl;
-            startInfo.Environment["HTTP_PROXY"] = proxyUrl;
-            startInfo.Environment["ALL_PROXY"] = proxyUrl;
-            // Nothing may exempt the API endpoints from the proxy, or the hang path would bypass it.
-            startInfo.Environment.Remove("NO_PROXY");
-            startInfo.Environment.Remove("no_proxy");
-            AppendDispatchStderrDiagnostic(
-                parameters.StderrPath,
-                $"codex-egress-proxy: {mode} mode on {proxyUrl} (idle {idle.TotalSeconds:0}s, connect {connect.TotalSeconds:0}s)");
-            return proxy;
-        }
-        catch (Exception ex) when (ex is SocketException or IOException or ObjectDisposedException)
-        {
-            AppendDispatchStderrDiagnostic(
-                parameters.StderrPath, $"codex-egress-proxy: failed to start, using direct egress: {ex.Message}");
-            proxy.Dispose();
-            return null;
-        }
-    }
-
-    private static void AppendEgressTunnelRecord(string logPath, object logLock, CodexEgressTunnelRecord record)
-    {
-        try
-        {
-            var line = JsonSerializer.Serialize(new
-            {
-                target = record.Target,
-                durationMs = record.DurationMs,
-                bytesUpstream = record.BytesUpstream,
-                bytesDownstream = record.BytesDownstream,
-                maxIdleMs = record.MaxIdleMs,
-                close = record.CloseReason.ToString(),
-            });
-            lock (logLock)
-            {
-                File.AppendAllText(logPath, line + Environment.NewLine);
-            }
-        }
-        catch
-        {
-            // Observe-phase logging is best-effort; never let it disturb the dispatch.
         }
     }
 
@@ -1014,7 +930,6 @@ public static void DropToLow() {
         var prepExitWritten = false;
         Process? worker = null;
         OwnedProcessGroup? workerGroup = null;
-        CodexEgressProxy? egressProxy = null;
         Process? selectedChild = null;
         var selectedChildLock = new object();
         string? hostDiagnosticWriteFailure = null;
@@ -1326,9 +1241,6 @@ public static void DropToLow() {
             WriteHeartbeat("starting");
             RequireStartGate();
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
-            // Route this Codex worker's egress through a per-dispatch loopback proxy (when enabled) so a
-            // black-holed API request is dropped and retried instead of hanging. Endpoint stays in-process.
-            egressProxy = StartCodexEgressProxyIfEnabled(parameters, startInfo);
             worker = ProcessTreeGuiSuppression.Start(startInfo);
             workerGroup = OwnedProcessGroup.Attach(worker);
 
@@ -1411,7 +1323,6 @@ public static void DropToLow() {
             WriteHeartbeat("exited");
             WriteSelectedChildExitRecord();
             WorkerProcessJobs.ReadAccountingAndDispose(workerGroup, kill: false, captureAccounting: false, out _);
-            egressProxy?.Dispose();
             // The exit file is the completion signal consumed by BackgroundDispatchRunner. Publish it
             // only after every child/diagnostic artifact the completion path reads is durable.
             TryWriteDispatchExitArtifact(parameters.ExitCodePath, exitCode);
