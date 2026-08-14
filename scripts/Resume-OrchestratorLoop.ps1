@@ -68,7 +68,9 @@ function Get-ConductLoopProcesses {
         $powerShellPath = "powershell.exe"
     }
 
-    $output = @(& $powerShellPath -NoProfile -ExecutionPolicy Bypass -File $helperPath -ConductLoop -Newest 10 2>&1)
+    # A wedged incumbent is normally the oldest match, so a newest-first cap can
+    # discard the exact lock owner that recovery must validate.
+    $output = @(& $powerShellPath -NoProfile -ExecutionPolicy Bypass -File $helperPath -ConductLoop -Newest ([int]::MaxValue) 2>&1)
     $helperExitCode = $LASTEXITCODE
     if ($helperExitCode -is [int] -and $helperExitCode -ne 0) {
         throw "Repo process helper failed with exit code $helperExitCode`: $($output -join ' ')"
@@ -207,8 +209,7 @@ function Get-ConductLiveness {
 function Write-ResumeReceipt {
     param(
         [string]$RepositoryRoot,
-        [string]$Message,
-        [switch]$Required
+        [string]$Message
     )
 
     [Console]::Out.WriteLine($Message)
@@ -220,9 +221,7 @@ function Write-ResumeReceipt {
         Add-Content -LiteralPath (Join-Path $logDirectory "auto-resume.log") -Value "$timestamp $Message"
     }
     catch {
-        if ($Required) {
-            throw "Auto-resume recovery receipt could not be persisted: $($_.Exception.Message)"
-        }
+        throw "Auto-resume recovery receipt could not be persisted: $($_.Exception.Message)"
     }
 }
 
@@ -250,7 +249,7 @@ function Stop-ConfirmedConductProcess {
 
     $ageSeconds = [Math]::Floor($Liveness.Age.TotalSeconds)
     $thresholdSeconds = [Math]::Floor($Liveness.Threshold.TotalSeconds)
-    Write-ResumeReceipt -RepositoryRoot $RepositoryRoot -Required -Message (
+    Write-ResumeReceipt -RepositoryRoot $RepositoryRoot -Message (
         "RESUME_RECOVERY incumbentPid=$($LockOwner.Id) action=terminate eventAgeSeconds=$ageSeconds thresholdSeconds=$thresholdSeconds")
     try {
         Stop-Process -Id $LockOwner.Id -Force -ErrorAction Stop
@@ -259,7 +258,7 @@ function Stop-ConfirmedConductProcess {
         }
     }
     catch {
-        Write-ResumeReceipt -RepositoryRoot $RepositoryRoot -Required -Message (
+        Write-ResumeReceipt -RepositoryRoot $RepositoryRoot -Message (
             "RESUME_RECOVERY_FAILED incumbentPid=$($LockOwner.Id) reason=termination-failed detail=$($_.Exception.Message)")
         throw "Failed to terminate stale conduct lock owner PID $($LockOwner.Id): $($_.Exception.Message)"
     }
@@ -267,7 +266,7 @@ function Stop-ConfirmedConductProcess {
         $target.Dispose()
     }
 
-    Write-ResumeReceipt -RepositoryRoot $RepositoryRoot -Required -Message (
+    Write-ResumeReceipt -RepositoryRoot $RepositoryRoot -Message (
         "RESUME_RECOVERY_CONFIRMED incumbentPid=$($LockOwner.Id) state=exited")
 }
 
