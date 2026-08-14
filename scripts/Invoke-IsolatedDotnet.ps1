@@ -1156,9 +1156,30 @@ function Invoke-FocusedChildProcess {
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $childProcessId = $null
+    $childStartedAt = $null
+    $childExecutable = $FileName
+    $identityStatus = "unavailable"
+    $identityError = $null
+    $terminationRequested = $false
+    $terminationSucceeded = $null
+    $terminationError = $null
+    $processStateAfter = "not-started"
     try {
         if (-not $process.Start()) {
             throw "Could not start '$FileName'."
+        }
+        $childProcessId = $process.Id
+        $processStateAfter = "running"
+        try {
+            $childStartedAt = $process.StartTime.ToUniversalTime().ToString('o')
+            $childExecutable = $process.MainModule.FileName
+            $identityStatus = "confirmed"
+        }
+        catch {
+            # A pid without start time and image path is diagnostic context, not a trusted identity.
+            $identityStatus = "pid-only"
+            $identityError = "{0}: {1}" -f $_.Exception.GetType().FullName, $_.Exception.Message
         }
         if (-not [string]::IsNullOrWhiteSpace($HeartbeatPath)) {
             try {
@@ -1215,13 +1236,17 @@ function Invoke-FocusedChildProcess {
             }
         }
         if (-not $completed) {
+            $terminationRequested = $true
             try {
                 $process.Kill($true)
             }
             catch {
+                $terminationError = $_.Exception.Message
             }
             $process.WaitForExit()
+            $terminationSucceeded = $process.HasExited
         }
+        $processStateAfter = if ($process.HasExited) { "exited" } else { "running" }
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         return [pscustomobject]@{
@@ -1231,11 +1256,39 @@ function Invoke-FocusedChildProcess {
             ElapsedSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
             Stdout = $stdout
             Stderr = $stderr
+            ChildProcessId = $childProcessId
+            ChildStartedAt = $childStartedAt
+            ChildExecutable = $childExecutable
+            IdentityStatus = $identityStatus
+            IdentityError = $identityError
+            TerminationRequested = $terminationRequested
+            TerminationSucceeded = $terminationSucceeded
+            TerminationError = $terminationError
+            ProcessStateAfter = $processStateAfter
         }
     }
     finally {
         $stopwatch.Stop()
         $process.Dispose()
+    }
+}
+
+function Set-FocusedChildProcessReceipt {
+    param(
+        [System.Collections.IDictionary]$Receipt,
+        [object]$Result
+    )
+
+    $Receipt.childProcess = [ordered]@{
+        processId = $Result.ChildProcessId
+        startedAt = $Result.ChildStartedAt
+        executable = $Result.ChildExecutable
+        identityStatus = $Result.IdentityStatus
+        identityError = $Result.IdentityError
+        terminationRequested = $Result.TerminationRequested
+        terminationSucceeded = $Result.TerminationSucceeded
+        terminationError = $Result.TerminationError
+        stateAfter = $Result.ProcessStateAfter
     }
 }
 
@@ -1360,6 +1413,7 @@ function Invoke-FocusedTestMode {
         elapsedSeconds = 0
         budgetSeconds = $FocusedBudgetSeconds
         slotId = $null
+        leaseState = "not-acquired"
         leaseReleased = $false
         worktreeRoot = $null
         commit = $null
@@ -1376,6 +1430,17 @@ function Invoke-FocusedTestMode {
         testArguments = @()
         buildPerformed = $false
         buildReused = $false
+        childProcess = [ordered]@{
+            processId = $null
+            startedAt = $null
+            executable = $null
+            identityStatus = "not-started"
+            identityError = $null
+            terminationRequested = $false
+            terminationSucceeded = $null
+            terminationError = $null
+            stateAfter = "not-started"
+        }
     }
     try {
         $authorization = Get-FocusedWorkerAuthorization
@@ -1409,11 +1474,6 @@ function Invoke-FocusedTestMode {
             return $receipt
         }
 
-        $preferredSlotName = Get-BuildSlotName -Value $safeGoalPrefix -SlotCount (Get-BuildConcurrencySlotCount)
-        $preferredSlot = [int]$preferredSlotName.Substring("build-".Length)
-        $leaseDeadline = $started.AddSeconds([Math]::Min($FocusedLeaseWaitSeconds, $FocusedBudgetSeconds))
-        $slotLease = Enter-FocusedBuildSlot -IsolatedRoot $isolatedRoot -SlotCount (Get-BuildConcurrencySlotCount) -PreferredSlot $preferredSlot -Deadline $leaseDeadline -GoalId $authorization.GoalId
-
         if (-not [string]::IsNullOrWhiteSpace($FocusedReceiptPath)) {
             $candidateReceiptPath = [System.IO.Path]::GetFullPath($FocusedReceiptPath)
             $repositoryPrefix = $worktree.Root.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
@@ -1424,12 +1484,33 @@ function Invoke-FocusedTestMode {
         }
         $receipt.receiptPath = $receiptPath
 
+        $preferredSlotName = Get-BuildSlotName -Value $safeGoalPrefix -SlotCount (Get-BuildConcurrencySlotCount)
+        $preferredSlot = [int]$preferredSlotName.Substring("build-".Length)
+        # LeaseWaitSeconds describes the slot-acquisition phase, not all setup performed before it.
+        # Keep that phase bounded by the unchanged overall process deadline so slow repository-state
+        # inspection cannot turn an uncontended slot into a spurious no-slot result.
+        $leaseDeadline = [DateTime]::UtcNow.AddSeconds($FocusedLeaseWaitSeconds)
+        if ($leaseDeadline -gt $processDeadline) {
+            $leaseDeadline = $processDeadline
+        }
+        if ([DateTime]::UtcNow -ge $processDeadline) {
+            $receipt.exitCode = 2
+            $receipt.reason = "budget-exceeded"
+            return $receipt
+        }
+        $slotLease = Enter-FocusedBuildSlot -IsolatedRoot $isolatedRoot -SlotCount (Get-BuildConcurrencySlotCount) -PreferredSlot $preferredSlot -Deadline $leaseDeadline -GoalId $authorization.GoalId
+
         if ($null -eq $slotLease) {
+            # Enter-FocusedBuildSlot returning no lease is positive evidence for the
+            # acquisition failure. Do not relabel it from the ambient clock after
+            # the wait; budget-exceeded is reserved for the explicit deadline gates
+            # and timed-out child processes below.
             $receipt.exitCode = 3
             $receipt.reason = "no-slot"
             return $receipt
         }
         $receipt.slotId = $slotLease.Id
+        $receipt.leaseState = "held"
 
         $ownerToken = "focused-$safeGoalPrefix-$($slotLease.Id)"
         $artifactsPath = Join-Path $runRoot "focused-artifacts\$($slotLease.Id)"
@@ -1462,6 +1543,7 @@ function Invoke-FocusedTestMode {
                 return $receipt
             }
             $build = Invoke-FocusedChildProcess -FileName "dotnet" -ProcessArguments $buildArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
+            Set-FocusedChildProcessReceipt -Receipt $receipt -Result $build
             $buildLogPath = Join-Path $outputDirectory "build.log"
             Write-FocusedLog -Path $buildLogPath -Stdout $build.Stdout -Stderr $build.Stderr
             $receipt.outputLogPath = $buildLogPath
@@ -1516,6 +1598,7 @@ function Invoke-FocusedTestMode {
             return $receipt
         }
         $testRun = Invoke-FocusedChildProcess -FileName $reuse.ExecutablePath -ProcessArguments $testArguments -Deadline $processDeadline -HeartbeatPath $slotLease.HeartbeatPath -AcceptancePriorityPath "$($slotLease.Path).acceptance-priority.lock"
+        Set-FocusedChildProcessReceipt -Receipt $receipt -Result $testRun
         $testLogPath = Join-Path $outputDirectory "test.log"
         Write-FocusedLog -Path $testLogPath -Stdout $testRun.Stdout -Stderr $testRun.Stderr
         $receipt.outputLogPath = $testLogPath
@@ -1611,9 +1694,11 @@ function Invoke-FocusedTestMode {
                 try {
                     $slotLease.Stream.Dispose()
                     $receipt.leaseReleased = $true
+                    $receipt.leaseState = "released"
                 }
                 catch {
                     $receipt.leaseReleaseError = $_.Exception.Message
+                    $receipt.leaseState = "release-failed"
                 }
             }
             catch {

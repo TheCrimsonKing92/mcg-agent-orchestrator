@@ -2753,6 +2753,11 @@ public sealed class DotnetBuildEnvironmentManagerTests
         Assert.Contains("lastProgressAt", source, StringComparison.Ordinal);
         Assert.Contains("state = \"running\"", source, StringComparison.Ordinal);
         Assert.Contains("$runDeadline.AddSeconds(-$cleanupMarginSeconds)", mode, StringComparison.Ordinal);
+        Assert.Contains("$leaseDeadline = [DateTime]::UtcNow.AddSeconds($FocusedLeaseWaitSeconds)", mode, StringComparison.Ordinal);
+        Assert.Contains("if ($leaseDeadline -gt $processDeadline)", mode, StringComparison.Ordinal);
+        Assert.Contains("$leaseDeadline = $processDeadline", mode, StringComparison.Ordinal);
+        Assert.Contains("if ([DateTime]::UtcNow -ge $processDeadline)", mode, StringComparison.Ordinal);
+        Assert.Contains("$receipt.reason = \"budget-exceeded\"", mode, StringComparison.Ordinal);
         Assert.Contains("-HeartbeatPath $slotLease.HeartbeatPath", mode, StringComparison.Ordinal);
         Assert.Contains("$path.acceptance-priority.lock", source, StringComparison.Ordinal);
         Assert.Contains("$acceptancePriorityStream.Lock(0, 1)", source, StringComparison.Ordinal);
@@ -3081,14 +3086,34 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.True(process.WaitForExit(30000), "Budget fixture did not exit within 30 seconds.");
             var result = (ExitCode: process.ExitCode, Stdout: stdout, Stderr: stderr);
 
+            var diagnostics = BuildFocusedRunnerFailureDiagnostics(result, receiptPath, isolatedRoot);
+            if (result.ExitCode != 2)
+            {
+                Assert.Fail(diagnostics);
+            }
             Assert.Equal(2, result.ExitCode);
+            Assert.True(File.Exists(receiptPath), diagnostics);
             using var receipt = JsonDocument.Parse(File.ReadAllText(receiptPath));
             Assert.Equal("BLOCKED", receipt.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal(2, receipt.RootElement.GetProperty("exitCode").GetInt32());
             Assert.Equal("budget-exceeded", receipt.RootElement.GetProperty("reason").GetString());
             Assert.True(receipt.RootElement.GetProperty("leaseReleased").GetBoolean());
+            Assert.Equal("released", receipt.RootElement.GetProperty("leaseState").GetString());
+            Assert.True(receipt.RootElement.GetProperty("worktreeStateAfter").GetProperty("unchanged").GetBoolean());
+            var childProcess = receipt.RootElement.GetProperty("childProcess");
+            Assert.True(childProcess.GetProperty("processId").GetInt32() > 0);
+            var identityStatus = childProcess.GetProperty("identityStatus").GetString();
+            Assert.Equal("confirmed", identityStatus);
+            Assert.False(string.IsNullOrWhiteSpace(childProcess.GetProperty("startedAt").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(childProcess.GetProperty("executable").GetString()));
+            Assert.True(childProcess.GetProperty("terminationRequested").GetBoolean());
+            Assert.True(childProcess.GetProperty("terminationSucceeded").GetBoolean());
+            Assert.Equal("exited", childProcess.GetProperty("stateAfter").GetString());
+            Assert.Equal("exited", GetFocusedChildIdentityState(childProcess));
+            var slotPath = Path.Combine(isolatedRoot, "build-slots", receipt.RootElement.GetProperty("slotId").GetString() + ".lock");
+            Assert.False(IsByteRangeLocked(slotPath));
             var outputLogPath = receipt.RootElement.GetProperty("outputLogPath").GetString();
             Assert.False(string.IsNullOrWhiteSpace(outputLogPath));
-            Assert.True(File.Exists(startedPath));
             Assert.Equal(JsonValueKind.Null, receipt.RootElement.GetProperty("testProcessExitCode").ValueKind);
             Assert.False(File.Exists(logPath));
             Assert.True(string.IsNullOrWhiteSpace(RunCommand("git", workDirectory, "status", "--porcelain")));
@@ -3112,6 +3137,317 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 // Best effort when a killed fixture briefly retains an image handle.
             }
         }
+    }
+
+    [Xunit.Fact]
+    public void FocusedChildProcess_AcceptancePriority_KillsDescendantTree()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = CreateTempDirectory();
+        var harnessPath = Path.Combine(root, "focused-child-harness.ps1");
+        var fixturePath = Path.Combine(root, "focused-child-fixture.ps1");
+        var resultPath = Path.Combine(root, "focused-child-result.json");
+        var descendantIdentityPath = Path.Combine(root, "descendant.json");
+        var releasePath = Path.Combine(root, "never-release");
+        var priorityPath = Path.Combine(root, "acceptance-priority.lock");
+        Process? harness = null;
+        try
+        {
+            var source = ReadIsolatedDotnetScript();
+            var functionStart = source.IndexOf("function Invoke-FocusedChildProcess", StringComparison.Ordinal);
+            var functionEnd = source.IndexOf("function Set-FocusedChildProcessReceipt", functionStart, StringComparison.Ordinal);
+            Assert.True(functionStart >= 0 && functionEnd > functionStart);
+            var focusedChildFunction = source[functionStart..functionEnd];
+
+            File.WriteAllText(
+                fixturePath,
+                """
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = "Stop"
+                $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+                $startInfo.FileName = $env:FOCUSED_TREE_SHELL
+                $startInfo.UseShellExecute = $false
+                $startInfo.CreateNoWindow = $true
+                $startInfo.RedirectStandardOutput = $true
+                $startInfo.RedirectStandardError = $true
+                foreach ($argument in @(
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    'while (-not (Test-Path -LiteralPath $env:FOCUSED_TREE_RELEASE)) { Start-Sleep -Milliseconds 100 }')) {
+                    [void]$startInfo.ArgumentList.Add($argument)
+                }
+                $descendant = [System.Diagnostics.Process]::Start($startInfo)
+                if ($null -eq $descendant) {
+                    throw "Failed to start the focused child descendant fixture."
+                }
+                $descendantExecutable = $descendant.MainModule.FileName
+                [ordered]@{
+                    processId = $descendant.Id
+                    parentProcessId = $PID
+                    startedAt = $descendant.StartTime.ToUniversalTime().ToString('o')
+                    executable = $descendantExecutable
+                    identityStatus = "confirmed"
+                } | ConvertTo-Json | Set-Content -LiteralPath $env:FOCUSED_TREE_IDENTITY
+                while (-not (Test-Path -LiteralPath $env:FOCUSED_TREE_RELEASE)) {
+                    Start-Sleep -Milliseconds 100
+                }
+                """);
+            File.WriteAllText(
+                harnessPath,
+                $$"""
+                Set-StrictMode -Version Latest
+                $ErrorActionPreference = "Stop"
+                $script:RepositoryRoot = $env:FOCUSED_TREE_ROOT
+                {{focusedChildFunction}}
+                $result = Invoke-FocusedChildProcess `
+                    -FileName $env:FOCUSED_TREE_SHELL `
+                    -ProcessArguments @("-NoProfile", "-NonInteractive", "-File", $env:FOCUSED_TREE_FIXTURE) `
+                    -Deadline ([DateTime]::UtcNow.AddSeconds(30)) `
+                    -HeartbeatPath "" `
+                    -AcceptancePriorityPath $env:FOCUSED_TREE_PRIORITY
+                $result | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $env:FOCUSED_TREE_RESULT
+                """);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = WorkerShell.Executable,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            foreach (var argument in new[]
+            {
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                harnessPath
+            })
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
+            startInfo.Environment["FOCUSED_TREE_ROOT"] = root;
+            startInfo.Environment["FOCUSED_TREE_SHELL"] = WorkerShell.Executable;
+            startInfo.Environment["FOCUSED_TREE_FIXTURE"] = fixturePath;
+            startInfo.Environment["FOCUSED_TREE_IDENTITY"] = descendantIdentityPath;
+            startInfo.Environment["FOCUSED_TREE_RELEASE"] = releasePath;
+            startInfo.Environment["FOCUSED_TREE_PRIORITY"] = priorityPath;
+            startInfo.Environment["FOCUSED_TREE_RESULT"] = resultPath;
+
+            harness = Process.Start(startInfo) ??
+                throw new InvalidOperationException("Failed to start the focused child-process harness.");
+            JsonDocument? publishedDescendantIdentity = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => TryReadJsonDocument(descendantIdentityPath, out publishedDescendantIdentity),
+                    TimeSpan.FromSeconds(15)),
+                "The focused child fixture did not publish a readable descendant identity.");
+            using var descendantIdentity = publishedDescendantIdentity!;
+            Assert.Equal("confirmed", descendantIdentity.RootElement.GetProperty("identityStatus").GetString());
+            Assert.Equal("running-same-identity", GetFocusedChildIdentityState(descendantIdentity.RootElement));
+            using var descendantProcess = Process.GetProcessById(
+                descendantIdentity.RootElement.GetProperty("processId").GetInt32());
+            using (var priority = File.Open(priorityPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite))
+            {
+                var priorityLocked = false;
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            try
+                            {
+                                priority.Lock(0, 1);
+                                priorityLocked = true;
+                                return true;
+                            }
+                            catch (IOException)
+                            {
+                                return false;
+                            }
+                        },
+                        TimeSpan.FromSeconds(5)),
+                    "The acceptance-priority probe lock was not acquired.");
+                try
+                {
+                    Assert.True(harness.WaitForExit(10000), "The focused child harness did not honor acceptance priority.");
+                }
+                finally
+                {
+                    if (priorityLocked)
+                    {
+                        priority.Unlock(0, 1);
+                    }
+                }
+            }
+
+            var stdout = harness.StandardOutput.ReadToEnd();
+            var stderr = harness.StandardError.ReadToEnd();
+            var diagnostics = $"harnessExitCode={harness.ExitCode}{Environment.NewLine}stdout={stdout}{Environment.NewLine}stderr={stderr}";
+            if (harness.ExitCode != 0)
+            {
+                Assert.Fail(diagnostics);
+            }
+            Assert.Equal(0, harness.ExitCode);
+            Assert.True(File.Exists(resultPath), diagnostics);
+            using var result = JsonDocument.Parse(File.ReadAllText(resultPath));
+            Assert.False(result.RootElement.GetProperty("TimedOut").GetBoolean());
+            Assert.True(result.RootElement.GetProperty("AcceptancePriorityRequested").GetBoolean());
+            Assert.True(result.RootElement.GetProperty("TerminationRequested").GetBoolean());
+            Assert.True(result.RootElement.GetProperty("TerminationSucceeded").GetBoolean());
+            Assert.Equal("exited", result.RootElement.GetProperty("ProcessStateAfter").GetString());
+
+            Assert.True(descendantProcess.WaitForExit(5000), diagnostics);
+            Assert.Equal(
+                result.RootElement.GetProperty("ChildProcessId").GetInt32(),
+                descendantIdentity.RootElement.GetProperty("parentProcessId").GetInt32());
+            Assert.NotEqual(
+                result.RootElement.GetProperty("ChildProcessId").GetInt32(),
+                descendantIdentity.RootElement.GetProperty("processId").GetInt32());
+            Assert.Equal("exited", GetFocusedChildIdentityState(descendantIdentity.RootElement));
+        }
+        finally
+        {
+            if (harness is not null)
+            {
+                StopProcess(harness);
+                harness.Dispose();
+            }
+            StopFocusedProcessIdentity(descendantIdentityPath);
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch
+            {
+                // Best effort when a killed fixture briefly retains an image handle.
+            }
+        }
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(2, "budget-exceeded", "exit-2-budget-exceeded", "parsed")]
+    [Xunit.InlineData(3, "acceptance-priority", "exit-3-distinct-runner-failure", "parsed")]
+    [Xunit.InlineData(5, "no-tests", "exit-5-harness-setup-or-no-tests", "parsed")]
+    [Xunit.InlineData(5, "missing", "exit-5-harness-setup-or-no-tests", "missing")]
+    [Xunit.InlineData(5, "malformed", "exit-5-harness-setup-or-no-tests", "malformed")]
+    public void FocusedRunner_FailureDiagnostics_ClassifyTypedOutcomes(
+        int exitCode,
+        string receiptReason,
+        string expectedClassification,
+        string expectedReceiptStatus)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var receiptPath = Path.Combine(root, "focused.receipt.json");
+            if (receiptReason == "malformed")
+            {
+                File.WriteAllText(receiptPath, "{");
+            }
+            else if (receiptReason != "missing")
+            {
+                File.WriteAllText(
+                    receiptPath,
+                    JsonSerializer.Serialize(new
+                    {
+                        outcome = "BLOCKED",
+                        exitCode,
+                        reason = receiptReason,
+                        leaseReleased = false,
+                        leaseState = "not-acquired",
+                        slotId = (string?)null,
+                        childProcess = new
+                        {
+                            processId = (int?)null,
+                            startedAt = (string?)null,
+                            executable = (string?)null,
+                            identityStatus = "not-started",
+                            identityError = (string?)null,
+                            terminationRequested = false,
+                            terminationSucceeded = (bool?)null,
+                            terminationError = (string?)null,
+                            stateAfter = "not-started"
+                        }
+                    }));
+            }
+
+            var diagnostics = BuildFocusedRunnerFailureDiagnostics(
+                (exitCode, "outer-stdout", "outer-stderr"),
+                receiptPath,
+                root);
+
+            Assert.Contains($"exitClassification={expectedClassification}", diagnostics, StringComparison.Ordinal);
+            Assert.Contains($"receiptStatus={expectedReceiptStatus}", diagnostics, StringComparison.Ordinal);
+            Assert.Contains("stdout=outer-stdout", diagnostics, StringComparison.Ordinal);
+            Assert.Contains("stderr=outer-stderr", diagnostics, StringComparison.Ordinal);
+            if (expectedReceiptStatus == "parsed")
+            {
+                Assert.Contains($"receiptReason={receiptReason}", diagnostics, StringComparison.Ordinal);
+                Assert.Contains($"receiptExitCode={exitCode}", diagnostics, StringComparison.Ordinal);
+                Assert.Contains("receiptOutcome=BLOCKED", diagnostics, StringComparison.Ordinal);
+                Assert.Contains("leaseState=not-acquired", diagnostics, StringComparison.Ordinal);
+                Assert.Contains("ownedProcessState=not-started", diagnostics, StringComparison.Ordinal);
+                Assert.Contains("liveDescendantInspectionStatus=not-started", diagnostics, StringComparison.Ordinal);
+                Assert.Contains("childIdentityError=<null>", diagnostics, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_LiveDescendantDiagnostics_ReportInspectionFailure()
+    {
+        using var receipt = JsonDocument.Parse("""
+            {
+              "processId": 123,
+              "identityStatus": "confirmed"
+            }
+            """);
+
+        var descendants = TryGetFocusedLiveDescendantProcessIds(
+            receipt.RootElement,
+            out var inspectionStatus,
+            _ => throw new InvalidOperationException("inspection failed"));
+
+        Assert.Empty(descendants);
+        Assert.Equal("inspection-failed:InvalidOperationException", inspectionStatus);
+    }
+
+    [Xunit.Fact]
+    public void FocusedRunner_LiveDescendantDiagnostics_DoNotInspectUnconfirmedPid()
+    {
+        using var receipt = JsonDocument.Parse("""
+            {
+              "processId": 123,
+              "identityStatus": "pid-only",
+              "identityError": "System.ComponentModel.Win32Exception: transient identity read failure"
+            }
+            """);
+        var inspectionAttempted = false;
+
+        var descendants = TryGetFocusedLiveDescendantProcessIds(
+            receipt.RootElement,
+            out var inspectionStatus,
+            _ =>
+            {
+                inspectionAttempted = true;
+                return [];
+            });
+
+        Assert.Empty(descendants);
+        Assert.False(inspectionAttempted);
+        Assert.Equal("identity-unconfirmed:pid-only", inspectionStatus);
+        Assert.Equal("identity-unconfirmed:pid-only", GetFocusedChildIdentityState(receipt.RootElement));
     }
 
     [Xunit.Fact]
@@ -3173,7 +3509,12 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
             Assert.True(result.ExitCode == 3, $"Focused no-slot invocation exited {result.ExitCode}.{Environment.NewLine}{result.Stdout}{Environment.NewLine}{result.Stderr}");
             using var receipt = JsonDocument.Parse(File.ReadAllText(receiptPath));
+            Assert.Equal("BLOCKED", receipt.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal(3, receipt.RootElement.GetProperty("exitCode").GetInt32());
             Assert.Equal("no-slot", receipt.RootElement.GetProperty("reason").GetString());
+            Assert.Equal("not-acquired", receipt.RootElement.GetProperty("leaseState").GetString());
+            Assert.False(receipt.RootElement.GetProperty("leaseReleased").GetBoolean());
+            Assert.Equal("not-started", receipt.RootElement.GetProperty("childProcess").GetProperty("stateAfter").GetString());
             Assert.False(File.Exists(logPath));
         }
         finally
@@ -3401,6 +3742,236 @@ public sealed class DotnetBuildEnvironmentManagerTests
         File.WriteAllText(
             Path.Combine(artifactsPath, ".mcg-focused-build-state.json"),
             JsonSerializer.Serialize(new { fingerprint }));
+    }
+
+    private static string BuildFocusedRunnerFailureDiagnostics(
+        (int ExitCode, string Stdout, string Stderr) result,
+        string receiptPath,
+        string isolatedRoot)
+    {
+        var diagnostics = new StringBuilder();
+        var exitClassification = result.ExitCode switch
+        {
+            2 => "exit-2-budget-exceeded",
+            3 => "exit-3-distinct-runner-failure",
+            5 => "exit-5-harness-setup-or-no-tests",
+            _ => "unexpected-exit"
+        };
+        diagnostics.Append("focusedRunnerExitCode=").Append(result.ExitCode)
+            .Append("; exitClassification=").AppendLine(exitClassification);
+
+        if (!File.Exists(receiptPath))
+        {
+            diagnostics.AppendLine("receiptStatus=missing; receiptOutcome=<unavailable>; receiptReason=<unavailable>; receiptExitCode=<unavailable>");
+            diagnostics.AppendLine("leaseState=unknown; actualLeaseState=unknown; ownedProcessState=unknown");
+        }
+        else
+        {
+            try
+            {
+                using var receipt = JsonDocument.Parse(File.ReadAllText(receiptPath));
+                var root = receipt.RootElement;
+                diagnostics.Append("receiptStatus=parsed; receiptOutcome=").Append(JsonDiagnosticValue(root, "outcome"))
+                    .Append("; receiptReason=").Append(JsonDiagnosticValue(root, "reason"))
+                    .Append("; receiptExitCode=").Append(JsonDiagnosticValue(root, "exitCode"))
+                    .Append("; leaseReleased=").Append(JsonDiagnosticValue(root, "leaseReleased"))
+                    .Append("; leaseState=").AppendLine(JsonDiagnosticValue(root, "leaseState"));
+
+                var slotId = JsonDiagnosticValue(root, "slotId");
+                if (slotId is "<null>" or "<missing>")
+                {
+                    diagnostics.AppendLine("actualLeaseState=not-acquired");
+                }
+                else
+                {
+                    try
+                    {
+                        var slotPath = Path.Combine(isolatedRoot, "build-slots", slotId + ".lock");
+                        diagnostics.Append("actualLeaseState=")
+                            .AppendLine(IsByteRangeLocked(slotPath) ? "locked" : "released");
+                    }
+                    catch (Exception exception)
+                    {
+                        diagnostics.Append("actualLeaseState=inspection-failed:").AppendLine(exception.GetType().Name);
+                    }
+                }
+
+                if (!root.TryGetProperty("childProcess", out var childProcess) ||
+                    childProcess.ValueKind != JsonValueKind.Object)
+                {
+                    diagnostics.AppendLine("childProcessStatus=missing; ownedProcessState=unknown; liveDescendantProcessIds=<unavailable>");
+                }
+                else
+                {
+                    diagnostics.Append("childProcessId=").Append(JsonDiagnosticValue(childProcess, "processId"))
+                        .Append("; childStartedAt=").Append(JsonDiagnosticValue(childProcess, "startedAt"))
+                        .Append("; childExecutable=").Append(JsonDiagnosticValue(childProcess, "executable"))
+                        .Append("; childIdentityStatus=").Append(JsonDiagnosticValue(childProcess, "identityStatus"))
+                        .Append("; childIdentityError=").Append(JsonDiagnosticValue(childProcess, "identityError"))
+                        .Append("; terminationRequested=").Append(JsonDiagnosticValue(childProcess, "terminationRequested"))
+                        .Append("; terminationSucceeded=").Append(JsonDiagnosticValue(childProcess, "terminationSucceeded"))
+                        .Append("; terminationError=").Append(JsonDiagnosticValue(childProcess, "terminationError"))
+                        .Append("; childStateAfter=").AppendLine(JsonDiagnosticValue(childProcess, "stateAfter"));
+
+                    var ownedProcessState = GetFocusedChildIdentityState(childProcess);
+                    var descendants = TryGetFocusedLiveDescendantProcessIds(
+                        childProcess,
+                        out var descendantInspectionStatus);
+                    diagnostics.Append("ownedProcessState=").Append(ownedProcessState)
+                        .Append("; liveDescendantInspectionStatus=").Append(descendantInspectionStatus)
+                        .Append("; liveDescendantProcessIds=[")
+                        .Append(string.Join(",", descendants))
+                        .AppendLine("]");
+                }
+            }
+            catch (JsonException exception)
+            {
+                diagnostics.Append("receiptStatus=malformed; receiptParseError=").AppendLine(exception.Message);
+                diagnostics.AppendLine("receiptOutcome=<unavailable>; receiptReason=<unavailable>; receiptExitCode=<unavailable>");
+                diagnostics.AppendLine("leaseState=unknown; actualLeaseState=unknown; ownedProcessState=unknown");
+            }
+            catch (Exception exception)
+            {
+                diagnostics.Append("receiptStatus=setup-failure; receiptReadError=").AppendLine(exception.Message);
+                diagnostics.AppendLine("receiptOutcome=<unavailable>; receiptReason=<unavailable>; receiptExitCode=<unavailable>");
+                diagnostics.AppendLine("leaseState=unknown; actualLeaseState=unknown; ownedProcessState=unknown");
+            }
+        }
+
+        diagnostics.Append("stdout=").AppendLine(result.Stdout)
+            .Append("stderr=").AppendLine(result.Stderr);
+        return diagnostics.ToString();
+    }
+
+    private static string JsonDiagnosticValue(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+        {
+            return "<missing>";
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.Null => "<null>",
+            JsonValueKind.String => value.GetString() ?? "<null>",
+            _ => value.GetRawText()
+        };
+    }
+
+    private static bool TryReadJsonDocument(string path, out JsonDocument? document)
+    {
+        document = null;
+        try
+        {
+            document = JsonDocument.Parse(File.ReadAllText(path));
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static IReadOnlyList<int> TryGetFocusedLiveDescendantProcessIds(
+        JsonElement childProcess,
+        out string inspectionStatus,
+        Func<int, IReadOnlyList<int>>? inspectDescendants = null)
+    {
+        if (!childProcess.TryGetProperty("processId", out var processIdElement) ||
+            processIdElement.ValueKind != JsonValueKind.Number ||
+            !processIdElement.TryGetInt32(out var processId) ||
+            processId <= 0)
+        {
+            inspectionStatus = "not-started";
+            return [];
+        }
+
+        var identityStatus = JsonDiagnosticValue(childProcess, "identityStatus");
+        if (!string.Equals(identityStatus, "confirmed", StringComparison.Ordinal))
+        {
+            inspectionStatus = "identity-unconfirmed:" + identityStatus;
+            return [];
+        }
+
+        try
+        {
+            var descendants = (inspectDescendants ?? WorkerProcessJobs.ListLiveDescendantProcessIds)(processId);
+            inspectionStatus = "confirmed";
+            return descendants;
+        }
+        catch (Exception exception)
+        {
+            inspectionStatus = "inspection-failed:" + exception.GetType().Name;
+            return [];
+        }
+    }
+
+    private static string GetFocusedChildIdentityState(JsonElement childProcess)
+    {
+        if (!childProcess.TryGetProperty("processId", out var processIdElement) ||
+            processIdElement.ValueKind != JsonValueKind.Number ||
+            !processIdElement.TryGetInt32(out var processId) ||
+            processId <= 0)
+        {
+            return "not-started";
+        }
+
+        var identityStatus = JsonDiagnosticValue(childProcess, "identityStatus");
+        if (!string.Equals(identityStatus, "confirmed", StringComparison.Ordinal))
+        {
+            return "identity-unconfirmed:" + identityStatus;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            var expectedStartedAt = JsonDiagnosticValue(childProcess, "startedAt");
+            var expectedExecutable = JsonDiagnosticValue(childProcess, "executable");
+            if (!DateTimeOffset.TryParse(
+                    expectedStartedAt,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out var startedAt))
+            {
+                return "running-identity-unavailable";
+            }
+
+            var startMatches = Math.Abs((process.StartTime.ToUniversalTime() - startedAt.UtcDateTime).TotalSeconds) < 1;
+            string? actualExecutable;
+            try
+            {
+                actualExecutable = process.MainModule?.FileName;
+            }
+            catch
+            {
+                actualExecutable = null;
+            }
+            var executableMatches = !string.IsNullOrWhiteSpace(actualExecutable) &&
+                !string.IsNullOrWhiteSpace(expectedExecutable) &&
+                string.Equals(
+                    Path.GetFullPath(actualExecutable),
+                    Path.GetFullPath(expectedExecutable),
+                    StringComparison.OrdinalIgnoreCase);
+            return startMatches && executableMatches
+                ? "running-same-identity"
+                : "pid-reused-or-identity-mismatch";
+        }
+        catch (ArgumentException)
+        {
+            return "exited";
+        }
+        catch (InvalidOperationException)
+        {
+            return "exited";
+        }
+        catch (Exception exception)
+        {
+            return "identity-inspection-failed:" + exception.GetType().Name;
+        }
     }
 
     private static bool IsByteRangeLocked(string path)
@@ -4399,6 +4970,32 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
         catch
         {
+        }
+    }
+
+    private static void StopFocusedProcessIdentity(string identityPath)
+    {
+        if (!File.Exists(identityPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using var identity = JsonDocument.Parse(File.ReadAllText(identityPath));
+            var root = identity.RootElement;
+            if (!string.Equals(GetFocusedChildIdentityState(root), "running-same-identity", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            using var process = Process.GetProcessById(root.GetProperty("processId").GetInt32());
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(5000);
+        }
+        catch
+        {
+            // Exact-identity cleanup is best effort after the behavioral assertion has captured the failure.
         }
     }
 
