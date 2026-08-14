@@ -11,9 +11,13 @@ using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 
-[Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatchTestSupport
 {
+    private static readonly WorkerSandboxOptions DisabledSandbox = new(
+        false,
+        WorkerSandboxOptions.DefaultAccount,
+        WorkerSandboxOptions.DefaultCredentialTarget);
+
     [Xunit.Fact(DisplayName = "StartDispatches_fails_closed_when_recorded_worker_profile_is_missing")]
     public void StartDispatchesFailsClosedWhenRecordedWorkerProfileIsMissing()
 {
@@ -42,39 +46,34 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     [
         new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}")
     ]);
-    var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
+    var prepared = GoalManagementCommandService.ProfileDispatchTask(
+        kernel,
+        workspace,
+        goal,
+        developer,
+        profiles.GetRequired("codex-cli"),
+        [agent],
+        sandboxOptions: DisabledSandbox);
+    var missingProfiles = new WorkerProfileCatalog([]);
 
-    try
-    {
-        var prepared = GoalManagementCommandService.ProfileDispatchTask(
+    var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
+        GoalManagementCommandService.StartDispatches(
             kernel,
             workspace,
             goal,
-            developer,
-            profiles.GetRequired("codex-cli"),
-            [agent]);
-        var missingProfiles = new WorkerProfileCatalog([]);
-        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+            [agent],
+            missingProfiles,
+            runner: new BackgroundDispatchRunner(disableProcessStart: true),
+            sandboxOptions: DisabledSandbox));
 
-        var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
-            GoalManagementCommandService.StartDispatches(kernel, workspace, goal, [agent], missingProfiles));
-
-        Assert.Contains("worker profile 'codex-cli' is not available", ex.Message);
-        Assert.Equal(prepared.PromptPath, developer.LastDispatch!.PromptPath);
-        Xunit.Assert.Null(developer.LastProcess);
-    }
-    finally
-    {
-        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, originalDisableStart);
-    }
+    Assert.Contains("worker profile 'codex-cli' is not available", ex.Message);
+    Assert.Equal(prepared.PromptPath, developer.LastDispatch!.PromptPath);
+    Xunit.Assert.Null(developer.LastProcess);
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_prepares_subscription_tasks_by_assigned_provider")]
     public void WorkerProfileDispatcherPreparesSubscriptionTasksByAssignedProvider()
 {
-    // Hermetic: clear the operator's MCG_WORKER_SANDBOX so this asserts the default dispatch mode
-    // regardless of how the suite was launched (see ClearWorkerSandboxEnv).
-    using var _sandboxEnv = ClearWorkerSandboxEnv();
     var root = CreateSeededDispatchRepository();
     var promptRoot = Path.Combine(root, "prompts");
     var dispatchedAt = DateTimeOffset.Parse("2026-06-02T12:00:00Z");
@@ -92,7 +91,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        sandboxOptions: DisabledSandbox);
     Assert.Single(researchResults);
     Assert.Equal(AgentRole.Researcher, researchResults.Single().Task.RequiredRole);
     CompleteResearcherArtifact(kernel, goal);
@@ -105,7 +105,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         promptRoot,
         workingDirectory,
         dispatchedAt.AddMinutes(1),
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        sandboxOptions: DisabledSandbox);
     Assert.Single(plannerResults);
     Assert.Equal(AgentRole.Planner, plannerResults.Single().Task.RequiredRole);
     CompletePlannerArtifact(kernel, goal);
@@ -118,7 +119,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         promptRoot,
         workingDirectory,
         dispatchedAt.AddMinutes(2),
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        sandboxOptions: DisabledSandbox);
     var results = researchResults.Concat(plannerResults).Concat(downstreamResults).ToList();
 
     Assert.Equal(5, results.Count);
@@ -145,7 +147,6 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_dispatches_Tester_after_persisted_Developer_completion_without_process_start")]
     public void WorkerProfileDispatcherReadyBatchDispatchesTesterAfterPersistedDeveloperCompletionWithoutProcessStart()
 {
-    using var _sandboxEnv = ClearWorkerSandboxEnv();
     var root = CreateTempDirectory();
     File.WriteAllText(Path.Combine(root, ".git"), "gitdir: ..");
     var kernel = new AgentOrchestratorKernel();
@@ -177,7 +178,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         CreateRefinedWorkspace(root),
         goal,
         agents,
-        profiles);
+        profiles,
+        sandboxOptions: DisabledSandbox);
 
     Assert.IsType<DispatchReadinessReady>(readiness);
     Assert.Single(batch.Dispatches);
@@ -190,7 +192,6 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_ready_batch_records_provider_from_claude_launcher")]
     public void WorkerProfileDispatcherReadyBatchRecordsProviderFromClaudeLauncher()
 {
-    using var _sandboxEnv = ClearWorkerSandboxEnv();
     var root = CreateTempDirectory();
     var promptRoot = Path.Combine(root, "prompts");
     var workingDirectory = Path.Combine(root, "repo");
@@ -229,7 +230,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         promptRoot,
         workingDirectory,
         dispatchedAt,
-        commandExists: RealClaudeLauncherExists);
+        commandExists: RealClaudeLauncherExists,
+        sandboxOptions: DisabledSandbox);
 
     Assert.Single(results);
     var developer = goal.Tasks.Single();

@@ -11,9 +11,13 @@ using System.Net.Sockets;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 
-[Xunit.Collection("EnvMutation")]
 public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestSupport
 {
+    private static readonly WorkerSandboxOptions DisabledSandbox = new(
+        Enabled: false,
+        WorkerSandboxOptions.DefaultAccount,
+        WorkerSandboxOptions.DefaultCredentialTarget);
+
     [Xunit.Fact(DisplayName = "Worker_preflight_terminal_sweep_cleans_cancelled_worktree_without_starting_paid_process")]
     public void WorkerPreflightTerminalSweepCleansCancelledWorktreeWithoutStartingPaidProcess()
     {
@@ -284,35 +288,33 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     [
         new WorkerProfile("codex-cli", "codex exec --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}")
     ]);
-    var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
+    var prepared = GoalManagementCommandService.ProfileDispatchTask(
+        kernel,
+        workspace,
+        goal,
+        developer,
+        profiles.GetRequired("codex-cli"),
+        [agent],
+        sandboxOptions: DisabledSandbox);
+    var lateState = "late operator note that must appear in the prompt started by the worker";
+    kernel.RecordTaskNote(goal.Id, developer.Id, lateState);
 
-    try
-    {
-        var prepared = GoalManagementCommandService.ProfileDispatchTask(
+    Assert.ThrowsAny<InvalidOperationException>(() =>
+        GoalManagementCommandService.StartDispatches(
             kernel,
             workspace,
             goal,
-            developer,
-            profiles.GetRequired("codex-cli"),
-            [agent]);
-        var lateState = "late operator note that must appear in the prompt started by the worker";
-        kernel.RecordTaskNote(goal.Id, developer.Id, lateState);
-        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+            [agent],
+            profiles,
+            runner: new BackgroundDispatchRunner(disableProcessStart: true),
+            sandboxOptions: DisabledSandbox));
 
-        Assert.ThrowsAny<InvalidOperationException>(() =>
-            GoalManagementCommandService.StartDispatches(kernel, workspace, goal, [agent], profiles));
-
-        var refreshedPromptPath = developer.LastDispatch!.PromptPath!;
-        Assert.NotEqual(prepared.PromptPath, refreshedPromptPath);
-        Assert.Contains(lateState, File.ReadAllText(refreshedPromptPath), StringComparison.Ordinal);
-        Assert.DoesNotContain(refreshedPromptPath, developer.LastDispatch.Command, StringComparison.Ordinal);
-        Assert.DoesNotContain("Get-Content -Raw", developer.LastDispatch.Command, StringComparison.Ordinal);
-        Xunit.Assert.Null(developer.LastProcess);
-    }
-    finally
-    {
-        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, originalDisableStart);
-    }
+    var refreshedPromptPath = developer.LastDispatch!.PromptPath!;
+    Assert.NotEqual(prepared.PromptPath, refreshedPromptPath);
+    Assert.Contains(lateState, File.ReadAllText(refreshedPromptPath), StringComparison.Ordinal);
+    Assert.DoesNotContain(refreshedPromptPath, developer.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.DoesNotContain("Get-Content -Raw", developer.LastDispatch.Command, StringComparison.Ordinal);
+    Xunit.Assert.Null(developer.LastProcess);
 }
 
     [Xunit.Fact(DisplayName = "StartSubscriptionReadyTasks_checkpoints_dispatch_record_before_process_start")]
@@ -334,41 +336,33 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         []));
     var agent = SubscriptionPlannerAgent("planner", "Planner");
     kernel.ActivateGoal(goal.Id, [agent]);
-    var originalDisableStart = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
     var checkpointCalls = 0;
 
-    try
-    {
-        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+    var ex = Assert.Throws<InvalidOperationException>(() =>
+        GoalManagementCommandService.StartSubscriptionReadyTasks(
+            kernel,
+            workspace,
+            goal,
+            [agent],
+            DispatchTestProfiles(),
+            checkpointBeforeWorkerStart: (_, checkpointGoalId, checkpointTaskId, _) =>
+            {
+                checkpointCalls++;
+                Assert.Equal(goal.Id, checkpointGoalId);
+                Assert.Equal(planner.Id, checkpointTaskId);
+                throw new InvalidOperationException("dispatch checkpoint failed");
+            },
+            runner: new BackgroundDispatchRunner(disableProcessStart: true),
+            sandboxOptions: DisabledSandbox));
 
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-            GoalManagementCommandService.StartSubscriptionReadyTasks(
-                kernel,
-                workspace,
-                goal,
-                [agent],
-                DispatchTestProfiles(),
-                checkpointBeforeWorkerStart: (_, checkpointGoalId, checkpointTaskId, _) =>
-                {
-                    checkpointCalls++;
-                    Assert.Equal(goal.Id, checkpointGoalId);
-                    Assert.Equal(planner.Id, checkpointTaskId);
-                    throw new InvalidOperationException("dispatch checkpoint failed");
-                }));
-
-        Assert.Contains("dispatch checkpoint failed", ex.Message, StringComparison.Ordinal);
-        Assert.Equal(1, checkpointCalls);
-        Assert.True(planner.LastDispatch is not null);
-        Assert.True(planner.LastProcess is null);
-        var dispatchJsonFiles = Directory.Exists(workspace.LogDirectory)
-            ? Directory.EnumerateFiles(workspace.LogDirectory, "*.dispatch.json", SearchOption.TopDirectoryOnly)
-            : Array.Empty<string>();
-        Assert.Empty(dispatchJsonFiles);
-    }
-    finally
-    {
-        Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, originalDisableStart);
-    }
+    Assert.Contains("dispatch checkpoint failed", ex.Message, StringComparison.Ordinal);
+    Assert.Equal(1, checkpointCalls);
+    Assert.True(planner.LastDispatch is not null);
+    Assert.True(planner.LastProcess is null);
+    var dispatchJsonFiles = Directory.Exists(workspace.LogDirectory)
+        ? Directory.EnumerateFiles(workspace.LogDirectory, "*.dispatch.json", SearchOption.TopDirectoryOnly)
+        : Array.Empty<string>();
+    Assert.Empty(dispatchJsonFiles);
 }
 
     [Xunit.Fact(DisplayName = "StartDispatches_checkpoint_phase_stays_post_process_after_first_spawn")]
@@ -518,7 +512,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         "manual-codex",
         "codex exec --model {subscriptionModelName} --cd {workingDirectory} (Get-Content -Raw {promptPath})",
         promptRoot,
-        WorkerProfileDispatcher.BuildDispatchVariables(task.RequiredRole, workingDirectory, null)));
+        WorkerProfileDispatcher.BuildDispatchVariables(task.RequiredRole, workingDirectory, null, DisabledSandbox)));
 
     Assert.Contains("{subscriptionModelName}", ex.Message, StringComparison.Ordinal);
     Assert.Contains("subscription-dispatch", ex.Message, StringComparison.Ordinal);
@@ -889,17 +883,20 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     [Xunit.Fact(DisplayName = "DispatchProcessHost_writes_claude_auth_diagnostic_when_api_key_missing")]
     public void DispatchProcessHostWritesClaudeAuthDiagnosticWhenApiKeyMissing()
 {
-    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
     var root = CreateTempDirectory();
     try
     {
-        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
-        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = Path.Combine(root, "no-cli-credentials");
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, stderrPath);
+        DispatchProcessHost.SeedProviderEnvironment(
+            startInfo,
+            WorkerSandboxProvider.Claude,
+            sandboxRoot,
+            stderrPath,
+            anthropicApiKeyAccessor: () => null,
+            claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials"));
 
         Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
         Assert.False(startInfo.Environment.ContainsKey("CODEX_HOME"));
@@ -912,8 +909,6 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
     finally
     {
-        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = null;
-        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
         try { Directory.Delete(root, recursive: true); } catch { }
     }
 }
@@ -921,21 +916,24 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     [Xunit.Fact(DisplayName = "DispatchProcessHost_seeds_cli_credentials_into_sandbox_config_without_diagnostic")]
     public void DispatchProcessHostSeedsCliCredentialsIntoSandboxConfigWithoutDiagnostic()
 {
-    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
     var root = CreateTempDirectory();
     try
     {
-        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
         var credentialSource = Path.Combine(root, "operator-claude");
         Directory.CreateDirectory(credentialSource);
         File.WriteAllText(Path.Combine(credentialSource, ".credentials.json"), "{\"token\":\"subscription\"}");
         File.WriteAllText(Path.Combine(credentialSource, "settings.json"), "{\"theme\":\"dark\"}");
-        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = credentialSource;
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, stderrPath);
+        DispatchProcessHost.SeedProviderEnvironment(
+            startInfo,
+            WorkerSandboxProvider.Claude,
+            sandboxRoot,
+            stderrPath,
+            anthropicApiKeyAccessor: () => null,
+            claudeCredentialDirectoryAccessor: () => credentialSource);
 
         Assert.False(startInfo.Environment.ContainsKey("ANTHROPIC_API_KEY"));
         Assert.True(startInfo.Environment.TryGetValue("CLAUDE_CONFIG_DIR", out var claudeConfigDir));
@@ -949,8 +947,6 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
     finally
     {
-        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = null;
-        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
         try { Directory.Delete(root, recursive: true); } catch { }
     }
 }
@@ -958,17 +954,20 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     [Xunit.Fact(DisplayName = "DispatchProcessHost_worker_stderr_stream_preserves_claude_auth_diagnostic")]
     public void DispatchProcessHostWorkerStderrStreamPreservesClaudeAuthDiagnostic()
 {
-    var previousKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
     var root = CreateTempDirectory();
     try
     {
-        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", null);
-        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = Path.Combine(root, "no-cli-credentials");
         var startInfo = CreateSandboxStartInfo(root);
         var sandboxRoot = Path.Combine(root, ".mcg-sandbox");
         var stderrPath = Path.Combine(root, "dispatch.stderr.log");
 
-        DispatchProcessHost.SeedProviderEnvironment(startInfo, WorkerSandboxProvider.Claude, sandboxRoot, stderrPath);
+        DispatchProcessHost.SeedProviderEnvironment(
+            startInfo,
+            WorkerSandboxProvider.Claude,
+            sandboxRoot,
+            stderrPath,
+            anthropicApiKeyAccessor: () => null,
+            claudeCredentialDirectoryAccessor: () => Path.Combine(root, "no-cli-credentials"));
 
         using (var stderr = DispatchProcessHost.OpenWorkerStderrStream(stderrPath))
         using (var writer = new StreamWriter(stderr))
@@ -986,8 +985,6 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
     finally
     {
-        DispatchProcessHost.ClaudeCredentialSourceOverrideForTests = null;
-        Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", previousKey);
         try { Directory.Delete(root, recursive: true); } catch { }
     }
 }
@@ -1473,7 +1470,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         DispatchTestProfiles(),
         promptRoot,
         worktree,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox);
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
@@ -1526,7 +1524,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         DispatchTestProfiles(),
         promptRoot,
         worktree,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox);
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains("Merge-tree status: conflicted against current main", prompt, StringComparison.Ordinal);
@@ -1573,7 +1572,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         goal,
         reviewer,
         DispatchTestProfiles().GetRequired("codex-cli"),
-        [agent]);
+        [agent],
+        sandboxOptions: DisabledSandbox);
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
@@ -1608,7 +1608,14 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     RunGit(root, ["commit", "-m", "Advance main for ready dispatch"], DateTimeOffset.Parse("2026-07-15T18:59:00Z"));
     var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory}");
 
-    var results = WorkerProfileDispatcher.PrepareReadyTasks(kernel, goal, profile, promptRoot, worktree, dispatchedAt);
+    var results = WorkerProfileDispatcher.PrepareReadyTasks(
+        kernel,
+        goal,
+        profile,
+        promptRoot,
+        worktree,
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox);
 
     var result = Assert.Single(results);
     var prompt = File.ReadAllText(result.PromptPath);
@@ -1640,7 +1647,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         profile,
         promptRoot,
         root,
-        DateTimeOffset.Parse("2026-07-15T19:01:00Z")));
+        DateTimeOffset.Parse("2026-07-15T19:01:00Z"),
+        sandboxOptions: DisabledSandbox));
 
     Assert.Equal(WorkerProfileDispatcher.ReviewerScopeUnavailableErrorCode, ex.ErrorCode);
     Assert.Contains(ex.Findings, finding => finding.Contains("git ref 'main' could not be resolved", StringComparison.Ordinal));
@@ -1675,7 +1683,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         DateTimeOffset.Parse("2026-07-15T19:06:00Z"),
         reviewerScopeChangedFiles: ["seed.txt"],
         reviewerScopeMergeBase: "0000000000000000000000000000000000000000",
-        reviewerScopeTotalChangedFileCount: 1));
+        reviewerScopeTotalChangedFileCount: 1,
+        sandboxOptions: DisabledSandbox));
 
     Assert.Equal(WorkerProfileDispatcher.ReviewerMergeTreeUnavailableErrorCode, ex.ErrorCode);
     Assert.Contains(ex.Findings, finding => finding.Contains("git merge-tree --write-tree --name-only main HEAD failed", StringComparison.Ordinal));
@@ -1708,7 +1717,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         DispatchTestProfiles(),
         promptRoot,
         root,
-        DateTimeOffset.Parse("2026-07-15T18:54:00Z")));
+        DateTimeOffset.Parse("2026-07-15T18:54:00Z"),
+        sandboxOptions: DisabledSandbox));
 
     Assert.Equal(WorkerProfileDispatcher.ReviewerScopeUnavailableErrorCode, ex.ErrorCode);
     Assert.Contains(ex.Findings, finding => finding.Contains("git ref 'main' could not be resolved", StringComparison.Ordinal));
