@@ -3691,6 +3691,8 @@ public sealed class ConductorBatchLoopTests
             buildPermitBusyTimeout: DotnetBuildEnvironmentManager.DefaultSlotBusyPollTimeout,
             buildPermitSleep: clock.Advance);
         var ran = false;
+        DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = () =>
+            new ProcessCommandLineSnapshot(new Dictionary<int, string>());
 
         try
         {
@@ -3712,6 +3714,10 @@ public sealed class ConductorBatchLoopTests
             Assert.False(ran);
             Assert.Contains("waitReason=all-permits-busy", output, StringComparison.Ordinal);
             Assert.Contains("permit=build-0|build-1", output, StringComparison.Ordinal);
+            Assert.Contains(
+                $"holderPid={Environment.ProcessId}|{Environment.ProcessId}",
+                output,
+                StringComparison.Ordinal);
             Assert.DoesNotContain("permit=acceptance-", output, StringComparison.Ordinal);
             Assert.DoesNotContain("waitReason=designated-permit-busy-while-free", output, StringComparison.Ordinal);
             Assert.Equal(
@@ -3720,6 +3726,7 @@ public sealed class ConductorBatchLoopTests
         }
         finally
         {
+            DotnetBuildEnvironmentManager.ProcessCommandLineSnapshotForTests = null;
             TryDeleteDirectory(attemptRoot);
         }
     }
@@ -3785,6 +3792,7 @@ public sealed class ConductorBatchLoopTests
 
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, reclaimed.Attempt.Outcome);
             Assert.True(deadRan);
+            Assert.NotEqual(liveEnvironment.BuildPermitIndex, reclaimedEnvironment!.BuildPermitIndex);
             Assert.Equal(deadEnvironment.BuildPermitIndex, reclaimedEnvironment!.BuildPermitIndex);
         }
         finally

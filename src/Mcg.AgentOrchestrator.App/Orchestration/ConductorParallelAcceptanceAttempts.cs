@@ -1068,11 +1068,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
                 "yield",
                 attempt,
                 candidate,
-                busyPermits.Length == 1 ? busyPermits[0].OwnerProcessId : null,
-                busyPermits.Length == 0
+                holderPid: null,
+                permitName: busyPermits.Length == 0
                     ? AllBuildPermitNames()
                     : BuildPermitNames(busyPermits.Select(slot => slot.SlotIndex)),
-                AcceptanceBuildPermitWaitReason.AllPermitsBusy);
+                waitReason: AcceptanceBuildPermitWaitReason.AllPermitsBusy,
+                holderPidField: BuildPermitHolderPids(busyPermits));
             throw new DotnetBuildSlotsBusyException(busy);
         }
 
@@ -1131,9 +1132,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         ConductorParallelAcceptanceCandidate candidate,
         int? holderPid,
         string? permitName = null,
-        AcceptanceBuildPermitWaitReason? waitReason = null)
+        AcceptanceBuildPermitWaitReason? waitReason = null,
+        string? holderPidField = null)
     {
-        var pid = holderPid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+        var pid = holderPidField ??
+            holderPid?.ToString(System.Globalization.CultureInfo.InvariantCulture) ??
+            "unknown";
         var slot = permitName ?? $"acceptance-{candidate.SlotIndex}";
         var waitReasonField = waitReason is null ? string.Empty : $" waitReason={WaitReasonName(waitReason.Value)}";
         var line = $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} permit={slot} holderPid={pid}{waitReasonField}";
@@ -1151,6 +1155,12 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
 
     private static string BuildPermitNames(IEnumerable<int> permitIndexes) =>
         string.Join("|", permitIndexes.Select(index => $"build-{index}"));
+
+    private static string BuildPermitHolderPids(IEnumerable<DotnetBuildStableSlotWait> busyPermits) =>
+        string.Join(
+            "|",
+            busyPermits.Select(permit =>
+                permit.OwnerProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"));
 
     private static string WaitReasonName(AcceptanceBuildPermitWaitReason waitReason) =>
         waitReason switch
