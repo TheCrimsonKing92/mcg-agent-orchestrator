@@ -130,14 +130,7 @@ internal static class SubscriptionPromptCostGuard
         var effective = PaidPromptThresholds.EffectivePromptCharacterCount(
             dispatch.PromptCharacterCount ?? 0,
             AgentOrchestratorKernel.EstimatePriorTaskEvidenceCharacterCount(goal, task.Id));
-        var canonicalInventoryCharacters = dispatch.ContextPackageReceipt?.Sections
-            .Where(section => section.LogicalIdentity.Equals("context/manifest.v1.json", StringComparison.Ordinal))
-            .Sum(section => section.CharacterCount) ?? 0;
-
-        // The manifest is a canonical inventory of artifact records already represented by their
-        // rendered delivery entries. Keep the actual prompt count for telemetry, but do not treat
-        // that required duplicate attestation metadata as anomalous brief content.
-        return Math.Max(0, effective - canonicalInventoryCharacters);
+        return effective;
     }
 
     // Only a genuinely ANOMALOUS prompt (disproportionate to its task complexity, or an extreme
