@@ -2281,22 +2281,40 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             "main");
         var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "dispatch-admission-incumbent");
         var attemptRoot = Path.Combine(Path.GetTempPath(), $"mcg-admission-{Guid.NewGuid():N}");
-        var readyPath = Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!, $"holder-ready-{Guid.NewGuid():N}.txt");
-        var releasePath = Path.Combine(Path.GetDirectoryName(environment.ExecutionLockPath)!, $"holder-release-{Guid.NewGuid():N}.txt");
-        using var incumbent = StartLeaseHolder(environment.ExecutionLockPath, readyPath, releasePath);
+        var holderFixtures = Enumerable
+            .Range(0, DotnetBuildEnvironmentManager.BuildConcurrencySlotCount)
+            .Select(permitIndex =>
+            {
+                var permitEnvironment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(permitIndex);
+                var permitDirectory = Path.GetDirectoryName(permitEnvironment.ExecutionLockPath)!;
+                return (
+                    Environment: permitEnvironment,
+                    ReadyPath: Path.Combine(permitDirectory, $"holder-ready-{Guid.NewGuid():N}.txt"),
+                    ReleasePath: Path.Combine(permitDirectory, $"holder-release-{Guid.NewGuid():N}.txt"));
+            })
+            .ToArray();
+        var incumbents = new List<Process>();
         var earlyChecks = 0;
         var preflightRuns = 0;
         var paidStarts = 0;
 
         try
         {
-            Xunit.Assert.True(
-                SpinWait.SpinUntil(() => File.Exists(readyPath), TimeSpan.FromSeconds(10)),
-                "Incumbent lease holder did not signal readiness.");
+            foreach (var holderFixture in holderFixtures)
+            {
+                incumbents.Add(StartLeaseHolder(
+                    holderFixture.Environment.ExecutionLockPath,
+                    holderFixture.ReadyPath,
+                    holderFixture.ReleasePath));
+            }
+            Xunit.Assert.All(holderFixtures, holderFixture => Xunit.Assert.True(
+                SpinWait.SpinUntil(() => File.Exists(holderFixture.ReadyPath), TimeSpan.FromSeconds(10)),
+                $"Incumbent lease holder did not signal readiness for {holderFixture.Environment.BuildPermitIndex}."));
             Directory.Delete(environment.ArtifactsPath, recursive: true);
             var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 runInline: true,
+                buildPermitBusyTimeout: TimeSpan.Zero,
                 tryRunPreSlot: (_, _) =>
                 {
                     earlyChecks++;
@@ -2318,6 +2336,9 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
             Xunit.Assert.Equal(
                 ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot,
                 decision.Attempt.Outcome);
+            Xunit.Assert.Equal(
+                AcceptanceBuildPermitWaitReason.AllPermitsBusy,
+                decision.Attempt.BuildPermitWaitReason);
             Xunit.Assert.Equal(1, earlyChecks);
             Xunit.Assert.Equal(0, preflightRuns);
             Xunit.Assert.Equal(0, paidStarts);
@@ -2328,11 +2349,18 @@ public sealed class WorkerDispatchAcceptanceAdmissionTests : WorkerDispatchTestS
         }
         finally
         {
-            File.WriteAllText(releasePath, "release");
-            if (!incumbent.WaitForExit(5000))
+            foreach (var holderFixture in holderFixtures)
             {
-                incumbent.Kill(entireProcessTree: true);
-                incumbent.WaitForExit(5000);
+                File.WriteAllText(holderFixture.ReleasePath, "release");
+            }
+            foreach (var incumbent in incumbents)
+            {
+                if (!incumbent.WaitForExit(5000))
+                {
+                    incumbent.Kill(entireProcessTree: true);
+                    incumbent.WaitForExit(5000);
+                }
+                incumbent.Dispose();
             }
 
             if (Directory.Exists(attemptRoot))

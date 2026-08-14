@@ -2716,9 +2716,16 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
     [Xunit.Fact(DisplayName = "ParallelAcceptance_attempt_yields_to_live_cli_holder_and_reclaims_dead_holder")]
     public void ParallelAcceptanceAttemptYieldsToLiveCliHolderAndReclaimsDeadHolder()
     {
-        using var _ = IsolatedDotnetRootScope();
+        using var isolatedRoot = IsolatedDotnetRootScope();
         var (_, liveGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/LiveCli.cs");
         var (_, deadGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/DeadCli.cs");
+        for (var attempt = 1;
+             attempt < 128 && BuildPermitIndex(liveGoal) == BuildPermitIndex(deadGoal);
+             attempt++)
+        {
+            (_, deadGoal) = SimpleGoal("Update src/Mcg.AgentOrchestrator.App/Orchestration/DeadCli.cs");
+        }
+        Assert.NotEqual(BuildPermitIndex(liveGoal), BuildPermitIndex(deadGoal));
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
         var liveCandidate = ConductorParallelAcceptanceCandidate.Create(liveGoal, 0, ["src/LiveCli.cs"], "branch-live", "main");
         var deadCandidate = ConductorParallelAcceptanceCandidate.Create(deadGoal, 0, ["src/DeadCli.cs"], "branch-dead", "main");
@@ -2726,12 +2733,30 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         var deadEnvironment = DotnetBuildEnvironmentManager.CreateAttempt(deadGoal.Id, "dead-cli");
         var liveRan = false;
         var deadRan = false;
+        DotnetBuildEnvironment? reclaimedEnvironment = null;
 
         try
         {
-            using (DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(liveEnvironment))
+            var livePermitIndex = liveEnvironment.BuildPermitIndex
+                ?? throw new InvalidOperationException("Live goal build permit was not assigned.");
+            var liveLeases = new List<FileStream>();
+            try
             {
-                var liveCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(attemptRoot, runInline: true);
+                liveLeases.Add(DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(liveEnvironment));
+                foreach (var permitIndex in Enumerable.Range(0, DotnetBuildEnvironmentManager.BuildConcurrencySlotCount))
+                {
+                    if (permitIndex != livePermitIndex)
+                    {
+                        liveLeases.Add(DotnetBuildEnvironmentManager.AcquireLeaseExecutionLock(
+                            DotnetBuildEnvironmentManager.CreateStableSlotAttempt(permitIndex),
+                            TimeSpan.Zero));
+                    }
+                }
+
+                var liveCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                    attemptRoot,
+                    runInline: true,
+                    buildPermitBusyTimeout: TimeSpan.Zero);
                 var liveBlocked = liveCoordinator.Evaluate(
                     liveCandidate,
                     ConductorAutonomyPolicy.Conservative,
@@ -2741,7 +2766,15 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
                         return PassingRun(attemptCandidate, attemptPolicy);
                     });
                 Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.BlockedBuildSlot, liveBlocked.Attempt.Outcome);
+                Assert.Equal(AcceptanceBuildPermitWaitReason.AllPermitsBusy, liveBlocked.Attempt.BuildPermitWaitReason);
                 Assert.False(liveRan);
+            }
+            finally
+            {
+                foreach (var liveLease in liveLeases)
+                {
+                    liveLease.Dispose();
+                }
             }
 
             File.WriteAllText(deadEnvironment.ExecutionLockPath, "999999");
@@ -2752,12 +2785,15 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
                 (attemptCandidate, attemptPolicy, stableSlotLease, _) =>
                 {
                     Assert.NotNull(stableSlotLease);
+                    reclaimedEnvironment = stableSlotLease.Environment;
                     deadRan = true;
                     return PassingRun(attemptCandidate, attemptPolicy);
                 });
 
             Assert.Equal(ConductorParallelAcceptanceAttemptOutcome.Passed, reclaimed.Attempt.Outcome);
             Assert.True(deadRan);
+            Assert.NotEqual(liveEnvironment.BuildPermitIndex, reclaimedEnvironment!.BuildPermitIndex);
+            Assert.Equal(deadEnvironment.BuildPermitIndex, reclaimedEnvironment.BuildPermitIndex);
         }
         finally
         {
