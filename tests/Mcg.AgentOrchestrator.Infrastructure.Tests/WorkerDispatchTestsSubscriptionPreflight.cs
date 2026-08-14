@@ -305,11 +305,10 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
 }
 
     [Xunit.Theory(DisplayName = "WorkerProfileDispatcher_preflight_uses_explicit_OS_sandbox_for_Codex_repo_skills_without_starting_worker")]
-    [Xunit.InlineData(false, "1", false, "blocked")]
-    [Xunit.InlineData(true, "0", true, "repo-skill-write")]
+    [Xunit.InlineData(false, false, "blocked")]
+    [Xunit.InlineData(true, true, "repo-skill-write")]
     public void WorkerProfileDispatcherPreflightUsesExplicitOsSandboxForCodexRepoSkillsWithoutStartingWorker(
         bool explicitSandboxEnabled,
-        string ambientSandboxValue,
         bool expectedAllowed,
         string expectedCapabilityStatus)
     {
@@ -344,11 +343,7 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
             workingDirectory,
             DateTimeOffset.Parse("2026-08-10T12:00:00Z"),
             sandboxOptions: sandbox,
-            commandExists: _ => true,
-            sandboxOptionsAccessor: () => DisabledSandbox with
-            {
-                Enabled = ambientSandboxValue == "1"
-            });
+            commandExists: _ => true);
 
         Assert.Equal(expectedAllowed, preflight.Allowed);
         Assert.Equal("codex-cli", preflight.ProfileName);

@@ -52,7 +52,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
         goal,
         developer,
         profiles.GetRequired("codex-cli"),
-        [agent]);
+        [agent],
+        sandboxOptions: DisabledSandbox);
     var missingProfiles = new WorkerProfileCatalog([]);
 
     var ex = Assert.ThrowsAny<InvalidOperationException>(() =>
@@ -62,7 +63,8 @@ public sealed class WorkerDispatchTestsModelSelectionEnvMutation : WorkerDispatc
             goal,
             [agent],
             missingProfiles,
-            runner: new BackgroundDispatchRunner(disableProcessStart: true)));
+            runner: new BackgroundDispatchRunner(disableProcessStart: true),
+            sandboxOptions: DisabledSandbox));
 
     Assert.Contains("worker profile 'codex-cli' is not available", ex.Message);
     Assert.Equal(prepared.PromptPath, developer.LastDispatch!.PromptPath);

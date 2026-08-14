@@ -405,7 +405,8 @@ public static class WorkerProfileDispatcher
         string promptRoot,
         string workingDirectory,
         DateTimeOffset dispatchedAt,
-        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null)
+        CitedPriorEvidenceResolver? citedPriorEvidenceResolver = null,
+        WorkerSandboxOptions? sandboxOptions = null)
     {
         var results = new List<WorkerProfileDispatchResult>();
         foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList())
@@ -418,7 +419,8 @@ public static class WorkerProfileDispatcher
                 promptRoot,
                 workingDirectory,
                 dispatchedAt,
-                citedPriorEvidenceResolver: citedPriorEvidenceResolver));
+                citedPriorEvidenceResolver: citedPriorEvidenceResolver,
+                sandboxOptions: sandboxOptions));
         }
 
         return results;
@@ -522,8 +524,7 @@ public static class WorkerProfileDispatcher
         bool allowGitReference = false,
         Func<ClaudeCliAuthState>? claudeAuthProbe = null,
         WorkerSandboxOptions? sandboxOptions = null,
-        Func<string, bool>? commandExists = null,
-        Func<WorkerSandboxOptions>? sandboxOptionsAccessor = null)
+        Func<string, bool>? commandExists = null)
     {
         var findings = new List<string>();
         ReviewerChangedFileScope? reviewerScope = null;
@@ -532,7 +533,7 @@ public static class WorkerProfileDispatcher
         try
         {
             EnsureTaskNeedsExecution(task);
-            var sandbox = sandboxOptions ?? (sandboxOptionsAccessor ?? WorkerSandboxOptions.FromEnvironment)();
+            var sandbox = sandboxOptions ?? WorkerSandboxOptions.FromEnvironment();
             var agent = ResolveAssignedAgent(null, goal, task, agents);
             var roleSelection = ResolveEffectiveSubscriptionModelSelection(agent, goal, task, modelOverride, profiles, claudeAuthProbe, sandbox, commandExists);
             roleSelection = ApplyReasoningEffortPolicy(agent, goal, task, roleSelection);

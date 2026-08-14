@@ -13,6 +13,11 @@ using System.Text.Json;
 
 public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestSupport
 {
+    private static readonly WorkerSandboxOptions DisabledSandbox = new(
+        Enabled: false,
+        WorkerSandboxOptions.DefaultAccount,
+        WorkerSandboxOptions.DefaultCredentialTarget);
+
     [Xunit.Fact(DisplayName = "Worker_preflight_terminal_sweep_cleans_cancelled_worktree_without_starting_paid_process")]
     public void WorkerPreflightTerminalSweepCleansCancelledWorktreeWithoutStartingPaidProcess()
     {
@@ -289,7 +294,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         goal,
         developer,
         profiles.GetRequired("codex-cli"),
-        [agent]);
+        [agent],
+        sandboxOptions: DisabledSandbox);
     var lateState = "late operator note that must appear in the prompt started by the worker";
     kernel.RecordTaskNote(goal.Id, developer.Id, lateState);
 
@@ -300,7 +306,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
             goal,
             [agent],
             profiles,
-            runner: new BackgroundDispatchRunner(disableProcessStart: true)));
+            runner: new BackgroundDispatchRunner(disableProcessStart: true),
+            sandboxOptions: DisabledSandbox));
 
     var refreshedPromptPath = developer.LastDispatch!.PromptPath!;
     Assert.NotEqual(prepared.PromptPath, refreshedPromptPath);
@@ -345,7 +352,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 Assert.Equal(planner.Id, checkpointTaskId);
                 throw new InvalidOperationException("dispatch checkpoint failed");
             },
-            runner: new BackgroundDispatchRunner(disableProcessStart: true)));
+            runner: new BackgroundDispatchRunner(disableProcessStart: true),
+            sandboxOptions: DisabledSandbox));
 
     Assert.Contains("dispatch checkpoint failed", ex.Message, StringComparison.Ordinal);
     Assert.Equal(1, checkpointCalls);
@@ -504,7 +512,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         "manual-codex",
         "codex exec --model {subscriptionModelName} --cd {workingDirectory} (Get-Content -Raw {promptPath})",
         promptRoot,
-        WorkerProfileDispatcher.BuildDispatchVariables(task.RequiredRole, workingDirectory, null)));
+        WorkerProfileDispatcher.BuildDispatchVariables(task.RequiredRole, workingDirectory, null, DisabledSandbox)));
 
     Assert.Contains("{subscriptionModelName}", ex.Message, StringComparison.Ordinal);
     Assert.Contains("subscription-dispatch", ex.Message, StringComparison.Ordinal);
@@ -1462,7 +1470,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         DispatchTestProfiles(),
         promptRoot,
         worktree,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox);
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
@@ -1515,7 +1524,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         DispatchTestProfiles(),
         promptRoot,
         worktree,
-        dispatchedAt);
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox);
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains("Merge-tree status: conflicted against current main", prompt, StringComparison.Ordinal);
@@ -1562,7 +1572,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         goal,
         reviewer,
         DispatchTestProfiles().GetRequired("codex-cli"),
-        [agent]);
+        [agent],
+        sandboxOptions: DisabledSandbox);
 
     var prompt = File.ReadAllText(result.PromptPath);
     Assert.Contains("## Reviewer Changed-File Scope", prompt, StringComparison.Ordinal);
@@ -1597,7 +1608,14 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     RunGit(root, ["commit", "-m", "Advance main for ready dispatch"], DateTimeOffset.Parse("2026-07-15T18:59:00Z"));
     var profile = new WorkerProfile("codex-cli", "codex exec --sandbox read-only --cd {workingDirectory}");
 
-    var results = WorkerProfileDispatcher.PrepareReadyTasks(kernel, goal, profile, promptRoot, worktree, dispatchedAt);
+    var results = WorkerProfileDispatcher.PrepareReadyTasks(
+        kernel,
+        goal,
+        profile,
+        promptRoot,
+        worktree,
+        dispatchedAt,
+        sandboxOptions: DisabledSandbox);
 
     var result = Assert.Single(results);
     var prompt = File.ReadAllText(result.PromptPath);
@@ -1629,7 +1647,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         profile,
         promptRoot,
         root,
-        DateTimeOffset.Parse("2026-07-15T19:01:00Z")));
+        DateTimeOffset.Parse("2026-07-15T19:01:00Z"),
+        sandboxOptions: DisabledSandbox));
 
     Assert.Equal(WorkerProfileDispatcher.ReviewerScopeUnavailableErrorCode, ex.ErrorCode);
     Assert.Contains(ex.Findings, finding => finding.Contains("git ref 'main' could not be resolved", StringComparison.Ordinal));
@@ -1664,7 +1683,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         DateTimeOffset.Parse("2026-07-15T19:06:00Z"),
         reviewerScopeChangedFiles: ["seed.txt"],
         reviewerScopeMergeBase: "0000000000000000000000000000000000000000",
-        reviewerScopeTotalChangedFileCount: 1));
+        reviewerScopeTotalChangedFileCount: 1,
+        sandboxOptions: DisabledSandbox));
 
     Assert.Equal(WorkerProfileDispatcher.ReviewerMergeTreeUnavailableErrorCode, ex.ErrorCode);
     Assert.Contains(ex.Findings, finding => finding.Contains("git merge-tree --write-tree --name-only main HEAD failed", StringComparison.Ordinal));
@@ -1697,7 +1717,8 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         DispatchTestProfiles(),
         promptRoot,
         root,
-        DateTimeOffset.Parse("2026-07-15T18:54:00Z")));
+        DateTimeOffset.Parse("2026-07-15T18:54:00Z"),
+        sandboxOptions: DisabledSandbox));
 
     Assert.Equal(WorkerProfileDispatcher.ReviewerScopeUnavailableErrorCode, ex.ErrorCode);
     Assert.Contains(ex.Findings, finding => finding.Contains("git ref 'main' could not be resolved", StringComparison.Ordinal));
