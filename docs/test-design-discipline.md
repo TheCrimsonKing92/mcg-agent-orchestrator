@@ -97,9 +97,13 @@ it.
 Two practical consequences. A worker that stops on a mechanism-phrased constraint is behaving correctly, so
 treat that blocker as a brief defect and fix the constraint rather than granting a one-off exception; the
 same goal produced three clarification round-trips, each legitimate, each traceable to under-specification.
-And when an exception genuinely is warranted, grant it narrowly and expect it may go unused — that goal's next
-round satisfied both blockers in configuration and touched no `src/` file, because clarifying the intent
-revealed a narrower path than the exception would have taken.
+And when an exception genuinely is warranted, grant it narrowly — then verify it was actually needed rather
+than assuming either way. That goal's next round satisfied both blockers in configuration and touched no
+`src/` file, and the operator recorded that as the narrower path being sufficient. It was not: the Tester
+then showed the routing selected **zero** dashboard tests, and the duplicate assembly identity underneath both
+findings still required the `src/` changes. A narrower diff is not evidence of a sufficient one, and "the
+mapping was added" is a different claim from "the mapping selects tests" — which is the same
+record-versus-world error rule (l) exists to catch, committed here by the operator while writing about it.
 
 An infeasible criterion raises a fixed-HIGH feasibility clarification before any measurement/assertion-shape question for that criterion. Dispatch remains blocked until the operator chooses exactly one disposition: re-scope and re-check the replacement, move the criterion to `OPERATOR-OWNED / post-landing`, or supply a worker-accessible reproducing scenario. The criterion must never silently pass through because a measurement-method clarification was answered. Independently, every worker brief sanctions an honest `BLOCKED` report that names the missing capability or scenario.
 
