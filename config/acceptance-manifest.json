@@ -41,7 +41,7 @@
         "name": "Goal lifecycle commands",
         "filter": "FullyQualifiedName~CliCommandTestsGoalLifecycleCommands|FullyQualifiedName~CliCommandTestsPersistentRunnerCommands|FullyQualifiedName~CliCommandTestsSubscriptionDispatchCommands|FullyQualifiedName~CliCommandTestsTerminalSweepCommands|FullyQualifiedName~GoalGitFactIndexTests|FullyQualifiedName~GoalsPruneTests|FullyQualifiedName~LandingExecutorTests",
         "estimatedSerialSeconds": 248.4,
-        "exclusiveResourceKeys": []
+        "exclusiveResourceKeys": [ "xunit:GoalWorktreeCleanupHooks" ]
       },
       {
         "name": "Goal worktree cleanup",
