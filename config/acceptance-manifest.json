@@ -272,7 +272,11 @@
       "type": "dotnet-test",
       "runner": "mtp",
       "project": "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
-      "arguments": [ "--verbosity", "minimal", "--filter", "Category!=HostIntegration" ]
+      "arguments": [ "--verbosity", "minimal", "--filter-not-trait", "Category=HostIntegration" ],
+      "exclusiveResourceKeys": [
+        "xunit:EnvMutation",
+        "xunit:ProcessSpawning"
+      ]
     },
     {
       "name": "provider environment tests",

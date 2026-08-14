@@ -132,7 +132,12 @@ public sealed class AcceptanceGateEngineSettingsTests
             .Select(check => check!.AsObject())
             .Single(check => check["name"]?.GetValue<string>() == "dashboard tests");
         Xunit.Assert.Equal(dashboardProject, dashboardCheck["project"]?.GetValue<string>());
-        Xunit.Assert.Contains("Category!=HostIntegration", dashboardCheck["arguments"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Xunit.Assert.Equal(
+            ["--verbosity", "minimal", "--filter-not-trait", "Category=HostIntegration"],
+            dashboardCheck["arguments"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Xunit.Assert.Equal(
+            ["xunit:EnvMutation", "xunit:ProcessSpawning"],
+            dashboardCheck["exclusiveResourceKeys"]!.AsArray().Select(value => value!.GetValue<string>()));
 
         var solutionText = File.ReadAllText(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln"));
         var trustedTestProjects = GoalAcceptanceVerifier.DiscoverTrustedTestProjects(repositoryRoot, repositoryRoot);
