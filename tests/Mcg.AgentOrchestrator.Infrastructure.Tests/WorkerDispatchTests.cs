@@ -1148,7 +1148,9 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             new WorkerProfile("test-profile", "echo {promptPath}"),
             promptRoot,
             worktree,
-            dispatchedAt.AddMinutes(1));
+            dispatchedAt.AddMinutes(1),
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
 
         var contextDirectory = Path.Combine(worktree, ".orchestrator-context", goal.Id.Value);
         var priorEvidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md"));
