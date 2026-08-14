@@ -32,6 +32,8 @@ l. **A test earns its authority only by being shown capable of failing.** A test
 
    The control is a **negative control**: before a test counts as evidence for a gate-relevant behaviour, demonstrate that it goes RED when that behaviour is broken, and record what red looked like. This is the executable form of (a)'s precondition rule — asserting that the boundary is present and selected is exactly what (3) omitted, and asserting it would have failed at the arrange step instead of passing seven vacuous cases. Treat these as smells that demand the negative control be shown explicitly: every parameterized case producing an identical outcome; an arrange step that can throw into the same error channel the assertions read; a test whose expected-value literals change in the same diff as the production code they cover; a stub-driven test standing in for an end-to-end criterion. None of these is banned — each is a claim that must be paid for with a demonstrated red.
 
+   **A control whose arms cannot disagree is not a control — it is a second observation of the same state.** Before recording RED/GREEN, prove the two arms actually ran different configurations. If both produce the same result, that is the finding; do not record it as evidence. Two failure modes seen in practice: the mutation and the measurement landing in different scopes (a `global.json` `test.runner` opt-in was removed in a goal worktree while `dotnet test` ran from the repository root, where SDK configuration resolves from the *current directory* — both arms read the unmutated file and failed identically, and the pair was nearly filed as a valid control); and an arm that never executed at all (a filter matching zero tests, a build that failed before the host launched). Rule (f)'s loud-failure requirement is what catches the second; the first is only caught by checking that the arms differ, so state the mutation and the invocation scope together in the receipt. Symmetrically, a GREEN that reproduces RED's exact error is a defect in the control, not a defect in the code.
+
    For deterministic guards that consume operator rulings, hold the synthetic verdict constant and remove or change only the typed ruling record for the negative control. This proves the guard keys on authoritative structure rather than accommodating words in model- or worker-authored prose.
 
    Record each new goal's negative-control receipt in `docs/negative-controls/<goal-prefix>.md`. Never append a per-goal record to this shared discipline file: sibling goal files keep independent evidence independently mergeable. The records already present below are historical and remain here; do not relocate them retroactively.
@@ -57,6 +59,51 @@ Spec refinement checks feasibility before asking how a criterion will be measure
 
 Use [`role-capability-matrix.md`](role-capability-matrix.md) to assign the evidence owner before refinement;
 the feasibility detector is a deliberately narrow backstop, not a replacement for that authoring pass.
+
+**Name the evidence owner in the brief whenever it is not the executing role, or the goal cannot converge.**
+Assigning the owner mentally is not enough: the criterion has to say so in the text a Reviewer reads. A
+criterion whose evidence can only exist *after* the role that must attest to it — anything owned by the
+conductor, the acceptance gate, or the operator — will be verdicted `not-verifiable` by an honest Reviewer,
+and a `not-verifiable` verdict is counted as not-passing. No number of worker rounds changes that; each one
+re-derives the same impasse and costs a paid dispatch. Mark such criteria `OPERATOR-OWNED / post-landing` (or
+name the conductor as owner) and state where the receipt will be recorded, normally
+`docs/negative-controls/<goal-prefix>.md`.
+
+Four goals hit this on 2026-08-14, three of them by different mechanisms and one from a brief written by an
+operator who had applied the convention correctly an hour earlier: a Tester requiring a standard-gate receipt
+to reach `Verified` while the gate requires `Verified` (a hard cycle, breakable only by an operator closing
+the task); an `advisory`, `operator-owned` finding enforced as blocking; a criterion attesting to a gate that
+runs after review, enforced at review; and a criterion demanding a measured post-landing acceptance receipt.
+In every case the work was complete and correct, the Reviewer explicitly reported no blocker, and the goal
+still could not close.
+
+Two corollaries. **Do not ask a role for evidence its capability profile excludes** — the failure mode is
+non-convergence, not merely an inefficient round. And **an authorization is evidence too**: granting one in a
+clarification answer does not bind the Developer and Reviewer rounds that follow, so record it in the plan and
+the goal's negative-controls file. A goal blocked on authorization ran all five roles and produced an empty
+diff on 2026-08-14 because the grant lived only in a clarification thread.
+
+**Phrase constraints by intent, not by mechanism — a constraint written as a forbidden mechanism will forbid
+necessary work.** "Do not change product behaviour" and "do not modify `src/`" look equivalent when the brief
+is written and diverge as soon as the work is real. On 2026-08-14 a goal moving dashboard tests into their own
+project carried a `no product code changes` constraint, and creating a new test assembly required two `src/`
+registrations that change no behaviour at all: an `InternalsVisibleTo` grant, and a test-impact routing entry
+mapping dashboard sources to the new project. **Omitting the routing entry would not have preserved
+behaviour** — dashboard source changes would have stopped selecting dashboard tests, leaving a green suite
+that no longer asks the question, which is rule (l)'s failure mode arriving through the back door of an
+over-broad constraint. State the property to protect and let the implementer determine which edits threaten
+it.
+
+Two practical consequences. A worker that stops on a mechanism-phrased constraint is behaving correctly, so
+treat that blocker as a brief defect and fix the constraint rather than granting a one-off exception; the
+same goal produced three clarification round-trips, each legitimate, each traceable to under-specification.
+And when an exception genuinely is warranted, grant it narrowly — then verify it was actually needed rather
+than assuming either way. That goal's next round satisfied both blockers in configuration and touched no
+`src/` file, and the operator recorded that as the narrower path being sufficient. It was not: the Tester
+then showed the routing selected **zero** dashboard tests, and the duplicate assembly identity underneath both
+findings still required the `src/` changes. A narrower diff is not evidence of a sufficient one, and "the
+mapping was added" is a different claim from "the mapping selects tests" — which is the same
+record-versus-world error rule (l) exists to catch, committed here by the operator while writing about it.
 
 An infeasible criterion raises a fixed-HIGH feasibility clarification before any measurement/assertion-shape question for that criterion. Dispatch remains blocked until the operator chooses exactly one disposition: re-scope and re-check the replacement, move the criterion to `OPERATOR-OWNED / post-landing`, or supply a worker-accessible reproducing scenario. The criterion must never silently pass through because a measurement-method clarification was answered. Independently, every worker brief sanctions an honest `BLOCKED` report that names the missing capability or scenario.
 

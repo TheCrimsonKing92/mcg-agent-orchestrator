@@ -14,16 +14,17 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(16, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(17, settings.InfrastructureTestLanes.Count);
         Xunit.Assert.Equal(6, startupContract.ManifestCheckCount);
         var expectedEstimates = new Dictionary<string, double>(StringComparer.Ordinal)
         {
-            ["Cli"] = 11.4,
+            ["Cli"] = 65.2,
             ["Worker shell"] = 9.1,
             ["Worker sandbox planner"] = 9.3,
             ["Conduct watch sweep scoping"] = 10.0,
-            ["Goal lifecycle commands"] = 248.4,
-            ["Goal worktree cleanup"] = 327.3,
+            ["Goal lifecycle commands"] = 194.6,
+            ["Goal worktree cleanup"] = 274.6,
+            ["Goal worktree parallel"] = 52.7,
             ["Worker profiles"] = 45.8,
             ["Worker dispatch fixtures"] = 354.0,
             ["Process spawning"] = 230.2,
@@ -46,19 +47,19 @@ public sealed class AcceptanceGateEngineSettingsTests
             lane => Xunit.Assert.True(
                 lane.EstimatedSerialSeconds > 0,
                 $"Checked-in lane '{lane.Name}' must carry a positive serial-duration estimate."));
-        AssertLanePairPreservesCoverage(
+        AssertLaneSetPreservesCoverage(
             settings,
-            "Goal lifecycle commands",
-            "Goal worktree cleanup",
+            ["Goal lifecycle commands", "Goal worktree cleanup", "Goal worktree parallel"],
             [
                 "AcceptanceCohortWorkflowTests",
-                "CliCommandTestsGoalLifecycleCommands",
+                "CliCommandTestsGoalLifecycleCleanupHooks",
                 "CliCommandTestsPersistentRunnerCommands",
                 "CliCommandTestsSubscriptionDispatchCommands",
                 "CliCommandTestsTerminalSweepCommands",
                 "GoalGitFactIndexTests",
                 "GoalsPruneTests",
                 "GoalWorktreeTestsAcceptanceLanding",
+                "GoalWorktreeTestsCleanupHookDelegates",
                 "GoalWorktreeTestsCreationResolution",
                 "GoalWorktreeTestsOrphanEphemeralSweep",
                 "GoalWorktreeTestsRebaseMerge",
@@ -66,6 +67,9 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "GoalWorktreeTestsSqliteTooling",
                 "LandingExecutorTests"
             ]);
+        Xunit.Assert.Empty(settings.InfrastructureTestLanes
+            .Single(lane => lane.Name == "Goal worktree parallel")
+            .ExclusiveResourceKeys);
         AssertLanePairPreservesCoverage(
             settings,
             "Worker profiles",
@@ -1000,16 +1004,23 @@ public sealed class AcceptanceGateEngineSettingsTests
         string firstLaneName,
         string secondLaneName,
         IReadOnlyList<string> expectedClasses)
-    {
-        var first = settings.InfrastructureTestLanes.Single(lane => lane.Name == firstLaneName);
-        var second = settings.InfrastructureTestLanes.Single(lane => lane.Name == secondLaneName);
-        var firstClasses = FilterClasses(first.Filter);
-        var secondClasses = FilterClasses(second.Filter);
+        => AssertLaneSetPreservesCoverage(settings, [firstLaneName, secondLaneName], expectedClasses);
 
-        Xunit.Assert.Empty(firstClasses.Intersect(secondClasses, StringComparer.Ordinal));
+    private static void AssertLaneSetPreservesCoverage(
+        AcceptanceGateEngineSettings settings,
+        IReadOnlyList<string> laneNames,
+        IReadOnlyList<string> expectedClasses)
+    {
+        var laneClasses = laneNames
+            .Select(name => FilterClasses(settings.InfrastructureTestLanes.Single(lane => lane.Name == name).Filter))
+            .ToArray();
+
+        Xunit.Assert.Equal(
+            laneClasses.Sum(classes => classes.Length),
+            laneClasses.SelectMany(classes => classes).Distinct(StringComparer.Ordinal).Count());
         Xunit.Assert.Equal(
             expectedClasses.Order(StringComparer.Ordinal),
-            firstClasses.Concat(secondClasses).Order(StringComparer.Ordinal));
+            laneClasses.SelectMany(classes => classes).Order(StringComparer.Ordinal));
     }
 
     private static bool IsRunnableTestClass(Type type) =>

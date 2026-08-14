@@ -1668,6 +1668,34 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_first_available_build_permit_reserves_priority_while_waiting")]
+    public void DotnetBuildEnvironmentManagerFirstAvailableBuildPermitReservesPriorityWhileWaiting()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(
+            new GoalId("89abcdef89abcdef89abcdef89abcdef"),
+            "priority-scan");
+        using var lease0 = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+            DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0),
+                TimeSpan.Zero)).Lease;
+        using var lease1 = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+            DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(
+                DotnetBuildEnvironmentManager.CreateStableSlotAttempt(1),
+                TimeSpan.Zero)).Lease;
+
+        var acquisition = DotnetBuildEnvironmentManager.TryAcquireFirstAvailableBuildPermit(
+            environment,
+            TimeSpan.Zero,
+            onWait: () =>
+            {
+                Assert.True(IsByteRangeLocked(lease0.Environment.ExecutionLockPath + ".acceptance-priority.lock"));
+                Assert.True(IsByteRangeLocked(lease1.Environment.ExecutionLockPath + ".acceptance-priority.lock"));
+            });
+
+        Assert.IsType<DotnetBuildLeaseAcquisition.SlotsBusy>(acquisition);
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_early_release_shuts_down_build_servers_before_releasing_permit")]
     public void DotnetBuildEnvironmentManagerEarlyReleaseShutsDownBuildServersBeforeReleasingPermit()
     {

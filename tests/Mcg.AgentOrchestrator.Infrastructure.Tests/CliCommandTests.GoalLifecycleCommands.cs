@@ -8,7 +8,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Text.Json;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
 {
     [Xunit.Fact]
@@ -1897,53 +1896,6 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "Cli_retention_plan_archives_abandoned_goal_evidence_and_deletes_orphaned_build_lease")]
-    public void CliRetentionPlanArchivesAbandonedGoalEvidenceAndDeletesOrphanedBuildLease()
-    {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
-        var kernel = new AgentOrchestratorKernel();
-        var task = new TaskSpec(TaskId.New(), "Fail work", AgentRole.Developer);
-        var goal = kernel.CreateGoal("Retention abandoned", [task]);
-        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-        var providers = new InMemoryModelProviderRegistry([]);
-        var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = goal;
-        kernel.ActivateGoal(goal.Id, agents);
-        kernel.CancelGoal(goal.Id, "Abandoned during retention test.");
-        Directory.CreateDirectory(Path.Combine(root, ".orchestrator-context", goal.Id.Value));
-        Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "pre-review-evidence-attempts", goal.Id.Value));
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "retention");
-        MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
-
-        try
-        {
-            var output = CaptureConsole(() =>
-            {
-                var changed = CliCommandDispatcher.ExecuteCommand(
-                    ["retention-plan"],
-                    kernel,
-                    workspace,
-                    ref agents,
-                    providers,
-                    ref profiles,
-                    ref currentGoal);
-                Xunit.Assert.False(changed);
-            });
-
-            Xunit.Assert.Contains("State: Abandoned", output);
-            Xunit.Assert.Contains("ContextPackage: Archive; exists=True", output);
-            Xunit.Assert.Contains("TestEvidence: Archive; exists=True", output);
-            Xunit.Assert.Contains("BuildLease: DeleteNow; exists=True", output);
-            Xunit.Assert.Contains("command: build-lease-cleanup --confirm-build-lease-cleanup", output);
-        }
-        finally
-        {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id);
-        }
-    }
-
-
     [Xunit.Fact(DisplayName = "Cli_operator_inbox_reports_and_acknowledges_items")]
     public void CliOperatorInboxReportsAndAcknowledgesItems()
     {
@@ -2190,93 +2142,6 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         Xunit.Assert.Contains("Interrupted operations:", output);
         Xunit.Assert.Contains("acceptance", output);
         Xunit.Assert.Contains("Recommended actions:", output);
-    }
-
-
-    [Xunit.Fact(DisplayName = "Cli_goal_recovery_reports_orphaned_build_lease_cleanup")]
-    public void CliGoalRecoveryReportsOrphanedBuildLeaseCleanup()
-    {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("Recover orphaned build lease", [
-            new TaskSpec(TaskId.New(), "Inspect", AgentRole.Developer)
-        ]);
-        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-        var providers = new InMemoryModelProviderRegistry([]);
-        var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = goal;
-        kernel.ActivateGoal(goal.Id, agents);
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "stale");
-        MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
-        string output;
-        try
-        {
-            output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
-                ["goal-recovery", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal));
-        }
-        finally
-        {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id);
-        }
-        Xunit.Assert.Contains("Build lease: goal-", output);
-        Xunit.Assert.Contains("canCleanup=True", output);
-        Xunit.Assert.Contains("goal build lease is orphaned", output);
-        Xunit.Assert.Contains("build-lease-cleanup --confirm-build-lease-cleanup", output);
-    }
-
-
-    [Xunit.Fact(DisplayName = "Cli_build_lease_cleanup_requires_confirmation_and_deletes_orphaned_lease")]
-    public void CliBuildLeaseCleanupRequiresConfirmationAndDeletesOrphanedLease()
-    {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
-        var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("Clean orphaned build lease", [
-            new TaskSpec(TaskId.New(), "Inspect", AgentRole.Developer)
-        ]);
-        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-        var providers = new InMemoryModelProviderRegistry([]);
-        var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = goal;
-        kernel.ActivateGoal(goal.Id, agents);
-        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "stale");
-        MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
-        var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
-            ["build-lease-cleanup", goal.Id.Value[..8]],
-            kernel,
-            workspace,
-            ref agents,
-            providers,
-            ref profiles,
-            ref currentGoal));
-        Xunit.Assert.Contains("--confirm-build-lease-cleanup", blocked.Message);
-
-        string leaseOutput;
-        try
-        {
-            leaseOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
-                ["build-lease-cleanup", goal.Id.Value[..8], "--confirm-build-lease-cleanup"],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal));
-        }
-        finally
-        {
-            DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id);
-        }
-
-        Xunit.Assert.Contains("Deleted orphaned build lease", leaseOutput);
-        Xunit.Assert.False(Directory.Exists(environment.RootPath));
     }
 
 
@@ -2720,6 +2585,146 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
+}
+
+[Xunit.Collection(TestCollections.IsolatedDotnetRoot)]
+public sealed class CliCommandTestsIsolatedBuildLeaseCommands : CliCommandTestBase
+{
+    [Xunit.Fact(DisplayName = "Cli_retention_plan_archives_abandoned_goal_evidence_and_deletes_orphaned_build_lease")]
+    public void CliRetentionPlanArchivesAbandonedGoalEvidenceAndDeletesOrphanedBuildLease()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Fail work", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Retention abandoned", [task]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        kernel.CancelGoal(goal.Id, "Abandoned during retention test.");
+        Directory.CreateDirectory(Path.Combine(root, ".orchestrator-context", goal.Id.Value));
+        Directory.CreateDirectory(Path.Combine(root, ".orchestrator", "pre-review-evidence-attempts", goal.Id.Value));
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "retention");
+        MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
+
+        try
+        {
+            var output = CaptureConsole(() =>
+            {
+                var changed = CliCommandDispatcher.ExecuteCommand(
+                    ["retention-plan"],
+                    kernel,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal);
+                Xunit.Assert.False(changed);
+            });
+
+            Xunit.Assert.Contains("State: Abandoned", output);
+            Xunit.Assert.Contains("ContextPackage: Archive; exists=True", output);
+            Xunit.Assert.Contains("TestEvidence: Archive; exists=True", output);
+            Xunit.Assert.Contains("BuildLease: DeleteNow; exists=True", output);
+            Xunit.Assert.Contains("command: build-lease-cleanup --confirm-build-lease-cleanup", output);
+        }
+        finally
+        {
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id));
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_goal_recovery_reports_orphaned_build_lease_cleanup")]
+    public void CliGoalRecoveryReportsOrphanedBuildLeaseCleanup()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Recover orphaned build lease", [
+            new TaskSpec(TaskId.New(), "Inspect", AgentRole.Developer)
+        ]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "stale");
+        MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
+        string output;
+        try
+        {
+            output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["goal-recovery", goal.Id.Value[..8]],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+        }
+        finally
+        {
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id));
+        }
+        Xunit.Assert.Contains("Build lease: goal-", output);
+        Xunit.Assert.Contains("canCleanup=True", output);
+        Xunit.Assert.Contains("goal build lease is orphaned", output);
+        Xunit.Assert.Contains("build-lease-cleanup --confirm-build-lease-cleanup", output);
+    }
+
+    [Xunit.Fact(DisplayName = "Cli_build_lease_cleanup_requires_confirmation_and_deletes_orphaned_lease")]
+    public void CliBuildLeaseCleanupRequiresConfirmationAndDeletesOrphanedLease()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Clean orphaned build lease", [
+            new TaskSpec(TaskId.New(), "Inspect", AgentRole.Developer)
+        ]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = goal;
+        kernel.ActivateGoal(goal.Id, agents);
+        var environment = DotnetBuildEnvironmentManager.CreateAttempt(goal.Id, "stale");
+        MakeLeaseOwnerStale(environment.LeaseMetadataPath!);
+        var blocked = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CliCommandDispatcher.ExecuteCommand(
+            ["build-lease-cleanup", goal.Id.Value[..8]],
+            kernel,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        Xunit.Assert.Contains("--confirm-build-lease-cleanup", blocked.Message);
+
+        string leaseOutput;
+        try
+        {
+            leaseOutput = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["build-lease-cleanup", goal.Id.Value[..8], "--confirm-build-lease-cleanup"],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+        }
+        finally
+        {
+            Xunit.Assert.True(DotnetBuildEnvironmentManager.TryDeleteGoalArtifacts(goal.Id));
+        }
+
+        Xunit.Assert.Contains("Deleted orphaned build lease", leaseOutput);
+        Xunit.Assert.False(Directory.Exists(environment.RootPath));
+    }
+}
+
+[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
+public sealed class CliCommandTestsGoalLifecycleCleanupHooksAbandon : CliCommandTestBase
+{
     [Xunit.Fact(DisplayName = "Cli_abandon_goal_confirmed_cancels_and_removes_clean_workspace")]
     public void CliAbandonGoalConfirmedCancelsAndRemovesCleanWorkspace()
     {
@@ -2775,6 +2780,10 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
+}
+
+public sealed class CliCommandTestsGoalLifecycleCommandsCreation : CliCommandTestBase
+{
     [Xunit.Fact(DisplayName = "Cli_goal_role_flags_assign_named_agents_at_creation")]
     public void CliGoalRoleFlagsAssignNamedAgentsAtCreation()
     {
@@ -3076,48 +3085,6 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
-    [Xunit.Fact(DisplayName = "Cli_status_prints_cleanup_backoff_for_snapshot_visibility")]
-    public void CliStatusPrintsCleanupBackoffForSnapshotVisibility()
-    {
-        var root = CreateTempDirectory();
-        var workspace = CreateRefinedWorkspace(root);
-        var originalNow = GoalWorktrees.CleanupUtcNow;
-        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
-        try
-        {
-            var now = DateTimeOffset.Parse("2026-07-03T12:00:00Z");
-            GoalWorktrees.CleanupUtcNow = () => now;
-            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(15);
-            var kernel = new AgentOrchestratorKernel();
-            var goal = kernel.CreateGoal("Cleanup debt visible in status");
-            GoalWorktrees.RecordGoalCleanupNeeded(workspace.ExecutionDirectory, goal.Id, "remove:branch-delete-failed");
-            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-            var providers = new InMemoryModelProviderRegistry([]);
-            var profiles = WorkerProfileCatalog.Default();
-            Goal? currentGoal = goal;
-
-            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
-                ["status", goal.Id.Value[..8]],
-                kernel,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal));
-
-            Xunit.Assert.Contains("Cleanup backoff:", output);
-            Xunit.Assert.Contains("reason=remove:branch-delete-failed", output);
-            Xunit.Assert.Contains("skip_until_utc=2026-07-03T12:15:00.0000000+00:00", output);
-            Xunit.Assert.Contains("remaining_wait=00:15:00", output);
-            Xunit.Assert.Contains($"Cleanup retry: conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop", output);
-        }
-        finally
-        {
-            GoalWorktrees.CleanupUtcNow = originalNow;
-            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
-        }
-    }
-
     [Xunit.Fact(DisplayName = "Cli_cleanup_status_uses_caller_cleanup_clock_and_backoff")]
     public void CliCleanupStatusUsesCallerCleanupClockAndBackoff()
     {
@@ -3184,6 +3151,11 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
     }
 
 
+}
+
+[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
+public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliCommandTestBase
+{
     [Xunit.Fact(DisplayName = "Cli_acceptance_records_dogfood_entry_in_sqlite_without_committing_log_file")]
     public async Task CliAcceptanceRecordsDogfoodEntryInSqliteWithoutCommittingLogFile()
     {
@@ -4188,5 +4160,51 @@ public sealed class CliCommandTestsGoalLifecycleCommands : CliCommandTestBase
         RunGitOutput(root, "commit", "-m", "Move main");
 
         return (root, workspace, kernel, goal);
+    }
+}
+
+[Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
+public sealed class CliCommandTestsGoalLifecycleCleanupHooks : CliCommandTestBase
+{
+    [Xunit.Fact(DisplayName = "Cli_status_prints_cleanup_backoff_for_snapshot_visibility")]
+    public void CliStatusPrintsCleanupBackoffForSnapshotVisibility()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var originalNow = GoalWorktrees.CleanupUtcNow;
+        var originalBackoff = GoalWorktrees.CleanupBackoffDuration;
+        try
+        {
+            var now = DateTimeOffset.Parse("2026-07-03T12:00:00Z");
+            GoalWorktrees.CleanupUtcNow = () => now;
+            GoalWorktrees.CleanupBackoffDuration = TimeSpan.FromMinutes(15);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Cleanup debt visible in status");
+            GoalWorktrees.RecordGoalCleanupNeeded(workspace.ExecutionDirectory, goal.Id, "remove:branch-delete-failed");
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = new InMemoryModelProviderRegistry([]);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = goal;
+
+            var output = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+                ["status", goal.Id.Value[..8]],
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.Contains("Cleanup backoff:", output);
+            Xunit.Assert.Contains("reason=remove:branch-delete-failed", output);
+            Xunit.Assert.Contains("skip_until_utc=2026-07-03T12:15:00.0000000+00:00", output);
+            Xunit.Assert.Contains("remaining_wait=00:15:00", output);
+            Xunit.Assert.Contains($"Cleanup retry: conduct {goal.Id.Value[..8].ToLowerInvariant()} --loop", output);
+        }
+        finally
+        {
+            GoalWorktrees.CleanupUtcNow = originalNow;
+            GoalWorktrees.CleanupBackoffDuration = originalBackoff;
+        }
     }
 }
