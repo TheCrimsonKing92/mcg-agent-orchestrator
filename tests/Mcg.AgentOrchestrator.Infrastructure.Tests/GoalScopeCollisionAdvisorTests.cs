@@ -341,6 +341,34 @@ public sealed class GoalScopeCollisionAdvisorTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_journal_observer_skips_external_facts_for_non_verified_goal")]
+    public void JournalObserverSkipsExternalFactsForNonVerifiedGoal()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-scope-collision-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal(
+                "Change src/Feature/File.cs.",
+                [new TaskSpec(TaskId.New(), "Implement planned work.", AgentRole.Developer)]);
+            kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+            goal = kernel.GetGoal(goal.Id);
+            GoalOperationJournal.Failed(root, goal, "conductor:cleanup", "Fixture blocking lifecycle fact.");
+
+            var observation = GoalMonitoringSubscriptionCommand.ReadScopeCollisionLifecycleObservation(workspace, goal);
+
+            Xunit.Assert.Equal(GoalStatus.Active, goal.Status);
+            Xunit.Assert.True(observation.IsAvailable);
+            Xunit.Assert.Equal(GoalLifecycleState.Created, observation.State);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "GoalScopeCollisionAdvisor_missing_lifecycle_evidence_qualifies_overlap")]
     public void MissingLifecycleEvidenceQualifiesOverlap()
     {

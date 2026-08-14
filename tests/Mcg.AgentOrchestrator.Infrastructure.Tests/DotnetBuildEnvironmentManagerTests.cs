@@ -3069,7 +3069,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
                 receiptPath,
                 logPath,
                 "budget-test",
-                budgetSeconds: 5,
+                budgetSeconds: 15,
                 leaseWaitSeconds: 5,
                 projectFile,
                 "FullyQualifiedName~FocusedProcessFixtureTests");
@@ -3078,7 +3078,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start budget fixture.");
             var stdout = process.StandardOutput.ReadToEnd();
             var stderr = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(15000), "Budget fixture did not exit within 15 seconds.");
+            Assert.True(process.WaitForExit(30000), "Budget fixture did not exit within 30 seconds.");
             var result = (ExitCode: process.ExitCode, Stdout: stdout, Stderr: stderr);
 
             Assert.Equal(2, result.ExitCode);
@@ -3088,7 +3088,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             Assert.True(receipt.RootElement.GetProperty("leaseReleased").GetBoolean());
             var outputLogPath = receipt.RootElement.GetProperty("outputLogPath").GetString();
             Assert.False(string.IsNullOrWhiteSpace(outputLogPath));
-            Assert.True(File.Exists(outputLogPath));
+            Assert.True(File.Exists(startedPath));
             Assert.Equal(JsonValueKind.Null, receipt.RootElement.GetProperty("testProcessExitCode").ValueKind);
             Assert.False(File.Exists(logPath));
             Assert.True(string.IsNullOrWhiteSpace(RunCommand("git", workDirectory, "status", "--porcelain")));

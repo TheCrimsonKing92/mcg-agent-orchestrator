@@ -769,6 +769,11 @@ internal static class GoalMonitoringSubscriptionCommand
         OrchestratorWorkspace workspace,
         Goal goal)
     {
+        if (!RequiresScopeCollisionLifecycleFacts(goal))
+        {
+            return new GoalScopeLifecycleObservation(GoalLifecycle.ResolveState(goal));
+        }
+
         try
         {
             return ReadScopeCollisionLifecycleObservation(
@@ -818,6 +823,11 @@ internal static class GoalMonitoringSubscriptionCommand
         Goal goal,
         bool hasOpenClarification)
     {
+        if (!RequiresScopeCollisionLifecycleFacts(goal))
+        {
+            return new GoalScopeLifecycleObservation(GoalLifecycle.ResolveState(goal));
+        }
+
         try
         {
             return new GoalScopeLifecycleObservation(
@@ -830,6 +840,9 @@ internal static class GoalMonitoringSubscriptionCommand
             return UnavailableScopeCollisionLifecycleObservation(ex);
         }
     }
+
+    private static bool RequiresScopeCollisionLifecycleFacts(Goal goal) =>
+        goal.Status == GoalStatus.Verified;
 
     private static GoalScopeLifecycleObservation UnavailableScopeCollisionLifecycleObservation(Exception ex) =>
         new(State: null, UnavailableReason: ex.GetType().Name);
