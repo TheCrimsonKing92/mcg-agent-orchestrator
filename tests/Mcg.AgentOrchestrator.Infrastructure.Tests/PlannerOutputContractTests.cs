@@ -42,7 +42,25 @@ public sealed class PlannerOutputContractTests : WorkerDispatchTestSupport
             workingDirectory);
 
         Xunit.Assert.False(result.Succeeded);
-        Xunit.Assert.Contains("AcceptanceOwnershipStore.cs", result.Diagnostic, StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            "target citation 'src/AcceptanceOwnershipStore.cs' does not exist",
+            result.Diagnostic,
+            StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("- Extend `src/NewStore.cs` — new durable ownership store.")]
+    [Xunit.InlineData("- Extend `src/NewFixture.cs` (new file) with focused contract coverage.")]
+    [Xunit.InlineData("- Create `src/CreatedDocument.md` with the verification receipt.")]
+    [Xunit.InlineData("- Add new file `src/AddedScript.ps1` for the verification workflow.")]
+    public void PlannerContract_NewFileMarkerVariantsPermitMissingTargets(string targetBody)
+    {
+        var workingDirectory = CreateTempDirectory();
+        var plan = ReplaceSectionBody(PlannerContractPlanFixture(), "## Target seams and symbols", targetBody);
+
+        var result = PlannerOutputContract.Resolve(plan, string.Empty, workingDirectory);
+
+        Xunit.Assert.True(result.Succeeded, result.Diagnostic);
     }
 
     [Xunit.Fact]
