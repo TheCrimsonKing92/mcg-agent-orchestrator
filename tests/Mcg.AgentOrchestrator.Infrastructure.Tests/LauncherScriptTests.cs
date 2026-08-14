@@ -403,6 +403,8 @@ public sealed class LauncherScriptTests
         Assert.True(string.IsNullOrWhiteSpace(result.Stderr), result.Stderr);
         Assert.Contains("RESUME_BLOCKED reason=conduct-stop-target-unknown", result.Stdout, StringComparison.Ordinal);
         Assert.Contains("RESUME_FAILED reason=recovery-unavailable", result.Stdout, StringComparison.Ordinal);
+        var recoveryLog = File.ReadAllText(Path.Combine(sandbox.RepositoryRoot, ".orchestrator", "logs", "auto-resume.log"));
+        Assert.Contains("RESUME_FAILED reason=recovery-unavailable", recoveryLog, StringComparison.Ordinal);
         Assert.False(File.Exists(sandbox.StartInvocationPath), "Resume should not relaunch while .conduct-stop exists.");
     }
 

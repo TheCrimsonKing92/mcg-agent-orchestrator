@@ -402,7 +402,8 @@ try {
     }
 }
 catch {
-    Write-Output "RESUME_FAILED reason=recovery-unavailable detail=$($_.Exception.Message)"
+    Write-ResumeReceipt -RepositoryRoot $repoRoot -Message (
+        "RESUME_FAILED reason=recovery-unavailable detail=$($_.Exception.Message)")
     exit 1
 }
 
