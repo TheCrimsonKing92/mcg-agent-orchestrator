@@ -214,14 +214,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+    private const string DashboardTestsProject = "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj";
+    private const string TestSupportProject = "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj";
     private const string ProviderEnvironmentTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
     private const string CliTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
     private const int MaxFocusedEvidenceFilterLength = 1024;
     internal const string FocusedEvidenceSupportedProjectForms =
         "Core, Core.Tests, Mcg.AgentOrchestrator.Core.Tests, Infrastructure, Infrastructure.Tests, " +
-        "Mcg.AgentOrchestrator.Infrastructure.Tests, or a full .csproj path ending in " +
+        "Mcg.AgentOrchestrator.Infrastructure.Tests, Dashboard, Dashboard.Tests, " +
+        "Mcg.AgentOrchestrator.Dashboard.Tests, or a full .csproj path ending in " +
         "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj or " +
-        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj; " +
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj or " +
+        "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj; " +
         "extracted Infrastructure test projects registered in engine.mtpInvocations also accept their " +
         "project label, file name, or full .csproj path";
     private const string PartitionVerdictJournalOperation = "acceptance:partition-verdict";
@@ -231,11 +235,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [AppProject] = [InfrastructureTestsProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [CoreProject] = [InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [AppProject] = [InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [CoreTestsProject] = [],
         [InfrastructureTestsProject] = [],
+        [DashboardTestsProject] = [],
+        [TestSupportProject] = [InfrastructureTestsProject, DashboardTestsProject],
         [ProviderEnvironmentTestsProject] = [],
         [CliTestsProject] = []
     };
@@ -319,6 +325,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AppProject,
         CoreTestsProject,
         InfrastructureTestsProject,
+        DashboardTestsProject,
+        TestSupportProject,
         ProviderEnvironmentTestsProject,
         CliTestsProject
     ];
@@ -1855,8 +1863,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             "Core.Tests" or "Core" or "Mcg.AgentOrchestrator.Core.Tests" => CoreTestsProject,
             "Infrastructure.Tests" or "Infrastructure" or "Mcg.AgentOrchestrator.Infrastructure.Tests" => InfrastructureTestsProject,
+            "Dashboard.Tests" or "Dashboard" or "Mcg.AgentOrchestrator.Dashboard.Tests" => DashboardTestsProject,
             _ when normalized.EndsWith(CoreTestsProject, StringComparison.OrdinalIgnoreCase) => CoreTestsProject,
             _ when normalized.EndsWith(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase) => InfrastructureTestsProject,
+            _ when normalized.EndsWith(DashboardTestsProject, StringComparison.OrdinalIgnoreCase) => DashboardTestsProject,
             _ => string.Empty
         };
         if (project.Length > 0)
@@ -1867,7 +1877,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         foreach (var invocation in engineSettings?.MtpInvocations ?? [])
         {
             var candidate = NormalizePath(invocation.Project)!;
-            if (!IsExtractedInfrastructureTestProject(candidate))
+            if (!IsExtractedInfrastructureTestProject(candidate) && !IsDashboardTestProject(candidate))
             {
                 continue;
             }
@@ -2512,6 +2522,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return AppProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Core.Tests/", StringComparison.OrdinalIgnoreCase))
             return CoreTestsProject;
+        if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Dashboard.Tests/", StringComparison.OrdinalIgnoreCase))
+            return DashboardTestsProject;
+        if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.TestSupport/", StringComparison.OrdinalIgnoreCase))
+            return TestSupportProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/", StringComparison.OrdinalIgnoreCase))
             return ProviderEnvironmentTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/", StringComparison.OrdinalIgnoreCase))
@@ -2527,6 +2541,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         project.Equals(AppProject, StringComparison.OrdinalIgnoreCase) ? "App" :
         project.Equals(CoreTestsProject, StringComparison.OrdinalIgnoreCase) ? "Core.Tests" :
         project.Equals(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure.Tests" :
+        project.Equals(DashboardTestsProject, StringComparison.OrdinalIgnoreCase) ? "Dashboard.Tests" :
+        project.Equals(TestSupportProject, StringComparison.OrdinalIgnoreCase) ? "TestSupport" :
         IsExtractedInfrastructureTestProject(project) ? ExtractedInfrastructureProjectLabel(project) :
         project;
 
@@ -2660,6 +2676,14 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             "tests\\Mcg.AgentOrchestrator.Core.Tests\\Mcg.AgentOrchestrator.Core.Tests.csproj",
             StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsDashboardTestProject(string project) =>
+        project.EndsWith(
+            DashboardTestsProject,
+            StringComparison.OrdinalIgnoreCase) ||
+        project.EndsWith(
+            "tests\\Mcg.AgentOrchestrator.Dashboard.Tests\\Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
+            StringComparison.OrdinalIgnoreCase);
+
     private static bool IsReplacedByFocusedProjectCheck(
         AcceptanceManifestCheck manifestCheck,
         IReadOnlyList<AcceptanceManifestCheck> focusedProjectChecks) =>
@@ -2737,6 +2761,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         !string.IsNullOrWhiteSpace(project) &&
         (IsCoreTestProject(project) ||
          IsInfrastructureTestProject(project) ||
+         IsDashboardTestProject(project) ||
          IsExtractedInfrastructureTestProject(project))
             ? "mtp"
             : "vstest";
@@ -6291,6 +6316,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string.IsNullOrWhiteSpace(check.Project) ||
         check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
         IsInfrastructureTestProject(check.Project) ||
+        IsDashboardTestProject(check.Project) ||
         IsExtractedInfrastructureTestProject(check.Project);
 
     private static bool GateUsesStableSlot(int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease) =>

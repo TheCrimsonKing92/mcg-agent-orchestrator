@@ -4,7 +4,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Reflection;
 
 public static class SharedTestSupport
 {
@@ -15,22 +14,11 @@ public static class SharedTestSupport
         return path;
     }
 
-    public static dynamic CreateRefinedWorkspaceOpaque(string root)
+    public static object CreateRefinedWorkspaceOpaque(string root)
     {
         SeedLocalSkillCatalog(root);
-        var workspaceType = typeof(AgentTaskRunner).Assembly.GetType(
-            "Mcg.AgentOrchestrator.App.Orchestration.OrchestratorWorkspace",
-            throwOnError: true)!;
-        var forDirectory = workspaceType.GetMethod(
-            "ForDirectory",
-            BindingFlags.Public | BindingFlags.Static,
-            binder: null,
-            [typeof(string), typeof(string), typeof(string)],
-            modifiers: null)
-            ?? throw new MissingMethodException(workspaceType.FullName, "ForDirectory");
-        var workspace = forDirectory.Invoke(null, [root, null, null])
-            ?? throw new InvalidOperationException("OrchestratorWorkspace.ForDirectory returned null.");
-        _ = StateDbMigrations.EnsureUpToDate(GetWorkspacePath(workspace, "SqliteStatePath"));
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
         SeedSpecRefinerBinding(workspace);
         return workspace;
     }
@@ -56,7 +44,9 @@ public static class SharedTestSupport
 
     public static void SeedSpecRefinerBinding(object workspace)
     {
-        ModelFunctionCatalogStore.Save(GetWorkspacePath(workspace, "ModelFunctionCatalogPath"), new ModelFunctionCatalog([
+        var orchestratorWorkspace = workspace as OrchestratorWorkspace
+            ?? throw new ArgumentException("Expected an OrchestratorWorkspace.", nameof(workspace));
+        ModelFunctionCatalogStore.Save(orchestratorWorkspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
             new ModelFunctionBinding(
                 ModelFunctionPurposes.SpecRefiner,
                 ModelLane.CheapApi,
@@ -81,9 +71,19 @@ public static class SharedTestSupport
             CreateNoWindow = true
         };
 
+        // Pin Ollama to an unreachable endpoint so assertions are deterministic
+        // regardless of whether a live Ollama server runs on this machine.
         startInfo.EnvironmentVariables["OLLAMA_BASE_URL"] = "http://127.0.0.1:1";
-        startInfo.EnvironmentVariables["MCG_ORCHESTRATOR_REPOSITORY_ROOT"] = workingDirectory;
+        startInfo.EnvironmentVariables[OrchestratorWorkspace.RepoRootEnvironmentVariable] = workingDirectory;
+
+        // Spawned-app dispatch starts must never launch real subscription CLIs:
+        // codex/claude authenticate from account state, not the API keys pinned
+        // below, so without this flag auto-handoff tests burn real usage and edit
+        // real worktrees under the repository root.
         startInfo.EnvironmentVariables[BackgroundDispatchRunner.DisableDispatchStartVariable] = "1";
+
+        // Pin provider credentials and model names so spawned-app assertions are
+        // machine-independent regardless of what keys or models the host has set.
         startInfo.EnvironmentVariables["OPENAI_API_KEY"] = "test-openai-key";
         startInfo.EnvironmentVariables["ANTHROPIC_API_KEY"] = "test-anthropic-key";
         startInfo.EnvironmentVariables["OPENAI_MODEL"] = "test-openai-model";
@@ -148,7 +148,7 @@ public static class SharedTestSupport
         {
             Environment.CurrentDirectory,
             AppContext.BaseDirectory,
-            Environment.GetEnvironmentVariable("MCG_ORCHESTRATOR_REPOSITORY_ROOT")
+            Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable)
         };
 
         foreach (var candidate in candidates)
@@ -174,14 +174,6 @@ public static class SharedTestSupport
         throw new DirectoryNotFoundException("Could not locate repository root.");
     }
 
-    private static string GetWorkspacePath(object workspace, string propertyName)
-    {
-        ArgumentNullException.ThrowIfNull(workspace);
-        return workspace.GetType().GetProperty(
-                propertyName,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetValue(workspace) as string
-            ?? throw new MissingMemberException(workspace.GetType().FullName, propertyName);
-    }
 }
 
 public sealed class FakeSmokeProvider : IModelProvider
