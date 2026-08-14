@@ -1,16 +1,5 @@
 using Mcg.AgentOrchestrator.Infrastructure;
 
-public static class TestCollections
-{
-    public const string ChaosGateGit = "ChaosGateGit";
-    public const string DotnetBuildSlots = "DotnetBuildSlots";
-    public const string EnvMutation = "EnvMutation";
-    public const string GoalAcceptanceVerifier = "GoalAcceptanceVerifier";
-    public const string GoalWorktreeCleanupHooks = "GoalWorktreeCleanupHooks";
-    public const string JobAccounting = "JobAccounting";
-    public const string ProcessSpawning = "ProcessSpawning";
-}
-
 // Pins MCG_DOTNET_ISOLATED_ROOT to an ephemeral per-run temp root for the dotnet
 // build-slot collection. Per-test EnvVarScope overrides nest cleanly on top of
 // this baseline and the collection root is deleted only after the slot tests finish.

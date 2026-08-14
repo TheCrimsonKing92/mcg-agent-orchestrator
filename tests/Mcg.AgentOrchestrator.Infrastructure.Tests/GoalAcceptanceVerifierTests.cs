@@ -3612,7 +3612,6 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 "infrastructure tests: Cli",
                 "infrastructure tests: Worker shell",
                 "infrastructure tests: Worker sandbox planner",
-                "infrastructure tests: Dashboard validation",
                 "infrastructure tests: Conduct watch sweep scoping",
                 "infrastructure tests: Goal lifecycle commands",
                 "infrastructure tests: Goal worktree cleanup",
@@ -3646,12 +3645,18 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInCliLaneFilter));
             Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInGoalAcceptanceVerifierLaneFilter));
             Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInGoalAcceptanceBuildSlotsLaneFilter));
-            Assert.DoesNotContain(infrastructureCalls, call => call.Contains("FullyQualifiedName~DashboardHostTests&Category!=HostIntegration"));
             Assert.Contains(infrastructureCalls, call =>
                 call.Any(argument =>
                     argument.Contains("FullyQualifiedName!~GoalAcceptanceVerifierTests", StringComparison.Ordinal) &&
-                    argument.Contains("FullyQualifiedName!~DashboardRenderingTests", StringComparison.Ordinal) &&
                     argument.Contains("Category!=HostIntegration", StringComparison.Ordinal)));
+            Assert.DoesNotContain(infrastructureCalls, call =>
+                call.Any(argument => argument.Contains("Dashboard", StringComparison.Ordinal)));
+            Assert.Contains(calls, call =>
+                call.Any(argument => argument.Contains(
+                    "Mcg.AgentOrchestrator.Dashboard.Tests",
+                    StringComparison.Ordinal)) &&
+                call.Contains("--filter-not-trait") &&
+                call.Contains("Category=HostIntegration"));
         }
         finally
         {

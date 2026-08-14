@@ -97,7 +97,7 @@ public sealed class MtpTestRunnerScriptTests
         var manifest = Path.Combine(root, "config", "acceptance-manifest.json");
         var command = $"Import-Module '{module.Replace("'", "''")}' -Force; " +
             $"$manifest = Read-MtpTestManifest '{manifest.Replace("'", "''")}'; $partitions = @(Get-MtpLocalPartitions $manifest); " +
-            "$result = [ordered]@{ cli = @(($partitions | Where-Object Name -eq 'Cli').Filters); dashboard = @(($partitions | Where-Object Name -eq 'Dashboard').Filters) }; " +
+            "$result = [ordered]@{ cli = @(($partitions | Where-Object Name -eq 'Cli').Filters); names = @($partitions.Name) }; " +
             "$result | ConvertTo-Json -Compress";
 
         var result = RunPowerShellCommand(root, command);
@@ -105,10 +105,9 @@ public sealed class MtpTestRunnerScriptTests
         Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
         using var document = JsonDocument.Parse(result.Stdout.Trim());
         var cliFilters = document.RootElement.GetProperty("cli").EnumerateArray().Select(item => item.GetString()).ToArray();
-        var dashboardFilters = document.RootElement.GetProperty("dashboard").EnumerateArray().Select(item => item.GetString()).ToArray();
         Xunit.Assert.Contains("FullyQualifiedName~CliHelpTests", cliFilters);
-        Xunit.Assert.Contains("FullyQualifiedName~DashboardRenderingTests", dashboardFilters);
-        Xunit.Assert.Contains("FullyQualifiedName~DashboardHostTests", dashboardFilters);
+        var partitionNames = document.RootElement.GetProperty("names").EnumerateArray().Select(item => item.GetString()).ToArray();
+        Xunit.Assert.DoesNotContain("Dashboard", partitionNames);
     }
 
     [Xunit.Theory]
