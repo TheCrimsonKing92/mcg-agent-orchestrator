@@ -2212,10 +2212,10 @@ public sealed class ConductorDriverTests
 
         driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
 
-        Assert.Contains("src/Foo29.cs(29,1): error CS1002: ; expected", retryMessage!, StringComparison.Ordinal);
-        Assert.DoesNotContain("src/Foo30.cs(30,1): error CS1002: ; expected", retryMessage!, StringComparison.Ordinal);
-        Assert.Contains("... truncated 6 acceptance evidence line(s)", retryMessage!, StringComparison.Ordinal);
-        Assert.True(task.CriterionRetryFeedback.Any(item => item.Contains("... truncated 6 acceptance evidence line(s)", StringComparison.Ordinal)));
+        Assert.Contains("src/Foo30.cs(30,1): error CS1002: ; expected", retryMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/Foo31.cs(31,1): error CS1002: ; expected", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("5 more acceptance evidence entries omitted.", retryMessage!, StringComparison.Ordinal);
+        Assert.True(task.CriterionRetryFeedback.Any(item => item.Contains("5 more acceptance evidence entries omitted.", StringComparison.Ordinal)));
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_Verified_unmet_acceptance_retry_feedback_preserves_no_evidence_fallback")]

@@ -5516,12 +5516,18 @@ internal sealed class ConductorDriver
         var remainingEvidenceEntries = MaxCriterionRetryEvidenceLines;
         foreach (var criterion in criteria.Where(criterion => !criterion.Passed))
         {
-            evidence.Add(FormatFailedCheckEvidence(criterion));
             var outputEvidence = ExtractConcreteOutputEvidence(criterion).ToArray();
             var testResultPaths = criterion.TestResultPaths?
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray() ?? [];
+
+            if (outputEvidence.Length == 0 && testResultPaths.Length == 0)
+            {
+                continue;
+            }
+
+            evidence.Add(FormatFailedCheckEvidence(criterion));
 
             if (testResultPaths.Length == 0)
             {
