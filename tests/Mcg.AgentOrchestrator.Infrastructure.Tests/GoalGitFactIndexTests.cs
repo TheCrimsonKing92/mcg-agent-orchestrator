@@ -5,11 +5,29 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class GoalGitFactIndexTests
 {
+    [Xunit.Fact]
+    public void BuildBranchQueryFailureMarksEvidenceUnavailable()
+    {
+        var originalRunner = GoalGitFactIndex.GitRunner;
+        try
+        {
+            GoalGitFactIndex.GitRunner = (_, _) => new GitCli.GitResult(1, string.Empty, "git unavailable");
+
+            var index = GoalGitFactIndex.Build(Environment.CurrentDirectory);
+
+            Assert.False(index.IsAvailable);
+        }
+        finally
+        {
+            GoalGitFactIndex.GitRunner = originalRunner;
+        }
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(0, "- 1111111111111111111111111111111111111111\n- 2222222222222222222222222222222222222222\n", "EquivalentToMain")]
     [Xunit.InlineData(0, "- 1111111111111111111111111111111111111111\n+ 2222222222222222222222222222222222222222\n", "AbsentFromMain")]
     [Xunit.InlineData(1, "", "Inconclusive")]
-    [Xunit.InlineData(0, "", "Inconclusive")]
+    [Xunit.InlineData(0, "", "NoCommitsAhead")]
     [Xunit.InlineData(0, "unexpected output", "Inconclusive")]
     [Xunit.InlineData(0, "- not-an-object-id", "Inconclusive")]
     public void ClassifyCherryResult_Output_ReturnsExpectedState(
@@ -49,6 +67,111 @@ public sealed class GoalGitFactIndexTests
         finally
         {
             GoalGitFactIndex.GitRunner = originalRunner;
+        }
+    }
+
+    [Xunit.Fact]
+    public void BuildReplacementFacts_BranchAtMainTipIsNotLanded()
+    {
+        var originalRunner = GoalGitFactIndex.GitRunner;
+        var goal = CreateGoalWithStatus("Zero-commit replacement branch", GoalStatus.Cancelled);
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var mainSha = "1111111111111111111111111111111111111111";
+        var index = new GoalGitFactIndex(
+            Environment.CurrentDirectory,
+            isGitWorkTree: true,
+            new Dictionary<string, string>(StringComparer.Ordinal) { [branch] = mainSha },
+            new HashSet<string>(StringComparer.Ordinal) { branch },
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            mainSha);
+        try
+        {
+            GoalGitFactIndex.GitRunner = (_, args) =>
+                string.Join(" ", args).StartsWith("cherry ", StringComparison.Ordinal)
+                    ? new GitCli.GitResult(0, string.Empty, string.Empty)
+                    : new GitCli.GitResult(1, string.Empty, "unexpected git command");
+
+            var facts = index.BuildReplacementFacts(goal);
+
+            Assert.False(facts.BranchAlreadyLanded);
+            Assert.Equal(GoalBranchContentState.NoCommitsAhead, facts.ContentState);
+        }
+        finally
+        {
+            GoalGitFactIndex.GitRunner = originalRunner;
+        }
+    }
+
+    [Xunit.Fact]
+    public void BuildReplacementFacts_ZeroCommitBranchAtOlderMainAncestorIsNotLanded()
+    {
+        var originalRunner = GoalGitFactIndex.GitRunner;
+        var goal = CreateGoalWithStatus("Historical zero-commit replacement branch", GoalStatus.Failed);
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var branchSha = "1111111111111111111111111111111111111111";
+        var mainSha = "2222222222222222222222222222222222222222";
+        var index = new GoalGitFactIndex(
+            Environment.CurrentDirectory,
+            isGitWorkTree: true,
+            new Dictionary<string, string>(StringComparer.Ordinal) { [branch] = branchSha },
+            new HashSet<string>(StringComparer.Ordinal) { branch },
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            mainSha);
+        try
+        {
+            GoalGitFactIndex.GitRunner = (_, args) =>
+                string.Join(" ", args).StartsWith("cherry ", StringComparison.Ordinal)
+                    ? new GitCli.GitResult(0, string.Empty, string.Empty)
+                    : new GitCli.GitResult(1, string.Empty, "unexpected git command");
+
+            var facts = index.BuildReplacementFacts(goal);
+
+            Assert.False(facts.BranchAlreadyLanded);
+            Assert.Equal(GoalBranchContentState.NoCommitsAhead, facts.ContentState);
+        }
+        finally
+        {
+            GoalGitFactIndex.GitRunner = originalRunner;
+        }
+    }
+
+    [Xunit.Fact]
+    public void ReplacementEvidence_InconclusiveBranchContent_FailsClosedWithoutInventingDelta()
+    {
+        var originalRunner = GoalGitFactIndex.GitRunner;
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-goal-replacement-evidence-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var goal = CreateGoalWithStatus("Inconclusive replacement evidence", GoalStatus.Cancelled);
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        try
+        {
+            GoalGitFactIndex.GitRunner = (_, args) => string.Join(" ", args) switch
+            {
+                "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/" =>
+                    new GitCli.GitResult(0, $"{branch} 1111111111111111111111111111111111111111\n", string.Empty),
+                "for-each-ref --format=%(refname:short) --merged HEAD refs/heads/goal/" =>
+                    new GitCli.GitResult(0, string.Empty, string.Empty),
+                "worktree list --porcelain" => new GitCli.GitResult(0, string.Empty, string.Empty),
+                "rev-parse --verify refs/heads/main" =>
+                    new GitCli.GitResult(0, "2222222222222222222222222222222222222222\n", string.Empty),
+                var command when command.StartsWith("cherry ", StringComparison.Ordinal) =>
+                    new GitCli.GitResult(1, string.Empty, "classification unavailable"),
+                var command => new GitCli.GitResult(1, string.Empty, $"unexpected git command: {command}")
+            };
+
+            var facts = GoalReplacementEvidence.Capture(workspace, goal);
+
+            Assert.False(facts.IsGitEvidenceAvailable);
+            Assert.False(facts.HasRepositoryDelta);
+            Assert.Equal(
+                GoalReplacementOutcome.ProtectedOwner,
+                SourceBacklogClaimEligibility.Evaluate(GoalReplacementDisposition.ZeroWorkCorrection, facts));
+        }
+        finally
+        {
+            GoalGitFactIndex.GitRunner = originalRunner;
+            Directory.Delete(root, recursive: true);
         }
     }
 

@@ -85,6 +85,23 @@ public sealed class CliArgumentNormalizationTests
             CliArgumentParser.NormalizeArgs(["note", "1", "operator", "note", "--goal", "38d0e2e9"]));
     }
 
+    [Xunit.Fact]
+    public void GoalReplace_ExternalArgv_PreservesPredecessorAndFlags()
+    {
+        string[] args =
+        [
+            "goal-replace", "11111111111111111111111111111111",
+            "--brief-file", @"C:\operator records\brief.md",
+            "--reason-file", @"C:\operator records\reason.md",
+            "--request-id", "22222222-2222-2222-2222-222222222222",
+            "--disposition", "zero-work-correction",
+            "--confirm-goal-replace",
+            "--pipeline", "five-role"
+        ];
+
+        Xunit.Assert.Equal(args, CliArgumentParser.NormalizeArgs(args));
+    }
+
     [Xunit.Theory]
     [Xunit.InlineData(new[] { "progress", "1", "failed", "--goal" }, "--goal requires")]
     [Xunit.InlineData(new[] { "progress", "--goal", "abc12345", "1", "failed", "note", "--goal", "def67890" }, "only once")]
