@@ -158,6 +158,7 @@ public static class RepositoryTestImpactPlanner
         }
         else if (infrastructureTestFilter is not null &&
             !summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure/")) &&
+            !summary.Files.Any(file => StartsWith(file.Path, "src/Mcg.AgentOrchestrator.Infrastructure.Providers/")) &&
             !touchesApp &&
             !touchesScriptsOrConfig)
         {
