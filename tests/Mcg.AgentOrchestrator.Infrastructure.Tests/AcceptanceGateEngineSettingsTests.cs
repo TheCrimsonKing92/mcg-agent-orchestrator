@@ -139,9 +139,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(
             ["--verbosity", "minimal", "--filter-not-trait", "Category=HostIntegration"],
             dashboardCheck["arguments"]!.AsArray().Select(value => value!.GetValue<string>()));
-        Xunit.Assert.Equal(
-            ["xunit:EnvMutation", "xunit:ProcessSpawning"],
-            dashboardCheck["exclusiveResourceKeys"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Xunit.Assert.False(dashboardCheck.ContainsKey("exclusiveResourceKeys"));
 
         var solutionText = File.ReadAllText(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln"));
         var trustedTestProjects = GoalAcceptanceVerifier.DiscoverTrustedTestProjects(repositoryRoot, repositoryRoot);
