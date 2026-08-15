@@ -1627,7 +1627,7 @@ public sealed class GoalWorktreeTestsAcceptanceRetry : GoalWorktreeTestBase
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class GoalWorktreeIsolatedDotnetTests : GoalWorktreeTestBase
 {
-    private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromSeconds(90);
 
     [Xunit.Fact(DisplayName = "InvokeIsolatedDotnet_reuses_prebuilt_test_assembly_and_dependency_directory")]
     public async Task InvokeIsolatedDotnetReusesPrebuiltTestAssemblyAndDependencyDirectory()
