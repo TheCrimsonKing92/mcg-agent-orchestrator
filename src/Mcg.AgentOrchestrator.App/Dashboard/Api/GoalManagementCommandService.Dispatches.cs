@@ -20,14 +20,9 @@ public static IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTas
     var results = new List<WorkerProfileDispatchResult>();
     var assigned = goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList();
     if (goal.RefinedSpec is null && assigned.All(task => task.RequiredRole != AgentRole.Researcher))
-    {
-        EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
-        goal = kernel.GetGoal(goal.Id);
-        assigned = goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList();
-    }
+        _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, goal.Id);
 
-    foreach (var task in assigned.Where(task =>
-        goal.RefinedSpec is not null || task.RequiredRole == AgentRole.Researcher))
+    foreach (var task in assigned.Where(task => IsRefinementEligible(goal, task)))
     {
         results.Add(ProfileDispatchTask(kernel, workspace, goal, task, profile, agents));
     }
@@ -404,12 +399,16 @@ internal static void EnsureRefinedForSpecConsumer(
     IModelProviderRegistry? providers,
     Goal goal)
 {
-    GoalRefinementGate.EnsureRefined(
-        kernel,
-        workspace,
-        providers ?? new InMemoryModelProviderRegistry([]),
-        goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, kernel.GetGoal(goal.Id));
+    var current = kernel.GetGoal(goal.Id);
+    if (current.RefinedSpec is null)
+    {
+        var launch = GoalRefinementWorkCoordinator.TryLaunch(workspace, goal.Id);
+        throw new InvalidOperationException(
+            $"SPEC_REFINEMENT_PENDING goal={goal.Id.Value} owner=durable-outbox " +
+            $"executor_started={launch.Started.ToString().ToLowerInvariant()} detail={launch.Detail}");
+    }
+
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, current);
 }
 
 private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(
@@ -419,6 +418,7 @@ private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(
 {
     var assigned = goal.Tasks
         .Where(IsSubscriptionStartCandidate)
+        .Where(task => IsRefinementEligible(goal, task))
         .ToList();
     var plan = BuildReadyTaskParallelPlan(goal, agents, approveHighRiskOwnership);
     var firstBatch = plan.Batches.FirstOrDefault();
@@ -441,6 +441,7 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
 {
     var assigned = goal.Tasks
         .Where(IsSubscriptionStartCandidate)
+        .Where(task => IsRefinementEligible(goal, task))
         .ToList();
     var intents = assigned
         .Select(task =>
@@ -463,6 +464,9 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
         .ToList();
     return ParallelExecutionPlanner.Build(intents, providerQuotas, approveHighRiskOwnership);
 }
+
+private static bool IsRefinementEligible(Goal goal, TaskSpec task) =>
+    goal.RefinedSpec is not null || task.RequiredRole == AgentRole.Researcher;
 
 private sealed record ParallelSafeBatchSelection(
     HashSet<TaskId> TaskIds,

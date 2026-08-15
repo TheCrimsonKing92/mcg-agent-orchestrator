@@ -1627,6 +1627,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
                     GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
+                    GoalRefinementWorkCoordinator.TryLaunchFirstPending(
+                        new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
+                        context.Workspace);
                     RunEventMaintenanceCadence.TryRunIfDue(
                         context.Workspace.RunEventStorePath,
                         context.Workspace.ConductEventsLogPath);
@@ -1744,6 +1747,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchReaper = new BackgroundDispatchRunner();
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {
+                    GoalRefinementWorkCoordinator.TryLaunchFirstPending(
+                        new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
+                        context.Workspace);
                     watchReaper.BeginRefreshCycle();
                     foreach (var resolved in wk.SweepStaleHumanWaits(TimeSpan.FromHours(24)))
                     {

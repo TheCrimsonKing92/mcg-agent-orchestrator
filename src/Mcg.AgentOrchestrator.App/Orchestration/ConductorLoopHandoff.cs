@@ -812,7 +812,7 @@ internal static partial class ConductorLoopHandoff
         return match.Success ? match.Groups["name"].Value : null;
     }
 
-    private static ConductLoopLaunchResult LaunchDetached(ConductLoopLaunchRequest request)
+    internal static ConductLoopLaunchResult LaunchDetached(ConductLoopLaunchRequest request)
     {
         var command = request.CommandPrefix?.ToList() ?? [];
         if (command.Count == 0)

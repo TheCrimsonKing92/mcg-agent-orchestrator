@@ -3299,6 +3299,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var beforeKernel = await CreateMigratedStateRepository(workspace.SqliteStatePath).LoadAsync();
         var beforeSnapshot = JsonSerializer.Serialize(beforeKernel.ExportGoalSnapshot(existingGoal.Id));
         var beforeOutbox = await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind);
+        var beforeRefinementOutbox = await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents
             .Where(agent => agent.Role != AgentRole.Tester)
             .ToArray();
@@ -3321,6 +3322,9 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var afterGoal = Xunit.Assert.Single(afterKernel.Goals);
         Xunit.Assert.Equal(beforeSnapshot, JsonSerializer.Serialize(afterKernel.ExportGoalSnapshot(afterGoal.Id)));
         Xunit.Assert.Equal(beforeOutbox, await reloadedRepository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+        Xunit.Assert.Equal(
+            beforeRefinementOutbox,
+            await reloadedRepository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
         Xunit.Assert.Equal(existingGoal.Id, currentGoal!.Id);
         Xunit.Assert.Contains("missing available agent role(s): Tester", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("No goal was created", exception.Message, StringComparison.Ordinal);
@@ -3377,6 +3381,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains($"goal-delivery-retry {created.Id.Value}", error.Message, StringComparison.Ordinal);
         Xunit.Assert.True(lifecycleAttempts >= 2);
         Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+        Xunit.Assert.Single(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
 
         CreateVersion7StateOutboxFixture(workspace.SqliteStatePath);
         Xunit.Assert.False(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));

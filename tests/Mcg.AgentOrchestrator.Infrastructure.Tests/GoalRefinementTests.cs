@@ -89,8 +89,8 @@ public sealed class GoalRefinementTests
             ExtractRenderedAcceptanceCriteria(brief));
     }
 
-    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_returns_before_slow_refinement_and_holds_planner_preparation")]
-    public async Task GoalLifecycleCommandsReturnsBeforeSlowRefinementAndHoldsPlannerPreparation()
+    [Xunit.Fact(DisplayName = "GoalLifecycleCommands_returns_before_slow_refinement_and_durable_owner_holds_planner")]
+    public async Task GoalLifecycleCommandsReturnsBeforeSlowRefinementAndDurableOwnerHoldsPlanner()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -117,6 +117,19 @@ public sealed class GoalRefinementTests
         Xunit.Assert.Null(goal.RefinedSpec);
         Xunit.Assert.False(provider.Started.Task.IsCompleted);
 
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.TransactWithOutboxAsync(
+            (persistedKernel, _) =>
+            {
+                persistedKernel.ReplaceGoalWithSnapshot(kernel.ExportGoalSnapshot(goal.Id));
+                return Task.FromResult((
+                    ShouldSave: true,
+                    Result: true,
+                    OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[
+                        GoalRefinementWorkCoordinator.CreateMessage(goal.Id)
+                    ]));
+            });
+
         var profile = new WorkerProfile("test-profile", "Write-Output {promptPath}");
         var researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
         _ = GoalManagementCommandService.ProfileDispatchTask(
@@ -128,28 +141,64 @@ public sealed class GoalRefinementTests
             AgentCatalog.Default().Agents,
             providers);
         Xunit.Assert.False(provider.Started.Task.IsCompleted);
+        await repository.SaveAsync(kernel);
 
         var planner = goal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
-        var plannerPreparation = Task.Run(() => GoalManagementCommandService.ProfileDispatchTask(
-            kernel,
+        var pending = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            GoalManagementCommandService.ProfileDispatchTask(
+                kernel,
+                workspace,
+                goal,
+                planner,
+                profile,
+                AgentCatalog.Default().Agents,
+                providers));
+        Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
+        Xunit.Assert.False(provider.Started.Task.IsCompleted);
+
+        var refinement = GoalRefinementWorkCoordinator.ProcessAsync(
+            repository,
             workspace,
-            goal,
-            planner,
-            profile,
-            AgentCatalog.Default().Agents,
-            providers));
+            providers,
+            WorkerProfileCatalog.Default(),
+            goal.Id);
         await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
-        Xunit.Assert.False(plannerPreparation.IsCompleted);
+        Xunit.Assert.False(refinement.IsCompleted);
 
         provider.CompleteWith("""
             ```json
             {"behavioralContract":"Use the completed refined spec.","acceptanceCriteria":["Planner sees the spec"],"verificationClass":"TestVerifiable","decisions":[],"forks":[]}
             ```
             """);
+        var refinementResult = await refinement.WaitAsync(TimeSpan.FromSeconds(2));
+        Xunit.Assert.True(refinementResult.Claimed);
+        Xunit.Assert.True(refinementResult.Attached);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+        var replay = await GoalRefinementWorkCoordinator.ProcessAsync(
+            repository,
+            workspace,
+            providers,
+            WorkerProfileCatalog.Default(),
+            goal.Id);
+        Xunit.Assert.False(replay.Claimed);
+        Xunit.Assert.False(replay.Attached);
+
+        var reloadedKernel = await repository.LoadAsync();
+        var reloadedGoal = reloadedKernel.GetGoal(goal.Id);
+        var reloadedResearcher = reloadedGoal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+        Xunit.Assert.NotNull(reloadedResearcher.LastDispatch);
+        var reloadedPlanner = reloadedGoal.Tasks.First(task => task.RequiredRole == AgentRole.Planner);
         var preflight = await Xunit.Assert.ThrowsAsync<WorkerSubscriptionPreflightException>(
-            () => plannerPreparation.WaitAsync(TimeSpan.FromSeconds(2)));
+            () => Task.Run(() => GoalManagementCommandService.ProfileDispatchTask(
+                reloadedKernel,
+                workspace,
+                reloadedGoal,
+                reloadedPlanner,
+                profile,
+                AgentCatalog.Default().Agents,
+                providers)));
         Xunit.Assert.Contains("missing-research-artifact", preflight.Message, StringComparison.Ordinal);
-        Xunit.Assert.Equal("Use the completed refined spec.", kernel.GetGoal(goal.Id).RefinedSpec!.BehavioralContract);
+        Xunit.Assert.Equal("Use the completed refined spec.", reloadedGoal.RefinedSpec!.BehavioralContract);
     }
 
     [Xunit.Fact(DisplayName = "GoalLifecycleCommands_records_auto_pipeline_decision_and_creates_reviewer_lane")]
