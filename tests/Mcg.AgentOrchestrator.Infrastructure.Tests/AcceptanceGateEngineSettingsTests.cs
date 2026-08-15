@@ -55,7 +55,6 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "CliCommandTestsGoalLifecycleCleanupHooks",
                 "CliCommandTestsPersistentRunnerCommands",
                 "CliCommandTestsSubscriptionDispatchCommands",
-                "CliCommandTestsTerminalSweepCommands",
                 "GoalGitFactIndexTests",
                 "GoalsPruneTests",
                 "GoalWorktreeTestsAcceptanceLanding",
@@ -70,6 +69,24 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Empty(settings.InfrastructureTestLanes
             .Single(lane => lane.Name == "Goal worktree parallel")
             .ExclusiveResourceKeys);
+        var terminalSweepLane = Xunit.Assert.Single(settings.InfrastructureTestLanes
+            .Where(lane => LaneIncludesClass(lane, typeof(CliCommandTestsTerminalSweepCommands))));
+        Xunit.Assert.Equal("Cli", terminalSweepLane.Name);
+        Xunit.Assert.Empty(terminalSweepLane.ExclusiveResourceKeys);
+        var gitFactIndexLane = Xunit.Assert.Single(settings.InfrastructureTestLanes
+            .Where(lane => LaneIncludesClass(lane, typeof(GoalGitFactIndexTests))));
+        Xunit.Assert.Equal("Goal worktree parallel", gitFactIndexLane.Name);
+        Xunit.Assert.Empty(gitFactIndexLane.ExclusiveResourceKeys);
+        Xunit.Assert.Equal(
+            ["xunit:GoalWorktreeCleanupHooks"],
+            settings.InfrastructureTestLanes
+                .Single(lane => lane.Name == "Goal lifecycle commands")
+                .ExclusiveResourceKeys);
+        Xunit.Assert.Equal(
+            ["xunit:GoalWorktreeCleanupHooks"],
+            settings.InfrastructureTestLanes
+                .Single(lane => lane.Name == "Goal worktree cleanup")
+                .ExclusiveResourceKeys);
         AssertLanePairPreservesCoverage(
             settings,
             "Worker profiles",

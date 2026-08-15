@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Mcg.AgentOrchestrator.Core;
+using Mcg.AgentOrchestrator.Infrastructure;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -9,9 +10,12 @@ internal static class GoalReplacementEvidence
 {
     internal static Action<GoalId>? AfterFinalTransferValidation { get; set; }
 
-    public static GoalReplacementEligibilityFacts Capture(OrchestratorWorkspace workspace, Goal predecessor)
+    public static GoalReplacementEligibilityFacts Capture(
+        OrchestratorWorkspace workspace,
+        Goal predecessor,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
-        var gitFacts = GoalGitFactIndex.Build(workspace.ExecutionDirectory);
+        var gitFacts = GoalGitFactIndex.Build(workspace.ExecutionDirectory, gitRunner);
         var branchFacts = gitFacts.BuildReplacementFacts(predecessor);
         var journal = GoalOperationJournal.Read(workspace.ExecutionDirectory, predecessor.Id);
         var hasDispatch = predecessor.Tasks.Any(task =>
