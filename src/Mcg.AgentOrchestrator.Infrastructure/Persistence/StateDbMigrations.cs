@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class StateDbMigrations
 {
     private sealed record Migration(int Number, string Name, Action<SqliteConnection> Apply);
-    private const int CurrentMigrationNumber = 11;
+    private const int CurrentMigrationNumber = 12;
 
     /// <summary>
     /// Reports whether the published state store already has every numbered migration.
@@ -123,7 +123,8 @@ public static class StateDbMigrations
                 new(8, "state-outbox-lease-columns", repository.ApplyStateOutboxLeaseSchemaMigration),
                 new(9, "source-backlog-authoritative-claims", ApplySourceBacklogClaimSchema),
                 new(10, "goal-replacement-fingerprint-inputs", ApplyGoalReplacementFingerprintInputSchema),
-                new(11, "goal-replacement-assigned-agent-fingerprint-inputs", ApplyGoalReplacementAssignedAgentFingerprintInputSchema)
+                new(11, "goal-replacement-assigned-agent-fingerprint-inputs", ApplyGoalReplacementAssignedAgentFingerprintInputSchema),
+                new(12, "goal-intake-request-ledger", ApplyGoalIntakeRequestSchema)
             };
             ValidateMigrationSequence(migrations);
 
@@ -345,6 +346,32 @@ public static class StateDbMigrations
             "goal_replacement_audit",
             "assigned_agents",
             "ALTER TABLE goal_replacement_audit ADD COLUMN assigned_agents TEXT NOT NULL DEFAULT ''");
+    }
+
+    private static void ApplyGoalIntakeRequestSchema(SqliteConnection connection)
+    {
+        ExecuteNonQuery(connection, """
+            CREATE TABLE IF NOT EXISTS goal_intake_requests (
+                request_key         TEXT PRIMARY KEY COLLATE BINARY,
+                fingerprint_version INTEGER NOT NULL,
+                fingerprint         TEXT NOT NULL,
+                state               TEXT NOT NULL CHECK (state IN ('still-committing', 'created', 'failed')),
+                created_at          TEXT NOT NULL,
+                updated_at          TEXT NOT NULL,
+                goal_id             TEXT NULL,
+                failure_code        TEXT NULL,
+                failure_detail      TEXT NULL,
+                stdout_path         TEXT NULL,
+                stderr_path         TEXT NULL,
+                CHECK ((state = 'created' AND goal_id IS NOT NULL AND failure_code IS NULL) OR
+                       (state = 'failed' AND goal_id IS NULL AND failure_code IS NOT NULL) OR
+                       (state = 'still-committing' AND goal_id IS NULL AND failure_code IS NULL))
+            )
+            """, statementObserver: null);
+        ExecuteNonQuery(
+            connection,
+            "CREATE INDEX IF NOT EXISTS ix_goal_intake_requests_state_goal ON goal_intake_requests(state, goal_id)",
+            statementObserver: null);
     }
 
     private static void AddColumnIfMissing(
