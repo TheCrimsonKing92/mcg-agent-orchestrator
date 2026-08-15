@@ -4795,6 +4795,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         GoalAcceptanceVerifier.ResolveShardCoreBudgetForTests = () => 2;
         var root = CreateRealProcessShardManifestWorkspace();
         var repositoryRoot = InfrastructureTestSupport.FindRepositoryRoot();
+        const string infrastructureTestProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+        const string shardProbeProject =
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj";
         var invocations = new System.Collections.Concurrent.ConcurrentQueue<string[]>();
         var executablePaths = new System.Collections.Concurrent.ConcurrentBag<string>();
         var resultsDirectories = new System.Collections.Concurrent.ConcurrentBag<string>();
@@ -4822,6 +4826,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var verifier = new GoalAcceptanceVerifier(async (args, _, timeout, cancellationToken) =>
             {
                 invocations.Enqueue(args);
+                var processArgs = args;
+                if (args.Length >= 3 &&
+                    args[0].Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                    args[1].Equals("build", StringComparison.OrdinalIgnoreCase))
+                {
+                    Assert.Equal(infrastructureTestProject, args[2]);
+                    processArgs = [.. args];
+                    processArgs[2] = shardProbeProject;
+                }
+
                 var isShardTest =
                     IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.RealProcessShardProbe") &&
                     (args.Contains("--filter-class") || args.Contains("--filter-not-class"));
@@ -4837,7 +4851,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 }
 
                 return await RunRealShardProcessAsync(
-                    args,
+                    processArgs,
                     repositoryRoot,
                     timeout,
                     shardEnvironment,
@@ -7513,9 +7527,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 ],
                 "mtpInvocations": [
                   {
-                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj",
-                    "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
-                    "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "executablePathTemplate": "bin/Mcg.AgentOrchestrator.RealProcessShardProbe/{configuration}/Mcg.AgentOrchestrator.RealProcessShardProbe{executableExtension}",
+                    "firewallExecutablePathTemplate": "bin/Mcg.AgentOrchestrator.RealProcessShardProbe/{configuration}/Mcg.AgentOrchestrator.RealProcessShardProbe.exe",
                     "arguments": [
                       "{executable}",
                       "--no-ansi",
@@ -7537,7 +7551,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                   "name": "infrastructure tests",
                   "type": "dotnet-test",
                   "runner": "mtp",
-                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
                   "arguments": ["--verbosity", "minimal"]
                 }
               ],
