@@ -19,6 +19,127 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         WorkerSandboxOptions.DefaultAccount,
         WorkerSandboxOptions.DefaultCredentialTarget);
 
+    [Xunit.Fact]
+    public async Task GoalReplacement_PreflightAndTransfer_DoNotStartPaidWorker()
+    {
+        var root = CreateSeededDispatchRepository();
+        var workspace = InfrastructureTestSupport.CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("replacement-preflight-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Replacement preflight source");
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled zero-work predecessor");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No worker was dispatched.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "replacement-preflight-brief.md");
+        var reasonPath = Path.Combine(root, "replacement-preflight-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Create a corrected FiveRole successor.");
+        await File.WriteAllTextAsync(reasonPath, "Correct the malformed zero-work goal.");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var refiner = new ReplacementPreflightRefinerProvider();
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            [
+                "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                "--reason-file", reasonPath, "--request-id", Guid.NewGuid().ToString(),
+                "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                "--pipeline", "five-role"
+            ],
+            repository,
+            workspace,
+            ref agents,
+            new InMemoryModelProviderRegistry([refiner]),
+            ref profiles,
+            ref currentGoal));
+
+        var restored = await repository.LoadAsync();
+        var successor = Xunit.Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
+        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Contains("GOAL_REPLACE_SUCCEEDED", output, StringComparison.Ordinal);
+        var claim = new SourceBacklogClaimStore(workspace.SqliteStatePath).ResolveClaim(restored, item.Id);
+        Xunit.Assert.Equal(successor.Id.Value, claim!.OwnerGoalId);
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            successor.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.All(successor.Tasks, task =>
+        {
+            Xunit.Assert.Null(task.LastDispatch);
+            Xunit.Assert.Null(task.LastProcess);
+        });
+        Xunit.Assert.False(Directory.Exists(GoalWorktrees.WorktreePath(workspace.ExecutionDirectory, successor.Id)));
+        Xunit.Assert.Empty(Directory.Exists(workspace.LogDirectory)
+            ? Directory.EnumerateFiles(workspace.LogDirectory, "*.dispatch.json", SearchOption.TopDirectoryOnly)
+            : []);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplacement_ProtectedOwner_DoesNotStartPaidWorker()
+    {
+        var root = CreateSeededDispatchRepository();
+        var workspace = InfrastructureTestSupport.CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("replacement-preflight-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Protected replacement source");
+        var repository = InfrastructureTestSupport.CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal(
+            "Protected predecessor",
+            [new TaskSpec(TaskId.New(), "Keep the active owner protected.", AgentRole.Developer)]);
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.ActivateGoal(predecessor.Id, AgentCatalog.Default().Agents);
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "replacement-rejection-brief.md");
+        var reasonPath = Path.Combine(root, "replacement-rejection-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Prepare a successor that must remain blocked.");
+        await File.WriteAllTextAsync(reasonPath, "Confirm protected owners cannot be replaced.");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var refiner = new ReplacementPreflightRefinerProvider();
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                    "--reason-file", reasonPath, "--request-id", Guid.NewGuid().ToString(),
+                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                    "--pipeline", "five-role"
+                ],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([refiner]),
+                ref profiles,
+                ref currentGoal)));
+
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Contains("GOAL_REPLACE_PROTECTED_OWNER", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        var restoredPredecessor = Xunit.Assert.Single(restored.Goals);
+        Xunit.Assert.Equal(predecessor.Id, restoredPredecessor.Id);
+        var restoredTask = Xunit.Assert.Single(restoredPredecessor.Tasks);
+        Xunit.Assert.Null(restoredTask.LastDispatch);
+        Xunit.Assert.Null(restoredTask.LastProcess);
+        Xunit.Assert.False(Directory.Exists(GoalWorktrees.WorktreePath(workspace.ExecutionDirectory, predecessor.Id)));
+        Xunit.Assert.Empty(Directory.Exists(workspace.LogDirectory)
+            ? Directory.EnumerateFiles(workspace.LogDirectory, "*.dispatch.json", SearchOption.TopDirectoryOnly)
+            : []);
+    }
+
     [Xunit.Fact(DisplayName = "Worker_preflight_terminal_sweep_cleans_cancelled_worktree_without_starting_paid_process")]
     public void WorkerPreflightTerminalSweepCleansCancelledWorktreeWithoutStartingPaidProcess()
     {
@@ -49,6 +170,30 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         finally
         {
             _ = GoalWorktrees.DeleteDirectory(root);
+        }
+    }
+
+    private sealed class ReplacementPreflightRefinerProvider : IModelProvider
+    {
+        public string ProviderName => "replacement-preflight-refiner";
+
+        public int InvocationCount { get; private set; }
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            InvocationCount++;
+            const string response = """
+                ```json
+                {
+                  "behavioralContract": "Create a corrected FiveRole successor without dispatching it.",
+                  "acceptanceCriteria": ["The successor remains prepared for ordinary dispatch."],
+                  "verificationClass": "TestVerifiable",
+                  "decisions": [],
+                  "forks": []
+                }
+                ```
+                """;
+            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
         }
     }
 

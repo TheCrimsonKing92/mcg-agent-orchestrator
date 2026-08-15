@@ -38,6 +38,9 @@ private static bool HandleWorkspaceCommand(CliExecutionContext context, IReadOnl
     context.CurrentGoal = goal;
     var executionDirectory = context.Workspace.ExecutionDirectory;
     var branch = context.Worktrees.BranchName(goal.Id);
+    using var evidenceMutationLease = normalizedAction == "status"
+        ? null
+        : AcquireGoalEvidenceMutationLease(context, goal, $"workspace:{normalizedAction}");
     switch (normalizedAction)
     {
         case "status":
@@ -222,11 +225,24 @@ private static void EnsureGoalWorkspaceForDispatch(CliExecutionContext context, 
         return;
     }
 
+    using var evidenceMutationLease = AcquireGoalEvidenceMutationLease(context, goal, "workspace:auto-create");
     var branch = context.Worktrees.BranchName(goal.Id);
     GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:create", $"branch {branch}");
     var path = context.Worktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
     GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:create", path);
     Console.WriteLine($"Workspace auto-created: {path} (branch {branch})");
+}
+
+private static IDisposable AcquireGoalEvidenceMutationLease(
+    CliExecutionContext context,
+    Goal goal,
+    string operation)
+{
+    var owner = $"goal-evidence:{operation}:{Environment.ProcessId}:{Guid.NewGuid():N}";
+    return new ReconcileSweepRemediationStore(context.Workspace.SqliteStatePath)
+        .TryAcquireAcceptanceLease(goal.Id.Value, owner, TimeSpan.FromMinutes(30))
+        ?? throw new InvalidOperationException(
+            $"GOAL_OPERATION_BLOCKED goal={goal.Id.Value} operation={operation} reason=concurrent-acceptance-or-replacement");
 }
 
 // Post-merge cleanup is durable debt, not an acceptance gate. The conduct loop's terminal
@@ -263,7 +279,8 @@ private static bool JournalAutoCloseSourceBacklogItem(CliExecutionContext contex
         context.Workspace.BacklogStorePath,
         Console.WriteLine,
         context.Kernel,
-        context.Workspace.ExecutionDirectory);
+        context.Workspace.ExecutionDirectory,
+        stateDbPath: context.Workspace.SqliteStatePath);
     GoalOperationJournal.Completed(
         context.Workspace.ExecutionDirectory,
         goal,

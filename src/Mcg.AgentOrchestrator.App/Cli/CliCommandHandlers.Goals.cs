@@ -225,6 +225,99 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 {
     switch (command)
     {
+        case "goal-intake-status":
+        {
+            CliArgumentParser.RequirePartCount(parts, 2, "goal-intake-status <request-key>");
+            GoalIntakeRequestStore.ValidateRequestKey(parts[1]);
+            var record = new GoalIntakeRequestStore(context.Workspace.SqliteStatePath).Get(parts[1])
+                ?? throw new InvalidOperationException(
+                    $"GOAL_INTAKE_REQUEST_NOT_FOUND requestKey={parts[1]}");
+            ConsoleViews.PrintGoalIntakeReceipt(record);
+            return false;
+        }
+
+        case "goal-replace":
+        {
+            const string usage = "goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace";
+            CliArgumentParser.RequirePartCount(parts, 2, usage);
+            EnsureCliConfirmation(
+                parts,
+                "--confirm-goal-replace",
+                "goal-replace requires --confirm-goal-replace because it transfers authoritative backlog ownership.");
+            var predecessor = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts[1]);
+            if (predecessor.SourceBacklogItemId is not { } backlogItemId)
+                throw new InvalidOperationException($"GOAL_REPLACE_VALIDATION_REJECTED predecessor={predecessor.Id.Value} reason=predecessor-has-no-source-backlog");
+
+            var requestIdText = GetFlagValue(parts, "--request-id");
+            if (!Guid.TryParse(requestIdText, out var requestId))
+                throw new ArgumentException("--request-id requires a GUID.");
+            var disposition = ParseGoalReplacementDisposition(GetFlagValue(parts, "--disposition"));
+            var replacementObjective = ResolveTextArgument(parts, inlineIndex: 2, usage, "--brief-file");
+            var reason = ResolveTextArgument(parts, inlineIndex: 2, usage, "--reason-file").Trim();
+            if (string.IsNullOrWhiteSpace(reason))
+                throw new ArgumentException("--reason-file must contain a non-empty reason.");
+
+            var backlogItem = new BacklogStore(context.Workspace.BacklogStorePath)
+                .GetByExactIdAsync(backlogItemId).GetAwaiter().GetResult();
+            if (backlogItem is null)
+                throw new InvalidOperationException($"GOAL_REPLACE_VALIDATION_REJECTED backlogItem={backlogItemId} reason=source-backlog-missing");
+            if (backlogItem.Status != BacklogItemStatus.Open)
+                throw new InvalidOperationException($"GOAL_REPLACE_VALIDATION_REJECTED backlogItem={backlogItemId} status={backlogItem.Status} reason=source-backlog-not-open");
+
+            var replacementStore = new SourceBacklogClaimStore(context.Workspace.SqliteStatePath);
+            var claim = replacementStore
+                .ResolveClaim(context.Kernel, backlogItemId)
+                ?? throw new InvalidOperationException($"GOAL_REPLACE_VALIDATION_REJECTED backlogItem={backlogItemId} reason=source-claim-missing");
+            var priorAttempt = replacementStore.FindAudit(requestId);
+            if (!string.Equals(claim.OwnerGoalId, predecessor.Id.Value, StringComparison.Ordinal) &&
+                (priorAttempt is null ||
+                 !string.Equals(priorAttempt.PredecessorGoalId, predecessor.Id.Value, StringComparison.Ordinal)))
+                throw new SourceBacklogClaimConflictException(backlogItemId, predecessor.Id.Value, claim.OwnerGoalId, claim.Version);
+
+            var pipelineRequest = ResolveGoalIntakePipelineRequest(parts);
+            var plan = BuildGoalObjectivePlan(context, replacementObjective, simple: false, pipelineRequest);
+            GoalObjectivePlanner.ThrowIfBlocked(plan);
+            var replacementAgents = ApplyRoleAgentOverrides(parts, context.Agents);
+            GoalLifecycleCommands.EnsureRequestedPipelineCanBeSatisfied(plan, replacementAgents);
+            ConsoleViews.PrintGoalObjectivePlan(plan);
+            context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
+                context.Kernel,
+                replacementAgents,
+                plan,
+                context.Workspace,
+                context.Providers,
+                context.EventWriter,
+                context.RefinementCollaborationItemRaise);
+            context.Kernel.SetGoalSourceBacklogItemLink(
+                context.CurrentGoal.Id,
+                backlogItemId,
+                claim.Coverage);
+            foreach (var dependency in predecessor.DependsOn)
+                context.Kernel.SetGoalDependency(context.CurrentGoal.Id, dependency);
+
+            var requestedAgentOverrides = string.Join(
+                ',',
+                GoalRoleAgentFlags
+                    .OrderBy(entry => entry.Value)
+                    .Select(entry => (entry.Value, AgentId: GetFlagValue(parts, entry.Key)))
+                    .Where(entry => !string.IsNullOrWhiteSpace(entry.AgentId))
+                    .Select(entry => $"{entry.Value}={entry.AgentId}"));
+
+            context.FinalizeGoalReplacement(
+                context.CurrentGoal,
+                new GoalReplacementCommand(
+                    predecessor.Id,
+                    requestId,
+                    disposition,
+                    reason,
+                    replacementObjective,
+                    claim.OwnerGoalId,
+                    claim.Version,
+                    pipelineRequest == GoalIntakePipelineRequest.FiveRole ? "five-role" : "auto",
+                    requestedAgentOverrides));
+            return true;
+        }
+
         case "prototype":
             var objective = parts.Count > 1 ? parts[1] : "Create a Windows-based agent orchestrator";
             var prototypeKernel = new AgentOrchestratorKernel();
@@ -270,6 +363,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 PrintScopeCollisionAdvisory(context, runObjective);
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
                 PrintClosedSourceBacklogWarning(runSourceBacklogLink);
+                context.ReportGoalCreationProgress();
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                     context.Kernel,
                     runAgents,
@@ -294,6 +388,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintScopeCollisionAdvisory(context, goalObjective);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
+            context.ReportGoalCreationProgress();
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                 context.Kernel,
                 goalAgents,
@@ -316,6 +411,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintScopeCollisionAdvisory(context, simpleObjective);
             var simpleSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, simpleObjective);
             PrintClosedSourceBacklogWarning(simpleSourceBacklogLink);
+            context.ReportGoalCreationProgress();
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
                 context.Kernel,
@@ -574,6 +670,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     $"Re-run with --confirm-goal-mark-landed after verifying that goal {landedPrefix} was merged to main out-of-band.");
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, landedPrefix);
             var landedGoal = context.CurrentGoal;
+            using var evidenceMutationLease = AcquireGoalEvidenceMutationLease(context, landedGoal, "goal-mark-landed");
             var landedId = landedGoal.Id;
             var landedGp = landedId.Value[..8];
             if (landedGoal.Status is not (GoalStatus.Verifying or GoalStatus.Verified or GoalStatus.Completed))
@@ -1734,6 +1831,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             return null;
     }
 }
+
+private static GoalReplacementDisposition ParseGoalReplacementDisposition(string? value) =>
+    value?.Trim().ToLowerInvariant() switch
+    {
+        "zero-work-correction" => GoalReplacementDisposition.ZeroWorkCorrection,
+        "abandon-failed-attempt" => GoalReplacementDisposition.AbandonFailedAttempt,
+        "supersede-unlanded-attempt" => GoalReplacementDisposition.SupersedeUnlandedAttempt,
+        _ => throw new ArgumentException(
+            "--disposition requires one of: zero-work-correction, abandon-failed-attempt, supersede-unlanded-attempt.")
+    };
+
 
     internal static int RefreshTrackedGoalsPreservingCheckpointHolds(
         AgentOrchestratorKernel loopKernel,

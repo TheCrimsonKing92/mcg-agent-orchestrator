@@ -285,7 +285,12 @@ public sealed class GoalDependencyTests
             classifyChangeRisk: _ => null);
 
         var summary = new ConductorBatchLoop().Run(
-            kernel, driver, ConductorAutonomyPolicy.Conservative, NoStopPath(), maxIterations: 5);
+            kernel,
+            driver,
+            ConductorAutonomyPolicy.Conservative,
+            NoStopPath(),
+            maxIterations: 5,
+            sleepFunc: _ => false);
 
         Assert.False(bWorkspaceCreated);
         // A escalates (SpawnFailed). B may be held or dep-escalated depending on tick ordering,

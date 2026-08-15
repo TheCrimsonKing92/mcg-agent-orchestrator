@@ -1467,12 +1467,306 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "Create a linked goal", "--backlog-item", "abc", "--backlog-coverage", "slice"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "Create and run", "--run"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "Create simply", "--simple"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalReplacementCommand(["goal-replace", "abc"]));
 
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "--from-backlog"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsBacklogIntakeCommand(["goal", "--from-backlog"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command", "--request-key", "key"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal-mark-landed", "abc"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand([]));
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_same_key_replays_one_goal_and_task_graph()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var args = new[] { "simple-goal", "Implement one keyed task", "--request-key", "sequential-key" };
+
+        var firstOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var first = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        var originalTaskIds = first.Tasks.Select(task => task.Id.Value).ToArray();
+
+        var replayOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var restored = await repository.LoadAsync();
+
+        var onlyGoal = Xunit.Assert.Single(restored.Goals);
+        Xunit.Assert.Equal(first.Id, onlyGoal.Id);
+        Xunit.Assert.Equal(originalTaskIds, onlyGoal.Tasks.Select(task => task.Id.Value));
+        Xunit.Assert.Contains("\"state\":\"still-committing\"", firstOutput);
+        Xunit.Assert.Contains("\"state\":\"created\"", firstOutput);
+        Xunit.Assert.Contains("\"state\":\"created\"", replayOutput);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_conflicting_payload_reuse_is_rejected()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["simple-goal", "Original keyed task", "--request-key", "conflict-key"],
+            repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["simple-goal", "Changed keyed task", "--request-key", "conflict-key"],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Contains("GOAL_INTAKE_PAYLOAD_CONFLICT", error.Message);
+        Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_concurrent_same_key_creates_one_goal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        using var ready = new CountdownEvent(2);
+        using var release = new ManualResetEventSlim(false);
+
+        Task Start() => Task.Run(() =>
+        {
+            IReadOnlyList<AgentDefinition> localAgents = AgentCatalog.Default().Agents;
+            var localProfiles = WorkerProfileCatalog.Default();
+            Goal? localGoal = null;
+            ready.Signal();
+            release.Wait();
+            _ = CliPersistentStateRunner.ExecuteCommand(
+                ["simple-goal", "Concurrent keyed task", "--request-key", "concurrent-goal-key"],
+                CreateMigratedStateRepository(workspace.SqliteStatePath),
+                workspace,
+                ref localAgents,
+                new InMemoryModelProviderRegistry([]),
+                ref localProfiles,
+                ref localGoal);
+        });
+
+        var first = Start();
+        var second = Start();
+        Xunit.Assert.True(ready.Wait(TimeSpan.FromSeconds(15)), "Both goal attempts did not reach the event gate.");
+        release.Set();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(15));
+
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        Xunit.Assert.Equal(
+            GoalIntakeRequestStates.Created,
+            new GoalIntakeRequestStore(workspace.SqliteStatePath).Get("concurrent-goal-key")!.State);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_status_polls_without_retrying_creation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var store = new GoalIntakeRequestStore(workspace.SqliteStatePath);
+        _ = store.Reserve("poll-key", "poll-fingerprint");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal-intake-status", "poll-key"],
+            repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Contains("\"requestKey\":\"poll-key\"", output);
+        Xunit.Assert.Contains("\"state\":\"still-committing\"", output);
+        Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_unkeyed_duplicate_objectives_remain_distinct()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        for (var index = 0; index < 2; index++)
+        {
+            _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["simple-goal", "Same unkeyed objective"],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        }
+
+        Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_keyed_backlog_replay_keeps_atomic_goal_binding()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Keyed backlog source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var args = new[]
+        {
+            "backlog-intake", item.Id, "--create-simple-goal", "--backlog-coverage", "slice",
+            "--request-key", "backlog-key"
+        };
+
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var replay = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        var goal = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        var request = new GoalIntakeRequestStore(workspace.SqliteStatePath).Get("backlog-key")!;
+        var backlogRecord = new BacklogIntakeRecordStore(workspace.SqliteStatePath).Get(item.Id)!;
+        Xunit.Assert.Equal(goal.Id.Value, request.GoalId);
+        Xunit.Assert.Equal(goal.Id.Value, backlogRecord.GoalId);
+        Xunit.Assert.Contains("\"state\":\"created\"", replay);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_keyed_backlog_existing_goal_records_terminal_failure()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Already owned backlog source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var unkeyedArgs = new[]
+        {
+            "backlog-intake", item.Id, "--create-simple-goal", "--backlog-coverage", "slice"
+        };
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            unkeyedArgs, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var existingGoal = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [.. unkeyedArgs, "--request-key", "already-owned-backlog-key"],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Contains("GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL", error.Message);
+        Xunit.Assert.Contains(existingGoal.Id.Value, error.Message);
+        var request = new GoalIntakeRequestStore(workspace.SqliteStatePath).Get("already-owned-backlog-key")!;
+        Xunit.Assert.Equal(GoalIntakeRequestStates.Failed, request.State);
+        Xunit.Assert.Equal("GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL", request.FailureCode);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_keyed_backlog_in_progress_records_terminal_failure()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Busy backlog source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        _ = new BacklogIntakeRecordStore(workspace.SqliteStatePath).Reserve(item.Id, "Busy backlog source");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "backlog-intake", item.Id, "--create-simple-goal", "--backlog-coverage", "slice",
+                    "--request-key", "in-progress-backlog-key"
+                ],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Contains("GOAL_INTAKE_BACKLOG_RESERVATION_NOT_ACQUIRED", error.Message);
+        var request = new GoalIntakeRequestStore(workspace.SqliteStatePath).Get("in-progress-backlog-key")!;
+        Xunit.Assert.Equal(GoalIntakeRequestStates.Failed, request.State);
+        Xunit.Assert.Equal("GOAL_INTAKE_BACKLOG_RESERVATION_NOT_ACQUIRED", request.FailureCode);
+        Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
+    }
+
+    [Xunit.Fact]
+    public void GoalIntake_failed_status_is_pollable_without_failed_exit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var store = new GoalIntakeRequestStore(workspace.SqliteStatePath);
+        _ = store.Reserve("failed-key", "failed-fingerprint");
+        _ = store.MarkFailed("failed-key", "failed-fingerprint", "TEST_FAILURE", "controlled failure");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => Xunit.Assert.False(CliPersistentStateRunner.ExecuteCommand(
+            ["goal-intake-status", "failed-key"], repository, workspace, ref agents,
+            new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal)));
+
+        Xunit.Assert.Contains("\"state\":\"failed\"", output);
+        Xunit.Assert.Contains("\"failureCode\":\"TEST_FAILURE\"", output);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_dispatch_replay_stops_before_second_preflight()
+    {
+        using var sandbox = ClearWorkerSandboxEnv();
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, ".git"), "gitdir: fake");
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var args = new[]
+        {
+            "simple-goal", "Dispatch exactly once", "--dispatch", "--confirm-dispatch-start",
+            "--request-key", "dispatch-key"
+        };
+        var previous = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+            var first = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    args, repository, workspace, ref agents,
+                    new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]),
+                    ref profiles, ref currentGoal));
+            Xunit.Assert.Contains(BackgroundDispatchRunner.DisableDispatchStartVariable, first.Message);
+
+            var replay = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                args, repository, workspace, ref agents,
+                new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]),
+                ref profiles, ref currentGoal));
+            Xunit.Assert.Contains("\"state\":\"created\"", replay);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, previous);
+        }
+
+        var goal = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        Xunit.Assert.Null(goal.Tasks.Single().LastDispatch);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_refinement_allows_concurrent_sqlite_writer")]
@@ -1612,26 +1906,36 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 Name: ModelFunctionPurposes.SpecRefiner)
         ]));
         var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Single-consumer backlog source");
-        var repository = new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel());
-        repository.BeforeNextTransaction = stored =>
-        {
-            var competing = stored.CreateGoal("Competing intake winner");
-            stored.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Slice);
-        };
-        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
         var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
-            CliPersistentStateRunner.ExecuteCommand(
-                ["goal", "Create one linked goal", "--backlog-item", item.Id, "--backlog-coverage", "slice"],
-                repository,
-                workspace,
-                ref agents,
-                providers,
-                ref profiles,
-                ref currentGoal)));
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        {
+            var competingKernel = repository.LoadAsync().GetAwaiter().GetResult();
+            var competing = competingKernel.CreateGoal("Competing intake winner");
+            competingKernel.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Slice);
+            repository.SaveAsync(competingKernel).GetAwaiter().GetResult();
+        };
+        InvalidOperationException error;
+        try
+        {
+            error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    ["goal", "Create one linked goal", "--backlog-item", item.Id, "--backlog-coverage", "slice"],
+                    repository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+        }
 
         Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed", error.Message);
         Xunit.Assert.Null(currentGoal);
@@ -1727,6 +2031,1264 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(
             [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             persistedGoal.Tasks.Select(task => task.RequiredRole));
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplaceCancelledZeroWorkCreatesFiveRoleSuccessor()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        await File.WriteAllTextAsync(
+            Path.Combine(root, ".gitignore"),
+            ".agents/" + Environment.NewLine + ".orchestrator/" + Environment.NewLine);
+        RunGit(root, "add", ".gitignore");
+        RunGit(root, "commit", "-m", "Ignore test-local orchestrator state");
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var item = await backlogStore.AddAsync("Correct a malformed zero-work goal");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Malformed Developer plus Reviewer goal");
+        initial.AddTask(predecessor.Id, AgentRole.Developer, "Implement the malformed intake.");
+        initial.AddTask(predecessor.Id, AgentRole.Reviewer, "Review the malformed intake.");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "Malformed task graph; no work started.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "replacement-brief.md");
+        var reasonPath = Path.Combine(root, "replacement-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with one focused assertion.");
+        await File.WriteAllTextAsync(reasonPath, "Correct the malformed zero-work intake.");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var refiner = new ClarifyingGoalRefinerProvider();
+        var providers = new InMemoryModelProviderRegistry([refiner]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var requestId = Guid.NewGuid();
+        string[] replacementCommand =
+        [
+            "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+            "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+            "--disposition", "zero-work-correction", "--confirm-goal-replace",
+            "--pipeline", "five-role"
+        ];
+
+        var error = Xunit.Record.Exception(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            replacementCommand,
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal)));
+
+        Xunit.Assert.Null(error);
+        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Equal(2, restored.Goals.Count);
+        var successor = Xunit.Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
+        Xunit.Assert.Equal(item.Id, successor.SourceBacklogItemId);
+        Xunit.Assert.Equal(
+            [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
+            successor.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.All(successor.Tasks, task => Xunit.Assert.Null(task.LastDispatch));
+        Xunit.Assert.False(Directory.Exists(GoalWorktrees.WorktreePath(workspace.ExecutionDirectory, successor.Id)));
+
+        await backlogStore.CloseAsync(item.Id);
+        IReadOnlyList<AgentDefinition> replayAgents = Array.Empty<AgentDefinition>();
+        var replayProfiles = new WorkerProfileCatalog([]);
+        Goal? replayCurrentGoal = null;
+        var replayOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            replacementCommand,
+            repository,
+            workspace,
+            ref replayAgents,
+            new InMemoryModelProviderRegistry([]),
+            ref replayProfiles,
+            ref replayCurrentGoal));
+        Xunit.Assert.Contains("GOAL_REPLACE_REPLAYED", replayOutput, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"Goal {successor.Id.Value[..8]}", replayOutput, StringComparison.Ordinal);
+        Xunit.Assert.Equal(successor.Id, replayCurrentGoal!.Id);
+        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
+        await backlogStore.ReopenAsync(item.Id, "Continue the replacement landing fixture.");
+        var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(requestId);
+        Xunit.Assert.NotNull(audit);
+        Xunit.Assert.Equal(GoalReplacementOutcome.Succeeded, audit!.Outcome);
+        Xunit.Assert.Equal(predecessor.Id.Value, audit.PredecessorGoalId);
+        Xunit.Assert.Equal(successor.Id.Value, audit.SuccessorGoalId);
+        Xunit.Assert.Equal("Correct the malformed zero-work intake.", audit.Reason);
+        Xunit.Assert.Equal(
+            string.Join(',', successor.Tasks.Select(task => $"{task.RequiredRole}={task.AssignedAgentId}")),
+            audit.AssignedAgents);
+
+        var changedPipeline = replacementCommand.ToArray();
+        changedPipeline[Array.IndexOf(changedPipeline, "five-role")] = "auto";
+        Xunit.Assert.IsType<GoalReplacementIdempotencyConflictException>(Xunit.Assert.ThrowsAny<Exception>(() =>
+            CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                changedPipeline,
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal))));
+
+        var changedAgentOverride = replacementCommand
+            .Concat(["--developer", "different-developer-agent"])
+            .ToArray();
+        Xunit.Assert.IsType<GoalReplacementIdempotencyConflictException>(Xunit.Assert.ThrowsAny<Exception>(() =>
+            CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                changedAgentOverride,
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal))));
+        Xunit.Assert.Equal(1, refiner.InvocationCount);
+
+        await File.WriteAllTextAsync(reasonPath, "A different immutable operator reason.");
+        var idempotencyConflict = Xunit.Assert.Throws<GoalReplacementIdempotencyConflictException>(() =>
+            CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                replacementCommand,
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal)));
+        Xunit.Assert.Contains(requestId.ToString("D"), idempotencyConflict.Message, StringComparison.Ordinal);
+        await File.WriteAllTextAsync(reasonPath, "Correct the malformed zero-work intake.");
+        var projection = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["backlog-show", item.Id],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        Xunit.Assert.Contains($"Owner:   {successor.Id.Value}", projection, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"- {predecessor.Id.Value[..8]} status=Cancelled authority=historical", projection, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"- {successor.Id.Value[..8]} status=Active authority=authoritative", projection, StringComparison.Ordinal);
+        Xunit.Assert.Contains(
+            $"predecessor={predecessor.Id.Value} successor={successor.Id.Value} request={requestId:D}",
+            projection,
+            StringComparison.Ordinal);
+        var landedKernel = await repository.LoadAsync();
+        var historicalPredecessor = landedKernel.Goals.Single(goal => goal.Id == predecessor.Id);
+        var authoritativeSuccessor = landedKernel.Goals.Single(goal => goal.Id == successor.Id);
+        Xunit.Assert.False(GoalLandingPostActions.AutoCloseSourceBacklogItem(
+            historicalPredecessor,
+            workspace.BacklogStorePath,
+            kernel: landedKernel,
+            stateDbPath: workspace.SqliteStatePath));
+        Xunit.Assert.Equal(
+            BacklogItemStatus.Open,
+            (await new BacklogStore(workspace.BacklogStorePath).GetByExactIdAsync(item.Id))!.Status);
+        foreach (var task in authoritativeSuccessor.Tasks)
+        {
+            landedKernel.RecordTaskVerification(
+                authoritativeSuccessor.Id,
+                task.Id,
+                ManualVerificationRecorder.Create(true, "Passed replacement landing fixture.", root, DateTimeOffset.UtcNow));
+        }
+        Xunit.Assert.Equal(GoalStatus.Verified, authoritativeSuccessor.Status);
+        await repository.SaveAsync(landedKernel);
+        var worktree = CommitGoalWork(
+            root,
+            authoritativeSuccessor.Id,
+            "replacement-landing.txt",
+            "replacement landed through acceptance");
+        Xunit.Assert.Equal(worktree, GoalWorktrees.TryResolve(root, authoritativeSuccessor.Id));
+        var acceptanceContext = new CliExecutionContext(
+            landedKernel,
+            workspace,
+            providers,
+            agents,
+            profiles,
+            authoritativeSuccessor)
+        {
+            AcceptanceVerifier = new ProbeAcceptanceVerifier(() => { })
+        };
+        var acceptanceOutput = CaptureConsole(() => CliCommandHandlers.Execute(
+            ["acceptance", authoritativeSuccessor.Id.Value, "--no-record"],
+            acceptanceContext));
+        Xunit.Assert.Contains("Fast-forwarded", acceptanceOutput, StringComparison.Ordinal);
+        Xunit.Assert.True(File.Exists(Path.Combine(root, "replacement-landing.txt")));
+        Xunit.Assert.Equal(
+            BacklogItemStatus.Done,
+            (await new BacklogStore(workspace.BacklogStorePath).GetByExactIdAsync(item.Id))!.Status);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplaceClosedBacklogPreflightRecordsDurableTypedReceipt()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var item = await backlogStore.AddAsync("Closed replacement source");
+        await backlogStore.CloseAsync(item.Id);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor for preflight audit");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "closed-preflight-brief.md");
+        var reasonPath = Path.Combine(root, "closed-preflight-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Prepare a corrected successor.");
+        await File.WriteAllTextAsync(reasonPath, "Reject closed source before planning.");
+        var requestId = Guid.NewGuid();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                    "--pipeline", "five-role"
+                ],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([]),
+                ref profiles,
+                ref currentGoal)));
+
+        Xunit.Assert.Contains("GOAL_REPLACE_VALIDATION_REJECTED", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("reason=source-backlog-not-open", exception.Message, StringComparison.Ordinal);
+        var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(requestId);
+        Xunit.Assert.NotNull(audit);
+        Xunit.Assert.Equal(GoalReplacementOutcome.ValidationRejected, audit!.Outcome);
+        Xunit.Assert.Equal("source-backlog-not-open", audit.FailureCode);
+        Xunit.Assert.Equal("Reject closed source before planning.", audit.Reason);
+        await File.WriteAllTextAsync(reasonPath, "Changed preflight reason.");
+        var idempotencyConflict = Xunit.Assert.Throws<GoalReplacementIdempotencyConflictException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                    "--pipeline", "five-role"
+                ],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([]),
+                ref profiles,
+                ref currentGoal)));
+        Xunit.Assert.Contains(requestId.ToString("D"), idempotencyConflict.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(predecessor.Id, Xunit.Assert.Single((await repository.LoadAsync()).Goals).Id);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplaceEligibilityEvidenceChangeRejectsTransfer()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("callback-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Evidence token replacement source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor before evidence change");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "evidence-change-brief.md");
+        var reasonPath = Path.Combine(root, "evidence-change-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Prepare a corrected successor after evidence capture.");
+        await File.WriteAllTextAsync(reasonPath, "Reject stale eligibility evidence.");
+        var requestId = Guid.NewGuid();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                    "--pipeline", "five-role"
+                ],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([
+                    new CallbackGoalRefinerProvider(() =>
+                        RunGit(root, "branch", GoalWorktrees.BranchName(predecessor.Id)))
+                ]),
+                ref profiles,
+                ref currentGoal)));
+
+        Xunit.Assert.Contains("GOAL_REPLACE_INELIGIBLE_DISPOSITION", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("reason=ineligible-disposition", exception.Message, StringComparison.Ordinal);
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Equal(predecessor.Id, Xunit.Assert.Single(restored.Goals).Id);
+        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        Xunit.Assert.Equal(predecessor.Id.Value, claimStore.ResolveClaim(restored, item.Id)!.OwnerGoalId);
+        Xunit.Assert.Empty(claimStore.ListLineage(item.Id));
+        Xunit.Assert.Equal(GoalReplacementOutcome.IneligibleDisposition, claimStore.FindAudit(requestId)!.Outcome);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task GoalReplaceTransferAuthorityRequiresUnchangedFacts(bool changeEvidence)
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("transfer-authority-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Transfer authority replacement source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor before transfer authority check");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "transfer-authority-brief.md");
+        var reasonPath = Path.Combine(root, "transfer-authority-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Prepare a corrected successor at the claim-transfer boundary.");
+        await File.WriteAllTextAsync(reasonPath, "Bind current eligibility evidence to the transfer.");
+        var requestId = Guid.NewGuid();
+        var beforeOutbox = await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind);
+        using var finalValidationReached = new ManualResetEventSlim(initialState: false);
+        using var releaseFinalValidation = new ManualResetEventSlim(initialState: false);
+        GoalReplacementEvidence.AfterFinalTransferValidation = _ =>
+        {
+            finalValidationReached.Set();
+            if (!releaseFinalValidation.Wait(TimeSpan.FromSeconds(15)))
+                throw new TimeoutException("Final transfer validation was not released by the test.");
+        };
+
+        Exception? ExecuteReplacement()
+        {
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            try
+            {
+                CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                    [
+                        "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                        "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                        "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                        "--pipeline", "five-role"
+                    ],
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
+                    ref profiles,
+                    ref currentGoal));
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return ex;
+            }
+        }
+
+        Exception? exception;
+        try
+        {
+            var replacement = Task.Run(ExecuteReplacement);
+            Xunit.Assert.True(
+                finalValidationReached.Wait(TimeSpan.FromSeconds(15)),
+                "Replacement did not reach the final transfer authority boundary.");
+            if (changeEvidence)
+                RunGit(root, "branch", GoalWorktrees.BranchName(predecessor.Id));
+            releaseFinalValidation.Set();
+            exception = await replacement.WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        finally
+        {
+            releaseFinalValidation.Set();
+            GoalReplacementEvidence.AfterFinalTransferValidation = null;
+        }
+
+        var restored = await repository.LoadAsync();
+        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        var claim = claimStore.ResolveClaim(restored, item.Id)!;
+        if (changeEvidence)
+        {
+            Xunit.Assert.Contains("reason=eligibility-evidence-changed", Xunit.Assert.IsType<InvalidOperationException>(exception).Message, StringComparison.Ordinal);
+            Xunit.Assert.Equal(predecessor.Id, Xunit.Assert.Single(restored.Goals).Id);
+            Xunit.Assert.Equal(predecessor.Id.Value, claim.OwnerGoalId);
+            Xunit.Assert.Empty(claimStore.ListLineage(item.Id));
+            Xunit.Assert.Equal(beforeOutbox, await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
+            Xunit.Assert.Equal(GoalReplacementOutcome.ValidationRejected, claimStore.FindAudit(requestId)!.Outcome);
+        }
+        else
+        {
+            Xunit.Assert.Null(exception);
+            Xunit.Assert.Equal(2, restored.Goals.Count);
+            Xunit.Assert.NotEqual(predecessor.Id.Value, claim.OwnerGoalId);
+            Xunit.Assert.Single(claimStore.ListLineage(item.Id));
+            Xunit.Assert.Equal(GoalReplacementOutcome.Succeeded, claimStore.FindAudit(requestId)!.Outcome);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplaceProtectedReplayPreservesTypedOutcome()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var item = await backlogStore.AddAsync("Protected replacement source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Active protected predecessor");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "protected-replay-brief.md");
+        var reasonPath = Path.Combine(root, "protected-replay-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Prepare a successor that must remain blocked.");
+        await File.WriteAllTextAsync(reasonPath, "Confirm active owners stay protected.");
+        var requestId = Guid.NewGuid();
+        var command = new[]
+        {
+            "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+            "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+            "--disposition", "zero-work-correction", "--confirm-goal-replace",
+            "--pipeline", "five-role"
+        };
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var refiner = new ClarifyingGoalRefinerProvider();
+        var providers = new InMemoryModelProviderRegistry([refiner]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        InvalidOperationException Replace() => Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                command,
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal)));
+
+        var first = Replace();
+        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        await backlogStore.CloseAsync(item.Id);
+        var replay = Replace();
+
+        Xunit.Assert.Contains("GOAL_REPLACE_PROTECTED_OWNER", first.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("GOAL_REPLACE_PROTECTED_OWNER", replay.Message, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("PERSISTENCE_FAILED", replay.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        await File.WriteAllTextAsync(reasonPath, "Changed protected-owner retry reason.");
+        Xunit.Assert.IsType<GoalReplacementIdempotencyConflictException>(Replace());
+        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(requestId);
+        Xunit.Assert.Equal(GoalReplacementOutcome.ProtectedOwner, audit!.Outcome);
+        Xunit.Assert.NotEmpty(audit.ObjectiveHash);
+        Xunit.Assert.Equal(
+            "Researcher,Planner,Developer,Tester,Reviewer",
+            audit.OrderedRoles);
+        Xunit.Assert.Equal(predecessor.Id, Xunit.Assert.Single((await repository.LoadAsync()).Goals).Id);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData(false)]
+    [Xunit.InlineData(true)]
+    public async Task GoalReplaceTransactionFailureRollsBackSuccessorClaimAndLineage(
+        bool claimObservationUnavailable)
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("clarifying-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Rollback replacement source");
+        var setupRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor for rollback");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await setupRepository.SaveAsync(initial);
+        var repository = CreateMigratedStateRepository(
+            workspace.SqliteStatePath,
+            beforeOutboxCommit: () => throw new IOException("Injected replacement commit failure."));
+        var briefPath = Path.Combine(root, "rollback-brief.md");
+        var reasonPath = Path.Combine(root, "rollback-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with one focused assertion.");
+        await File.WriteAllTextAsync(reasonPath, "Prove atomic replacement rollback.");
+        var requestId = Guid.NewGuid();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        if (claimObservationUnavailable)
+        {
+            CliPersistentStateRunner.BeforeGoalReplacementFailureClaimObservation = () =>
+                throw new IOException("Injected claim observation failure.");
+        }
+        InvalidOperationException exception;
+        try
+        {
+            exception = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    [
+                        "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                        "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                        "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                        "--pipeline", "five-role"
+                    ],
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            CliPersistentStateRunner.BeforeGoalReplacementFailureClaimObservation = null;
+        }
+
+        Xunit.Assert.Contains("GOAL_REPLACE_PERSISTENCE_FAILED", exception.Message, StringComparison.Ordinal);
+        var restored = await setupRepository.LoadAsync();
+        Xunit.Assert.Equal(predecessor.Id, Xunit.Assert.Single(restored.Goals).Id);
+        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        var claim = claimStore.ResolveClaim(restored, item.Id);
+        Xunit.Assert.Equal(predecessor.Id.Value, claim!.OwnerGoalId);
+        Xunit.Assert.Empty(claimStore.ListLineage(item.Id));
+        var audit = claimStore.FindAudit(requestId)!;
+        Xunit.Assert.Equal(GoalReplacementOutcome.PersistenceFailed, audit.Outcome);
+        if (claimObservationUnavailable)
+        {
+            Xunit.Assert.Null(audit.ObservedOwnerGoalId);
+            Xunit.Assert.Null(audit.ObservedClaimVersion);
+            Xunit.Assert.Equal("transaction-failed-claim-observation-unavailable", audit.FailureCode);
+            Xunit.Assert.Contains("owner=unknown claimVersion=unknown", exception.Message, StringComparison.Ordinal);
+        }
+        else
+        {
+            Xunit.Assert.Equal(predecessor.Id.Value, audit.ObservedOwnerGoalId);
+            Xunit.Assert.Equal(claim.Version, audit.ObservedClaimVersion);
+            Xunit.Assert.Equal("transaction-failed", audit.FailureCode);
+            Xunit.Assert.Contains($"owner={predecessor.Id.Value}", exception.Message, StringComparison.Ordinal);
+            Xunit.Assert.Contains($"claimVersion={claim.Version}", exception.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplaceInvalidInputsRecordTypedAttempts()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Invalid replacement input source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor for invalid input receipts");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "valid-brief.md");
+        var reasonPath = Path.Combine(root, "valid-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Prepare a corrected successor.");
+        await File.WriteAllTextAsync(reasonPath, "Correct the invalid predecessor.");
+        var missingBriefPath = Path.Combine(root, "missing-brief.md");
+        var missingReasonPath = Path.Combine(root, "missing-reason.md");
+
+        var cases = new[]
+        {
+            (RequestId: Guid.NewGuid(), Disposition: "not-a-disposition", Brief: (string?)briefPath, Reason: (string?)reasonPath, FailureCode: "invalid-disposition"),
+            (RequestId: Guid.NewGuid(), Disposition: "zero-work-correction", Brief: missingBriefPath, Reason: (string?)reasonPath, FailureCode: "brief-file-missing"),
+            (RequestId: Guid.NewGuid(), Disposition: "zero-work-correction", Brief: (string?)briefPath, Reason: missingReasonPath, FailureCode: "reason-file-missing"),
+            (RequestId: Guid.NewGuid(), Disposition: "zero-work-correction", Brief: null, Reason: (string?)reasonPath, FailureCode: "brief-file-missing"),
+            (RequestId: Guid.NewGuid(), Disposition: "zero-work-correction", Brief: (string?)briefPath, Reason: null, FailureCode: "reason-file-missing")
+        };
+
+        foreach (var testCase in cases)
+        {
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            List<string> command =
+            [
+                "goal-replace", predecessor.Id.Value,
+                "--request-id", testCase.RequestId.ToString(),
+                "--disposition", testCase.Disposition,
+                "--confirm-goal-replace"
+            ];
+            if (testCase.Brief is not null)
+                command.AddRange(["--brief-file", testCase.Brief]);
+            if (testCase.Reason is not null)
+                command.AddRange(["--reason-file", testCase.Reason]);
+            Exception Execute() => Xunit.Assert.ThrowsAny<Exception>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    command,
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([]),
+                    ref profiles,
+                    ref currentGoal)));
+
+            _ = Execute();
+
+            var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(testCase.RequestId);
+            Xunit.Assert.NotNull(audit);
+            Xunit.Assert.Equal(GoalReplacementOutcome.ValidationRejected, audit.Outcome);
+            Xunit.Assert.Equal(testCase.FailureCode, audit.FailureCode);
+            Xunit.Assert.Equal(predecessor.Id.Value, audit.ObservedOwnerGoalId);
+            Xunit.Assert.Equal(1, audit.ObservedClaimVersion);
+            var replay = Execute();
+            Xunit.Assert.False(replay is GoalReplacementIdempotencyConflictException);
+            Xunit.Assert.Contains("GOAL_REPLACE_VALIDATION_REJECTED", replay.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplaceSourceUnlinkedPredecessorRecordsTypedAttempt()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Source-unlinked predecessor");
+        initial.CancelGoal(predecessor.Id, "No source association was recorded.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "unlinked-brief.md");
+        var reasonPath = Path.Combine(root, "unlinked-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Prepare a corrected successor.");
+        await File.WriteAllTextAsync(reasonPath, "Record the rejected replacement attempt.");
+        var requestId = Guid.NewGuid();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        Exception Execute() => Xunit.Assert.ThrowsAny<Exception>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                    "--pipeline", "five-role"
+                ],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([]),
+                ref profiles,
+                ref currentGoal)));
+
+        var first = Execute();
+        var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(requestId);
+
+        Xunit.Assert.Contains("reason=predecessor-has-no-source-backlog", first.Message, StringComparison.Ordinal);
+        Xunit.Assert.NotNull(audit);
+        Xunit.Assert.Equal(GoalReplacementOutcome.ValidationRejected, audit.Outcome);
+        Xunit.Assert.Equal("predecessor-has-no-source-backlog", audit.FailureCode);
+        Xunit.Assert.Equal($"unlinked:{predecessor.Id.Value}", audit.BacklogItemId);
+        Xunit.Assert.Null(audit.ObservedOwnerGoalId);
+        Xunit.Assert.Null(audit.ObservedClaimVersion);
+        var replay = Execute();
+        Xunit.Assert.Contains("GOAL_REPLACE_VALIDATION_REJECTED", replay.Message, StringComparison.Ordinal);
+        Xunit.Assert.False(replay is GoalReplacementIdempotencyConflictException);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplaceCreationPreconditionChangeRecordsValidationRejected()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("precondition-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var backlog = new BacklogStore(workspace.BacklogStorePath);
+        var item = await backlog.AddAsync("Replacement dependency source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var dependency = initial.CreateGoal("Replacement dependency");
+        var predecessor = initial.CreateGoal("Cancelled predecessor with dependency");
+        initial.SetGoalDependency(predecessor.Id, dependency.Id);
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        _ = await backlog.AddDependencyAsync(
+            item.Id,
+            new BacklogDependencyTarget(dependency.Id.Value, BacklogDependencyTargetKind.Goal),
+            goalExists: id => id == dependency.Id.Value);
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "precondition-brief.md");
+        var reasonPath = Path.Combine(root, "precondition-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Prepare a corrected successor.");
+        await File.WriteAllTextAsync(reasonPath, "Reject stale deterministic inputs.");
+        var requestId = Guid.NewGuid();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+            backlog.RemoveDependencyAsync(item.Id, dependency.Id.Value).GetAwaiter().GetResult();
+
+        Exception exception;
+        try
+        {
+            exception = Xunit.Assert.ThrowsAny<Exception>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    [
+                        "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                        "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                        "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                        "--pipeline", "five-role"
+                    ],
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+        }
+
+        Xunit.Assert.Contains("GOAL_REPLACE_VALIDATION_REJECTED", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("reason=source-backlog-dependencies-changed", exception.Message, StringComparison.Ordinal);
+        var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(requestId);
+        Xunit.Assert.NotNull(audit);
+        Xunit.Assert.Equal(GoalReplacementOutcome.ValidationRejected, audit.Outcome);
+        Xunit.Assert.Equal("source-backlog-dependencies-changed", audit.FailureCode);
+        Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
+    }
+
+    [Xunit.Fact]
+    public void GoalReplaceUnavailableClaimObservationDoesNotInventExpectedFacts()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var repository = new InMemoryTransactionalStateRepository(new AgentOrchestratorKernel())
+        {
+            ThrowOnLoadAsync = true
+        };
+
+        var observed = CliPersistentStateRunner.ResolveObservedClaimAfterReplacementFailure(
+            new SourceBacklogClaimStore(workspace.SqliteStatePath),
+            repository,
+            "unobservable-backlog-item");
+
+        Xunit.Assert.Null(observed);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplace_ChangedClaimBehindEvidenceLease_ReturnsConflict()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("changed-owner-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Changed owner behind evidence lease");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor before claim change");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await repository.SaveAsync(initial);
+        var firstBrief = Path.Combine(root, "changed-owner-first.md");
+        var secondBrief = Path.Combine(root, "changed-owner-second.md");
+        var reasonPath = Path.Combine(root, "changed-owner-reason.md");
+        await File.WriteAllTextAsync(firstBrief, "Prepare the first corrected successor.");
+        await File.WriteAllTextAsync(secondBrief, "Prepare the successor that wins ownership.");
+        await File.WriteAllTextAsync(reasonPath, "Replace the zero-work predecessor.");
+        var firstRequest = Guid.NewGuid();
+        var secondRequest = Guid.NewGuid();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        IDisposable? evidenceLease = null;
+
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+            IReadOnlyList<AgentDefinition> competingAgents = AgentCatalog.Default().Agents;
+            var competingProfiles = WorkerProfileCatalog.Default();
+            Goal? competingGoal = null;
+            CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "goal-replace", predecessor.Id.Value, "--brief-file", secondBrief,
+                    "--reason-file", reasonPath, "--request-id", secondRequest.ToString(),
+                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                    "--pipeline", "five-role"
+                ],
+                CreateMigratedStateRepository(workspace.SqliteStatePath),
+                workspace,
+                ref competingAgents,
+                new InMemoryModelProviderRegistry([new DeterministicGoalRefinerProvider()]),
+                ref competingProfiles,
+                ref competingGoal));
+            evidenceLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+                .TryAcquireAcceptanceLease(
+                    predecessor.Id.Value,
+                    $"goal-evidence:test:{Guid.NewGuid():N}",
+                    TimeSpan.FromMinutes(30));
+            Xunit.Assert.NotNull(evidenceLease);
+        };
+
+        SourceBacklogClaimConflictException conflict;
+        try
+        {
+            conflict = Xunit.Assert.Throws<SourceBacklogClaimConflictException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    [
+                        "goal-replace", predecessor.Id.Value, "--brief-file", firstBrief,
+                        "--reason-file", reasonPath, "--request-id", firstRequest.ToString(),
+                        "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                        "--pipeline", "five-role"
+                    ],
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([new DeterministicGoalRefinerProvider()]),
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+            evidenceLease?.Dispose();
+        }
+
+        var restored = await repository.LoadAsync();
+        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        var claim = claimStore.ResolveClaim(restored, item.Id)!;
+        Xunit.Assert.Equal(claim.OwnerGoalId, conflict.ObservedOwnerGoalId);
+        Xunit.Assert.Equal(claim.Version, conflict.ObservedVersion);
+        Xunit.Assert.NotEqual(predecessor.Id.Value, claim.OwnerGoalId);
+        var audit = claimStore.FindAudit(firstRequest)!;
+        Xunit.Assert.Equal(GoalReplacementOutcome.CurrentOwnerConflict, audit.Outcome);
+        Xunit.Assert.Equal(claim.OwnerGoalId, audit.ObservedOwnerGoalId);
+        Xunit.Assert.Equal(claim.Version, audit.ObservedClaimVersion);
+        Xunit.Assert.Equal(GoalReplacementOutcome.Succeeded, claimStore.FindAudit(secondRequest)!.Outcome);
+    }
+
+    [Xunit.Fact(DisplayName = "goal-replace reports the observed claim after a competing lease timeout")]
+    public void GoalReplace_CompetingLeaseTimeout_ReportsObservedClaim()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        _ = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        const string predecessorGoalId = "timeout-predecessor";
+        using var competingLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+            .TryAcquireAcceptanceLease(
+                predecessorGoalId,
+                $"goal-replace:test:{Guid.NewGuid():N}",
+                TimeSpan.FromMinutes(30));
+        Xunit.Assert.NotNull(competingLease);
+        var expectedClaim = new SourceBacklogClaimSnapshot(
+            "timeout-backlog",
+            predecessorGoalId,
+            SourceBacklogCoverage.Full,
+            Version: 7,
+            DateTimeOffset.Parse("2026-08-12T00:00:00Z"));
+        var timeProvider = new ManualConductorTimeProviderForTests(
+            DateTimeOffset.Parse("2026-08-12T00:00:00Z"));
+        var waitCount = 0;
+
+        var acquisition = CliPersistentStateRunner.AcquireGoalReplacementTransferLease(
+            workspace.SqliteStatePath,
+            predecessorGoalId,
+            () => expectedClaim,
+            timeProvider,
+            _ =>
+            {
+                waitCount++;
+                timeProvider.AdvanceForTests(TimeSpan.FromSeconds(16));
+            });
+
+        Xunit.Assert.Equal(
+            CliPersistentStateRunner.GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut,
+            acquisition.Kind);
+        Xunit.Assert.Same(expectedClaim, acquisition.ObservedClaim);
+        Xunit.Assert.Equal(1, waitCount);
+    }
+
+    [Xunit.Fact(DisplayName = "goal-replace leaves an unchanged-claim lease timeout retryable")]
+    public void GoalReplace_CompetingLeaseTimeout_WithUnchangedClaim_IsRetryable()
+    {
+        var requestId = Guid.NewGuid();
+        const string predecessorGoalId = "timeout-predecessor";
+        var expectedClaim = new SourceBacklogClaimSnapshot(
+            "timeout-backlog",
+            predecessorGoalId,
+            SourceBacklogCoverage.Full,
+            Version: 7,
+            DateTimeOffset.Parse("2026-08-12T00:00:00Z"));
+        var command = new GoalReplacementCommand(
+            new GoalId(predecessorGoalId),
+            requestId,
+            GoalReplacementDisposition.ZeroWorkCorrection,
+            "Retry after the competing replacement releases its lease.",
+            "Prepare a corrected successor.",
+            expectedClaim.OwnerGoalId,
+            expectedClaim.Version,
+            "five-role",
+            string.Empty);
+        var acquisition = new CliPersistentStateRunner.GoalReplacementTransferLeaseAcquisition(
+            CliPersistentStateRunner.GoalReplacementTransferLeaseAcquisitionKind.CompetingReplacementTimedOut,
+            ObservedClaim: expectedClaim);
+        var recordedOutcomes = new List<GoalReplacementOutcome>();
+
+        var exception = Xunit.Assert.Throws<GoalReplacementRetryableTimeoutException>(() =>
+            CliPersistentStateRunner.ThrowGoalReplacementTransferLeaseTimeout(
+                command,
+                acquisition,
+                (outcome, _, _, _) => recordedOutcomes.Add(outcome)));
+
+        Xunit.Assert.Contains("GOAL_REPLACE_RETRYABLE_TIMEOUT", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"requestId={requestId:D}", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"owner={expectedClaim.OwnerGoalId}", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains($"claimVersion={expectedClaim.Version}", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Empty(recordedOutcomes);
+    }
+
+    [Xunit.Fact]
+    public async Task ConcurrentGoalReplacementsCommitExactlyOneSuccessor()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("deterministic-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Concurrent replacement source");
+        var setupRepository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor for concurrent replacement");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await setupRepository.SaveAsync(initial);
+        var firstBrief = Path.Combine(root, "first-replacement.md");
+        var secondBrief = Path.Combine(root, "second-replacement.md");
+        var reasonPath = Path.Combine(root, "replacement-reason.md");
+        await File.WriteAllTextAsync(firstBrief, "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with first focused assertion.");
+        await File.WriteAllTextAsync(secondBrief, "Update src/Mcg.AgentOrchestrator.App/Cli/CliCommandHelp.cs with second focused assertion.");
+        await File.WriteAllTextAsync(reasonPath, "Competing corrected replacement.");
+        var firstRequest = Guid.NewGuid();
+        var secondRequest = Guid.NewGuid();
+        using var bothPrepared = new CountdownEvent(2);
+        using var releaseCommit = new ManualResetEventSlim(initialState: false);
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        {
+            bothPrepared.Signal();
+            Xunit.Assert.True(
+                releaseCommit.Wait(TimeSpan.FromMinutes(1)),
+                "Concurrent replacement commit gate was not released.");
+        };
+
+        Exception? Replace(ITransactionalOrchestratorStateRepository repository, string brief, Guid requestId)
+        {
+            IReadOnlyList<AgentDefinition> localAgents = AgentCatalog.Default().Agents;
+            var localProfiles = WorkerProfileCatalog.Default();
+            Goal? localGoal = null;
+            try
+            {
+                CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                    [
+                        "goal-replace", predecessor.Id.Value, "--brief-file", brief,
+                        "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                        "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                        "--pipeline", "five-role"
+                    ],
+                    repository,
+                    workspace,
+                    ref localAgents,
+                    new InMemoryModelProviderRegistry([new DeterministicGoalRefinerProvider()]),
+                    ref localProfiles,
+                    ref localGoal));
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return ex;
+            }
+        }
+
+        Exception?[] outcomes;
+        try
+        {
+            var first = Task.Run(() => Replace(CreateMigratedStateRepository(workspace.SqliteStatePath), firstBrief, firstRequest));
+            var second = Task.Run(() => Replace(CreateMigratedStateRepository(workspace.SqliteStatePath), secondBrief, secondRequest));
+            if (!bothPrepared.Wait(TimeSpan.FromMinutes(1)))
+            {
+                releaseCommit.Set();
+                Exception?[] preparationOutcomes;
+                try
+                {
+                    preparationOutcomes = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromMinutes(1));
+                }
+                catch (TimeoutException)
+                {
+                    Xunit.Assert.Fail(
+                        $"Both replacements did not complete read-only preparation; " +
+                        $"remaining={bothPrepared.CurrentCount} first={first.Status} second={second.Status}.");
+                    throw;
+                }
+
+                var diagnostics = string.Join(
+                    " | ",
+                    preparationOutcomes.Select((outcome, index) =>
+                        outcome is null
+                            ? $"lane{index + 1}=completed"
+                            : $"lane{index + 1}={outcome.GetType().Name}: {outcome.Message}"));
+                Xunit.Assert.Fail(
+                    $"Both replacements did not complete read-only preparation; " +
+                    $"remaining={bothPrepared.CurrentCount}; {diagnostics}.");
+            }
+            releaseCommit.Set();
+            outcomes = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromMinutes(1));
+        }
+        finally
+        {
+            releaseCommit.Set();
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+        }
+        Xunit.Assert.Single(outcomes, outcome => outcome is null);
+        Xunit.Assert.Contains(
+            "GOAL_REPLACE_CURRENT_OWNER_CONFLICT",
+            Xunit.Assert.Single(outcomes, outcome => outcome is not null)!.Message,
+            StringComparison.Ordinal);
+        var restored = await setupRepository.LoadAsync();
+        Xunit.Assert.Equal(2, restored.Goals.Count);
+        var claimStore = new SourceBacklogClaimStore(workspace.SqliteStatePath);
+        Xunit.Assert.Single(claimStore.ListLineage(item.Id));
+        var audits = new[] { claimStore.FindAudit(firstRequest), claimStore.FindAudit(secondRequest) };
+        Xunit.Assert.Single(audits, audit => audit?.Outcome == GoalReplacementOutcome.Succeeded);
+        Xunit.Assert.Single(audits, audit => audit?.Outcome == GoalReplacementOutcome.CurrentOwnerConflict);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplace_LeaseReleasedBeforeOwnerObservation_RetriesAcquisition()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("lease-release-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Lease release replacement source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor behind released lease");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "lease-release-brief.md");
+        var reasonPath = Path.Combine(root, "lease-release-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Prepare the successor after a competing replacement releases its lease.");
+        await File.WriteAllTextAsync(reasonPath, "Retry the claim transfer after observing lease release.");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        IDisposable? competingLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+            .TryAcquireAcceptanceLease(
+                predecessor.Id.Value,
+                $"goal-replace:{Environment.ProcessId}:competing",
+                TimeSpan.FromMinutes(30));
+        Xunit.Assert.NotNull(competingLease);
+        using var failedAcquisitionObserved = new ManualResetEventSlim(initialState: false);
+        CliPersistentStateRunner.AfterGoalReplacementLeaseAcquisitionFailed = () =>
+        {
+            failedAcquisitionObserved.Set();
+            Interlocked.Exchange(ref competingLease, null)?.Dispose();
+        };
+
+        try
+        {
+            var exception = Xunit.Record.Exception(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    [
+                        "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                        "--reason-file", reasonPath, "--request-id", Guid.NewGuid().ToString(),
+                        "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                        "--pipeline", "five-role"
+                    ],
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([new DeterministicGoalRefinerProvider()]),
+                    ref profiles,
+                    ref currentGoal)));
+
+            Xunit.Assert.Null(exception);
+            Xunit.Assert.True(failedAcquisitionObserved.IsSet);
+            var restored = await repository.LoadAsync();
+            var successor = Xunit.Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
+            Xunit.Assert.Equal(
+                successor.Id.Value,
+                new SourceBacklogClaimStore(workspace.SqliteStatePath).ResolveClaim(restored, item.Id)!.OwnerGoalId);
+        }
+        finally
+        {
+            CliPersistentStateRunner.AfterGoalReplacementLeaseAcquisitionFailed = null;
+            competingLease?.Dispose();
+        }
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplace_BacklogClosesDuringCommit_RecordsValidationRejected()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("callback-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var backlogStore = new BacklogStore(workspace.BacklogStorePath);
+        var item = await backlogStore.AddAsync("Replacement validation source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor for validation");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "validation-brief.md");
+        var reasonPath = Path.Combine(root, "validation-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Update one focused CLI assertion.");
+        await File.WriteAllTextAsync(reasonPath, "Reject a source that closes after preparation.");
+        var requestId = Guid.NewGuid();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                    "--pipeline", "five-role"
+                ],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([
+                    new CallbackGoalRefinerProvider(() => backlogStore.CloseAsync(item.Id).GetAwaiter().GetResult())
+                ]),
+                ref profiles,
+                ref currentGoal)));
+
+        Xunit.Assert.Contains("GOAL_REPLACE_VALIDATION_REJECTED", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("reason=source-backlog-not-open", exception.Message, StringComparison.Ordinal);
+        var restored = await repository.LoadAsync();
+        Xunit.Assert.Equal(predecessor.Id, Xunit.Assert.Single(restored.Goals).Id);
+        var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(requestId);
+        Xunit.Assert.Equal(GoalReplacementOutcome.ValidationRejected, audit!.Outcome);
+        Xunit.Assert.Equal("source-backlog-not-open", audit.FailureCode);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalReplace_LegacyOwnerAmbiguous_RecordsTypedOutcome()
+    {
+        var root = CreateAcceptanceRepository();
+        var workspace = CreateRefinedWorkspace(root);
+        ModelFunctionCatalogStore.Save(workspace.ModelFunctionCatalogPath, new ModelFunctionCatalog([
+            new ModelFunctionBinding(
+                ModelFunctionPurposes.SpecRefiner,
+                ModelLane.CheapApi,
+                new ModelProfile("callback-refiner", "fake-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+                Name: ModelFunctionPurposes.SpecRefiner)
+        ]));
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Ambiguous replacement source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var initial = new AgentOrchestratorKernel();
+        var predecessor = initial.CreateGoal("Cancelled predecessor for ambiguity");
+        initial.SetGoalSourceBacklogItemLink(predecessor.Id, item.Id, SourceBacklogCoverage.Full);
+        initial.CancelGoal(predecessor.Id, "No work started.");
+        await repository.SaveAsync(initial);
+        var briefPath = Path.Combine(root, "ambiguity-brief.md");
+        var reasonPath = Path.Combine(root, "ambiguity-reason.md");
+        await File.WriteAllTextAsync(briefPath, "Update one focused CLI assertion.");
+        await File.WriteAllTextAsync(reasonPath, "Reject ambiguous legacy ownership.");
+        var requestId = Guid.NewGuid();
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                    "--pipeline", "five-role"
+                ],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([
+                    new CallbackGoalRefinerProvider(() =>
+                    {
+                        var competingKernel = repository.LoadAsync().GetAwaiter().GetResult();
+                        var competing = competingKernel.CreateGoal("Competing historical association");
+                        competingKernel.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Full);
+                        competingKernel.CancelGoal(competing.Id, "Legacy duplicate association.");
+                        repository.SaveAsync(competingKernel).GetAwaiter().GetResult();
+                    })
+                ]),
+                ref profiles,
+                ref currentGoal)));
+
+        Xunit.Assert.Contains("GOAL_REPLACE_LEGACY_OWNER_AMBIGUOUS", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("reason=legacy-owner-ambiguous", exception.Message, StringComparison.Ordinal);
+        Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
+        var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(requestId);
+        Xunit.Assert.Equal(GoalReplacementOutcome.LegacyOwnerAmbiguous, audit!.Outcome);
+        Xunit.Assert.Equal("legacy-owner-ambiguous", audit.FailureCode);
     }
 
     [Xunit.Fact]
@@ -2080,28 +3642,38 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         ]));
         var kernel = new AgentOrchestratorKernel();
         var dependencyGoal = kernel.CreateGoal("Existing prerequisite goal");
-        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
         var backlog = new BacklogStore(workspace.BacklogStorePath);
         var source = await backlog.AddAsync("Dependent goal source");
         _ = await backlog.AddDependencyAsync(
             source.Id,
             new BacklogDependencyTarget(dependencyGoal.Id.Value, BacklogDependencyTargetKind.Goal),
             goalExists: id => id == dependencyGoal.Id.Value);
-        repository.BeforeNextTransaction = _ =>
-            backlog.RemoveDependencyAsync(source.Id, dependencyGoal.Id.Value).GetAwaiter().GetResult();
+        var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
         IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
-            CliPersistentStateRunner.ExecuteCommand(
-                ["goal", "Create dependent goal", "--backlog-item", source.Id, "--backlog-coverage", "slice"],
-                repository,
-                workspace,
-                ref agents,
-                new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
-                ref profiles,
-                ref currentGoal)));
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+            backlog.RemoveDependencyAsync(source.Id, dependencyGoal.Id.Value).GetAwaiter().GetResult();
+        InvalidOperationException error;
+        try
+        {
+            error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    ["goal", "Create dependent goal", "--backlog-item", source.Id, "--backlog-coverage", "slice"],
+                    repository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+        }
 
         Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-dependencies-changed", error.Message, StringComparison.Ordinal);
         var restored = await repository.LoadAsync();
@@ -2123,14 +3695,20 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         ]));
         var kernel = new AgentOrchestratorKernel();
         var dependencyGoal = kernel.CreateGoal("Prerequisite removed during analysis");
-        var repository = new InMemoryTransactionalStateRepository(kernel);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        await repository.SaveAsync(kernel);
         var backlog = new BacklogStore(workspace.BacklogStorePath);
         var source = await backlog.AddAsync("Source whose dependency target disappears");
         _ = await backlog.AddDependencyAsync(
             source.Id,
             new BacklogDependencyTarget(dependencyGoal.Id.Value, BacklogDependencyTargetKind.Goal),
             goalExists: id => id == dependencyGoal.Id.Value);
-        repository.BeforeNextTransaction = _ =>
+        var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
         {
             using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={workspace.BacklogStorePath}");
             connection.Open();
@@ -2140,19 +3718,23 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             command.Parameters.AddWithValue("$source", source.Id);
             Xunit.Assert.Equal(1, command.ExecuteNonQuery());
         };
-        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
-        var profiles = WorkerProfileCatalog.Default();
-        Goal? currentGoal = null;
-
-        var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
-            CliPersistentStateRunner.ExecuteCommand(
-                ["goal", "Reject missing dependency target", "--backlog-item", source.Id, "--backlog-coverage", "slice"],
-                repository,
-                workspace,
-                ref agents,
-                new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]),
-                ref profiles,
-                ref currentGoal)));
+        InvalidOperationException error;
+        try
+        {
+            error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    ["goal", "Reject missing dependency target", "--backlog-item", source.Id, "--backlog-coverage", "slice"],
+                    repository,
+                    workspace,
+                    ref agents,
+                    providers,
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+        }
 
         Xunit.Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED reason=dependency-target-missing", error.Message, StringComparison.Ordinal);
         Xunit.Assert.Equal(dependencyGoal.Id, Xunit.Assert.Single((await repository.LoadAsync()).Goals).Id);
@@ -2426,7 +4008,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
-    public void CliStartupReadCommandDoesNotMigratePublishedVersion7State()
+    public void CliStartupReadCommandMigratesPublishedVersion7StateBeforeOpeningRepository()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -2435,7 +4017,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var result = RunAppCli(root, ["goals"]);
 
         Xunit.Assert.Equal(0, result.ExitCode);
-        Xunit.Assert.False(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
+        Xunit.Assert.True(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
         using (var unchanged = new Microsoft.Data.Sqlite.SqliteConnection(
             $"Data Source={workspace.SqliteStatePath};Mode=ReadOnly;Pooling=False"))
         {
@@ -2443,16 +4025,15 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             using var columns = unchanged.CreateCommand();
             columns.CommandText = "SELECT group_concat(name, ',') FROM (SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid)";
             Xunit.Assert.Equal(
-                "id,kind,payload_json,created_at",
+                "id,kind,payload_json,created_at,quarantined_at,quarantine_reason,processing_token,processing_started_at",
                 Convert.ToString(columns.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
             using var migrationCount = unchanged.CreateCommand();
             migrationCount.CommandText = "SELECT COUNT(*) FROM schema_migrations";
-            Xunit.Assert.Equal(7L, migrationCount.ExecuteScalar());
+            Xunit.Assert.Equal(12L, migrationCount.ExecuteScalar());
+            using var claimTable = unchanged.CreateCommand();
+            claimTable.CommandText = "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'source_backlog_claims'";
+            Xunit.Assert.Equal(1L, claimTable.ExecuteScalar());
         }
-
-        ProgramStartupLifecycle.EnsureStateDbInitialized(["conduct", "--loop"], workspace);
-
-        Xunit.Assert.True(StateDbMigrations.IsUpToDate(workspace.SqliteStatePath));
     }
 
 
@@ -5071,10 +6652,15 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
     private sealed class ClarifyingGoalRefinerProvider : IModelProvider
     {
+        private int _invocationCount;
+
         public string ProviderName => "clarifying-refiner";
+
+        public int InvocationCount => Volatile.Read(ref _invocationCount);
 
         public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref _invocationCount);
             const string response = """
                 ```json
                 {
@@ -5093,6 +6679,31 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                       "rationale": "Operator decision required."
                     }
                   ]
+                }
+                ```
+                """;
+            return Task.FromResult(new ModelResponse(response, new ModelUsage(1, 1), "stop"));
+        }
+    }
+
+    private sealed class CallbackGoalRefinerProvider(Action callback) : IModelProvider
+    {
+        private int _invoked;
+
+        public string ProviderName => "callback-refiner";
+
+        public Task<ModelResponse> CompleteAsync(ModelRequest request, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Exchange(ref _invoked, 1) == 0)
+                callback();
+            const string response = """
+                ```json
+                {
+                  "behavioralContract": "Create a corrected replacement goal.",
+                  "acceptanceCriteria": ["The replacement is committed atomically."],
+                  "verificationClass": "TestVerifiable",
+                  "decisions": [],
+                  "forks": []
                 }
                 ```
                 """;

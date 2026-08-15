@@ -28,6 +28,7 @@ public sealed class AdvanceLoopTests
     SeedSpecRefinerBinding(workspace);
     var kernel = new AgentOrchestratorKernel();
     var agents = AgentCatalog.Default().Agents;
+    var providers = new InMemoryModelProviderRegistry([]);
     var profiles = new WorkerProfileCatalog(
     [
         new WorkerProfile("codex-cli", BlockingCodexProfileCommand),
@@ -38,15 +39,30 @@ public sealed class AdvanceLoopTests
         TaskSpec? researcher = null;
     try
     {
-        goal = GoalLifecycleCommands.CreateActivateAndHandoffGoal(
+        goal = GoalLifecycleCommands.CreateAndActivateGoal(
+            kernel,
+            agents,
+            "Start subscription handoff on create",
+            workspace,
+            providers);
+        var advancement = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
             kernel,
             agents,
             profiles,
             workspace,
-            "Start subscription handoff on create",
-            simple: false,
-            allowLargePaidSubscriptionStart: true);
+            goal,
+            allowLargePaidSubscriptionStart: true,
+            providers: providers);
         researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
+        var handoffDiagnostic =
+            $"Expected automatic handoff to complete {nameof(NextActionAutomationKind.StartRecordedDispatch)}. " +
+            $"StopReason: {advancement.StopReason}; Failure: {advancement.Failure?.Reason ?? "<none>"}";
+
+        Assert.True(
+            advancement.Steps.Any(step =>
+                step.Executed &&
+                step.AutomationKind == NextActionAutomationKind.StartRecordedDispatch),
+            handoffDiagnostic);
 
         Assert.Equal(GoalStatus.Active, goal.Status);
         Assert.Equal(WorkTaskStatus.Running, researcher.Status);
@@ -59,7 +75,7 @@ public sealed class AdvanceLoopTests
         }
 
         Assert.Equal(workspace.ExecutionDirectory, dispatch.WorkingDirectory);
-        Assert.True(researcher.LastProcess is not null);
+        Assert.True(researcher.LastProcess is not null, handoffDiagnostic);
         Assert.True(researcher.LastProcess!.IsRunning);
         Assert.Equal(dispatch.Command, researcher.LastProcess.Command);
         Assert.True(goal.Timeline.Any(evt => evt.Kind == ProgressKind.TaskDispatchRecorded && evt.TaskId == researcher.Id));

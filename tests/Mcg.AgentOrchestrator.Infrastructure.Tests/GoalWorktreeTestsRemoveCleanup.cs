@@ -750,6 +750,53 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         }
     }
 
+    [Xunit.Fact]
+    public async Task Keyed_goal_replay_keeps_one_workspace_and_clean_repository()
+    {
+        var repo = CreateSeededRepository();
+        try
+        {
+            SeedLocalSkillCatalog(repo);
+            RunGit(repo, "add", ".agents/skills");
+            RunGit(repo, "commit", "-m", "Seed local skills");
+            var workspace = OrchestratorWorkspace.ForDirectory(repo);
+            var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var providers = SeedSpecRefiner(workspace);
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+            var intake = new[] { "simple-goal", "Keyed workspace goal", "--request-key", "workspace-key" };
+
+            _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                intake, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+            var goal = Assert.Single((await repository.LoadAsync()).Goals);
+            var kernel = await repository.LoadAsync();
+            currentGoal = kernel.Goals.Single();
+
+            _ = CliCommandDispatcher.ExecuteCommand(
+                ["workspace", "create"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            var worktreePath = GoalWorktrees.TryResolve(repo, goal.Id);
+            Assert.NotNull(worktreePath);
+
+            _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                intake, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+            Assert.Equal(worktreePath, GoalWorktrees.TryResolve(repo, goal.Id));
+            Assert.Single((await repository.LoadAsync()).Goals);
+
+            _ = CliCommandDispatcher.ExecuteCommand(
+                ["workspace", "remove"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
+            Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
+            var repositoryStatus = RunGitOutput(repo, "status", "--short");
+            Assert.True(
+                string.IsNullOrWhiteSpace(repositoryStatus),
+                $"Repository remained dirty after keyed replay cleanup:{Environment.NewLine}{repositoryStatus}");
+        }
+        finally
+        {
+            DeleteDirectory(repo);
+        }
+    }
+
     [Xunit.Fact(DisplayName = "Cli_workspace_remove_repairs_landed_cleaned_stale_acceptance_failure")]
     public void CliWorkspaceRemoveRepairsLandedCleanedStaleAcceptanceFailure()
     {

@@ -295,11 +295,15 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             [
                 "backlog_intake_records",
                 "engineering_practices",
+                "goal_intake_requests",
+                "goal_replacement_audit",
+                "goal_replacement_lineage",
                 "goals",
                 "human_input_requests",
                 "meta",
                 "model_fit_history",
                 "schema_migrations",
+                "source_backlog_claims",
                 "spawn_registry",
                 "sqlite_sequence",
                 "state_outbox",
@@ -317,7 +321,7 @@ public sealed class SqliteOrchestratorStateRepositoryTests
             ["id", "kind", "payload_json", "created_at", "quarantined_at", "quarantine_reason", "processing_token", "processing_started_at"],
             QueryStrings(conn, "SELECT name FROM pragma_table_info('state_outbox') ORDER BY cid"));
         Xunit.Assert.Equal(
-            Enumerable.Range(1, 8).Select(number => number.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            Enumerable.Range(1, 12).Select(number => number.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             QueryStrings(conn, "SELECT CAST(migration_number AS TEXT) FROM schema_migrations ORDER BY migration_number"));
     }
 
@@ -1309,6 +1313,21 @@ public sealed class SqliteOrchestratorStateRepositoryTests
         Assert.Contains("quarantine_reason", outboxColumns);
         Assert.Contains("processing_token", outboxColumns);
         Assert.Contains("processing_started_at", outboxColumns);
+        Assert.Equal(
+            ["backlog_item_id", "owner_goal_id", "coverage", "version", "updated_at"],
+            QueryStrings(checkConn, "SELECT name FROM pragma_table_info('source_backlog_claims') ORDER BY cid"));
+        Assert.Contains(
+            "goal_replacement_lineage",
+            QueryStrings(checkConn, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"));
+        Assert.Contains(
+            "goal_replacement_audit",
+            QueryStrings(checkConn, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"));
+        var replacementAuditColumns = QueryStrings(
+            checkConn,
+            "SELECT name FROM pragma_table_info('goal_replacement_audit') ORDER BY cid");
+        Assert.Contains("objective_hash", replacementAuditColumns);
+        Assert.Contains("ordered_roles", replacementAuditColumns);
+        Assert.Contains("assigned_agents", replacementAuditColumns);
     }
 
     [Xunit.Fact(DisplayName = "SqliteOrchestratorStateRepository_successor_preflight_allows_outbox_quarantine_column_migration")]

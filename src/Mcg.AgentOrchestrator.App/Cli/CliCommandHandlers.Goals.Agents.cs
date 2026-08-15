@@ -92,7 +92,7 @@ private static string Slug(string value)
     return slug.Trim('-');
 }
 
-private static IReadOnlyList<AgentDefinition> ApplyRoleAgentOverrides(
+internal static IReadOnlyList<AgentDefinition> ApplyRoleAgentOverrides(
     IReadOnlyList<string> parts,
     IReadOnlyList<AgentDefinition> agents)
 {

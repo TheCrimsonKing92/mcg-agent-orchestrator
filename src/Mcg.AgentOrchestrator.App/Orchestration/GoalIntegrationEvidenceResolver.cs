@@ -19,6 +19,7 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
     private readonly string _executionDirectory;
     private readonly string? _mainSha;
     private readonly IReadOnlyList<IntegrationCommitCandidate> _candidates;
+    private readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> _gitRunner;
     private readonly Dictionary<GoalId, GoalIntegrationEvidence?> _cache = [];
 
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
@@ -27,25 +28,32 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
     private GoalIntegrationEvidenceResolver(
         string executionDirectory,
         string? mainSha,
-        IReadOnlyList<IntegrationCommitCandidate> candidates)
+        IReadOnlyList<IntegrationCommitCandidate> candidates,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
         _executionDirectory = Path.GetFullPath(executionDirectory);
         _mainSha = mainSha;
         _candidates = candidates;
+        _gitRunner = gitRunner;
     }
 
-    public static GoalIntegrationEvidenceResolver Build(string executionDirectory, string? knownMainSha = null)
+    public static GoalIntegrationEvidenceResolver Build(
+        string executionDirectory,
+        string? knownMainSha = null,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
+        gitRunner ??= GitRunner;
         var fullExecutionDirectory = Path.GetFullPath(executionDirectory);
         var mainSha = string.IsNullOrWhiteSpace(knownMainSha)
-            ? ResolveMainSha(fullExecutionDirectory)
+            ? ResolveMainSha(fullExecutionDirectory, gitRunner)
             : knownMainSha.Trim();
         if (string.IsNullOrWhiteSpace(mainSha))
         {
-            return new GoalIntegrationEvidenceResolver(fullExecutionDirectory, null, []);
+            return new GoalIntegrationEvidenceResolver(fullExecutionDirectory, null, [], gitRunner);
         }
 
         var log = RunGit(
+            gitRunner,
             fullExecutionDirectory,
             "log",
             mainSha,
@@ -54,7 +62,7 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
         var candidates = log.ExitCode == 0
             ? ParseCandidates(log.Output)
             : [];
-        return new GoalIntegrationEvidenceResolver(fullExecutionDirectory, mainSha, candidates);
+        return new GoalIntegrationEvidenceResolver(fullExecutionDirectory, mainSha, candidates, gitRunner);
     }
 
     public bool TryResolve(GoalId goalId, out GoalIntegrationEvidence? evidence)
@@ -82,6 +90,7 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
         // revert deliberately does not reopen the old goal: the revert is separate work with its
         // own lifecycle, and attempting content-aware revert detection would make goals flap.
         var ancestry = RunGit(
+            _gitRunner,
             _executionDirectory,
             "merge-base",
             "--is-ancestor",
@@ -126,9 +135,11 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
         return candidates;
     }
 
-    private static string? ResolveMainSha(string executionDirectory)
+    private static string? ResolveMainSha(
+        string executionDirectory,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
-        var result = RunGit(executionDirectory, "rev-parse", "--verify", "refs/heads/main");
+        var result = RunGit(gitRunner, executionDirectory, "rev-parse", "--verify", "refs/heads/main");
         var sha = result.Output.Trim();
         return result.ExitCode == 0 && sha.Length > 0 && !sha.Any(char.IsWhiteSpace)
             ? sha
@@ -140,8 +151,11 @@ internal sealed class GoalIntegrationEvidenceResolver : IGoalIntegrationEvidence
         (goalId.StartsWith(token, StringComparison.OrdinalIgnoreCase) ||
          token.StartsWith(goalId, StringComparison.OrdinalIgnoreCase));
 
-    private static GitCli.GitResult RunGit(string executionDirectory, params string[] args) =>
-        GitRunner(executionDirectory, args);
+    private static GitCli.GitResult RunGit(
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        string executionDirectory,
+        params string[] args) =>
+        gitRunner(executionDirectory, args);
 
     internal sealed record IntegrationCommitCandidate(string Sha, string Subject, string GoalToken);
 }

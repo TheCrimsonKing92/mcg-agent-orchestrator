@@ -14,14 +14,13 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(4, settings.MaxConcurrentShards);
         Xunit.Assert.Equal(5, settings.PartitionVerdictFullRerunEveryN);
         Xunit.Assert.Equal(AcceptanceGateEngineSettings.DefaultOutputCaptureLimitBytes, settings.OutputCaptureLimitBytes);
-        Xunit.Assert.Equal(18, settings.InfrastructureTestLanes.Count);
-        Xunit.Assert.Equal(5, startupContract.ManifestCheckCount);
+        Xunit.Assert.Equal(17, settings.InfrastructureTestLanes.Count);
+        Xunit.Assert.Equal(6, startupContract.ManifestCheckCount);
         var expectedEstimates = new Dictionary<string, double>(StringComparer.Ordinal)
         {
             ["Cli"] = 65.2,
             ["Worker shell"] = 9.1,
             ["Worker sandbox planner"] = 9.3,
-            ["Dashboard validation"] = 9.2,
             ["Conduct watch sweep scoping"] = 10.0,
             ["Goal lifecycle commands"] = 194.6,
             ["Goal worktree cleanup"] = 274.6,
@@ -56,7 +55,6 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "CliCommandTestsGoalLifecycleCleanupHooks",
                 "CliCommandTestsPersistentRunnerCommands",
                 "CliCommandTestsSubscriptionDispatchCommands",
-                "CliCommandTestsTerminalSweepCommands",
                 "GoalGitFactIndexTests",
                 "GoalsPruneTests",
                 "GoalWorktreeTestsAcceptanceLanding",
@@ -71,6 +69,24 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Empty(settings.InfrastructureTestLanes
             .Single(lane => lane.Name == "Goal worktree parallel")
             .ExclusiveResourceKeys);
+        var terminalSweepLane = Xunit.Assert.Single(settings.InfrastructureTestLanes
+            .Where(lane => LaneIncludesClass(lane, typeof(CliCommandTestsTerminalSweepCommands))));
+        Xunit.Assert.Equal("Cli", terminalSweepLane.Name);
+        Xunit.Assert.Empty(terminalSweepLane.ExclusiveResourceKeys);
+        var gitFactIndexLane = Xunit.Assert.Single(settings.InfrastructureTestLanes
+            .Where(lane => LaneIncludesClass(lane, typeof(GoalGitFactIndexTests))));
+        Xunit.Assert.Equal("Goal worktree parallel", gitFactIndexLane.Name);
+        Xunit.Assert.Empty(gitFactIndexLane.ExclusiveResourceKeys);
+        Xunit.Assert.Equal(
+            ["xunit:GoalWorktreeCleanupHooks"],
+            settings.InfrastructureTestLanes
+                .Single(lane => lane.Name == "Goal lifecycle commands")
+                .ExclusiveResourceKeys);
+        Xunit.Assert.Equal(
+            ["xunit:GoalWorktreeCleanupHooks"],
+            settings.InfrastructureTestLanes
+                .Single(lane => lane.Name == "Goal worktree cleanup")
+                .ExclusiveResourceKeys);
         AssertLanePairPreservesCoverage(
             settings,
             "Worker profiles",
@@ -79,7 +95,6 @@ public sealed class AcceptanceGateEngineSettingsTests
                 "AdvanceLoopTests",
                 "ConductLoopLockTests",
                 "ConductorLoopHandoffTests",
-                "DashboardDispatchStartFailureEndpointTests",
                 "GoalBacklogLinkTests",
                 "GoalLifecycleEventWriterTests",
                 "RealWorkerProcessGuardTests",
@@ -112,8 +127,12 @@ public sealed class AcceptanceGateEngineSettingsTests
         const string cliProject =
             "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/" +
             "Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
+        const string dashboardProject =
+            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/" +
+            "Mcg.AgentOrchestrator.Dashboard.Tests.csproj";
         _ = settings.ResolveMtpInvocation(providerProject);
         _ = settings.ResolveMtpInvocation(cliProject);
+        _ = settings.ResolveMtpInvocation(dashboardProject);
         Xunit.Assert.Equal("Infrastructure.Cli.Tests", GoalAcceptanceVerifier.ProjectLabel(cliProject));
 
         var manifest = System.Text.Json.Nodes.JsonNode.Parse(
@@ -130,10 +149,19 @@ public sealed class AcceptanceGateEngineSettingsTests
         Xunit.Assert.Equal(cliProject, cliCheck["project"]?.GetValue<string>());
         Xunit.Assert.False(cliCheck.ContainsKey("estimatedSerialSeconds"));
         Xunit.Assert.False(cliCheck.ContainsKey("exclusiveResourceKeys"));
+        var dashboardCheck = manifest["checks"]!.AsArray()
+            .Select(check => check!.AsObject())
+            .Single(check => check["name"]?.GetValue<string>() == "dashboard tests");
+        Xunit.Assert.Equal(dashboardProject, dashboardCheck["project"]?.GetValue<string>());
+        Xunit.Assert.Equal(
+            ["--verbosity", "minimal", "--filter-not-trait", "Category=HostIntegration"],
+            dashboardCheck["arguments"]!.AsArray().Select(value => value!.GetValue<string>()));
+        Xunit.Assert.False(dashboardCheck.ContainsKey("exclusiveResourceKeys"));
 
         var solutionText = File.ReadAllText(Path.Combine(repositoryRoot, "Mcg.AgentOrchestrator.sln"));
         var trustedTestProjects = GoalAcceptanceVerifier.DiscoverTrustedTestProjects(repositoryRoot, repositoryRoot);
         Xunit.Assert.Contains(cliProject, trustedTestProjects);
+        Xunit.Assert.Contains(dashboardProject, trustedTestProjects);
         Xunit.Assert.All(
             trustedTestProjects,
             project => Xunit.Assert.Contains(
@@ -786,7 +814,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Directory.CreateDirectory(Path.GetDirectoryName(omittedProject)!);
         File.WriteAllText(
             omittedProject,
-            "<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
+            "<Project><PropertyGroup><IsTestProject>true</IsTestProject><UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>");
         var calls = new List<string[]>();
         GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
         GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];

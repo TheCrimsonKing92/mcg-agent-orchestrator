@@ -150,11 +150,37 @@ internal static class GoalLandingPostActions
         Action<string>? writeLine = null,
         AgentOrchestratorKernel? kernel = null,
         string? executionDirectory = null,
-        string? integrateCommitSha = null)
+        string? integrateCommitSha = null,
+        string? stateDbPath = null)
     {
         if (goal?.SourceBacklogItemId is null)
         {
             return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(stateDbPath))
+        {
+            if (kernel is null)
+                throw new ArgumentException("An authoritative source-claim check requires the current kernel.", nameof(kernel));
+            SourceBacklogClaimSnapshot? claim;
+            try
+            {
+                claim = new SourceBacklogClaimStore(stateDbPath)
+                    .ResolveClaim(kernel, goal.SourceBacklogItemId);
+            }
+            catch (LegacySourceBacklogOwnerAmbiguousException ex)
+            {
+                var warning = $"Warning: goal {goal.Id.Value[..8]} landed, but linked backlog item {goal.SourceBacklogItemId} was not closed: {ex.Message}";
+                kernel.RecordGoalPolicyDecision(goal.Id, warning);
+                writeLine?.Invoke(warning);
+                return false;
+            }
+            if (claim is null || !string.Equals(claim.OwnerGoalId, goal.Id.Value, StringComparison.Ordinal))
+            {
+                writeLine?.Invoke(
+                    $"Backlog item {goal.SourceBacklogItemId} was not closed because goal {goal.Id.Value[..8]} is historical; authoritative owner is {claim?.OwnerGoalId ?? "none"}.");
+                return false;
+            }
         }
 
         try

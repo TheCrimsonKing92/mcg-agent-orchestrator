@@ -43,6 +43,9 @@ internal sealed record DeveloperBranchIntegrationResult(
 
 internal sealed class ConductorDriver
 {
+    private sealed class EvidenceMutationLeaseUnavailableException(string message)
+        : InvalidOperationException(message);
+
     private const int MaxCriterionRetryEvidenceLines = 30;
     private static readonly TimeSpan DefaultBuildServerShutdownTimeout = TimeSpan.FromSeconds(5);
     private const string CleanBaselineRedCorrelationKeyPrefix = "clean-baseline-red:";
@@ -128,6 +131,7 @@ internal sealed class ConductorDriver
     private readonly Func<int> _getWorkerAdmissionCapacity;
     private readonly Func<bool> _hasGateReadyGoal;
     private readonly Func<Goal, string?> _tryBuildAwaitingClarificationEscalationReason;
+    private readonly Func<Goal, string, IDisposable?> _tryAcquireEvidenceMutationLease;
     private readonly string? _executionDirectory;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _parallelAcceptanceAttemptCoordinator;
     private readonly ConductorParallelAcceptanceAttemptCoordinator _focusedEvidenceAttemptCoordinator;
@@ -219,6 +223,13 @@ internal sealed class ConductorDriver
         var worktreeSnapshot = GoalWorktrees.ResolveAll(dir, factGoalIds)
             .ToDictionary(pair => pair.Key, pair => pair.Value);
         void RefreshJournal(GoalId goalId) => journalSnapshot[goalId] = GoalOperationJournal.Read(dir, goalId);
+        IDisposable? AcquireEvidenceMutationLease(Goal goal, string operation)
+        {
+            var owner = $"goal-evidence:{operation}:{Environment.ProcessId}:{Guid.NewGuid():N}";
+            return new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+                .TryAcquireAcceptanceLease(goal.Id.Value, owner, TimeSpan.FromMinutes(30));
+        }
+        _tryAcquireEvidenceMutationLease = AcquireEvidenceMutationLease;
         void RecordMissingBranchRetirement(Goal goal, string detail)
         {
             GoalOperationJournal.RecordTerminalDisposition(
@@ -258,6 +269,9 @@ internal sealed class ConductorDriver
 
         _createWorkspace = goal =>
         {
+            using var evidenceMutationLease = AcquireEvidenceMutationLease(goal, "conductor:workspace-create")
+                ?? throw new EvidenceMutationLeaseUnavailableException(
+                    $"GOAL_OPERATION_BLOCKED goal={goal.Id.Value} operation=conductor:workspace-create reason=concurrent-acceptance-or-replacement");
             GoalOperationJournal.Begin(dir, goal, "conductor:workspace-create", GoalWorktrees.BranchName(goal.Id));
             var path = GoalWorktrees.Ensure(dir, goal.Id);
             GoalOperationJournal.Completed(dir, goal, "conductor:workspace-create", path);
@@ -268,6 +282,12 @@ internal sealed class ConductorDriver
 
         _dispatchAndStart = (goal, policy) =>
         {
+            using var evidenceMutationLease = AcquireEvidenceMutationLease(goal, "conductor:dispatch");
+            if (evidenceMutationLease is null)
+            {
+                return DispatchStartOutcome.Deferred(
+                    $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}.");
+            }
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch", "Starting subscription dispatch.");
             var goalSnapshotBeforeDispatch = kernel.ExportGoalSnapshot(goal.Id);
             var criticalCheckpointPersisted = false;
@@ -329,6 +349,12 @@ internal sealed class ConductorDriver
 
         _startRecordedDispatches = (goal, policy) =>
         {
+            using var evidenceMutationLease = AcquireEvidenceMutationLease(goal, "conductor:dispatch-start");
+            if (evidenceMutationLease is null)
+            {
+                return DispatchStartOutcome.Deferred(
+                    $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}.");
+            }
             GoalOperationJournal.Begin(dir, goal, "conductor:dispatch-start", "Starting recorded dispatch.");
             ProcessBatchExecutionResult result;
             try
@@ -761,7 +787,8 @@ internal sealed class ConductorDriver
                 workspace.BacklogStorePath,
                 Console.WriteLine,
                 kernel,
-                dir);
+                dir,
+                stateDbPath: workspace.SqliteStatePath);
             GoalOperationJournal.Completed(dir, goal, "conductor:backlog-close",
                 closed ? "Closed linked source backlog item." : "No linked source backlog item closed.");
             RefreshJournal(goal.Id);
@@ -1083,6 +1110,7 @@ internal sealed class ConductorDriver
             IReadOnlyList<Goal>,
             ConductorAutonomyPolicy,
             ConductorAcceptanceCohortRunResult>? runAcceptanceCohort = null,
+        Func<Goal, string, IDisposable?>? tryAcquireEvidenceMutationLease = null,
         Func<Goal, DeveloperBranchIntegrationResult>? integrateMainBeforeDeveloperDispatch = null)
     {
         _getFacts = getFacts;
@@ -1179,6 +1207,8 @@ internal sealed class ConductorDriver
         _hasGateReadyGoal = hasGateReadyGoal ?? (() => false);
         _tryBuildAwaitingClarificationEscalationReason =
             tryBuildAwaitingClarificationEscalationReason ?? (_ => null);
+        _tryAcquireEvidenceMutationLease =
+            tryAcquireEvidenceMutationLease ?? ((_, _) => NoopEvidenceMutationLease.Instance);
         _executionDirectory = null;
         _parallelAcceptanceEnabled =
             runAcceptanceVerificationWithSlot is not null ||
@@ -2590,45 +2620,71 @@ internal sealed class ConductorDriver
                 continue;
             }
 
-            var changedFiles = recovery.Receipt.Identity.Members
-                .SelectMany(member => member.LandingPaths)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Order(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            foreach (var goal in goals.Cast<Goal>())
+            var resolvedGoals = goals.Cast<Goal>().ToArray();
+            var evidenceMutationLeases = new Stack<IDisposable>();
+            try
             {
-                GoalOperationJournal.Completed(
-                    workspace.ExecutionDirectory,
-                    goal,
-                    "conductor:land",
-                    $"Recovered shared cohort receipt {recovery.Receipt.ReceiptId} after main advanced.");
-                eventWriter.AppendGoalLanded(
-                    goal.Id,
-                    $"cohort/{recovery.Receipt.Identity.Value}",
-                    GoalWorktrees.BranchName(goal.Id));
-                StateEffectProposalApplier.ApplyLandedProposals(
-                    kernel,
-                    goal,
-                    workspace,
-                    changedFiles,
-                    Console.WriteLine);
-                var landingResult = new LandingResult(
-                    goal.Id.Value,
-                    goal.Id.Value[..8],
-                    new LandingDecision.Promote(),
-                    $"cohort/{recovery.Receipt.Identity.Value}",
-                    MainAdvanced: true,
-                    "Recovered exact tested cohort landing after main advanced.",
-                    recovery.CombinedCommitRevision,
-                    changedFiles);
-                _pendingRecoveredLandingReceipts.Add((
-                    new ConductorLandingReceipt(
-                        goal.Id.Value,
+                foreach (var goal in resolvedGoals.OrderBy(goal => goal.Id.Value, StringComparer.Ordinal))
+                {
+                    var lease = _tryAcquireEvidenceMutationLease(goal, "conductor:cohort-recovery");
+                    if (lease is null)
+                    {
+                        break;
+                    }
+                    evidenceMutationLeases.Push(lease);
+                }
+                if (evidenceMutationLeases.Count != resolvedGoals.Length)
+                {
+                    continue;
+                }
+
+                var changedFiles = recovery.Receipt.Identity.Members
+                    .SelectMany(member => member.LandingPaths)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                foreach (var goal in resolvedGoals)
+                {
+                    GoalOperationJournal.Completed(
+                        workspace.ExecutionDirectory,
+                        goal,
+                        "conductor:land",
+                        $"Recovered shared cohort receipt {recovery.Receipt.ReceiptId} after main advanced.");
+                    eventWriter.AppendGoalLanded(
+                        goal.Id,
+                        $"cohort/{recovery.Receipt.Identity.Value}",
+                        GoalWorktrees.BranchName(goal.Id));
+                    StateEffectProposalApplier.ApplyLandedProposals(
+                        kernel,
+                        goal,
+                        workspace,
                         changedFiles,
-                        recovery.CombinedCommitRevision),
-                    recovery.Receipt.Identity.Value,
-                    recovery.Receipt.ReceiptId));
-                _afterSuccessfulLanding(goal, landingResult);
+                        Console.WriteLine);
+                    var landingResult = new LandingResult(
+                        goal.Id.Value,
+                        goal.Id.Value[..8],
+                        new LandingDecision.Promote(),
+                        $"cohort/{recovery.Receipt.Identity.Value}",
+                        MainAdvanced: true,
+                        "Recovered exact tested cohort landing after main advanced.",
+                        recovery.CombinedCommitRevision,
+                        changedFiles);
+                    _pendingRecoveredLandingReceipts.Add((
+                        new ConductorLandingReceipt(
+                            goal.Id.Value,
+                            changedFiles,
+                            recovery.CombinedCommitRevision),
+                        recovery.Receipt.Identity.Value,
+                        recovery.Receipt.ReceiptId));
+                    _afterSuccessfulLanding(goal, landingResult);
+                }
+            }
+            finally
+            {
+                while (evidenceMutationLeases.TryPop(out var lease))
+                {
+                    lease.Dispose();
+                }
             }
         }
     }
@@ -3139,6 +3195,16 @@ internal sealed class ConductorDriver
         CancellationToken cancellationToken)
     {
         var effectiveCandidate = candidate;
+        using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
+            candidate.Goal,
+            "conductor:parallel-acceptance");
+        if (evidenceMutationLease is null)
+        {
+            return ConductorParallelAcceptanceRunResult.Early(
+                candidate,
+                ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy),
+                null);
+        }
         try
         {
             var early = RebaseBeforeAcceptance(
@@ -3248,6 +3314,12 @@ internal sealed class ConductorDriver
         ConductorAutonomyPolicy policy,
         AcceptanceVerificationSummary acceptance)
     {
+        using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(
+            candidate.Goal,
+            "conductor:parallel-land");
+        if (evidenceMutationLease is null)
+            return ReplacementEvidenceMutationHeld(candidate.Goal, candidate.GoalPrefix, policy);
+
         acceptance = NormalizeNamedFailedChecksForRetry(acceptance);
         if (!acceptance.Passed || acceptance.UnmetCriteria.Count > 0)
         {
@@ -3387,9 +3459,17 @@ internal sealed class ConductorDriver
 
     private ConductorAdvanceResult ExecuteCreateWorkspace(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
-        var path = _createWorkspace(goal);
-        return MakeResult(goal.Id.Value, goalPrefix, policy,
-            new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Created, $"Workspace created: {path}"));
+        try
+        {
+            var path = _createWorkspace(goal);
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Executed(GoalLifecycleState.Created, $"Workspace created: {path}"));
+        }
+        catch (EvidenceMutationLeaseUnavailableException ex)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(GoalLifecycleState.Created, ex.Message));
+        }
     }
 
     private ConductorAdvanceResult ExecuteDispatchAndStart(
@@ -3428,6 +3508,20 @@ internal sealed class ConductorDriver
         if (fromState == GoalLifecycleState.WorkspaceReady &&
             HasAssignedDeveloperReadyForDispatch(goal))
         {
+            using var integrationEvidenceMutationLease = _tryAcquireEvidenceMutationLease(
+                goal,
+                "conductor:developer-branch-integration");
+            if (integrationEvidenceMutationLease is null)
+            {
+                return MakeResult(
+                    goal.Id.Value,
+                    goalPrefix,
+                    policy,
+                    new ConductorAdvanceOutcome.Held(
+                        fromState,
+                        $"Goal evidence mutation is blocked by concurrent acceptance or replacement for {goal.Id.Value}."));
+            }
+
             var integration = _integrateMainBeforeDeveloperDispatch(goal);
             if (!integration.CanDispatch)
             {
@@ -3483,6 +3577,12 @@ internal sealed class ConductorDriver
             {
                 outcome = firstFailure;
             }
+        }
+
+        if (outcome.Category == DispatchStartOutcomeCategory.Deferred)
+        {
+            return MakeResult(goal.Id.Value, goalPrefix, policy,
+                new ConductorAdvanceOutcome.Held(fromState, outcome.Reason!));
         }
 
         if (outcome.Category == DispatchStartOutcomeCategory.Started)
@@ -3970,7 +4070,9 @@ internal sealed class ConductorDriver
                 ? "Core.Tests"
                 : project.Contains("Infrastructure.Tests", StringComparison.OrdinalIgnoreCase)
                     ? "Infrastructure.Tests"
-                    : null;
+                    : project.Contains("Dashboard.Tests", StringComparison.OrdinalIgnoreCase)
+                        ? "Dashboard.Tests"
+                        : null;
             if (alias is null)
             {
                 return new PreReviewEvidenceContext(
@@ -4550,6 +4652,10 @@ internal sealed class ConductorDriver
 
     private ConductorAdvanceResult ExecuteLanding(Goal goal, string goalPrefix, ConductorAutonomyPolicy policy)
     {
+        using var evidenceMutationLease = _tryAcquireEvidenceMutationLease(goal, "conductor:acceptance-and-land");
+        if (evidenceMutationLease is null)
+            return ReplacementEvidenceMutationHeld(goal, goalPrefix, policy);
+
         if (!HasCompletedPassedVerificationForAllTasks(goal))
         {
             return MakeResult(goal.Id.Value, goalPrefix, policy,
@@ -4602,6 +4708,27 @@ internal sealed class ConductorDriver
             : string.Join(", ", attribution.Holders.Select(holder =>
                 $"pid {holder.ProcessId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"} {holder.ProcessName ?? "unknown"}"));
         return $"path={attribution.Path}; holders: {holders}";
+    }
+
+    private ConductorAdvanceResult ReplacementEvidenceMutationHeld(
+        Goal goal,
+        string goalPrefix,
+        ConductorAutonomyPolicy policy) =>
+        MakeResult(
+            goal.Id.Value,
+            goalPrefix,
+            policy,
+            new ConductorAdvanceOutcome.Held(
+                GoalLifecycleState.Verified,
+                "Acceptance or landing is blocked by concurrent source-backlog replacement."));
+
+    private sealed class NoopEvidenceMutationLease : IDisposable
+    {
+        internal static readonly NoopEvidenceMutationLease Instance = new();
+
+        public void Dispose()
+        {
+        }
     }
 
     private ConductorAdvanceResult? RebaseBeforeAcceptance(

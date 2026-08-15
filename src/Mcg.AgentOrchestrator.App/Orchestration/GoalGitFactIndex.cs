@@ -6,6 +6,7 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 internal enum GoalBranchContentState
 {
     NotChecked,
+    NoCommitsAhead,
     EquivalentToMain,
     AbsentFromMain,
     Inconclusive
@@ -26,25 +27,31 @@ internal sealed class GoalGitFactIndex(
     IReadOnlyDictionary<string, string> goalBranchTips,
     IReadOnlySet<string> mergedGoalBranches,
     IReadOnlySet<string> registeredWorktreePaths,
-    string? mainSha)
+    string? mainSha,
+    bool evidenceAvailable = true,
+    Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
 {
     private readonly Dictionary<string, GoalBranchContentState> branchContentStates = new(StringComparer.Ordinal);
+    private readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> _gitRunner = gitRunner ?? GitRunner;
 
     internal static Func<string, IReadOnlyList<string>, GitCli.GitResult> GitRunner { get; set; } =
         (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
 
-    public static GoalGitFactIndex Build(string executionDirectory)
+    public static GoalGitFactIndex Build(
+        string executionDirectory,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
+        gitRunner ??= GitRunner;
         var fullExecutionDirectory = Path.GetFullPath(executionDirectory);
-        var branchResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/goal/");
+        var branchResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads/goal/");
         if (branchResult.ExitCode != 0)
         {
-            return new GoalGitFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet(), null);
+            return new GoalGitFactIndex(fullExecutionDirectory, false, EmptyTipMap(), EmptySet(), EmptyPathSet(), null, evidenceAvailable: false, gitRunner);
         }
 
-        var mergedResult = RunGit(fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/goal/");
-        var worktreeResult = RunGit(fullExecutionDirectory, "worktree", "list", "--porcelain");
-        var mainResult = RunGit(fullExecutionDirectory, "rev-parse", "--verify", "refs/heads/main");
+        var mergedResult = RunGit(gitRunner, fullExecutionDirectory, "for-each-ref", "--format=%(refname:short)", "--merged", "HEAD", "refs/heads/goal/");
+        var worktreeResult = RunGit(gitRunner, fullExecutionDirectory, "worktree", "list", "--porcelain");
+        var mainResult = RunGit(gitRunner, fullExecutionDirectory, "rev-parse", "--verify", "refs/heads/main");
         var resolvedMainSha = mainResult.ExitCode == 0 && IsSingleToken(mainResult.Output.Trim())
             ? mainResult.Output.Trim()
             : null;
@@ -55,7 +62,11 @@ internal sealed class GoalGitFactIndex(
             ParseBranchTips(branchResult.Output),
             mergedResult.ExitCode == 0 ? ParseLines(mergedResult.Output) : EmptySet(),
             worktreeResult.ExitCode == 0 ? ParseWorktreePaths(worktreeResult.Output) : EmptyPathSet(),
-            resolvedMainSha);
+            resolvedMainSha,
+            evidenceAvailable: mergedResult.ExitCode == 0 &&
+                               worktreeResult.ExitCode == 0 &&
+                               resolvedMainSha is not null,
+            gitRunner);
     }
 
     public bool HasGoalBranch(string branchName) => isGitWorkTree && goalBranchTips.ContainsKey(branchName);
@@ -66,6 +77,8 @@ internal sealed class GoalGitFactIndex(
         goalBranchTips.TryGetValue(GoalWorktrees.BranchName(goalId), out var tip) ? tip : null;
 
     public string? MainSha => mainSha;
+
+    public bool IsAvailable => evidenceAvailable;
 
     public GoalBranchFacts BuildGoalBranchFacts(Goal goal)
     {
@@ -85,6 +98,31 @@ internal sealed class GoalGitFactIndex(
         return new GoalBranchFacts(
             isAcceptedOrVerifiedGitGoal,
             goal.Status == GoalStatus.Completed && isGitWorkTree,
+            hasRegisteredWorktree,
+            hasGoalBranch,
+            hasGoalBranchArtifact,
+            branchAlreadyLanded,
+            contentState);
+    }
+
+    public GoalBranchFacts BuildReplacementFacts(Goal goal)
+    {
+        var branch = GoalWorktrees.BranchName(goal.Id);
+        var hasRegisteredWorktree = registeredWorktreePaths.Contains(
+            NormalizePath(GoalWorktrees.WorktreePath(executionDirectory, goal.Id)));
+        var hasGoalBranch = isGitWorkTree && goalBranchTips.ContainsKey(branch);
+        var hasGoalBranchArtifact = hasRegisteredWorktree || hasGoalBranch;
+        // Git reachability cannot distinguish a landed goal branch from a zero-commit
+        // branch left at an older main ancestor. Replacement landing authority comes
+        // from the durable operation journal in GoalReplacementEvidence.
+        const bool branchAlreadyLanded = false;
+        var contentState = hasGoalBranch
+            ? GetBranchContentState(branch)
+            : GoalBranchContentState.NotChecked;
+
+        return new GoalBranchFacts(
+            IsAcceptedOrVerifiedGitGoal: isGitWorkTree,
+            IsCompletedGitGoal: goal.Status == GoalStatus.Completed && isGitWorkTree,
             hasRegisteredWorktree,
             hasGoalBranch,
             hasGoalBranchArtifact,
@@ -116,7 +154,7 @@ internal sealed class GoalGitFactIndex(
 
         var state = mainSha is null
             ? GoalBranchContentState.Inconclusive
-            : ClassifyCherryResult(RunGit(executionDirectory, "cherry", mainSha, branch));
+            : ClassifyCherryResult(RunGit(_gitRunner, executionDirectory, "cherry", mainSha, branch));
         branchContentStates[branch] = state;
         return state;
     }
@@ -133,7 +171,7 @@ internal sealed class GoalGitFactIndex(
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (lines.Length == 0)
         {
-            return GoalBranchContentState.Inconclusive;
+            return GoalBranchContentState.NoCommitsAhead;
         }
 
         var hasAbsentCommit = false;
@@ -155,8 +193,11 @@ internal sealed class GoalGitFactIndex(
             : GoalBranchContentState.EquivalentToMain;
     }
 
-    private static GitCli.GitResult RunGit(string executionDirectory, params string[] args) =>
-        GitRunner(executionDirectory, args);
+    private static GitCli.GitResult RunGit(
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        string executionDirectory,
+        params string[] args) =>
+        gitRunner(executionDirectory, args);
 
     internal static IReadOnlySet<string> ParseLines(string output) =>
         output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

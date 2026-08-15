@@ -62,6 +62,7 @@ internal sealed class TerminalGoalSweepCache
     private readonly Dictionary<GoalId, TerminalGoalSweepCacheEntry> _terminalFingerprints = [];
     private string? _integrationEvidenceDirectory;
     private string? _integrationEvidenceMainSha;
+    private Func<string, IReadOnlyList<string>, GitCli.GitResult>? _integrationEvidenceGitRunner;
     private IGoalIntegrationEvidenceResolver? _integrationEvidenceResolver;
     private string? _loadedStorePath;
     private bool _loaded;
@@ -71,19 +72,22 @@ internal sealed class TerminalGoalSweepCache
 
     internal IGoalIntegrationEvidenceResolver GetIntegrationEvidenceResolver(
         string executionDirectory,
-        string? mainSha)
+        string? mainSha,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
         var fullDirectory = Path.GetFullPath(executionDirectory);
         if (_integrationEvidenceResolver is not null &&
             string.Equals(_integrationEvidenceDirectory, fullDirectory, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(_integrationEvidenceMainSha, mainSha, StringComparison.Ordinal))
+            string.Equals(_integrationEvidenceMainSha, mainSha, StringComparison.Ordinal) &&
+            ReferenceEquals(_integrationEvidenceGitRunner, gitRunner))
         {
             return _integrationEvidenceResolver;
         }
 
         _integrationEvidenceDirectory = fullDirectory;
         _integrationEvidenceMainSha = mainSha;
-        _integrationEvidenceResolver = GoalIntegrationEvidenceResolver.Build(fullDirectory, mainSha);
+        _integrationEvidenceGitRunner = gitRunner;
+        _integrationEvidenceResolver = GoalIntegrationEvidenceResolver.Build(fullDirectory, mainSha, gitRunner);
         return _integrationEvidenceResolver;
     }
 
@@ -223,7 +227,7 @@ internal sealed class TerminalGoalSweepCache
         goal.Tasks.All(task => !TerminalGoalSweep.IsStaleTerminalAssignedTaskStatus(task.Status)) &&
         goal.Tasks.All(task => task.LastProcess is not { IsRunning: true }) &&
         !HasPendingGoalArtifactCleanup(executionDirectory, goal.Id, sweepFacts.GitFacts) &&
-        !HasPendingCleanupBackoff(executionDirectory, goal.Id, sweepFacts.EphemeralDirectories);
+        !HasPendingCleanupBackoff(executionDirectory, goal.Id, sweepFacts.EphemeralDirectories, sweepFacts.CleanupHooks);
 
     private static bool IsCleanupBlocker(TerminalGoalSweepBlocker blocker) =>
         blocker.Kind is "completed-worktree-cleanup-needed" or
@@ -232,9 +236,10 @@ internal sealed class TerminalGoalSweepCache
     private static bool HasPendingCleanupBackoff(
         string executionDirectory,
         GoalId goalId,
-        IReadOnlyList<string> ephemeralDirectories) =>
+        IReadOnlyList<string> ephemeralDirectories,
+        GoalWorktreeCleanupHooks cleanupHooks) =>
         EnumerateGoalCleanupPaths(executionDirectory, goalId, ephemeralDirectories)
-            .Any(path => GoalWorktrees.TryGetCleanupBackoff(path) is not null);
+            .Any(path => GoalWorktrees.TryGetCleanupBackoff(path, cleanupHooks) is not null);
 
     private static bool HasPendingGoalArtifactCleanup(
         string executionDirectory,
@@ -327,7 +332,8 @@ internal sealed class TerminalGoalSweepCache
 
 internal sealed record TerminalGoalSweepCacheSweepFacts(
     GoalGitFactIndex GitFacts,
-    IReadOnlyList<string> EphemeralDirectories);
+    IReadOnlyList<string> EphemeralDirectories,
+    GoalWorktreeCleanupHooks CleanupHooks);
 
 internal static class TerminalGoalSweep
 {
@@ -349,17 +355,22 @@ internal static class TerminalGoalSweep
         GoalId? onlyGoalId = null,
         TerminalGoalSweepCache? cache = null,
         IGoalIntegrationEvidenceResolver? integrationEvidenceResolver = null,
-        ICollaborationItemStore? attentionStore = null)
+        ICollaborationItemStore? attentionStore = null,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null,
+        GoalWorktreeCleanupHooks? cleanupHooks = null)
     {
+        gitRunner ??= GitRunner;
+        cleanupHooks ??= GoalWorktreeCleanupHooks.Default;
         var dispatchRunner = new BackgroundDispatchRunner();
-        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory);
-        integrationEvidenceResolver ??= cache?.GetIntegrationEvidenceResolver(executionDirectory, branchFactIndex.MainSha)
-            ?? GoalIntegrationEvidenceResolver.Build(executionDirectory, branchFactIndex.MainSha);
+        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, gitRunner);
+        integrationEvidenceResolver ??= cache?.GetIntegrationEvidenceResolver(executionDirectory, branchFactIndex.MainSha, gitRunner)
+            ?? GoalIntegrationEvidenceResolver.Build(executionDirectory, branchFactIndex.MainSha, gitRunner);
         attentionStore ??= CollaborationItemStore.ForDirectory(
             OrchestratorWorkspace.ForDirectory(executionDirectory).OrchestratorDirectory);
         var cacheSweepFacts = new TerminalGoalSweepCacheSweepFacts(
             branchFactIndex,
-            EnumerateEphemeralDirectories(executionDirectory));
+            EnumerateEphemeralDirectories(executionDirectory),
+            cleanupHooks);
         var results = new List<TerminalGoalSweepGoalResult>();
         var sweptGoalIds = new List<GoalId>();
         var cacheHits = 0;
@@ -498,7 +509,7 @@ internal static class TerminalGoalSweep
                 }
                 else
                 {
-                    if (TryAutoRepairMergedBranchLandingIntent(kernel, executionDirectory, goal, repairs))
+                    if (TryAutoRepairMergedBranchLandingIntent(kernel, executionDirectory, goal, gitRunner, repairs))
                     {
                         goal = kernel.GetGoal(originalGoal.Id);
                         hasDurableLandingIntent = true;
@@ -552,7 +563,8 @@ internal static class TerminalGoalSweep
                 var removeResult = GoalWorktrees.RemoveTerminal(
                     executionDirectory,
                     goal.Id,
-                    kernel);
+                    kernel,
+                    cleanupHooks);
                 if (!removeResult.IsComplete)
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
@@ -601,7 +613,8 @@ internal static class TerminalGoalSweep
                     kernel,
                     equivalentBranchTip,
                     branchFacts.HasRegisteredWorktree,
-                    branchFacts.HasGoalBranch);
+                    branchFacts.HasGoalBranch,
+                    cleanupHooks);
                 AddOwnedEphemeralCleanupRepair(removeResult.OwnedEphemeralCleanup, prefix, repairs);
 
                 if (removeResult.IsComplete)
@@ -676,7 +689,8 @@ internal static class TerminalGoalSweep
                     goal.Id,
                     kernel,
                     branchFacts.HasRegisteredWorktree,
-                    branchFacts.HasGoalBranch);
+                    branchFacts.HasGoalBranch,
+                    cleanupHooks);
                 if (removeResult.Message.Contains("kept because it has unmerged commits", StringComparison.OrdinalIgnoreCase))
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
@@ -714,7 +728,7 @@ internal static class TerminalGoalSweep
 
             if (IsTerminalSweepStatus(goal.Status) && !blockers.Any(IsTerminalCleanupBlockingBlocker))
             {
-                var ephemeralCleanup = GoalWorktrees.SweepOwnedEphemeralDirectories(executionDirectory, goal.Id, kernel);
+                var ephemeralCleanup = GoalWorktrees.SweepOwnedEphemeralDirectories(executionDirectory, goal.Id, kernel, cleanupHooks);
                 if (!ephemeralCleanup.IsComplete)
                 {
                     blockers.Add(new TerminalGoalSweepBlocker(
@@ -903,6 +917,7 @@ internal static class TerminalGoalSweep
         AgentOrchestratorKernel kernel,
         string executionDirectory,
         Goal goal,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
         List<TerminalGoalSweepRepair> repairs)
     {
         var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
@@ -912,7 +927,7 @@ internal static class TerminalGoalSweep
             return true;
         }
 
-        if (!TryRecoverLandingMerge(executionDirectory, goal, out var recovered))
+        if (!TryRecoverLandingMerge(executionDirectory, goal, gitRunner, out var recovered))
         {
             return false;
         }
@@ -947,15 +962,16 @@ internal static class TerminalGoalSweep
     private static bool TryRecoverLandingMerge(
         string executionDirectory,
         Goal goal,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
         out RecoveredLandingMerge recovered)
     {
         recovered = default;
-        if (!TryResolveMergedBranchTip(executionDirectory, goal, out var branchTip))
+        if (!TryResolveMergedBranchTip(executionDirectory, goal, gitRunner, out var branchTip))
         {
             return false;
         }
 
-        var ancestry = RunGit(executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchTip}..main");
+        var ancestry = RunGit(gitRunner, executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchTip}..main");
         var mergeCommitSha = ancestry.ExitCode == 0
             ? ancestry.Output
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -963,7 +979,7 @@ internal static class TerminalGoalSweep
             : null;
         if (string.IsNullOrWhiteSpace(mergeCommitSha))
         {
-            var tipLog = RunGit(executionDirectory, "log", "--format=%H", "-n", "1", branchTip);
+            var tipLog = RunGit(gitRunner, executionDirectory, "log", "--format=%H", "-n", "1", branchTip);
             mergeCommitSha = tipLog.ExitCode == 0 ? tipLog.Output.Trim() : branchTip;
         }
 
@@ -974,14 +990,18 @@ internal static class TerminalGoalSweep
 
         recovered = new RecoveredLandingMerge(
             mergeCommitSha.Trim(),
-            TryGetCommitUtc(executionDirectory, mergeCommitSha.Trim()) ?? DateTimeOffset.UtcNow);
+            TryGetCommitUtc(executionDirectory, mergeCommitSha.Trim(), gitRunner) ?? DateTimeOffset.UtcNow);
         return true;
     }
 
-    private static bool TryResolveMergedBranchTip(string executionDirectory, Goal goal, out string branchTip)
+    private static bool TryResolveMergedBranchTip(
+        string executionDirectory,
+        Goal goal,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        out string branchTip)
     {
         var branch = GoalWorktrees.BranchName(goal.Id);
-        var branchResult = RunGit(executionDirectory, "rev-parse", $"refs/heads/{branch}");
+        var branchResult = RunGit(gitRunner, executionDirectory, "rev-parse", $"refs/heads/{branch}");
         if (branchResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(branchResult.Output))
         {
             branchTip = branchResult.Output.Trim();
@@ -991,7 +1011,7 @@ internal static class TerminalGoalSweep
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         if (worktree is not null)
         {
-            var worktreeResult = RunGit(worktree, "rev-parse", "HEAD");
+            var worktreeResult = RunGit(gitRunner, worktree, "rev-parse", "HEAD");
             if (worktreeResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(worktreeResult.Output))
             {
                 branchTip = worktreeResult.Output.Trim();
@@ -1003,9 +1023,12 @@ internal static class TerminalGoalSweep
         return false;
     }
 
-    private static DateTimeOffset? TryGetCommitUtc(string executionDirectory, string commitSha)
+    private static DateTimeOffset? TryGetCommitUtc(
+        string executionDirectory,
+        string commitSha,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
-        var result = RunGit(executionDirectory, "show", "-s", "--format=%cI", commitSha);
+        var result = RunGit(gitRunner, executionDirectory, "show", "-s", "--format=%cI", commitSha);
         return result.ExitCode == 0 &&
             DateTimeOffset.TryParse(
                 result.Output.Trim(),
@@ -1016,8 +1039,11 @@ internal static class TerminalGoalSweep
             : null;
     }
 
-    private static GitCli.GitResult RunGit(string executionDirectory, params string[] args) =>
-        GitRunner(executionDirectory, args);
+    private static GitCli.GitResult RunGit(
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        string executionDirectory,
+        params string[] args) =>
+        gitRunner(executionDirectory, args);
 
     private readonly record struct RecoveredLandingMerge(string MergeCommitSha, DateTimeOffset CommitAtUtc);
 
@@ -1044,10 +1070,11 @@ internal static class TerminalGoalSweep
     public static TerminalGoalSweepResult Diagnose(
         AgentOrchestratorKernel kernel,
         string executionDirectory,
-        GoalId? onlyGoalId = null)
+        GoalId? onlyGoalId = null,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null)
     {
         var results = new List<TerminalGoalSweepGoalResult>();
-        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory);
+        var branchFactIndex = GoalGitFactIndex.Build(executionDirectory, gitRunner);
 
         foreach (var goal in kernel.Goals.Where(goal => onlyGoalId is null || goal.Id == onlyGoalId).ToArray())
         {

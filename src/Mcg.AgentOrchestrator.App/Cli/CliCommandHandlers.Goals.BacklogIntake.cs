@@ -95,7 +95,7 @@ private static SourceBacklogItemLink? ResolveSourceBacklogItemLink(
 
 private static void ValidateSourceBacklogItemAvailable(CliExecutionContext context, BacklogItem item)
 {
-    if (context.Kernel.FindGoalBySourceBacklogItemId(item.Id) is { } competingGoal)
+    if (FindAuthoritativeSourceGoal(context, item.Id) is { } competingGoal)
     {
         throw new InvalidOperationException(
             $"GOAL_CREATE_PRECONDITION_CHANGED reason=source-backlog-consumed backlogItem={item.Id} competingGoal={competingGoal.Id.Value}");
@@ -166,7 +166,7 @@ private static void ApplySourceBacklogItemLink(CliExecutionContext context, Goal
         return;
     }
 
-    if (context.Kernel.FindGoalBySourceBacklogItemId(link.Item.Id) is { } competingGoal &&
+    if (FindAuthoritativeSourceGoal(context, link.Item.Id) is { } competingGoal &&
         competingGoal.Id != goal.Id)
     {
         throw new InvalidOperationException(
@@ -205,7 +205,7 @@ private static Goal ResolvePromotedDependencyGoal(
 {
     var goal = dependency.TargetKind == BacklogDependencyTargetKind.Goal
         ? context.Kernel.Goals.FirstOrDefault(candidate => candidate.Id.Value == dependency.PrerequisiteId)
-        : context.Kernel.FindGoalBySourceBacklogItemId(dependency.PrerequisiteId);
+        : FindAuthoritativeSourceGoal(context, dependency.PrerequisiteId);
     if (goal is not null)
         return goal;
 
@@ -456,6 +456,11 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             }
             ConsoleViews.PrintGoal(existingGoal);
         }
+        if (context.HasGoalCreationFinalizer)
+        {
+            throw new InvalidOperationException(
+                $"GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL goalId={existingGoal?.Id.Value ?? "unknown"}");
+        }
         return false;
     }
     ValidateBacklogPromotionPrerequisites(context, sourceBacklogItem);
@@ -464,9 +469,17 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     if (reservation.Kind != BacklogIntakeReservationKind.Acquired)
     {
         PrintBacklogIntakeRecord(reservation.Record, context.Kernel);
+        if (context.HasGoalCreationFinalizer)
+        {
+            var outcome = reservation.Kind == BacklogIntakeReservationKind.ExistingGoal
+                ? $"GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL goalId={reservation.Record.GoalId ?? "unknown"}"
+                : $"GOAL_INTAKE_BACKLOG_RESERVATION_NOT_ACQUIRED state={reservation.Record.Status}";
+            throw new InvalidOperationException(outcome);
+        }
         return false;
     }
 
+    context.ReportGoalCreationProgress();
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
         : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, goalObjectivePlan!, context.Workspace, context.Providers, context.EventWriter);
@@ -506,8 +519,27 @@ private static bool TryReuseBacklogIntakeGoal(
 {
     existingGoal = string.IsNullOrWhiteSpace(item.Id)
         ? null
-        : context.Kernel.FindGoalBySourceBacklogItemId(item.Id);
+        : FindAuthoritativeSourceGoal(context, item.Id);
     return existingGoal is not null;
+}
+
+private static Goal? FindAuthoritativeSourceGoal(CliExecutionContext context, string backlogItemId)
+{
+    SourceBacklogClaimSnapshot? claim;
+    try
+    {
+        claim = new SourceBacklogClaimStore(context.Workspace.SqliteStatePath)
+            .ResolveClaim(context.Kernel, backlogItemId);
+    }
+    catch (LegacySourceBacklogOwnerAmbiguousException ex)
+    {
+        throw new InvalidOperationException(
+            $"GOAL_CREATE_PRECONDITION_CHANGED reason=legacy-owner-ambiguous backlogItem={ex.BacklogItemId} linkedGoals={string.Join(',', ex.LinkedGoalIds)}",
+            ex);
+    }
+    return claim is null
+        ? null
+        : context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
 }
 
 private static bool TryReuseBacklogIntakeRecord(
@@ -541,6 +573,12 @@ private static void PersistBacklogIntakeGoal(CliExecutionContext context, Backlo
 {
     if (string.IsNullOrWhiteSpace(item.Id))
         return;
+
+    if (context.HasGoalCreationFinalizer)
+    {
+        context.FinalizeGoalCreation(goal);
+        return;
+    }
 
     context.PersistCheckpoint(context.Kernel);
     new BacklogIntakeRecordStore(context.Workspace.SqliteStatePath).MarkGoalCreated(item.Id, goal.Id.Value);

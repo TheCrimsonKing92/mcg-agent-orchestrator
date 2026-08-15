@@ -109,7 +109,7 @@ Each later extraction follows the same gate: nest the project below
 explicit MTP invocation, prove the reviewer evidence alias resolves from that invocation (including through
 the Conductor request contract), record an unchanged aggregate TRX count, and retain a cached-output receipt
 showing an unrelated module change does not rewrite the extracted assembly. The nesting/name convention is
-required by `IsExtractedInfrastructureTestProject`; a sibling project is trusted discovery input but is not
+required by `IsExtractedInfrastructureProject`; a sibling project is trusted discovery input but is not
 treated as an extracted Infrastructure module. Add the project to the explicit dependency graph until that
 graph becomes manifest-driven.
 

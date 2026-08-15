@@ -16,11 +16,11 @@ The conductor drives a goal through its **entire** lifecycle. You almost never c
 
 ```
 # 1. Create an ordinary implementation goal
-mcg-orchestrator.cmd goal "<objective>"                 # Planner + Researcher + Developer + Tester + Reviewer
-mcg-orchestrator.cmd goal --brief-file <path>           # long objective via throwaway file (then delete the file)
+mcg-orchestrator.cmd goal "<objective>" --request-key <unique-operator-key>       # Planner + Researcher + Developer + Tester + Reviewer
+mcg-orchestrator.cmd goal --brief-file <path> --request-key <unique-operator-key> # long objective via throwaway file (then delete the file)
 
 # Explicit exception only: genuinely mechanical low-risk work, or direct operator instruction
-mcg-orchestrator.cmd simple-goal "<objective>"          # single Developer task
+mcg-orchestrator.cmd simple-goal "<objective>" --request-key <unique-operator-key> # single Developer task
 
 # 2. (If the refiner raised clarifications) clear them so the goal can flow
 mcg-orchestrator.cmd attention dismiss <goal-prefix>    # proceed with the brief as written
@@ -33,6 +33,8 @@ mcg-orchestrator.cmd next <goal-prefix> --full          # one-shot full inspecti
 ```
 
 For ordinary implementation goals, use `goal`: the normal dogfood pipeline is the five-role SDLC flow through Planner, Researcher, Developer, Tester, and Reviewer. `simple-goal` is an explicit exception for genuinely mechanical, low-risk work or direct operator instruction. It is not a throughput shortcut, and narrow backlog items still use `goal` unless they meet that exception.
+
+Supply a fresh `--request-key` for each intended creation. If the foreground caller times out, do not invent a new key: run `goal-intake-status <request-key>` or repeat the exact original command with the same key. The receipt state distinguishes `still-committing`, `created`, and `failed`; a terminal `created` replay returns the original goal, while reuse with different effectful inputs fails with `GOAL_INTAKE_PAYLOAD_CONFLICT`. Identical unkeyed objectives remain separate goals by design.
 
 Before writing the objective or its acceptance criteria, assign every criterion to an evidence owner using
 [`role-capability-matrix.md`](role-capability-matrix.md). Put full-suite/gate evidence in acceptance,
@@ -200,6 +202,15 @@ For long-running conductor/acceptance commands, keep the operator seat free by l
 .\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name <goal>-conduct conduct --loop --watch --policy Permissive --poll-seconds 15 --max-duration 5400
 .\scripts\Invoke-RepoScript.ps1 scripts\Show-OrchestratorLogArtifacts.ps1 -GoalPrefix operator -TaskPrefix <goal>-conduct -TailLines 20
 ```
+
+For slow goal creation, launch with `--request-key`; the launcher JSON echoes `requestKey` with `pid`, `stdoutPath`, and `stderrPath`. Poll durable state instead of treating an empty or partial log as failure:
+
+```powershell
+.\scripts\Invoke-RepoScript.ps1 scripts\Start-OrchestratorCommand.ps1 -Name goal-intake goal --brief-file <path> --request-key <unique-operator-key>
+.\mcg-orchestrator.cmd goal-intake-status <unique-operator-key>
+```
+
+An abrupt process exit may leave a receipt in `still-committing`; automatic takeover is intentionally unsupported because a bare PID is not sufficient ownership proof. Confirm the original process and logs before escalating or choosing a new operator-approved key.
 
 For worker logs, use the same bounded helper instead of ad hoc `.orchestrator` PowerShell reads:
 
@@ -421,7 +432,7 @@ Durable state lives in stores, never in `.scratch`.
 
 | Location | What |
 |---|---|
-| `.orchestrator/state.db` | the kernel: goals, tasks, dispatches, verifications (SQLite, single-writer) |
+| `.orchestrator/state.db` | the kernel plus goal-intake request ledger: goals, tasks, dispatches, verifications, and keyed `still-committing`/`created`/`failed` receipts (SQLite, single-writer) |
 | `.orchestrator/backlog.db` | the backlog (use `backlog-list`/`backlog-add`/`backlog-show`/`backlog-close`; this is the source of truth, not `BACKLOG.md`) |
 | `.orchestrator/dogfood-log.db` | dogfood goal-boundary evidence (use `dogfood-log list`/`dogfood-log add`; this is the source of truth, not `DOGFOOD_LOG.md`) |
 | `.orchestrator/collaboration-items.db` | clarifications / operator-input items |

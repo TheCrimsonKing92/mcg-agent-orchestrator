@@ -542,11 +542,28 @@ public sealed class RepositoryChangeClassifierTests
 
         var check = Assert.Single(plan.Checks);
         Assert.Equal("focused dashboard infrastructure tests", check.Name);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", check.Command);
+        Assert.DoesNotContain("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
         Assert.Contains("--filter", check.Command);
         Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
+        Assert.Contains(check.Command, argument => argument.Contains("DashboardDispatchStartFailureEndpointTests", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("Category!=HostIntegration", StringComparison.Ordinal));
         Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_touched_dashboard_test_class_filter")]
+    public void RepositoryTestImpactPlannerSelectsTouchedDashboardTestClassFilter()
+    {
+        var plan = RepositoryTestImpactPlanner.Plan([
+            "tests/Mcg.AgentOrchestrator.Dashboard.Tests/DashboardDispatchStartFailureEndpointTests.cs"
+        ]);
+
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("focused dashboard infrastructure tests", check.Name);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", check.Command);
+        Assert.Contains("--filter", check.Command);
+        Assert.Equal("FullyQualifiedName~DashboardDispatchStartFailureEndpointTests", check.Command[^1]);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_falls_back_to_full_infrastructure_tests_for_shared_infrastructure")]
@@ -570,20 +587,17 @@ public sealed class RepositoryChangeClassifierTests
             "src/Mcg.AgentOrchestrator.App/Dashboard/Rendering/DashboardRenderer.OperatorShell.cs"
         ]);
 
-        var check = Assert.Single(plan.Checks);
-        Assert.Equal("focused CLI+dashboard infrastructure tests", check.Name);
-        Assert.Contains("--filter", check.Command);
-        var filterIndex = Array.FindIndex(check.Command.ToArray(), argument => argument == "--filter");
-        Assert.True(filterIndex >= 0);
-        Assert.Equal(
-            "(FullyQualifiedName~CliCommandTests|FullyQualifiedName~CliHelpTests)|(FullyQualifiedName~DashboardRenderingTests|FullyQualifiedName~DashboardHostTests&Category!=HostIntegration|FullyQualifiedName~DashboardValidationHarnessTests)",
-            check.Command[filterIndex + 1]);
-        Assert.Contains(check.Command, argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
-        Assert.Contains(check.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
-        Assert.Contains(check.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
-        Assert.Contains(check.Command, argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
-        Assert.Contains(check.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
-        Assert.False(check.Command.Any(argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
+        Assert.Equal(2, plan.Checks.Count);
+        var cliCheck = Assert.Single(plan.Checks, check => check.Name == "focused CLI infrastructure tests");
+        var dashboardCheck = Assert.Single(plan.Checks, check => check.Name == "focused dashboard infrastructure tests");
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", cliCheck.Command);
+        Assert.Contains(cliCheck.Command, argument => argument.Contains("CliCommandTests", StringComparison.Ordinal));
+        Assert.Contains(cliCheck.Command, argument => argument.Contains("CliHelpTests", StringComparison.Ordinal));
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", dashboardCheck.Command);
+        Assert.Contains(dashboardCheck.Command, argument => argument.Contains("DashboardRenderingTests", StringComparison.Ordinal));
+        Assert.Contains(dashboardCheck.Command, argument => argument.Contains("DashboardHostTests", StringComparison.Ordinal));
+        Assert.Contains(dashboardCheck.Command, argument => argument.Contains("DashboardValidationHarnessTests", StringComparison.Ordinal));
+        Assert.All(plan.Checks, check => Assert.DoesNotContain(check.Command, argument => argument.Contains("Mcg.AgentOrchestrator.sln", StringComparison.OrdinalIgnoreCase)));
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_disables_focused_app_filter_when_shared_infrastructure_changes")]
@@ -594,10 +608,13 @@ public sealed class RepositoryChangeClassifierTests
             "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier.cs"
         ]);
 
-        var check = Assert.Single(plan.Checks);
-        Assert.Equal("infrastructure tests", check.Name);
-        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
-        Assert.DoesNotContain("--filter", check.Command);
+        Assert.Equal(2, plan.Checks.Count);
+        var dashboardCheck = Assert.Single(plan.Checks, check => check.Name == "dashboard tests");
+        var infrastructureCheck = Assert.Single(plan.Checks, check => check.Name == "infrastructure tests");
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", dashboardCheck.Command);
+        Assert.DoesNotContain("--filter", dashboardCheck.Command);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", infrastructureCheck.Command);
+        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_disables_focused_app_filter_when_script_or_config_changes")]
@@ -612,13 +629,18 @@ public sealed class RepositoryChangeClassifierTests
             "src/Mcg.AgentOrchestrator.App/appsettings.json"
         ]);
 
-        foreach (var plan in new[] { scriptPlan, configPlan })
-        {
-            var check = Assert.Single(plan.Checks);
-            Assert.Equal("infrastructure tests", check.Name);
-            Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", check.Command);
-            Assert.DoesNotContain("--filter", check.Command);
-        }
+        var scriptCheck = Assert.Single(scriptPlan.Checks);
+        Assert.Equal("infrastructure tests", scriptCheck.Name);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", scriptCheck.Command);
+        Assert.DoesNotContain("--filter", scriptCheck.Command);
+
+        Assert.Equal(2, configPlan.Checks.Count);
+        var dashboardCheck = Assert.Single(configPlan.Checks, check => check.Name == "dashboard tests");
+        var infrastructureCheck = Assert.Single(configPlan.Checks, check => check.Name == "infrastructure tests");
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj", dashboardCheck.Command);
+        Assert.DoesNotContain("--filter", dashboardCheck.Command);
+        Assert.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", infrastructureCheck.Command);
+        Assert.DoesNotContain("--filter", infrastructureCheck.Command);
     }
 
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_touched_infrastructure_test_class_filter")]
@@ -689,25 +711,27 @@ public sealed class RepositoryChangeClassifierTests
         Assert.True(plan.Checks.Any(check => check.Name == "infrastructure tests"));
     }
 
-    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_full_suite_is_two_per_project_checks_never_a_solution_run")]
-    public void RepositoryTestImpactPlannerFullSuiteIsTwoPerProjectChecksNeverASolutionRun()
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_full_suite_is_per_project_checks_never_a_solution_run")]
+    public void RepositoryTestImpactPlannerFullSuiteIsPerProjectChecksNeverASolutionRun()
     {
-        // Security-sensitive paths force the full suite. Both test projects are MTP, so a
+        // Security-sensitive paths force the full suite. The test projects are MTP, so a
         // project-less "dotnet test" always fails on .NET 10 with the VSTest-target error —
-        // the full suite must be expressed as the two per-project runs the MTP runner can route.
+        // the full suite must be expressed as per-project runs the MTP runner can route.
         var plan = RepositoryTestImpactPlanner.Plan([
             "src/Mcg.AgentOrchestrator.Infrastructure/Sandbox/WorkerSandboxPolicy.cs"
         ]);
 
         Assert.True(plan.RequiresBuild);
         Assert.True(plan.RequiresBroadVerification);
-        Assert.Equal(2, plan.Checks.Count);
+        Assert.Equal(3, plan.Checks.Count);
         Assert.All(plan.Checks, check =>
             Assert.True(check.Command.Any(argument => argument.EndsWith(".csproj", StringComparison.Ordinal))));
         Assert.True(plan.Checks.Any(check =>
             check.Command.Contains("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj")));
         Assert.True(plan.Checks.Any(check =>
             check.Command.Contains("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj")));
+        Assert.True(plan.Checks.Any(check =>
+            check.Command.Contains("tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj")));
     }
 
     [Xunit.Fact(DisplayName = "VerificationPolicyCompiler_compiles_different_policies_from_task_risk_and_scope")]

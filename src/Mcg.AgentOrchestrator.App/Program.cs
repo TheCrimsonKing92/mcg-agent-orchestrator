@@ -207,6 +207,19 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
     return 0;
 }
 
+if (CliPersistentStateRunner.IsGoalIntakeStatusCommand(startupArgs))
+{
+    try
+    {
+        ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+        return ExitCompletedStartupCommand(1);
+    }
+}
+
 if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
 {
     var commandKernel = new AgentOrchestratorKernel();
@@ -445,32 +458,17 @@ internal static class ProgramStartupLifecycle
         ConductorLoopHandoff.IsAuthorityTransferRequested;
 
     internal static void EnsureStateDbInitialized(
-        IReadOnlyList<string> startupArgs,
+        IReadOnlyList<string> _startupArgs,
         OrchestratorWorkspace workspace)
     {
-        if (CliPersistentStateRunner.HasStateDbMigrationAuthority(startupArgs))
-        {
-            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
-            return;
-        }
-
         if (StateDbMigrations.IsUpToDate(workspace.SqliteStatePath))
             return;
 
-        // A stale published store requires conductor migration authority. Ordinary
-        // reads must not turn version skew into an implicit schema-write lease.
-        if (StateDbMigrations.HasPublishedMigrations(workspace.SqliteStatePath))
-            return;
-
-        // A first-use non-conductor command gets a short-lived, explicit bootstrap
-        // authority. Repositories remain schema-write-free, and established read
-        // commands never take this lease or run migrations.
-        using var bootstrapAuthority = ConductorLoopLease.Acquire(workspace.OrchestratorDirectory);
-        if (!StateDbMigrations.IsUpToDate(workspace.SqliteStatePath) &&
-            !StateDbMigrations.HasPublishedMigrations(workspace.SqliteStatePath))
-        {
-            _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
-        }
+        // Every supported app path opens state through this boundary before it can
+        // query feature tables. Numbered migrations use BEGIN IMMEDIATE and recheck
+        // their durable catalog under that write lock, so concurrent startups remain
+        // serialized and idempotent without argv-specific schema authority gaps.
+        _ = StateDbMigrations.EnsureUpToDate(workspace.SqliteStatePath);
     }
 
     internal static void InitializeWorkerProcessTracking(
