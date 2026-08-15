@@ -1270,20 +1270,27 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
             var cache = new TerminalGoalSweepCache();
+            var injectedGitCalls = new List<string>();
+            GitCli.GitResult GitRunner(string workingDirectory, IReadOnlyList<string> args)
+            {
+                injectedGitCalls.Add(string.Join(' ', args));
+                return StableGitRunner(workingDirectory, args);
+            }
 
-            var first = RunSweep(kernel, root, goal.Id, cache);
+            var first = RunSweep(kernel, root, goal.Id, cache, gitRunner: GitRunner);
 
             var firstRepair = Assert.Single(first.Goals.Single().Repairs);
             Assert.Equal("landing-intent-auto-repair", firstRepair.Kind);
             Assert.Contains($"goalId={goal.Id.Value}", firstRepair.Evidence, StringComparison.Ordinal);
             Assert.Contains($"mergeCommitSha={expectedMergeSha}", firstRepair.Evidence, StringComparison.Ordinal);
             Assert.Contains("source=auto-repair", firstRepair.Evidence, StringComparison.Ordinal);
+            Assert.Contains(injectedGitCalls, call => call.StartsWith("log --format=%H --reverse --ancestry-path ", StringComparison.Ordinal));
             Assert.Empty(first.Goals.Single().Blockers);
             Assert.Equal(0, first.CacheHitCount);
             Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
             Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
 
-            var second = RunSweep(kernel, root, goal.Id, cache);
+            var second = RunSweep(kernel, root, goal.Id, cache, gitRunner: GitRunner);
             var secondRepairs = second.Goals.Single().Repairs;
             Assert.Contains(secondRepairs, repair => repair.Kind == "landing-intent-auto-repair-noop");
             Assert.Contains(secondRepairs, repair => repair.Kind == "merged-branch-cleanup");
@@ -1292,7 +1299,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
             Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
 
-            var third = RunSweep(kernel, root, goal.Id, cache);
+            var third = RunSweep(kernel, root, goal.Id, cache, gitRunner: GitRunner);
             Assert.Empty(third.Goals);
 
             var journal = GoalOperationJournal.Read(root, goal.Id);

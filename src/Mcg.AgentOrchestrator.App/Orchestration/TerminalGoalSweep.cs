@@ -509,7 +509,7 @@ internal static class TerminalGoalSweep
                 }
                 else
                 {
-                    if (TryAutoRepairMergedBranchLandingIntent(kernel, executionDirectory, goal, repairs))
+                    if (TryAutoRepairMergedBranchLandingIntent(kernel, executionDirectory, goal, gitRunner, repairs))
                     {
                         goal = kernel.GetGoal(originalGoal.Id);
                         hasDurableLandingIntent = true;
@@ -917,6 +917,7 @@ internal static class TerminalGoalSweep
         AgentOrchestratorKernel kernel,
         string executionDirectory,
         Goal goal,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
         List<TerminalGoalSweepRepair> repairs)
     {
         var journal = GoalOperationJournal.Read(executionDirectory, goal.Id);
@@ -926,7 +927,7 @@ internal static class TerminalGoalSweep
             return true;
         }
 
-        if (!TryRecoverLandingMerge(executionDirectory, goal, out var recovered))
+        if (!TryRecoverLandingMerge(executionDirectory, goal, gitRunner, out var recovered))
         {
             return false;
         }
@@ -961,15 +962,16 @@ internal static class TerminalGoalSweep
     private static bool TryRecoverLandingMerge(
         string executionDirectory,
         Goal goal,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
         out RecoveredLandingMerge recovered)
     {
         recovered = default;
-        if (!TryResolveMergedBranchTip(executionDirectory, goal, out var branchTip))
+        if (!TryResolveMergedBranchTip(executionDirectory, goal, gitRunner, out var branchTip))
         {
             return false;
         }
 
-        var ancestry = RunGit(executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchTip}..main");
+        var ancestry = RunGit(gitRunner, executionDirectory, "log", "--format=%H", "--reverse", "--ancestry-path", $"{branchTip}..main");
         var mergeCommitSha = ancestry.ExitCode == 0
             ? ancestry.Output
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -977,7 +979,7 @@ internal static class TerminalGoalSweep
             : null;
         if (string.IsNullOrWhiteSpace(mergeCommitSha))
         {
-            var tipLog = RunGit(executionDirectory, "log", "--format=%H", "-n", "1", branchTip);
+            var tipLog = RunGit(gitRunner, executionDirectory, "log", "--format=%H", "-n", "1", branchTip);
             mergeCommitSha = tipLog.ExitCode == 0 ? tipLog.Output.Trim() : branchTip;
         }
 
@@ -988,14 +990,18 @@ internal static class TerminalGoalSweep
 
         recovered = new RecoveredLandingMerge(
             mergeCommitSha.Trim(),
-            TryGetCommitUtc(executionDirectory, mergeCommitSha.Trim()) ?? DateTimeOffset.UtcNow);
+            TryGetCommitUtc(executionDirectory, mergeCommitSha.Trim(), gitRunner) ?? DateTimeOffset.UtcNow);
         return true;
     }
 
-    private static bool TryResolveMergedBranchTip(string executionDirectory, Goal goal, out string branchTip)
+    private static bool TryResolveMergedBranchTip(
+        string executionDirectory,
+        Goal goal,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        out string branchTip)
     {
         var branch = GoalWorktrees.BranchName(goal.Id);
-        var branchResult = RunGit(executionDirectory, "rev-parse", $"refs/heads/{branch}");
+        var branchResult = RunGit(gitRunner, executionDirectory, "rev-parse", $"refs/heads/{branch}");
         if (branchResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(branchResult.Output))
         {
             branchTip = branchResult.Output.Trim();
@@ -1005,7 +1011,7 @@ internal static class TerminalGoalSweep
         var worktree = GoalWorktrees.TryResolve(executionDirectory, goal.Id);
         if (worktree is not null)
         {
-            var worktreeResult = RunGit(worktree, "rev-parse", "HEAD");
+            var worktreeResult = RunGit(gitRunner, worktree, "rev-parse", "HEAD");
             if (worktreeResult.ExitCode == 0 && !string.IsNullOrWhiteSpace(worktreeResult.Output))
             {
                 branchTip = worktreeResult.Output.Trim();
@@ -1017,9 +1023,12 @@ internal static class TerminalGoalSweep
         return false;
     }
 
-    private static DateTimeOffset? TryGetCommitUtc(string executionDirectory, string commitSha)
+    private static DateTimeOffset? TryGetCommitUtc(
+        string executionDirectory,
+        string commitSha,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner)
     {
-        var result = RunGit(executionDirectory, "show", "-s", "--format=%cI", commitSha);
+        var result = RunGit(gitRunner, executionDirectory, "show", "-s", "--format=%cI", commitSha);
         return result.ExitCode == 0 &&
             DateTimeOffset.TryParse(
                 result.Output.Trim(),
@@ -1030,8 +1039,11 @@ internal static class TerminalGoalSweep
             : null;
     }
 
-    private static GitCli.GitResult RunGit(string executionDirectory, params string[] args) =>
-        GitRunner(executionDirectory, args);
+    private static GitCli.GitResult RunGit(
+        Func<string, IReadOnlyList<string>, GitCli.GitResult> gitRunner,
+        string executionDirectory,
+        params string[] args) =>
+        gitRunner(executionDirectory, args);
 
     private readonly record struct RecoveredLandingMerge(string MergeCommitSha, DateTimeOffset CommitAtUtc);
 
