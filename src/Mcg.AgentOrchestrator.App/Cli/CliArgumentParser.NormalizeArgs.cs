@@ -131,6 +131,13 @@ public static IReadOnlyList<string> NormalizeArgs(string[] args)
         return NormalizeTargetCommandWithValueFlags(args, 1, "--waive", "--reason", "--reason-file", "--text-file", "--actor");
     }
 
+    if (command.Equals("goal-replace", StringComparison.OrdinalIgnoreCase))
+    {
+        // goal-replace has no inline free-text operands. Paths and option values are
+        // already distinct argv entries and must not be folded into the predecessor.
+        return args;
+    }
+
     if (command.Equals("revise", StringComparison.OrdinalIgnoreCase))
     {
         return NormalizeTargetCommandWithValueFlags(

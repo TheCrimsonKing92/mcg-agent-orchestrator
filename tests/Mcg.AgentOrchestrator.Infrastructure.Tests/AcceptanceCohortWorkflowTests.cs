@@ -1011,7 +1011,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     }
 
     [Fact]
-    public void ConstructorRecovery_ReplaysBothMemberLandingEffects()
+    public void ConstructorRecovery_DefersEntireCohortUntilReplacementLeaseIsReleased()
     {
         var repo = CreateAcceptanceCohortRepository();
         try
@@ -1062,6 +1062,36 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
                 integration.CommitRevision,
                 main);
             RunGit(repo, "update-ref", "refs/heads/main", integration.CommitRevision, main);
+
+            var replacementProtectedGoal = new[] { firstGoal, secondGoal }
+                .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
+                .Last();
+            using (var replacementLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+                       .TryAcquireAcceptanceLease(
+                           replacementProtectedGoal.Id.Value,
+                           $"goal-replace:test:{Guid.NewGuid():N}",
+                           TimeSpan.FromMinutes(30)))
+            {
+                Assert.NotNull(replacementLease);
+                _ = new ConductorDriver(
+                    kernel,
+                    workspace,
+                    FakeAcceptanceVerifier.Throws(new InvalidOperationException("Blocked recovery must not run a gate.")),
+                    AgentCatalog.Default().Agents,
+                    WorkerProfileCatalog.Default());
+
+                Assert.All(new[] { firstGoal, secondGoal }, goal =>
+                    Assert.False(GoalOperationJournal.HasCompletedLandingEvidence(
+                        GoalOperationJournal.Read(repo, goal.Id))));
+                var blockedLifecycleText = Directory.Exists(workspace.GoalLifecycleEventsDirectory)
+                    ? string.Join(
+                        '\n',
+                        Directory.EnumerateFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl")
+                            .Select(File.ReadAllText))
+                    : string.Empty;
+                Assert.DoesNotContain("\"eventType\":\"GoalLanded\"", blockedLifecycleText, StringComparison.Ordinal);
+                Assert.Single(store.RecoverPreparedLandings(repo));
+            }
 
             var recoveredDriver = new ConductorDriver(
                 kernel,

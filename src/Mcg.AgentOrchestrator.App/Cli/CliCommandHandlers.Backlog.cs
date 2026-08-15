@@ -15,11 +15,6 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             var status = GetFlagValue(parts, "--status");
             var text = GetFlagValue(parts, "--text");
             var store = new BacklogStore(context.Workspace.BacklogStorePath);
-            var goalsByBacklogItem = context.Kernel.Goals
-                .Where(goal => goal.SourceBacklogItemId is not null)
-                .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
-                .GroupBy(goal => goal.SourceBacklogItemId!, StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
             var filtersByListingStatus = IsBacklogListingStatus(status);
             var items = ApplyBacklogListFilters(
                 store.ListAsync(includeAll: true).GetAwaiter().GetResult(),
@@ -29,7 +24,7 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             if (filtersByListingStatus)
             {
                 items = items
-                    .Where(item => RenderBacklogListingStatus(item, FindLinkedGoal(goalsByBacklogItem, item.Id))
+                    .Where(item => RenderBacklogListingStatus(item, FindAuthoritativeSourceGoalForRead(context, item.Id, out _))
                         .Equals(status, StringComparison.OrdinalIgnoreCase))
                     .Take(limit ?? int.MaxValue)
                     .ToArray();
@@ -37,8 +32,11 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
 
             foreach (var item in items)
             {
-                var linkedGoal = FindLinkedGoal(goalsByBacklogItem, item.Id);
-                var goalId = linkedGoal?.Id.Value ?? "-";
+                var claim = ResolveSourceBacklogClaimForRead(context, item.Id, out var ambiguity);
+                var linkedGoal = claim is null
+                    ? null
+                    : context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
+                var goalId = ambiguity is null ? linkedGoal?.Id.Value ?? "-" : "legacy-owner-ambiguous";
                 Console.WriteLine($"{RenderBacklogListTag(item)}{RenderBacklogTimestampSuffix(item)}{RenderBacklogListSuffix(item)}{RenderBacklogReadinessSuffix(item, context, store)} {item.Id} | status={RenderBacklogListingStatus(item, linkedGoal)} | goal={goalId} | title={item.Title}");
             }
             Console.WriteLine($"Backlog list: {items.Count} item(s) from backlog store");
@@ -127,6 +125,13 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
             Console.WriteLine($"Updated: {item.UpdatedAt:O}");
             if (item.SourceGoalId is not null)
                 Console.WriteLine($"Goal:    {item.SourceGoalId}");
+            var claimStore = new SourceBacklogClaimStore(context.Workspace.SqliteStatePath);
+            var authoritativeClaim = ResolveSourceBacklogClaimForRead(context, item.Id, out var ambiguity);
+            Console.WriteLine($"Owner:   {(ambiguity is null ? authoritativeClaim?.OwnerGoalId ?? "-" : "legacy-owner-ambiguous")}");
+            Console.WriteLine($"Version: {authoritativeClaim?.Version.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-"}");
+            Console.WriteLine($"Coverage:{(authoritativeClaim is null ? " -" : $" {authoritativeClaim.Coverage.ToString().ToLowerInvariant()}")}");
+            if (ambiguity is not null)
+                Console.WriteLine($"Claim:   reason=legacy-owner-ambiguous linkedGoals={string.Join(',', ambiguity.LinkedGoalIds)}");
             var linkedGoals = context.Kernel.Goals
                 .Where(goal => string.Equals(goal.SourceBacklogItemId, item.Id, StringComparison.Ordinal))
                 .OrderBy(goal => goal.Id.Value, StringComparer.Ordinal)
@@ -137,8 +142,19 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
                 Console.WriteLine("Linked goals:");
                 foreach (var goal in linkedGoals)
                 {
-                    Console.WriteLine($"- {goal.Id.Value[..8]} status={goal.Status} landing={ResolveBacklogShowGoalLandingState(context, goal)}");
+                    var authority = ambiguity is not null
+                        ? "ambiguous"
+                        : authoritativeClaim?.OwnerGoalId == goal.Id.Value ? "authoritative" : "historical";
+                    Console.WriteLine($"- {goal.Id.Value[..8]} status={goal.Status} authority={authority} landing={ResolveBacklogShowGoalLandingState(context, goal)}");
                 }
+            }
+            var lineage = claimStore.ListLineage(item.Id);
+            if (lineage.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Replacement lineage:");
+                foreach (var replacement in lineage)
+                    Console.WriteLine($"- predecessor={replacement.PredecessorGoalId} successor={replacement.SuccessorGoalId} request={replacement.RequestId:D} at={replacement.ReplacedAt:O}");
             }
             if (item.Dependencies.Count > 0)
             {
@@ -294,6 +310,35 @@ private static bool? TryExecuteBacklogCommand(string command, IReadOnlyList<stri
     }
 }
 
+private static Goal? FindAuthoritativeSourceGoalForRead(
+    CliExecutionContext context,
+    string backlogItemId,
+    out LegacySourceBacklogOwnerAmbiguousException? ambiguity)
+{
+    var claim = ResolveSourceBacklogClaimForRead(context, backlogItemId, out ambiguity);
+    return claim is null
+        ? null
+        : context.Kernel.Goals.FirstOrDefault(goal => goal.Id.Value == claim.OwnerGoalId);
+}
+
+private static SourceBacklogClaimSnapshot? ResolveSourceBacklogClaimForRead(
+    CliExecutionContext context,
+    string backlogItemId,
+    out LegacySourceBacklogOwnerAmbiguousException? ambiguity)
+{
+    try
+    {
+        ambiguity = null;
+        return new SourceBacklogClaimStore(context.Workspace.SqliteStatePath)
+            .ResolveClaim(context.Kernel, backlogItemId);
+    }
+    catch (LegacySourceBacklogOwnerAmbiguousException ex)
+    {
+        ambiguity = ex;
+        return null;
+    }
+}
+
 private static string ResolveBacklogShowGoalLandingState(CliExecutionContext context, Goal goal)
 {
     var journal = GoalOperationJournal.Read(context.Workspace.ExecutionDirectory, goal.Id);
@@ -355,7 +400,9 @@ private static string RenderBacklogDependencyState(
     var item = store.GetByExactIdAsync(dependency.PrerequisiteId).GetAwaiter().GetResult();
     if (item is null)
         return "missing";
-    var promotedGoal = context.Kernel.FindGoalBySourceBacklogItemId(item.Id);
+    var promotedGoal = FindAuthoritativeSourceGoalForRead(context, item.Id, out var ambiguity);
+    if (ambiguity is not null)
+        return $"{item.Status}/legacy-owner-ambiguous";
     return promotedGoal is null
         ? item.Status.ToString()
         : $"{item.Status}/{promotedGoal.Status}/{ResolveBacklogShowGoalLandingState(context, promotedGoal)}";
@@ -376,7 +423,12 @@ private static string RenderBacklogReadinessSuffix(
         else
         {
             var prerequisite = store.GetByExactIdAsync(dependency.PrerequisiteId).GetAwaiter().GetResult();
-            goal = prerequisite is null ? null : context.Kernel.FindGoalBySourceBacklogItemId(prerequisite.Id);
+            LegacySourceBacklogOwnerAmbiguousException? ambiguity = null;
+            goal = prerequisite is null
+                ? null
+                : FindAuthoritativeSourceGoalForRead(context, prerequisite.Id, out ambiguity);
+            if (ambiguity is not null)
+                return $" [Blocked: reason=legacy-owner-ambiguous prerequisite {ShortBacklogId(dependency.PrerequisiteId)}]";
             if (goal is null)
                 return $" [Blocked: waiting on open prerequisite {ShortBacklogId(dependency.PrerequisiteId)}]";
         }

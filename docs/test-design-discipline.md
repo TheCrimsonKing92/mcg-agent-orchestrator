@@ -83,6 +83,28 @@ clarification answer does not bind the Developer and Reviewer rounds that follow
 the goal's negative-controls file. A goal blocked on authorization ran all five roles and produced an empty
 diff on 2026-08-14 because the grant lived only in a clarification thread.
 
+**Phrase constraints by intent, not by mechanism — a constraint written as a forbidden mechanism will forbid
+necessary work.** "Do not change product behaviour" and "do not modify `src/`" look equivalent when the brief
+is written and diverge as soon as the work is real. On 2026-08-14 a goal moving dashboard tests into their own
+project carried a `no product code changes` constraint, and creating a new test assembly required two `src/`
+registrations that change no behaviour at all: an `InternalsVisibleTo` grant, and a test-impact routing entry
+mapping dashboard sources to the new project. **Omitting the routing entry would not have preserved
+behaviour** — dashboard source changes would have stopped selecting dashboard tests, leaving a green suite
+that no longer asks the question, which is rule (l)'s failure mode arriving through the back door of an
+over-broad constraint. State the property to protect and let the implementer determine which edits threaten
+it.
+
+Two practical consequences. A worker that stops on a mechanism-phrased constraint is behaving correctly, so
+treat that blocker as a brief defect and fix the constraint rather than granting a one-off exception; the
+same goal produced three clarification round-trips, each legitimate, each traceable to under-specification.
+And when an exception genuinely is warranted, grant it narrowly — then verify it was actually needed rather
+than assuming either way. That goal's next round satisfied both blockers in configuration and touched no
+`src/` file, and the operator recorded that as the narrower path being sufficient. It was not: the Tester
+then showed the routing selected **zero** dashboard tests, and the duplicate assembly identity underneath both
+findings still required the `src/` changes. A narrower diff is not evidence of a sufficient one, and "the
+mapping was added" is a different claim from "the mapping selects tests" — which is the same
+record-versus-world error rule (l) exists to catch, committed here by the operator while writing about it.
+
 An infeasible criterion raises a fixed-HIGH feasibility clarification before any measurement/assertion-shape question for that criterion. Dispatch remains blocked until the operator chooses exactly one disposition: re-scope and re-check the replacement, move the criterion to `OPERATOR-OWNED / post-landing`, or supply a worker-accessible reproducing scenario. The criterion must never silently pass through because a measurement-method clarification was answered. Independently, every worker brief sanctions an honest `BLOCKED` report that names the missing capability or scenario.
 
 This first deterministic table is intentionally closed to those four categories. Network access, production credentials, and cross-repository requirements are known follow-up shapes; add each only with its own capability-demand rule, positive fixture, and measured false-positive receipt.

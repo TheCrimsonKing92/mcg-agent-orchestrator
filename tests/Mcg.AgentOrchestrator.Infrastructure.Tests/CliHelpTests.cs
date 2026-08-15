@@ -29,6 +29,7 @@ public sealed class CliHelpTests
     [Xunit.InlineData(new[] { "abandon-goal", "--help" }, "abandon-goal", "--text-file")]
     [Xunit.InlineData(new[] { "unpark-goal", "--help" }, "unpark-goal", "--confirm-goal-unpark")]
     [Xunit.InlineData(new[] { "goal", "--help" }, "goal", "--text-file")]
+    [Xunit.InlineData(new[] { "goal-replace", "--help" }, "goal-replace", "--researcher <agent>")]
     [Xunit.InlineData(new[] { "agent", "--help" }, "agent <role>", "--subscription-reasoning")]
     [Xunit.InlineData(new[] { "agent-add", "--help" }, "agent-add <role>", "--subscription-reasoning")]
     [Xunit.InlineData(new[] { "goals", "subscribe", "--help" }, "goals subscribe", "--from-cursor")]
@@ -479,6 +480,31 @@ public sealed class CliHelpTests
         Xunit.Assert.Contains("Usage:", ex.Message);
         Xunit.Assert.Contains(usageToken, ex.Message);
         Xunit.Assert.False(File.Exists(workspace.BacklogStorePath));
+    }
+
+    [Xunit.Fact]
+    public void GoalReplaceAcceptsRoleAgentOverrideFlags()
+    {
+        foreach (var flag in new[] { "--ideation", "--researcher", "--planner", "--developer", "--tester", "--reviewer" })
+        {
+            var root = CreateTempDirectory();
+            var workspace = OrchestratorWorkspace.ForDirectory(root);
+            var kernel = new AgentOrchestratorKernel();
+            IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+            var profiles = WorkerProfileCatalog.Default();
+            Goal? currentGoal = null;
+
+            var exception = Xunit.Assert.ThrowsAny<Exception>(() => CliCommandDispatcher.ExecuteCommand(
+                ["goal-replace", "missing-predecessor", flag, "agent-id", "--confirm-goal-replace"],
+                kernel,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([]),
+                ref profiles,
+                ref currentGoal));
+
+            Xunit.Assert.DoesNotContain("Unknown option", exception.Message, StringComparison.Ordinal);
+        }
     }
 
     [Xunit.Fact(DisplayName = "Cli_invalid_flag_startup_exits_one_with_usage_on_stderr")]
