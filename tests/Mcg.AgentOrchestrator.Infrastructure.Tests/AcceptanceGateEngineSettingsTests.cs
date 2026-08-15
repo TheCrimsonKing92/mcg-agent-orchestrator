@@ -797,7 +797,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         Directory.CreateDirectory(Path.GetDirectoryName(omittedProject)!);
         File.WriteAllText(
             omittedProject,
-            "<Project><PropertyGroup><IsTestProject>true</IsTestProject></PropertyGroup></Project>");
+            "<Project><PropertyGroup><IsTestProject>true</IsTestProject><UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>");
         var calls = new List<string[]>();
         GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
         GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];

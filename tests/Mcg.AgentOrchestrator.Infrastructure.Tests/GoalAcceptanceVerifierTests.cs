@@ -362,6 +362,71 @@ public sealed class HermeticVerificationEnvironmentTests
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class GoalAcceptanceVerifierTests : GoalAcceptanceVerifierTestBase
 {
+    [Xunit.Fact]
+    public void ResolveDotnetTestRunner_DerivesRunnerFromProjectDeclaration()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-runner-tests", Guid.NewGuid().ToString("N"));
+        const string project = "tests/Unlisted.Tests/Unlisted.Tests.csproj";
+        var projectPath = Path.Combine(root, project);
+        Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+        try
+        {
+            File.WriteAllText(
+                projectPath,
+                "<Project><PropertyGroup><UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>");
+            Assert.Equal("mtp", GoalAcceptanceVerifier.ResolveDotnetTestRunner(root, project));
+
+            File.WriteAllText(
+                projectPath,
+                "<Project><PropertyGroup><UseMicrosoftTestingPlatformRunner>  FaLsE  </UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>");
+            Assert.Equal("vstest", GoalAcceptanceVerifier.ResolveDotnetTestRunner(root, project));
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
+
+    [Xunit.Fact]
+    public void ResolveDotnetTestRunner_DefaultsToMtpForAmbiguousOrUnreadableDeclarations()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-runner-tests", Guid.NewGuid().ToString("N"));
+        const string project = "tests/Unlisted.Tests/Unlisted.Tests.csproj";
+        var projectPath = Path.Combine(root, project);
+        Directory.CreateDirectory(Path.GetDirectoryName(projectPath)!);
+        try
+        {
+            var ambiguousProjects = new[]
+            {
+                "<Project><PropertyGroup /></Project>",
+                "<Project>",
+                "<Project><PropertyGroup Condition=\"'$(Configuration)' == 'Debug'\"><UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>",
+                "<Project><PropertyGroup><UseMicrosoftTestingPlatformRunner Condition=\"'$(Configuration)' == 'Debug'\">false</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>",
+                "<Project><PropertyGroup><UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner><UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>",
+                "<Project><PropertyGroup><UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner><UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>",
+                "<Project><PropertyGroup><UseMicrosoftTestingPlatformRunner>not-a-boolean</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>",
+                "<Project><Choose><When Condition=\"'$(Configuration)' == 'Debug'\"><PropertyGroup><UseMicrosoftTestingPlatformRunner>false</UseMicrosoftTestingPlatformRunner></PropertyGroup></When></Choose></Project>"
+            };
+            foreach (var contents in ambiguousProjects)
+            {
+                File.WriteAllText(projectPath, contents);
+                Assert.Equal("mtp", GoalAcceptanceVerifier.ResolveDotnetTestRunner(root, project));
+            }
+
+            Assert.Equal("mtp", GoalAcceptanceVerifier.ResolveDotnetTestRunner(root, "../Outside.Tests.csproj"));
+            Assert.Equal("mtp", GoalAcceptanceVerifier.ResolveDotnetTestRunner(root, "tests/Missing.Tests.csproj"));
+            Assert.Equal(
+                "mtp",
+                GoalAcceptanceVerifier.ResolveDotnetTestRunner(
+                    root,
+                    project,
+                    _ => throw new IOException("deterministic unreadable-project probe")));
+        }
+        finally
+        {
+            DeleteDirectoryWithRetry(root);
+        }
+    }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_pre_review_attempt_namespace_cannot_collide_with_acceptance")]
     public void GoalAcceptanceVerifierPreReviewAttemptNamespaceCannotCollideWithAcceptance()
@@ -6954,6 +7019,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "forbiddenChangedPathGlobs": []
             }
             """);
+        var coreTestsProject = Path.Combine(
+            root,
+            "tests",
+            "Mcg.AgentOrchestrator.Core.Tests",
+            "Mcg.AgentOrchestrator.Core.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(coreTestsProject)!);
+        File.WriteAllText(
+            coreTestsProject,
+            "<Project><PropertyGroup><UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner></PropertyGroup></Project>");
         var calls = new List<string[]>();
         var verifier = new GoalAcceptanceVerifier((args, _, _) =>
         {
