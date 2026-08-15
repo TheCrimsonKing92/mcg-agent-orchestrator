@@ -726,6 +726,36 @@ public sealed class DashboardRenderingTests
     Assert.Equal($"acceptance {goal.Id.Value[..8]}", workSummary.OperatorDisposition.NextSafeCommand);
 }
 
+    [Xunit.Fact(DisplayName = "DashboardResponseMapper_surfaces_provider_dependency_receipt")]
+    public void DashboardResponseMapperSurfacesProviderDependencyReceipt()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Surface provider dependency receipt",
+        [new TaskSpec(TaskId.New(), "Verify provider dependency closure", AgentRole.Tester)]);
+    const string receipt =
+        "changed projects: Infrastructure.Providers; dependency closure: Infrastructure.Providers, Infrastructure, App";
+    var summary = new GoalAcceptanceSummary(
+        goal.Id,
+        goal.Objective,
+        GoalStatus.Verified,
+        true,
+        1,
+        1,
+        0,
+        0,
+        [],
+        [new GoalAcceptanceOutcome("gate-passed", true, DateTimeOffset.UtcNow, receipt)]);
+
+    var dto = DashboardResponseMapper.ToGoalAcceptanceSummaryDto(goal, summary);
+
+    var outcome = Assert.Single(dto.Outcomes);
+    Assert.Equal("gate-passed", outcome.Outcome);
+    Assert.True(outcome.IsCurrentCandidate);
+    Assert.Contains("changed projects: Infrastructure.Providers", outcome.Message, StringComparison.Ordinal);
+    Assert.Contains("dependency closure: Infrastructure.Providers, Infrastructure, App", outcome.Message, StringComparison.Ordinal);
+}
+
     [Xunit.Fact(DisplayName = "DashboardResponseMapper_surfaces_cleaned_goal_status_text")]
     public void DashboardResponseMapperSurfacesCleanedGoalStatusText()
 {
