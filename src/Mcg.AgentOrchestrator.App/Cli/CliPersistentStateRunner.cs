@@ -3380,6 +3380,10 @@ internal static class CliPersistentStateRunner
                     if (intakeRecord is not null)
                         ConsoleViews.PrintGoalIntakeReceipt(intakeRecord);
                 });
+            if (committedSnapshot is null)
+            {
+                throw new InvalidOperationException("GOAL_CREATE_COMMIT_MISSING reason=finalizer-not-invoked");
+            }
         }
         catch (Exception ex) when (request is not null && committedSnapshot is null)
         {
@@ -3389,11 +3393,6 @@ internal static class CliPersistentStateRunner
                 ResolveGoalIntakeFailureCode(ex),
                 ex.Message);
             throw;
-        }
-
-        if (committedSnapshot is null)
-        {
-            throw new InvalidOperationException("GOAL_CREATE_COMMIT_MISSING reason=finalizer-not-invoked");
         }
 
         if (currentGoal is not null)

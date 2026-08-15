@@ -456,6 +456,11 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
             }
             ConsoleViews.PrintGoal(existingGoal);
         }
+        if (context.HasGoalCreationFinalizer)
+        {
+            throw new InvalidOperationException(
+                $"GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL goalId={existingGoal?.Id.Value ?? "unknown"}");
+        }
         return false;
     }
     ValidateBacklogPromotionPrerequisites(context, sourceBacklogItem);
@@ -464,6 +469,13 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
     if (reservation.Kind != BacklogIntakeReservationKind.Acquired)
     {
         PrintBacklogIntakeRecord(reservation.Record, context.Kernel);
+        if (context.HasGoalCreationFinalizer)
+        {
+            var outcome = reservation.Kind == BacklogIntakeReservationKind.ExistingGoal
+                ? $"GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL goalId={reservation.Record.GoalId ?? "unknown"}"
+                : $"GOAL_INTAKE_BACKLOG_RESERVATION_NOT_ACQUIRED state={reservation.Record.Status}";
+            throw new InvalidOperationException(outcome);
+        }
         return false;
     }
 

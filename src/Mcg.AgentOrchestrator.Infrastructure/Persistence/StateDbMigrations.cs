@@ -351,7 +351,7 @@ public static class StateDbMigrations
     private static void ApplyGoalIntakeRequestSchema(SqliteConnection connection)
     {
         ExecuteNonQuery(connection, """
-            CREATE TABLE goal_intake_requests (
+            CREATE TABLE IF NOT EXISTS goal_intake_requests (
                 request_key         TEXT PRIMARY KEY COLLATE BINARY,
                 fingerprint_version INTEGER NOT NULL,
                 fingerprint         TEXT NOT NULL,
@@ -370,7 +370,7 @@ public static class StateDbMigrations
             """, statementObserver: null);
         ExecuteNonQuery(
             connection,
-            "CREATE INDEX ix_goal_intake_requests_state_goal ON goal_intake_requests(state, goal_id)",
+            "CREATE INDEX IF NOT EXISTS ix_goal_intake_requests_state_goal ON goal_intake_requests(state, goal_id)",
             statementObserver: null);
     }
 

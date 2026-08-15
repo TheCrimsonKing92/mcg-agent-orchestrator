@@ -1641,6 +1641,65 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
+    public async Task GoalIntake_keyed_backlog_existing_goal_records_terminal_failure()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Already owned backlog source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var unkeyedArgs = new[]
+        {
+            "backlog-intake", item.Id, "--create-simple-goal", "--backlog-coverage", "slice"
+        };
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            unkeyedArgs, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var existingGoal = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [.. unkeyedArgs, "--request-key", "already-owned-backlog-key"],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Contains("GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL", error.Message);
+        Xunit.Assert.Contains(existingGoal.Id.Value, error.Message);
+        var request = new GoalIntakeRequestStore(workspace.SqliteStatePath).Get("already-owned-backlog-key")!;
+        Xunit.Assert.Equal(GoalIntakeRequestStates.Failed, request.State);
+        Xunit.Assert.Equal("GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL", request.FailureCode);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_keyed_backlog_in_progress_records_terminal_failure()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Busy backlog source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        _ = new BacklogIntakeRecordStore(workspace.SqliteStatePath).Reserve(item.Id, "Busy backlog source");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                [
+                    "backlog-intake", item.Id, "--create-simple-goal", "--backlog-coverage", "slice",
+                    "--request-key", "in-progress-backlog-key"
+                ],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Contains("GOAL_INTAKE_BACKLOG_RESERVATION_NOT_ACQUIRED", error.Message);
+        var request = new GoalIntakeRequestStore(workspace.SqliteStatePath).Get("in-progress-backlog-key")!;
+        Xunit.Assert.Equal(GoalIntakeRequestStates.Failed, request.State);
+        Xunit.Assert.Equal("GOAL_INTAKE_BACKLOG_RESERVATION_NOT_ACQUIRED", request.FailureCode);
+        Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
+    }
+
+    [Xunit.Fact]
     public void GoalIntake_failed_status_is_pollable_without_failed_exit()
     {
         var root = CreateTempDirectory();
