@@ -6,7 +6,7 @@ namespace Mcg.AgentOrchestrator.Infrastructure;
 public static class StateDbMigrations
 {
     private sealed record Migration(int Number, string Name, Action<SqliteConnection> Apply);
-    private const int CurrentMigrationNumber = 8;
+    private const int CurrentMigrationNumber = 11;
 
     /// <summary>
     /// Reports whether the published state store already has every numbered migration.
@@ -120,7 +120,10 @@ public static class StateDbMigrations
                 new(5, "model-fit-outcome-backfill", repository.ApplyModelFitHistoryBackfillMigration),
                 new(6, "spawn-registry-owner-identity", ApplySpawnRegistryOwnerIdentitySchema),
                 new(7, "spawn-registry-lifecycle", ApplySpawnRegistryLifecycleSchema),
-                new(8, "state-outbox-lease-columns", repository.ApplyStateOutboxLeaseSchemaMigration)
+                new(8, "state-outbox-lease-columns", repository.ApplyStateOutboxLeaseSchemaMigration),
+                new(9, "source-backlog-authoritative-claims", ApplySourceBacklogClaimSchema),
+                new(10, "goal-replacement-fingerprint-inputs", ApplyGoalReplacementFingerprintInputSchema),
+                new(11, "goal-replacement-assigned-agent-fingerprint-inputs", ApplyGoalReplacementAssignedAgentFingerprintInputSchema)
             };
             ValidateMigrationSequence(migrations);
 
@@ -268,6 +271,100 @@ public static class StateDbMigrations
             connection,
             "CREATE INDEX IF NOT EXISTS ix_backlog_intake_records_goal_id ON backlog_intake_records(goal_id)",
             statementObserver: null);
+    }
+
+    private static void ApplySourceBacklogClaimSchema(SqliteConnection connection)
+    {
+        ExecuteNonQuery(connection, """
+            CREATE TABLE IF NOT EXISTS source_backlog_claims (
+                backlog_item_id TEXT PRIMARY KEY NOT NULL,
+                owner_goal_id   TEXT NOT NULL,
+                coverage        TEXT NOT NULL,
+                version         INTEGER NOT NULL,
+                updated_at      TEXT NOT NULL
+            )
+            """, statementObserver: null);
+        ExecuteNonQuery(connection, """
+            CREATE TABLE IF NOT EXISTS goal_replacement_lineage (
+                predecessor_goal_id TEXT PRIMARY KEY NOT NULL,
+                successor_goal_id   TEXT NOT NULL UNIQUE,
+                backlog_item_id     TEXT NOT NULL,
+                request_id          TEXT NOT NULL UNIQUE,
+                replaced_at         TEXT NOT NULL
+            )
+            """, statementObserver: null);
+        ExecuteNonQuery(connection, """
+            CREATE INDEX IF NOT EXISTS ix_goal_replacement_lineage_backlog
+            ON goal_replacement_lineage(backlog_item_id, replaced_at)
+            """, statementObserver: null);
+        ExecuteNonQuery(connection, """
+            CREATE TABLE IF NOT EXISTS goal_replacement_audit (
+                request_id                    TEXT PRIMARY KEY NOT NULL,
+                fingerprint                   TEXT NOT NULL,
+                outcome                       TEXT NOT NULL,
+                backlog_item_id               TEXT NOT NULL,
+                predecessor_goal_id           TEXT NOT NULL,
+                successor_goal_id             TEXT NULL,
+                disposition                   TEXT NOT NULL,
+                reason                        TEXT NOT NULL,
+                old_status                    TEXT NOT NULL,
+                new_status                    TEXT NULL,
+                coverage                      TEXT NOT NULL,
+                actor                         TEXT NOT NULL,
+                channel                       TEXT NOT NULL,
+                authentication_assurance      TEXT NOT NULL,
+                attempted_at                  TEXT NOT NULL,
+                expected_owner_goal_id        TEXT NOT NULL,
+                expected_claim_version        INTEGER NOT NULL,
+                observed_owner_goal_id        TEXT NULL,
+                observed_claim_version        INTEGER NULL,
+                eligibility_facts_json        TEXT NOT NULL,
+                failure_code                  TEXT NULL
+            )
+            """, statementObserver: null);
+    }
+
+    private static void ApplyGoalReplacementFingerprintInputSchema(SqliteConnection connection)
+    {
+        AddColumnIfMissing(
+            connection,
+            "goal_replacement_audit",
+            "objective_hash",
+            "ALTER TABLE goal_replacement_audit ADD COLUMN objective_hash TEXT NOT NULL DEFAULT ''");
+        AddColumnIfMissing(
+            connection,
+            "goal_replacement_audit",
+            "ordered_roles",
+            "ALTER TABLE goal_replacement_audit ADD COLUMN ordered_roles TEXT NOT NULL DEFAULT ''");
+    }
+
+    private static void ApplyGoalReplacementAssignedAgentFingerprintInputSchema(SqliteConnection connection)
+    {
+        AddColumnIfMissing(
+            connection,
+            "goal_replacement_audit",
+            "assigned_agents",
+            "ALTER TABLE goal_replacement_audit ADD COLUMN assigned_agents TEXT NOT NULL DEFAULT ''");
+    }
+
+    private static void AddColumnIfMissing(
+        SqliteConnection connection,
+        string table,
+        string column,
+        string sql)
+    {
+        using (var pragma = connection.CreateCommand())
+        {
+            pragma.CommandText = $"PRAGMA table_info({table})";
+            using var reader = pragma.ExecuteReader();
+            while (reader.Read())
+            {
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+        }
+
+        ExecuteNonQuery(connection, sql, statementObserver: null);
     }
 
     private static void ExecuteNonQuery(

@@ -487,6 +487,42 @@ public sealed class BacklogStore
         }, cancellationToken);
     }
 
+    /// <summary>
+    /// Holds the backlog database write reservation while a source-claim transfer commits in
+    /// state.db. Status-changing backlog operations also require this reservation, so the item
+    /// cannot become non-open between replacement validation and claim transfer.
+    /// </summary>
+    public IDisposable? TryAcquireOpenItemLease(string id, out BacklogItemStatus? observedStatus)
+    {
+        var connection = OpenConnection();
+        try
+        {
+            RunNonQuery(connection, "PRAGMA busy_timeout=30000");
+            RunNonQuery(connection, "BEGIN IMMEDIATE");
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT status FROM backlog WHERE id = $id";
+            command.Parameters.AddWithValue("$id", id);
+            var statusValue = command.ExecuteScalar()?.ToString();
+            observedStatus = Enum.TryParse<BacklogItemStatus>(statusValue, out var status)
+                ? status
+                : null;
+            if (observedStatus != BacklogItemStatus.Open)
+            {
+                RunNonQuery(connection, "ROLLBACK");
+                connection.Dispose();
+                return null;
+            }
+
+            return new BacklogItemMutationLease(connection);
+        }
+        catch
+        {
+            try { RunNonQuery(connection, "ROLLBACK"); } catch { }
+            connection.Dispose();
+            throw;
+        }
+    }
+
     public async Task<BacklogItem> ReopenAsync(
         string id,
         string? reason = null,
@@ -1423,5 +1459,17 @@ public sealed class BacklogStore
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = sql;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private sealed class BacklogItemMutationLease(SqliteConnection connection) : IDisposable
+    {
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            try { RunNonQuery(connection, "ROLLBACK"); } finally { connection.Dispose(); }
+        }
     }
 }

@@ -818,6 +818,120 @@ public sealed class ConductorDriverTests
         Assert.NotNull(kernel.GetGoal(goal.Id).Tasks.Single().LastProcess);
     }
 
+    [Xunit.Fact]
+    public void ConductorDriverReplacementLeaseBlocksWorkspaceEvidenceMutation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var (kernel, goal) = SimpleGoal("Lease-protected workspace creation");
+        using var replacementLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+            .TryAcquireAcceptanceLease(
+                goal.Id.Value,
+                $"goal-replace:test:{Guid.NewGuid():N}",
+                TimeSpan.FromMinutes(30));
+        Assert.NotNull(replacementLease);
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Equal(GoalLifecycleState.Created, held.State);
+        Assert.Contains("reason=concurrent-acceptance-or-replacement", held.Reason, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(GoalWorktrees.WorktreePath(root, goal.Id)));
+        Assert.Empty(GoalOperationJournal.Read(root, goal.Id).Entries);
+    }
+
+    [Xunit.Fact]
+    public void ConductorDriverReplacementLeaseBlocksDispatchEvidenceMutation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var (kernel, goal) = SimpleGoal("Lease-protected dispatch");
+        var worktreePath = GoalWorktrees.WorktreePath(root, goal.Id);
+        Directory.CreateDirectory(worktreePath);
+        File.WriteAllText(Path.Combine(worktreePath, ".git"), "gitdir: test");
+        using var replacementLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+            .TryAcquireAcceptanceLease(
+                goal.Id.Value,
+                $"goal-replace:test:{Guid.NewGuid():N}",
+                TimeSpan.FromMinutes(30));
+        Assert.NotNull(replacementLease);
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+        var before = JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id));
+        var phaseTimings = new List<string>();
+        driver.PhaseTimingSink = phaseTimings.Add;
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("blocked by concurrent acceptance or replacement", held.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(phaseTimings, timing => timing.Contains("phase=dispatch-remediation", StringComparison.Ordinal));
+        Assert.Equal(before, JsonSerializer.Serialize(kernel.ExportGoalSnapshot(goal.Id)));
+        Assert.All(goal.Tasks, task => Assert.Null(task.LastDispatch));
+        Assert.DoesNotContain(
+            GoalOperationJournal.Read(root, goal.Id).Entries,
+            entry => entry.Operation.StartsWith("conductor:dispatch", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public void ConductorDriverReplacementLeaseBlocksAcceptanceAndLandingEvidenceMutation()
+    {
+        var root = CreateTempDirectory();
+        RunGit(root, "init");
+        RunGit(root, "checkout", "-b", "main");
+        RunGit(root, "config", "user.email", "test@example.com");
+        RunGit(root, "config", "user.name", "Test User");
+        File.WriteAllText(Path.Combine(root, "README.md"), "initial");
+        RunGit(root, "add", ".");
+        RunGit(root, "commit", "-m", "initial");
+
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var kernel = new AgentOrchestratorKernel();
+        var goal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
+            kernel,
+            DefaultAgents(),
+            "Lease-protected conductor acceptance and landing");
+        PassVerification(kernel, goal, goal.Tasks.Single());
+        var worktree = GoalWorktrees.Ensure(root, goal.Id);
+        File.WriteAllText(Path.Combine(worktree, "feature.txt"), "goal work");
+        RunGit(worktree, "add", "feature.txt");
+        RunGit(worktree, "commit", "-m", "goal work");
+        using var replacementLease = new ReconcileSweepRemediationStore(workspace.SqliteStatePath)
+            .TryAcquireAcceptanceLease(
+                goal.Id.Value,
+                $"goal-replace:test:{Guid.NewGuid():N}",
+                TimeSpan.FromMinutes(30));
+        Assert.NotNull(replacementLease);
+        var driver = new ConductorDriver(
+            kernel,
+            workspace,
+            new FakeAcceptanceVerifier(),
+            DefaultAgents(),
+            WorkerProfileCatalog.Default());
+
+        var result = driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        var held = Assert.IsType<ConductorAdvanceOutcome.Held>(result.Outcome);
+        Assert.Contains("concurrent source-backlog replacement", held.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            GoalOperationJournal.Read(root, goal.Id).Entries,
+            entry => entry.Operation.StartsWith("conductor:acceptance", StringComparison.Ordinal) ||
+                entry.Operation.StartsWith("conductor:land", StringComparison.Ordinal));
+        Assert.NotEqual(
+            0,
+            GitCli.Run(root, "merge-base", "--is-ancestor", GoalWorktrees.BranchName(goal.Id), "main").ExitCode);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorDriver_real_facts_refresh_after_conductor_record")]
     public async Task ConductorDriverRealFactsRefreshAfterConductorRecord()
     {

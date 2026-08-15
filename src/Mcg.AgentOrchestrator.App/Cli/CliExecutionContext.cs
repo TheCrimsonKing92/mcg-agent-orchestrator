@@ -33,7 +33,8 @@ internal sealed class CliExecutionContext(
     Action<Goal>? finalizeGoalCreation = null,
     CollaborationItemRaise? refinementCollaborationItemRaise = null,
     Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null,
-    TransientSqliteLoadHold? initialConductLoopLoadHold = null)
+    TransientSqliteLoadHold? initialConductLoopLoadHold = null,
+    Action<Goal, GoalReplacementCommand>? finalizeGoalReplacement = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -171,11 +172,25 @@ public void RegisterAcceptanceGuardAbort() => registerAcceptanceGuardAbort?.Invo
 
 public void FinalizeGoalCreation(Goal goal) => finalizeGoalCreation?.Invoke(goal);
 
+public void FinalizeGoalReplacement(Goal goal, GoalReplacementCommand command) =>
+    (finalizeGoalReplacement ?? throw new InvalidOperationException("goal-replace requires durable replacement support."))(goal, command);
+
 public AcceptanceHostStopResult StopAcceptanceHosts(AcceptanceHostStopRequest request) =>
     stopAcceptanceHosts?.Invoke(request) ?? AcceptanceHostStopper.Stop(request);
 
 public IOperatorChannel Channel { get; } = channel ?? NullOperatorChannel.Instance;
 }
+
+internal sealed record GoalReplacementCommand(
+    GoalId PredecessorGoalId,
+    Guid RequestId,
+    GoalReplacementDisposition Disposition,
+    string Reason,
+    string Objective,
+    string ExpectedOwnerGoalId,
+    long ExpectedClaimVersion,
+    string RequestedPipeline,
+    string RequestedAgentOverrides);
 
 internal sealed class CliPhaseTimingRecorder(string commandName, bool enabled = true)
 {

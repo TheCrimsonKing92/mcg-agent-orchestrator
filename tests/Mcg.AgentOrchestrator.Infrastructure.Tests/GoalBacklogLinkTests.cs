@@ -811,4 +811,98 @@ public sealed class GoalBacklogLinkTests
         Assert.Contains(goal.Id.Value[..8], output);
         Assert.Contains("landing=", output);
     }
+
+    [Xunit.Fact]
+    public async Task LegacyAmbiguity_ReadCommandsExposeConflictWithoutThrowing()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var prerequisite = await store.AddAsync("Ambiguous legacy owner");
+        var dependent = await store.AddAsync("Depends on ambiguous legacy owner");
+        await store.AddDependencyAsync(
+            dependent.Id,
+            new(prerequisite.Id, BacklogDependencyTargetKind.Backlog));
+        var kernel = CreateAmbiguousLegacyOwnerKernel(prerequisite.Id);
+        IReadOnlyList<AgentDefinition> agents = [];
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var list = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-list", "--status", "open"],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var prerequisiteShow = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-show", prerequisite.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var dependentShow = CaptureConsole(() => CliCommandDispatcher.ExecuteCommand(
+            ["backlog-show", dependent.Id[..8]],
+            kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.Contains($"{prerequisite.Id} | status=open | goal=legacy-owner-ambiguous", list, StringComparison.Ordinal);
+        Assert.Contains($"[Blocked: reason=legacy-owner-ambiguous prerequisite {prerequisite.Id[..8]}] {dependent.Id}", list, StringComparison.Ordinal);
+        Assert.Contains("Owner:   legacy-owner-ambiguous", prerequisiteShow, StringComparison.Ordinal);
+        Assert.Contains("Claim:   reason=legacy-owner-ambiguous", prerequisiteShow, StringComparison.Ordinal);
+        Assert.Equal(2, prerequisiteShow.Split("authority=ambiguous", StringSplitOptions.None).Length - 1);
+        Assert.Contains($"- {prerequisite.Id} state=Open/legacy-owner-ambiguous", dependentShow, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public async Task LegacyAmbiguity_LandingSkipsBacklogCloseWithoutThrowing()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Ambiguous landing owner");
+        var kernel = CreateAmbiguousLegacyOwnerKernel(item.Id);
+        var goal = kernel.Goals.First();
+        var messages = new List<string>();
+
+        var closed = GoalLandingPostActions.AutoCloseSourceBacklogItem(
+            goal,
+            workspace.BacklogStorePath,
+            messages.Add,
+            kernel,
+            stateDbPath: workspace.SqliteStatePath);
+
+        Assert.False(closed);
+        Assert.Equal(BacklogItemStatus.Open, (await store.GetByExactIdAsync(item.Id))!.Status);
+        Assert.Contains(messages, message => message.Contains("reason=legacy-owner-ambiguous", StringComparison.Ordinal));
+        Assert.Contains(kernel.GetTimeline(goal.Id), evt =>
+            evt.Message.Contains("reason=legacy-owner-ambiguous", StringComparison.Ordinal));
+    }
+
+    [Xunit.Fact]
+    public async Task LegacyAmbiguity_OrdinaryCreateFailsClosedWithTypedReason()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var item = await store.AddAsync("Ambiguous ordinary creation");
+        var kernel = CreateAmbiguousLegacyOwnerKernel(item.Id);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            CliCommandDispatcher.ExecuteCommand(
+                ["goal", "Must remain blocked", "--backlog-item", item.Id, "--backlog-coverage", "full"],
+                kernel, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Assert.Contains("GOAL_CREATE_PRECONDITION_CHANGED", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("reason=legacy-owner-ambiguous", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, kernel.Goals.Count);
+        Assert.Null(currentGoal);
+    }
+
+    private static AgentOrchestratorKernel CreateAmbiguousLegacyOwnerKernel(string backlogItemId)
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var first = kernel.CreateGoal("First legacy association");
+        var second = kernel.CreateGoal("Second legacy association");
+        kernel.SetGoalSourceBacklogItemLink(first.Id, backlogItemId, SourceBacklogCoverage.Full);
+        kernel.SetGoalSourceBacklogItemLink(second.Id, backlogItemId, SourceBacklogCoverage.Full);
+        return kernel;
+    }
 }
