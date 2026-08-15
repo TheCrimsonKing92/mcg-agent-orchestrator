@@ -1132,7 +1132,10 @@ public sealed class AcceptanceGateEngineSettingsTests
         {
             var settings = AcceptanceGateEngineSettings.Load(root);
             return Xunit.Assert.Throws<InvalidDataException>(
-                () => AssertLanePartitionInvariants(settings, runnableClasses));
+                () => AssertLanePartitionInvariants(
+                    settings,
+                    runnableClasses,
+                    requireExclusiveCollectionMembership: true));
         }
         finally
         {
@@ -1142,7 +1145,8 @@ public sealed class AcceptanceGateEngineSettingsTests
 
     private static void AssertLanePartitionInvariants(
         AcceptanceGateEngineSettings settings,
-        IReadOnlyList<Type> runnableClasses)
+        IReadOnlyList<Type> runnableClasses,
+        bool requireExclusiveCollectionMembership = false)
     {
         if (runnableClasses.Count == 0)
         {
@@ -1193,8 +1197,6 @@ public sealed class AcceptanceGateEngineSettingsTests
                 .Select(type => type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name)
                 .Where(collectionName => collectionName is not null)
                 .ToHashSet(StringComparer.Ordinal);
-            var requiresDedicatedMembership = GoalAcceptanceVerifier.TranslateMtpFilter(lane.Filter)
-                .Contains("--filter-class", StringComparer.Ordinal);
             foreach (var resourceKey in lane.ExclusiveResourceKeys)
             {
                 const string xunitPrefix = "xunit:";
@@ -1206,7 +1208,7 @@ public sealed class AcceptanceGateEngineSettingsTests
 
                 var collectionName = normalizedKey[xunitPrefix.Length..];
                 if (matchedXunitCollections.Contains(collectionName) &&
-                    (!requiresDedicatedMembership || matchedClasses.All(type =>
+                    (!requireExclusiveCollectionMembership || matchedClasses.All(type =>
                         declaredXunitCollections.Contains(
                             type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name,
                             StringComparer.Ordinal))))
