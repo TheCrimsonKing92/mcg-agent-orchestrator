@@ -1400,13 +1400,6 @@ internal sealed class RecordingTimeProvider : TimeProvider
 [Xunit.Collection(TestCollections.JobAccounting)]
 public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceVerifierTestBase
 {
-    private const string CheckedInCliLaneFilter =
-        "FullyQualifiedName~CliCommandTests&FullyQualifiedName!~CliCommandTestsGoalLifecycleCleanupHooks&FullyQualifiedName!~CliCommandTestsPersistentRunnerCommands&FullyQualifiedName!~CliCommandTestsSubscriptionDispatchCommands";
-    private const string CheckedInGoalAcceptanceVerifierLaneFilter =
-        "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~GoalAcceptanceVerifierTests|FullyQualifiedName~RealProcessShardAlphaSmokeTests|FullyQualifiedName~RealProcessShardBetaSmokeTests|FullyQualifiedName~WorkerDispatchJobAccountingTests";
-    private const string CheckedInGoalAcceptanceBuildSlotsLaneFilter =
-        "FullyQualifiedName~GoalAcceptanceVerifierDotnetBuildSlotTests";
-
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_gate_heartbeat_surfaces_hung_child_without_process_inspection")]
     public async Task GoalAcceptanceVerifierGateHeartbeatSurfacesHungChildWithoutProcessInspection()
     {
@@ -3807,6 +3800,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         var root = CreateCheckedInManifestShapeWorkspace();
         try
         {
+            var lanes = AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes;
             var verifier = new GoalAcceptanceVerifier((args, _, _) =>
             {
                 calls.Add(args);
@@ -3821,26 +3815,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
             Assert.True(result.Passed);
             var checks = result.Checks ?? throw new InvalidOperationException("Expected acceptance checks.");
-            string[] expectedInfrastructureChecks =
-            [
-                "infrastructure tests: Cli",
-                "infrastructure tests: Worker shell",
-                "infrastructure tests: Worker sandbox planner",
-                "infrastructure tests: Conduct watch sweep scoping",
-                "infrastructure tests: Goal lifecycle commands",
-                "infrastructure tests: Goal worktree cleanup",
-                "infrastructure tests: Goal worktree parallel",
-                "infrastructure tests: Worker profiles",
-                "infrastructure tests: Worker dispatch fixtures",
-                "infrastructure tests: Process spawning",
-                "infrastructure tests: Chaos gate",
-                "infrastructure tests: Dotnet build slots",
-                "infrastructure tests: Goal acceptance verifier",
-                "infrastructure tests: Goal acceptance build slots",
-                "infrastructure tests: Remainder balance A",
-                "infrastructure tests: Remainder balance B",
-                "infrastructure tests: Remainder"
-            ];
+            var expectedInfrastructureChecks = lanes.Select(lane => $"infrastructure tests: {lane.Name}");
             Assert.Equal(
                 expectedInfrastructureChecks.Order(StringComparer.Ordinal),
                 checks
@@ -3857,9 +3832,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 .ToList();
 
             Assert.DoesNotContain(infrastructureCalls, call => !call.Contains("--filter"));
-            Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInCliLaneFilter));
-            Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInGoalAcceptanceVerifierLaneFilter));
-            Assert.Contains(infrastructureCalls, call => call.Contains(CheckedInGoalAcceptanceBuildSlotsLaneFilter));
+            Assert.Equal(lanes.Count, infrastructureCalls.Count);
+            Assert.All(
+                lanes,
+                lane => Assert.Equal(
+                    1,
+                    infrastructureCalls.Count(call => HasArgumentPair(call, "--filter", lane.Filter))));
             Assert.Contains(infrastructureCalls, call =>
                 call.Any(argument =>
                     argument.Contains("FullyQualifiedName!~GoalAcceptanceVerifierTests", StringComparison.Ordinal) &&
@@ -5428,6 +5406,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheRecordsLaterPartitionsAfterEarlyFailure()
     {
         var root = CreateCheckedInManifestShapeWorkspace();
+        var cliLaneFilter = ResolveLaneFilter(root, "Cli");
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
@@ -5438,7 +5417,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
-                    args.Contains(CheckedInCliLaneFilter))
+                    args.Contains(cliLaneFilter))
                 {
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                         1,
@@ -5473,6 +5452,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     public async Task GoalAcceptanceVerifierWithinAttemptRerunToleratesFlakyPartition()
     {
         var root = CreateCheckedInManifestShapeWorkspace();
+        var cliLaneFilter = ResolveLaneFilter(root, "Cli");
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         var cliRuns = 0;
@@ -5484,7 +5464,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             {
                 calls.Add(args);
                 if (IsInfrastructurePartitionTestCall(args) &&
-                    args.Contains(CheckedInCliLaneFilter))
+                    args.Contains(cliLaneFilter))
                 {
                     cliRuns++;
                     // Intermittent flake: fail the first run, pass the within-attempt re-run.
@@ -5756,6 +5736,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheBackstopForcesFullRerun()
     {
         var root = CreateTwoLanePartitionVerdictManifestWorkspace();
+        var cliLaneFilter = ResolveLaneFilter(root, "Cli");
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         var failFirstPartitionOnForcedRerun = false;
@@ -5772,7 +5753,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 calls.Add(args);
                 if (failFirstPartitionOnForcedRerun &&
                     IsInfrastructurePartitionTestCall(args) &&
-                    args.Contains(CheckedInCliLaneFilter))
+                    args.Contains(cliLaneFilter))
                 {
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                         1,
@@ -7634,12 +7615,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             """);
 
     private static string CreateTwoLanePartitionVerdictManifestWorkspace() =>
-        CreateManifestWorkspace($$"""
+        CreateManifestWorkspace("""
             {
               "version": 1,
               "engine": {
                 "infrastructureTestLanes": [
-                  { "name": "Cli", "filter": "{{CheckedInCliLaneFilter}}" },
+                  { "name": "Cli", "filter": "FullyQualifiedName~CliCommandTests" },
                   {
                     "name": "Remainder",
                     "filter": "FullyQualifiedName!~CliCommandTests&Category!=HostIntegration"
@@ -7657,6 +7638,11 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "forbiddenChangedPathGlobs": []
             }
             """);
+
+    private static string ResolveLaneFilter(string root, string laneName) =>
+        AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes
+            .Single(lane => lane.Name.Equals(laneName, StringComparison.Ordinal))
+            .Filter;
 
     private static string CreateRealProcessShardManifestWorkspace() =>
         CreateManifestWorkspace("""
