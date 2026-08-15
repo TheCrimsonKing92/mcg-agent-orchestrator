@@ -757,6 +757,8 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
         try
         {
             SeedLocalSkillCatalog(repo);
+            RunGit(repo, "add", ".agents/skills");
+            RunGit(repo, "commit", "-m", "Seed local skills");
             var workspace = OrchestratorWorkspace.ForDirectory(repo);
             var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
             IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
@@ -784,7 +786,10 @@ public sealed class GoalWorktreeTestsRemoveCleanup : GoalWorktreeTestBase
             _ = CliCommandDispatcher.ExecuteCommand(
                 ["workspace", "remove"], kernel, workspace, ref agents, providers, ref profiles, ref currentGoal);
             Assert.Null(GoalWorktrees.TryResolve(repo, goal.Id));
-            Assert.True(string.IsNullOrWhiteSpace(RunGitOutput(repo, "status", "--short")));
+            var repositoryStatus = RunGitOutput(repo, "status", "--short");
+            Assert.True(
+                string.IsNullOrWhiteSpace(repositoryStatus),
+                $"Repository remained dirty after keyed replay cleanup:{Environment.NewLine}{repositoryStatus}");
         }
         finally
         {
