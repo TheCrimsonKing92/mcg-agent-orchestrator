@@ -225,6 +225,17 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 {
     switch (command)
     {
+        case "goal-intake-status":
+        {
+            CliArgumentParser.RequirePartCount(parts, 2, "goal-intake-status <request-key>");
+            GoalIntakeRequestStore.ValidateRequestKey(parts[1]);
+            var record = new GoalIntakeRequestStore(context.Workspace.SqliteStatePath).Get(parts[1])
+                ?? throw new InvalidOperationException(
+                    $"GOAL_INTAKE_REQUEST_NOT_FOUND requestKey={parts[1]}");
+            ConsoleViews.PrintGoalIntakeReceipt(record);
+            return false;
+        }
+
         case "goal-replace":
         {
             const string usage = "goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace";
@@ -352,6 +363,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 PrintScopeCollisionAdvisory(context, runObjective);
                 var runSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, runObjective);
                 PrintClosedSourceBacklogWarning(runSourceBacklogLink);
+                context.ReportGoalCreationProgress();
                 context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                     context.Kernel,
                     runAgents,
@@ -376,6 +388,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintScopeCollisionAdvisory(context, goalObjective);
             var goalSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, goalObjective);
             PrintClosedSourceBacklogWarning(goalSourceBacklogLink);
+            context.ReportGoalCreationProgress();
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateGoal(
                 context.Kernel,
                 goalAgents,
@@ -398,6 +411,7 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
             PrintScopeCollisionAdvisory(context, simpleObjective);
             var simpleSourceBacklogLink = ResolveSourceBacklogItemLink(context, parts, simpleObjective);
             PrintClosedSourceBacklogWarning(simpleSourceBacklogLink);
+            context.ReportGoalCreationProgress();
             var simpleAgents = ApplyRoleAgentOverrides(parts, context.Agents);
             context.CurrentGoal = GoalLifecycleCommands.CreateAndActivateSimpleGoal(
                 context.Kernel,

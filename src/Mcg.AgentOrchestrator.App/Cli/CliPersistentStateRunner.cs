@@ -184,6 +184,11 @@ internal static class CliPersistentStateRunner
             return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
+        if (IsBacklogIntakeCommand(args) && HasRequestKey(args))
+        {
+            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+        }
+
         if (IsBacklogIntakeCommand(args))
         {
             return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
@@ -496,7 +501,7 @@ internal static class CliPersistentStateRunner
         return args[0].ToLowerInvariant() switch
         {
             _ when CliCommandHelp.IsCommandSpecificHelp(args) => true,
-            "operator-listen" or "operator-channel" => true,
+            "operator-listen" or "operator-channel" or "goal-intake-status" => true,
             // These backlog commands operate solely on the independent BacklogStore, never the
             // orchestrator kernel/state.db. Running them with an empty kernel — no state load, no
             // write lock, no process sweep — keeps them fully concurrent with a running conductor
@@ -628,8 +633,17 @@ internal static class CliPersistentStateRunner
 
     internal static bool IsGoalCreateCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
-        args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
-        !args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase));
+        ((args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
+          !args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))) ||
+         (args[0].Equals("simple-goal", StringComparison.OrdinalIgnoreCase) && HasRequestKey(args)));
+
+    internal static bool IsGoalIntakeStatusCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 && args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasRequestKey(IReadOnlyList<string> args) =>
+        args.Any(arg =>
+            arg.Equals("--request-key", StringComparison.OrdinalIgnoreCase) ||
+            arg.StartsWith("--request-key=", StringComparison.OrdinalIgnoreCase));
 
     internal static bool IsGoalReplacementCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("goal-replace", StringComparison.OrdinalIgnoreCase);
@@ -3258,6 +3272,39 @@ internal static class CliPersistentStateRunner
 
         var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
         currentGoal = ResolveCurrentGoal(kernel, currentGoal?.Id.Value);
+        var request = GoalIntakeRequestMapper.Map(args, workspace, agents);
+        GoalIntakeRequestStore? requestStore = null;
+        GoalIntakeRequestRecord? intakeRecord = null;
+        if (request is not null)
+        {
+            requestStore = new GoalIntakeRequestStore(workspace.SqliteStatePath);
+            var reservation = requestStore.Reserve(request.RequestKey, request.Fingerprint);
+            intakeRecord = reservation.Record;
+            if (reservation.Kind == GoalIntakeReservationKind.Replay)
+            {
+                ConsoleViews.PrintGoalIntakeReceipt(reservation.Record);
+                if (reservation.Record.State == GoalIntakeRequestStates.Created)
+                {
+                    currentGoal = kernel.Goals.FirstOrDefault(goal =>
+                        goal.Id.Value.Equals(reservation.Record.GoalId, StringComparison.Ordinal));
+                    if (currentGoal is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"GOAL_INTAKE_RECEIPT_INVALID requestKey={request.RequestKey} reason=created-goal-missing");
+                    }
+                    ConsoleViews.PrintGoal(currentGoal);
+                    return false;
+                }
+                if (reservation.Record.State == GoalIntakeRequestStates.Failed)
+                {
+                    throw new InvalidOperationException(
+                        $"GOAL_INTAKE_REPLAY_FAILED requestKey={request.RequestKey} " +
+                        $"failureCode={reservation.Record.FailureCode} detail={reservation.Record.FailureDetail}");
+                }
+
+                return false;
+            }
+        }
         GoalSnapshot? committedSnapshot = null;
         var deferredEventWriter = new DeferredGoalLifecycleEventWriter();
         var deferredCollaborationWriter = new DeferredGoalCreationCollaborationWriter(
@@ -3276,6 +3323,19 @@ internal static class CliPersistentStateRunner
                     {
                         ValidateGoalCreationPreconditions(currentKernel, preparedSnapshot, workspace);
                         currentKernel.ReplaceGoalWithSnapshot(preparedSnapshot);
+                        if (request is not null)
+                        {
+                            intakeRecord = requestStore!.MarkCreated(
+                                request.RequestKey,
+                                request.Fingerprint,
+                                preparedSnapshot.Id);
+                            if (request.Mode.StartsWith("backlog-", StringComparison.Ordinal) &&
+                                preparedSnapshot.SourceBacklogItemId is { } sourceBacklogItemId)
+                            {
+                                new BacklogIntakeRecordStore(workspace.SqliteStatePath)
+                                    .MarkGoalCreated(sourceBacklogItemId, preparedSnapshot.Id);
+                            }
+                        }
                         return Task.FromResult((
                             ShouldSave: true,
                             Result: true,
@@ -3284,6 +3344,8 @@ internal static class CliPersistentStateRunner
                 .GetAwaiter()
                 .GetResult();
             committedSnapshot = preparedSnapshot;
+            if (intakeRecord is not null)
+                ConsoleViews.PrintGoalIntakeReceipt(intakeRecord);
             try
             {
                 _ = DeliverGoalCreationSideEffects(outboxRepository, workspace, kernel, goal.Id);
@@ -3297,19 +3359,37 @@ internal static class CliPersistentStateRunner
             }
         }
 
-        var shouldSave = CliCommandDispatcher.ExecuteCommand(
-            args,
-            kernel,
-            workspace,
-            ref agents,
-            providers,
-            ref workerProfiles,
-            ref currentGoal,
-            channel,
-            () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
-            finalizeGoalCreation: FinalizeGoalCreation,
-            eventWriter: deferredEventWriter,
-            refinementCollaborationItemRaise: deferredCollaborationWriter.RaiseAsync);
+        bool shouldSave;
+        try
+        {
+            shouldSave = CliCommandDispatcher.ExecuteCommand(
+                args,
+                kernel,
+                workspace,
+                ref agents,
+                providers,
+                ref workerProfiles,
+                ref currentGoal,
+                channel,
+                () => stateRepository.LoadAsync().GetAwaiter().GetResult(),
+                finalizeGoalCreation: FinalizeGoalCreation,
+                eventWriter: deferredEventWriter,
+                refinementCollaborationItemRaise: deferredCollaborationWriter.RaiseAsync,
+                reportGoalCreationProgress: () =>
+                {
+                    if (intakeRecord is not null)
+                        ConsoleViews.PrintGoalIntakeReceipt(intakeRecord);
+                });
+        }
+        catch (Exception ex) when (request is not null && committedSnapshot is null)
+        {
+            _ = requestStore!.MarkFailed(
+                request.RequestKey,
+                request.Fingerprint,
+                ResolveGoalIntakeFailureCode(ex),
+                ex.Message);
+            throw;
+        }
 
         if (committedSnapshot is null)
         {
@@ -3329,6 +3409,23 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    private static string ResolveGoalIntakeFailureCode(Exception exception)
+    {
+        var firstToken = exception.Message
+            .Split([' ', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault();
+        if (firstToken is not null &&
+            firstToken.Length <= 100 &&
+            firstToken.All(character => char.IsAsciiLetterUpper(character) || char.IsAsciiDigit(character) || character == '_'))
+        {
+            return firstToken;
+        }
+
+        return exception is ArgumentException
+            ? "GOAL_INTAKE_ARGUMENT_INVALID"
+            : "GOAL_INTAKE_CREATE_FAILED";
     }
 
     private static bool ExecuteGoalCreateDeliveryRetry(

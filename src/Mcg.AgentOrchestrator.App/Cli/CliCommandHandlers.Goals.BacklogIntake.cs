@@ -467,6 +467,7 @@ private static bool HandleBacklogIntake(CliExecutionContext context, IReadOnlyLi
         return false;
     }
 
+    context.ReportGoalCreationProgress();
     context.CurrentGoal = createSimpleGoal
         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(context.Kernel, context.Agents, item.SuggestedObjective, context.Workspace, context.Providers, context.EventWriter)
         : GoalLifecycleCommands.CreateAndActivateGoal(context.Kernel, context.Agents, goalObjectivePlan!, context.Workspace, context.Providers, context.EventWriter);
@@ -560,6 +561,12 @@ private static void PersistBacklogIntakeGoal(CliExecutionContext context, Backlo
 {
     if (string.IsNullOrWhiteSpace(item.Id))
         return;
+
+    if (context.HasGoalCreationFinalizer)
+    {
+        context.FinalizeGoalCreation(goal);
+        return;
+    }
 
     context.PersistCheckpoint(context.Kernel);
     new BacklogIntakeRecordStore(context.Workspace.SqliteStatePath).MarkGoalCreated(item.Id, goal.Id.Value);

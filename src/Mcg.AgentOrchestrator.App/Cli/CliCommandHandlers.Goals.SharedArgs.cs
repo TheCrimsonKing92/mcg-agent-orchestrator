@@ -253,6 +253,7 @@ private static bool IsCliValueFlag(string part)
         part.Equals("--backlog-coverage", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--backlog-item", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--brief-file", StringComparison.OrdinalIgnoreCase) ||
+        part.Equals("--request-key", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--pipeline", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--complex-model", StringComparison.OrdinalIgnoreCase) ||
         part.Equals("--confirm-limit-review", StringComparison.OrdinalIgnoreCase) ||

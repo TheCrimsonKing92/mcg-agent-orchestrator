@@ -207,6 +207,19 @@ if (startupArgs.Count > 0 && startupArgs[0].Equals("prototype", StringComparison
     return 0;
 }
 
+if (CliPersistentStateRunner.IsGoalIntakeStatusCommand(startupArgs))
+{
+    try
+    {
+        ProgramStartupLifecycle.EnsureStateDbInitialized(startupArgs, workspace);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(ProgramStartupErrorFormatter.Format(ex));
+        return ExitCompletedStartupCommand(1);
+    }
+}
+
 if (CliPersistentStateRunner.SkipsKernelState(startupArgs))
 {
     var commandKernel = new AgentOrchestratorKernel();

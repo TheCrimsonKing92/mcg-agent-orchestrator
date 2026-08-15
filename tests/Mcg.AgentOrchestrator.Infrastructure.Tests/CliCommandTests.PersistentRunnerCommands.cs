@@ -1472,8 +1472,242 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "--from-backlog"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsBacklogIntakeCommand(["goal", "--from-backlog"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command", "--request-key", "key"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal-mark-landed", "abc"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand([]));
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_same_key_replays_one_goal_and_task_graph()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var args = new[] { "simple-goal", "Implement one keyed task", "--request-key", "sequential-key" };
+
+        var firstOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var first = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        var originalTaskIds = first.Tasks.Select(task => task.Id.Value).ToArray();
+
+        var replayOutput = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var restored = await repository.LoadAsync();
+
+        var onlyGoal = Xunit.Assert.Single(restored.Goals);
+        Xunit.Assert.Equal(first.Id, onlyGoal.Id);
+        Xunit.Assert.Equal(originalTaskIds, onlyGoal.Tasks.Select(task => task.Id.Value));
+        Xunit.Assert.Contains("\"state\":\"still-committing\"", firstOutput);
+        Xunit.Assert.Contains("\"state\":\"created\"", firstOutput);
+        Xunit.Assert.Contains("\"state\":\"created\"", replayOutput);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_conflicting_payload_reuse_is_rejected()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["simple-goal", "Original keyed task", "--request-key", "conflict-key"],
+            repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        var error = Xunit.Assert.Throws<InvalidOperationException>(() =>
+            CliPersistentStateRunner.ExecuteCommand(
+                ["simple-goal", "Changed keyed task", "--request-key", "conflict-key"],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Contains("GOAL_INTAKE_PAYLOAD_CONFLICT", error.Message);
+        Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_concurrent_same_key_creates_one_goal()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        using var ready = new CountdownEvent(2);
+        using var release = new ManualResetEventSlim(false);
+
+        Task Start() => Task.Run(() =>
+        {
+            IReadOnlyList<AgentDefinition> localAgents = AgentCatalog.Default().Agents;
+            var localProfiles = WorkerProfileCatalog.Default();
+            Goal? localGoal = null;
+            ready.Signal();
+            release.Wait();
+            _ = CliPersistentStateRunner.ExecuteCommand(
+                ["simple-goal", "Concurrent keyed task", "--request-key", "concurrent-goal-key"],
+                CreateMigratedStateRepository(workspace.SqliteStatePath),
+                workspace,
+                ref localAgents,
+                new InMemoryModelProviderRegistry([]),
+                ref localProfiles,
+                ref localGoal);
+        });
+
+        var first = Start();
+        var second = Start();
+        Xunit.Assert.True(ready.Wait(TimeSpan.FromSeconds(15)), "Both goal attempts did not reach the event gate.");
+        release.Set();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(15));
+
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        Xunit.Assert.Equal(
+            GoalIntakeRequestStates.Created,
+            new GoalIntakeRequestStore(workspace.SqliteStatePath).Get("concurrent-goal-key")!.State);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_status_polls_without_retrying_creation()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var store = new GoalIntakeRequestStore(workspace.SqliteStatePath);
+        _ = store.Reserve("poll-key", "poll-fingerprint");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal-intake-status", "poll-key"],
+            repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        Xunit.Assert.Contains("\"requestKey\":\"poll-key\"", output);
+        Xunit.Assert.Contains("\"state\":\"still-committing\"", output);
+        Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_unkeyed_duplicate_objectives_remain_distinct()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        for (var index = 0; index < 2; index++)
+        {
+            _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["simple-goal", "Same unkeyed objective"],
+                repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        }
+
+        Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_keyed_backlog_replay_keeps_atomic_goal_binding()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync("Keyed backlog source");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var providers = new InMemoryModelProviderRegistry([]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var args = new[]
+        {
+            "backlog-intake", item.Id, "--create-simple-goal", "--backlog-coverage", "slice",
+            "--request-key", "backlog-key"
+        };
+
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+        var replay = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            args, repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
+
+        var goal = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        var request = new GoalIntakeRequestStore(workspace.SqliteStatePath).Get("backlog-key")!;
+        var backlogRecord = new BacklogIntakeRecordStore(workspace.SqliteStatePath).Get(item.Id)!;
+        Xunit.Assert.Equal(goal.Id.Value, request.GoalId);
+        Xunit.Assert.Equal(goal.Id.Value, backlogRecord.GoalId);
+        Xunit.Assert.Contains("\"state\":\"created\"", replay);
+    }
+
+    [Xunit.Fact]
+    public void GoalIntake_failed_status_is_pollable_without_failed_exit()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var store = new GoalIntakeRequestStore(workspace.SqliteStatePath);
+        _ = store.Reserve("failed-key", "failed-fingerprint");
+        _ = store.MarkFailed("failed-key", "failed-fingerprint", "TEST_FAILURE", "controlled failure");
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => Xunit.Assert.False(CliPersistentStateRunner.ExecuteCommand(
+            ["goal-intake-status", "failed-key"], repository, workspace, ref agents,
+            new InMemoryModelProviderRegistry([]), ref profiles, ref currentGoal)));
+
+        Xunit.Assert.Contains("\"state\":\"failed\"", output);
+        Xunit.Assert.Contains("\"failureCode\":\"TEST_FAILURE\"", output);
+    }
+
+    [Xunit.Fact]
+    public async Task GoalIntake_dispatch_replay_stops_before_second_preflight()
+    {
+        using var sandbox = ClearWorkerSandboxEnv();
+        var root = CreateTempDirectory();
+        File.WriteAllText(Path.Combine(root, ".git"), "gitdir: fake");
+        var workspace = CreateRefinedWorkspace(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var agent = new AgentDefinition(
+            new AgentId("developer"),
+            "Developer",
+            AgentRole.Developer,
+            new ModelProfile("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias, ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+            Subscription: new SubscriptionLaunchProfile("codex-cli"));
+        IReadOnlyList<AgentDefinition> agents = [agent];
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+        var args = new[]
+        {
+            "simple-goal", "Dispatch exactly once", "--dispatch", "--confirm-dispatch-start",
+            "--request-key", "dispatch-key"
+        };
+        var previous = Environment.GetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, "1");
+            var first = Xunit.Assert.Throws<InvalidOperationException>(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    args, repository, workspace, ref agents,
+                    new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]),
+                    ref profiles, ref currentGoal));
+            Xunit.Assert.Contains(BackgroundDispatchRunner.DisableDispatchStartVariable, first.Message);
+
+            var replay = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                args, repository, workspace, ref agents,
+                new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]),
+                ref profiles, ref currentGoal));
+            Xunit.Assert.Contains("\"state\":\"created\"", replay);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(BackgroundDispatchRunner.DisableDispatchStartVariable, previous);
+        }
+
+        var goal = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        Xunit.Assert.Null(goal.Tasks.Single().LastDispatch);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_refinement_allows_concurrent_sqlite_writer")]
@@ -3736,7 +3970,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 Convert.ToString(columns.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
             using var migrationCount = unchanged.CreateCommand();
             migrationCount.CommandText = "SELECT COUNT(*) FROM schema_migrations";
-            Xunit.Assert.Equal(11L, migrationCount.ExecuteScalar());
+            Xunit.Assert.Equal(12L, migrationCount.ExecuteScalar());
             using var claimTable = unchanged.CreateCommand();
             claimTable.CommandText = "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'source_backlog_claims'";
             Xunit.Assert.Equal(1L, claimTable.ExecuteScalar());

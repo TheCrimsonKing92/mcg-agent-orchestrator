@@ -1259,8 +1259,19 @@ public sealed class LauncherScriptTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "StartOrchestratorCommand_emits_json_pid_and_log_path_through_repo_script")]
+    [Xunit.Fact]
     public void StartOrchestratorCommandEmitsJsonPidAndLogPathThroughRepoScript()
+        => AssertStartOrchestratorCommandReceipt(["goals"], expectedRequestKey: null);
+
+    [Xunit.Fact]
+    public void StartOrchestratorCommand_keyed_launch_exposes_request_correlation()
+        => AssertStartOrchestratorCommandReceipt(
+            ["goal-intake-status", "launcher-key", "--request-key", "launcher-key"],
+            expectedRequestKey: "launcher-key");
+
+    private static void AssertStartOrchestratorCommandReceipt(
+        IReadOnlyList<string> commandArguments,
+        string? expectedRequestKey)
     {
         var repoRoot = Environment.GetEnvironmentVariable(OrchestratorWorkspace.RepoRootEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(repoRoot))
@@ -1288,7 +1299,8 @@ public sealed class LauncherScriptTests
         startInfo.ArgumentList.Add("launcher-json-test");
         startInfo.ArgumentList.Add("-AppDll");
         startInfo.ArgumentList.Add(appDll);
-        startInfo.ArgumentList.Add("goals");
+        foreach (var argument in commandArguments)
+            startInfo.ArgumentList.Add(argument);
 
         using var launcher = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Failed to start launcher script.");
@@ -1306,7 +1318,10 @@ public sealed class LauncherScriptTests
         using var document = JsonDocument.Parse(outputLines[0]);
         var root = document.RootElement;
         var properties = root.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray();
-        Assert.Equal(ExpectedStartCommandJsonProperties, properties);
+        var expectedProperties = expectedRequestKey is null
+            ? ExpectedStartCommandJsonProperties
+            : ExpectedStartCommandJsonProperties.Append("requestKey").Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(expectedProperties, properties);
 
         var pid = root.GetProperty("pid").GetInt32();
         var stdoutPath = root.GetProperty("stdoutPath").GetString();
@@ -1319,8 +1334,10 @@ public sealed class LauncherScriptTests
         Assert.False(string.IsNullOrWhiteSpace(stderrPath));
         Assert.True(Path.IsPathFullyQualified(stdoutPath!));
         Assert.True(Path.IsPathFullyQualified(stderrPath!));
-        Assert.Equal(new[] { appDll, "goals" }, args);
+        Assert.Equal(new[] { appDll }.Concat(commandArguments).ToArray(), args);
         Assert.True(DateTimeOffset.TryParse(startedAt, out _), $"Expected parseable startedAt, got '{startedAt}'.");
+        if (expectedRequestKey is not null)
+            Assert.Equal(expectedRequestKey, root.GetProperty("requestKey").GetString());
 
         try
         {
@@ -1330,12 +1347,6 @@ public sealed class LauncherScriptTests
         catch (ArgumentException)
         {
             // Short commands can exit before the test reopens the emitted PID.
-        }
-
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
-        while (!File.Exists(stdoutPath) && DateTimeOffset.UtcNow < deadline)
-        {
-            Thread.Sleep(100);
         }
 
         Assert.True(File.Exists(stdoutPath), $"Expected launcher log path to exist: {stdoutPath}");
