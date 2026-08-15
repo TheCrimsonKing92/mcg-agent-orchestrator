@@ -498,6 +498,23 @@ public sealed class RepositoryChangeClassifierTests
         Assert.False(check.Command.Any(argument => argument.Equals("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", StringComparison.Ordinal)));
     }
 
+    [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_infrastructure_tests_for_extracted_provider_changes")]
+    public void RepositoryTestImpactPlannerSelectsInfrastructureTestsForExtractedProviderChanges()
+    {
+        var path = "src/Mcg.AgentOrchestrator.Infrastructure.Providers/ModelProviders.cs";
+
+        var summary = RepositoryChangeClassifier.Classify([path]);
+        var plan = RepositoryTestImpactPlanner.Plan(summary);
+
+        Assert.True(summary.RequiresConductorRelaunch);
+        Assert.True(plan.RequiresBuild);
+        var check = Assert.Single(plan.Checks);
+        Assert.Equal("infrastructure tests", check.Name);
+        Assert.Contains(
+            "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+            check.Command);
+    }
+
     [Xunit.Fact(DisplayName = "RepositoryTestImpactPlanner_selects_focused_cli_filter_for_cli_only_changes")]
     public void RepositoryTestImpactPlannerSelectsFocusedCliFilterForCliOnlyChanges()
     {

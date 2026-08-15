@@ -95,6 +95,7 @@ public static class RepositoryChangeClassifier
         "src/Mcg.AgentOrchestrator.Core/Application/VerificationPolicyCompiler",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
+        "src/Mcg.AgentOrchestrator.Infrastructure.Providers/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workers/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Processes/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunction",
