@@ -757,7 +757,9 @@ public sealed class TaskBriefTests
     public void BuildTaskBriefRetryFeedbackPreservesAtomicEntry()
     {
         var kernel = new AgentOrchestratorKernel();
-        var goal = kernel.CreateGoal("Preserve complete retry evidence");
+        var goal = kernel.CreateGoal(
+            "Preserve complete retry evidence",
+            [new TaskSpec(TaskId.New(), "Render complete retry evidence.", AgentRole.Developer)]);
         var task = goal.Tasks.Single();
         kernel.ActivateGoal(goal.Id, DefaultAgents());
         var completeEntry =
