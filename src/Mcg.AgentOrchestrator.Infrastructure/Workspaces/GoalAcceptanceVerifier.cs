@@ -214,14 +214,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
     private const string InfrastructureTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj";
+    private const string DashboardTestsProject = "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj";
+    private const string TestSupportProject = "tests/Mcg.AgentOrchestrator.TestSupport/Mcg.AgentOrchestrator.TestSupport.csproj";
     private const string ProviderEnvironmentTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj";
     private const string CliTestsProject = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj";
     private const int MaxFocusedEvidenceFilterLength = 1024;
     internal const string FocusedEvidenceSupportedProjectForms =
         "Core, Core.Tests, Mcg.AgentOrchestrator.Core.Tests, Infrastructure, Infrastructure.Tests, " +
-        "Mcg.AgentOrchestrator.Infrastructure.Tests, or a full .csproj path ending in " +
+        "Mcg.AgentOrchestrator.Infrastructure.Tests, Dashboard, Dashboard.Tests, " +
+        "Mcg.AgentOrchestrator.Dashboard.Tests, or a full .csproj path ending in " +
         "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj or " +
-        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj; " +
+        "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj or " +
+        "tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj; " +
         "extracted Infrastructure test projects registered in engine.mtpInvocations also accept their " +
         "project label, file name, or full .csproj path";
     private const string PartitionVerdictJournalOperation = "acceptance:partition-verdict";
@@ -231,11 +235,13 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject, CliTestsProject],
-        [AppProject] = [InfrastructureTestsProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [CoreProject] = [InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [InfrastructureProject] = [AppProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [AppProject] = [InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [CoreTestsProject] = [],
         [InfrastructureTestsProject] = [],
+        [DashboardTestsProject] = [],
+        [TestSupportProject] = [InfrastructureTestsProject, DashboardTestsProject],
         [ProviderEnvironmentTestsProject] = [],
         [CliTestsProject] = []
     };
@@ -319,6 +325,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         AppProject,
         CoreTestsProject,
         InfrastructureTestsProject,
+        DashboardTestsProject,
+        TestSupportProject,
         ProviderEnvironmentTestsProject,
         CliTestsProject
     ];
@@ -476,7 +484,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             c.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
             (string.IsNullOrWhiteSpace(c.Project) || c.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)));
 
-        var scopedChecks = BuildChangeScopedChecks(solutionCheck, effectiveChecks, changedFiles, policyShardPlan, infrastructureTestLanes);
+        var scopedChecks = BuildChangeScopedChecks(worktreePath, solutionCheck, effectiveChecks, changedFiles, policyShardPlan, infrastructureTestLanes);
         var runSolutionCheck = solutionCheck is not null && scopedChecks is null;
         var deferredChecks = runSolutionCheck
             ? BuildDeferredChecks(solutionCheck, effectiveChecks, worktreePath)
@@ -1579,7 +1587,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             }
 
             totalTargets += targetCount;
-            if (filter is not null && IsInfrastructureTestProject(project))
+            if (filter is not null && ProjectMatches(project, InfrastructureTestsProject))
             {
                 IReadOnlyList<(string Project, FocusedEvidenceFilter Filter)> projectArms;
                 try
@@ -1634,10 +1642,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ? $"reviewer mapped project evidence: {ProjectLabel(item.Project)}"
                     : $"reviewer focused evidence: {ProjectLabel(item.Project)} {item.Filter.CanonicalText}",
                 Type = "dotnet-test",
-                // Both focused-evidence target projects (Core.Tests, Infrastructure.Tests) are MTP;
-                // without this the check defaults to the VSTest runner and fails on .NET 10 with
-                // "VSTest target is no longer supported", making every reviewer evidence run fail.
-                Runner = "mtp",
+                // Focused-evidence checks are synthesized from a referenced project, so runner selection
+                // follows that project's declaration just like policy and impact-plan checks.
+                Runner = ResolveDotnetTestRunner(worktreePath, item.Project),
                 Project = item.Project,
                 Arguments = item.Filter is null
                     ? ["--verbosity", "minimal"]
@@ -1688,7 +1695,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var matchingProjects = engineSettings.MtpInvocations
             .Select(invocation => NormalizePath(invocation.Project))
-            .Where(project => IsExtractedInfrastructureTestProject(project!))
+            .Where(project => IsExtractedInfrastructureProject(project!))
             .Where(project => classNames.All(className =>
                 ProjectContainsFocusedEvidenceClass(worktreePath, project!, className)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1727,7 +1734,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         var extractedProjects = engineSettings.MtpInvocations
             .Select(invocation => NormalizePath(invocation.Project))
-            .Where(project => IsExtractedInfrastructureTestProject(project!))
+            .Where(project => IsExtractedInfrastructureProject(project!))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var grouped = new List<(string Project, List<string> Filters)>();
@@ -1855,8 +1862,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         {
             "Core.Tests" or "Core" or "Mcg.AgentOrchestrator.Core.Tests" => CoreTestsProject,
             "Infrastructure.Tests" or "Infrastructure" or "Mcg.AgentOrchestrator.Infrastructure.Tests" => InfrastructureTestsProject,
+            "Dashboard.Tests" or "Dashboard" or "Mcg.AgentOrchestrator.Dashboard.Tests" => DashboardTestsProject,
             _ when normalized.EndsWith(CoreTestsProject, StringComparison.OrdinalIgnoreCase) => CoreTestsProject,
             _ when normalized.EndsWith(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase) => InfrastructureTestsProject,
+            _ when normalized.EndsWith(DashboardTestsProject, StringComparison.OrdinalIgnoreCase) => DashboardTestsProject,
             _ => string.Empty
         };
         if (project.Length > 0)
@@ -1867,7 +1876,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         foreach (var invocation in engineSettings?.MtpInvocations ?? [])
         {
             var candidate = NormalizePath(invocation.Project)!;
-            if (!IsExtractedInfrastructureTestProject(candidate))
+            if (!IsExtractedInfrastructureProject(candidate) && !IsDashboardTestProject(candidate))
             {
                 continue;
             }
@@ -2207,6 +2216,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private static List<AcceptanceManifestCheck>? BuildChangeScopedChecks(
+        string worktreePath,
         AcceptanceManifestCheck? solutionCheck,
         IReadOnlyList<AcceptanceManifestCheck> allChecks,
         IReadOnlyList<string>? changedFiles,
@@ -2243,7 +2253,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var scoped = new List<AcceptanceManifestCheck>();
         foreach (var plannedCheck in plan.Checks)
         {
-            var plannedManifestCheck = PolicyCheckToManifestCheck(plannedCheck);
+            var plannedManifestCheck = PolicyCheckToManifestCheck(worktreePath, plannedCheck);
             foreach (var scopedCheck in ExpandBroadInfrastructureCheck(plannedManifestCheck, infrastructureTestLanes))
             {
                 var existing = allChecks.FirstOrDefault(check =>
@@ -2283,6 +2293,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     }
 
     private static IReadOnlyList<AcceptanceManifestCheck> BuildPolicyEffectiveChecks(
+        string worktreePath,
         IReadOnlyList<AcceptanceManifestCheck> manifestChecks,
         IReadOnlyList<string>? changedFiles,
         IReadOnlyList<AcceptanceManifestCheck>? policyRequiredChecks = null,
@@ -2293,7 +2304,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return manifestChecks;
 
         policyShardPlan ??= BuildPolicyShardPlan(changedFiles);
-        var requiredPolicyChecks = policyRequiredChecks ?? BuildRequiredPolicyChecks(changedFiles);
+        var requiredPolicyChecks = policyRequiredChecks ?? BuildRequiredPolicyChecks(worktreePath, changedFiles);
         var plannedChecks = requiredPolicyChecks
             .Where(check => !policyShardPlan.ForceFull ||
                 !check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
@@ -2343,8 +2354,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         // This is the single owner of the environment- and scope-expanded gate plan. Cohort
         // identity, partition-cache identity, and execution all hash or consume this exact plan.
-        var policyRequiredChecks = BuildRequiredPolicyChecks(changedFiles);
+        var policyRequiredChecks = BuildRequiredPolicyChecks(worktreePath, changedFiles);
         var policyEffectiveChecks = BuildPolicyEffectiveChecks(
+            worktreePath,
             manifest.Checks,
             changedFiles,
             policyRequiredChecks,
@@ -2369,7 +2381,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             structuralCoverageApplies);
     }
 
-    private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(IReadOnlyList<string>? changedFiles)
+    private static IReadOnlyList<AcceptanceManifestCheck> BuildRequiredPolicyChecks(
+        string worktreePath,
+        IReadOnlyList<string>? changedFiles)
     {
         if (changedFiles is null || changedFiles.Count == 0)
             return [];
@@ -2385,7 +2399,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 c.Required &&
                 (c.Kind.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) ||
                     c.Kind.Equals("browser-smoke", StringComparison.OrdinalIgnoreCase)))
-            .Select(PolicyCheckToManifestCheck)
+            .Select(check => PolicyCheckToManifestCheck(worktreePath, check))
             .Where(c => c is not null)
             .Select(c => c!)
             .ToArray();
@@ -2512,6 +2526,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             return AppProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Core.Tests/", StringComparison.OrdinalIgnoreCase))
             return CoreTestsProject;
+        if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Dashboard.Tests/", StringComparison.OrdinalIgnoreCase))
+            return DashboardTestsProject;
+        if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.TestSupport/", StringComparison.OrdinalIgnoreCase))
+            return TestSupportProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/", StringComparison.OrdinalIgnoreCase))
             return ProviderEnvironmentTestsProject;
         if (normalized.StartsWith("tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/", StringComparison.OrdinalIgnoreCase))
@@ -2527,7 +2545,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         project.Equals(AppProject, StringComparison.OrdinalIgnoreCase) ? "App" :
         project.Equals(CoreTestsProject, StringComparison.OrdinalIgnoreCase) ? "Core.Tests" :
         project.Equals(InfrastructureTestsProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure.Tests" :
-        IsExtractedInfrastructureTestProject(project) ? ExtractedInfrastructureProjectLabel(project) :
+        project.Equals(DashboardTestsProject, StringComparison.OrdinalIgnoreCase) ? "Dashboard.Tests" :
+        project.Equals(TestSupportProject, StringComparison.OrdinalIgnoreCase) ? "TestSupport" :
+        IsExtractedInfrastructureProject(project) ? ExtractedInfrastructureProjectLabel(project) :
         project;
 
     private static string ExtractedInfrastructureProjectLabel(string project)
@@ -2596,7 +2616,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsBroadInfrastructureTestCheck(AcceptanceManifestCheck check) =>
         check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
         !string.IsNullOrWhiteSpace(check.Project) &&
-        IsInfrastructureTestProject(check.Project) &&
+        ProjectMatches(check.Project, InfrastructureTestsProject) &&
         !check.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsFocusedProjectDotnetCheck(AcceptanceManifestCheck check) =>
@@ -2612,9 +2632,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool IsPolicyShardProjectCheck(AcceptanceManifestCheck check) =>
         check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
         !string.IsNullOrWhiteSpace(check.Project) &&
-        (IsCoreTestProject(check.Project) ||
-         IsInfrastructureTestProject(check.Project) ||
-         IsExtractedInfrastructureTestProject(check.Project));
+        (ProjectMatches(check.Project, CoreTestsProject) ||
+         ProjectMatches(check.Project, InfrastructureTestsProject) ||
+         IsDashboardTestProject(check.Project) ||
+         IsExtractedInfrastructureProject(check.Project));
 
     private static bool IsSkippedPolicyShardCheck(AcceptanceManifestCheck check, PolicyShardPlan policyShardPlan) =>
         policyShardPlan.Applies &&
@@ -2628,15 +2649,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         IsPolicyShardProjectCheck(check) &&
         policyShardPlan.IncludesProject(check.Project);
 
-    private static bool IsInfrastructureTestProject(string project) =>
-        project.EndsWith(
-            InfrastructureTestsProject,
-            StringComparison.OrdinalIgnoreCase) ||
-        project.EndsWith(
-            "tests\\Mcg.AgentOrchestrator.Infrastructure.Tests\\Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
-            StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsExtractedInfrastructureTestProject(string project)
+    private static bool IsExtractedInfrastructureProject(string project)
     {
         var normalized = NormalizePath(project);
         const string infrastructureTestsRoot = "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/";
@@ -2652,12 +2665,17 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             fileName.EndsWith(".Tests.csproj", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsCoreTestProject(string project) =>
+    private static bool ProjectMatches(string project, string expectedProject) =>
+        NormalizePath(project)?.EndsWith(
+            NormalizePath(expectedProject),
+            StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsDashboardTestProject(string project) =>
         project.EndsWith(
-            CoreTestsProject,
+            DashboardTestsProject,
             StringComparison.OrdinalIgnoreCase) ||
         project.EndsWith(
-            "tests\\Mcg.AgentOrchestrator.Core.Tests\\Mcg.AgentOrchestrator.Core.Tests.csproj",
+            "tests\\Mcg.AgentOrchestrator.Dashboard.Tests\\Mcg.AgentOrchestrator.Dashboard.Tests.csproj",
             StringComparison.OrdinalIgnoreCase);
 
     private static bool IsReplacedByFocusedProjectCheck(
@@ -2673,7 +2691,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static string ManifestCheckKey(AcceptanceManifestCheck check) =>
         $"{check.Type}:{check.Command}:{NormalizePath(check.Project)}:{string.Join('\u001f', check.Arguments)}";
 
-    private static AcceptanceManifestCheck? PolicyCheckToManifestCheck(VerificationPolicyCheck check)
+    private static AcceptanceManifestCheck? PolicyCheckToManifestCheck(
+        string worktreePath,
+        VerificationPolicyCheck check)
     {
         if (check.Kind.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase))
         {
@@ -2685,7 +2705,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 return null;
             }
 
-            return DotnetCommandToManifestCheck(check.Name, parts);
+            return DotnetCommandToManifestCheck(worktreePath, check.Name, parts);
         }
 
         if (check.Kind.Equals("browser-smoke", StringComparison.OrdinalIgnoreCase))
@@ -2707,13 +2727,18 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return null;
     }
 
-    private static AcceptanceManifestCheck PolicyCheckToManifestCheck(RepositoryTestImpactCheck check)
+    private static AcceptanceManifestCheck PolicyCheckToManifestCheck(
+        string worktreePath,
+        RepositoryTestImpactCheck check)
     {
         // Command format: ["dotnet", "test", <optional project>, ...args]
-        return DotnetCommandToManifestCheck(check.Name, [.. check.Command]);
+        return DotnetCommandToManifestCheck(worktreePath, check.Name, [.. check.Command]);
     }
 
-    private static AcceptanceManifestCheck DotnetCommandToManifestCheck(string name, string[] command)
+    private static AcceptanceManifestCheck DotnetCommandToManifestCheck(
+        string worktreePath,
+        string name,
+        string[] command)
     {
         var remaining = command.Skip(2).ToArray();
         var project = remaining.Length > 0 && !remaining[0].StartsWith("-", StringComparison.Ordinal)
@@ -2726,20 +2751,74 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Type = "dotnet-test",
             Project = project,
             Arguments = arguments,
-            Runner = ResolveDotnetTestRunner(project)
+            Runner = ResolveDotnetTestRunner(worktreePath, project)
         };
     }
 
-    // Core.Tests and Infrastructure.Tests are Microsoft.Testing.Platform projects; synthesized
-    // dotnet-test checks for them must carry runner=mtp or they default to the VSTest runner and
-    // fail on .NET 10 with "VSTest target is no longer supported".
-    private static string ResolveDotnetTestRunner(string? project) =>
-        !string.IsNullOrWhiteSpace(project) &&
-        (IsCoreTestProject(project) ||
-         IsInfrastructureTestProject(project) ||
-         IsExtractedInfrastructureTestProject(project))
-            ? "mtp"
-            : "vstest";
+    internal static string ResolveDotnetTestRunner(
+        string worktreePath,
+        string? project,
+        Func<string, XDocument>? loadProject = null)
+    {
+        if (string.IsNullOrWhiteSpace(worktreePath) ||
+            string.IsNullOrWhiteSpace(project) ||
+            !project.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+        {
+            return "mtp";
+        }
+
+        try
+        {
+            var rootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(worktreePath));
+            var projectPath = Path.GetFullPath(Path.Combine(rootPath, project));
+            var relativePath = Path.GetRelativePath(rootPath, projectPath);
+            if (Path.IsPathRooted(relativePath) ||
+                relativePath.Equals("..", StringComparison.Ordinal) ||
+                relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+                relativePath.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                return "mtp";
+            }
+
+            var document = (loadProject ?? (path => XDocument.Load(path, LoadOptions.None)))(projectPath);
+            var declarations = document
+                .Descendants()
+                .Where(element => element.Name.LocalName.Equals(
+                    "UseMicrosoftTestingPlatformRunner",
+                    StringComparison.Ordinal))
+                .ToArray();
+            if (declarations.Length != 1)
+            {
+                return "mtp";
+            }
+
+            var declaration = declarations[0];
+            var propertyGroup = declaration.Parent;
+            var isUnconditionalTopLevelProperty =
+                propertyGroup is not null &&
+                propertyGroup.Name.LocalName.Equals("PropertyGroup", StringComparison.Ordinal) &&
+                ReferenceEquals(propertyGroup.Parent, document.Root) &&
+                !propertyGroup.Attributes().Any(attribute =>
+                    attribute.Name.LocalName.Equals("Condition", StringComparison.OrdinalIgnoreCase)) &&
+                !declaration.Attributes().Any(attribute =>
+                    attribute.Name.LocalName.Equals("Condition", StringComparison.OrdinalIgnoreCase));
+            return isUnconditionalTopLevelProperty &&
+                bool.TryParse(declaration.Value.Trim(), out var useMtp) &&
+                !useMtp
+                    ? "vstest"
+                    : "mtp";
+        }
+        catch (Exception ex) when (
+            ex is IOException or
+                UnauthorizedAccessException or
+                System.Security.SecurityException or
+                System.Xml.XmlException or
+                ArgumentException or
+                NotSupportedException)
+        {
+            return "mtp";
+        }
+    }
 
     private static string[] SplitCommandLine(string commandLine) =>
         commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -3116,7 +3195,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         filter = string.Empty;
         if (!check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) ||
             string.IsNullOrWhiteSpace(check.Project) ||
-            !IsInfrastructureTestProject(check.Project) ||
+            !ProjectMatches(check.Project, InfrastructureTestsProject) ||
             !TryExtractFilter(check.Arguments, out filter))
         {
             return false;
@@ -5200,7 +5279,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         }
 
         var broadChecks = DiscoverTrustedStructuralCoverageProjects(worktreePath, mainWorktreePath)
-            .Select(project => BuildTrustedStructuralCoverageCheck(project, effectiveChecks))
+            .Select(project => BuildTrustedStructuralCoverageCheck(worktreePath, project, effectiveChecks))
             .ToArray();
         if (broadChecks.Length == 0)
         {
@@ -5479,7 +5558,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             completed.RemoveAll(check =>
                 check.Type.Equals("dotnet-test", StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(NormalizePath(check.Project), project, StringComparison.OrdinalIgnoreCase));
-            completed.Add(BuildTrustedStructuralCoverageCheck(project, manifestChecks));
+            completed.Add(BuildTrustedStructuralCoverageCheck(worktreePath, project, manifestChecks));
         }
 
         return completed;
@@ -5514,6 +5593,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         !check.Arguments.Any(argument => argument.Equals("--filter", StringComparison.OrdinalIgnoreCase));
 
     private static AcceptanceManifestCheck BuildTrustedStructuralCoverageCheck(
+        string worktreePath,
         string project,
         IReadOnlyList<AcceptanceManifestCheck> effectiveChecks)
     {
@@ -5546,7 +5626,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             Name = $"trusted structural discovery: {Path.GetFileNameWithoutExtension(project)}",
             Type = "dotnet-test",
             Project = project,
-            Runner = EngineSettings.HasMtpInvocation(project) ? "mtp" : "vstest"
+            Runner = ResolveDotnetTestRunner(worktreePath, project)
         };
     }
 
@@ -6290,8 +6370,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static bool NeedsUnattendedHostIntegrationExclusion(AcceptanceManifestCheck check) =>
         string.IsNullOrWhiteSpace(check.Project) ||
         check.Project.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
-        IsInfrastructureTestProject(check.Project) ||
-        IsExtractedInfrastructureTestProject(check.Project);
+        ProjectMatches(check.Project, InfrastructureTestsProject) ||
+        IsDashboardTestProject(check.Project) ||
+        IsExtractedInfrastructureProject(check.Project);
 
     private static bool GateUsesStableSlot(int? stableSlotIndex, DotnetBuildEnvironmentLease? stableSlotLease) =>
         stableSlotIndex.HasValue || stableSlotLease is not null;
@@ -8330,7 +8411,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             {
                 return changedFiles is null
                     ? new AcceptanceManifest()
-                    : FromTestImpactPlan(RepositoryTestImpactPlanner.Plan(changedFiles));
+                    : FromTestImpactPlan(worktreePath, RepositoryTestImpactPlanner.Plan(changedFiles));
             }
 
             return JsonSerializer.Deserialize<AcceptanceManifest>(
@@ -8338,16 +8419,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 JsonOptions) ?? new AcceptanceManifest();
         }
 
-        private static AcceptanceManifest FromTestImpactPlan(RepositoryTestImpactPlan plan) =>
+        private static AcceptanceManifest FromTestImpactPlan(
+            string worktreePath,
+            RepositoryTestImpactPlan plan) =>
             new()
             {
                 Checks = plan.Checks
-                    .Select(ToAcceptanceCheck)
+                    .Select(check => ToAcceptanceCheck(worktreePath, check))
                     .SelectMany(check => ExpandBroadInfrastructureCheck(check))
                     .ToArray()
             };
 
-        private static AcceptanceManifestCheck ToAcceptanceCheck(RepositoryTestImpactCheck check)
+        private static AcceptanceManifestCheck ToAcceptanceCheck(
+            string worktreePath,
+            RepositoryTestImpactCheck check)
         {
             if (check.Command.Count == 0)
             {
@@ -8376,7 +8461,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     Type = "dotnet-test",
                     Project = project,
                     Arguments = arguments,
-                    Runner = ResolveDotnetTestRunner(project)
+                    Runner = ResolveDotnetTestRunner(worktreePath, project)
                 };
             }
 

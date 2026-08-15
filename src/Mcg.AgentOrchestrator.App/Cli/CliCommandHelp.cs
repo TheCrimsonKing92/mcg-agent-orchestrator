@@ -6,6 +6,7 @@ internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
     public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|five-role>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] | goal --text-file <path> [--pipeline <auto|five-role>] | goal --brief-file <path> [--pipeline <auto|five-role>]";
+    public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|five-role>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
     public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--goal <goal-prefix>] [--mechanical] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--goal <goal-prefix>] [--mechanical]";
     public const string NoteUsage = "Usage: note <task-number> <message> [--gate-deliverable <id>...] | note <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note --goal <goal-prefix> <task-number> <message> [--gate-deliverable <id>...] | note <task-number> --text-file <path> [--gate-deliverable <id>...]";
@@ -89,6 +90,14 @@ internal static class CliCommandHelp
         new[] { "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--backlog-coverage", "--text-file", "--brief-file", "--help", "-h" }
             .ToHashSet(StringComparer.OrdinalIgnoreCase),
         ValidateFlags: false);
+
+    private static readonly CommandHelpEntry GoalReplace = new(
+        GoalReplaceUsage,
+        "Atomically replace an eligible terminal goal while preserving source history.",
+        [
+            "--brief-file", "--reason-file", "--request-id", "--disposition", "--confirm-goal-replace", "--pipeline",
+            "--ideation", "--researcher", "--planner", "--developer", "--tester", "--reviewer", "--help", "-h"
+        ]);
 
     private static readonly CommandHelpEntry GoalsSubscribe = new(
         GoalMonitoringSubscriptionCommand.GoalsSubscribeUsage,
@@ -403,6 +412,7 @@ internal static class CliCommandHelp
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  goal              Create a goal.");
+        Console.WriteLine("  goal-replace      Replace an eligible terminal source-linked goal.");
         Console.WriteLine("  goals             List goals.");
         Console.WriteLine("  status            Show goal or orchestrator status.");
         Console.WriteLine("  attention         List or answer operator attention items.");
@@ -482,6 +492,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase))
         {
             entry = Goal;
+            return true;
+        }
+
+        if (args[0].Equals("goal-replace", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = GoalReplace;
             return true;
         }
 

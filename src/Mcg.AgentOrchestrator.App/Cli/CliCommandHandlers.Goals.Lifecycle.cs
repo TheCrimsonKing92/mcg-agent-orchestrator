@@ -79,9 +79,13 @@ private static void HandleLifecycleGoal(CliExecutionContext context, IReadOnlyLi
     }
 
     var branch = context.Worktrees.BranchName(goal.Id);
-    GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:create", $"branch {branch}");
-    var workspacePath = context.Worktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
-    GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:create", workspacePath);
+    string workspacePath;
+    using (AcquireGoalEvidenceMutationLease(context, goal, "workspace:lifecycle-create"))
+    {
+        GoalOperationJournal.Begin(context.Workspace.ExecutionDirectory, goal, "workspace:create", $"branch {branch}");
+        workspacePath = context.Worktrees.Ensure(context.Workspace.ExecutionDirectory, goal.Id);
+        GoalOperationJournal.Completed(context.Workspace.ExecutionDirectory, goal, "workspace:create", workspacePath);
+    }
     Console.WriteLine($"Stage workspace create: {workspacePath} (branch {branch})");
     EnsureGoalReadinessAllowsStart(context, goal, HasCliConfirmation(parts, "--confirm-readiness-risk"));
     EnsureLifecycleParallelGateAllowsStart(context, goal);

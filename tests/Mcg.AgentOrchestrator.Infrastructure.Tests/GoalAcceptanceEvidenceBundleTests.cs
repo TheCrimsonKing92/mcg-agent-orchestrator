@@ -15,6 +15,10 @@ public sealed class GoalAcceptanceEvidenceBundleTests
         "full dotnet tests: core",
         "dotnet test tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj --verbosity minimal",
         "core tests")]
+    [Xunit.InlineData(
+        "full dotnet tests: dashboard",
+        "dotnet test tests/Mcg.AgentOrchestrator.Dashboard.Tests/Mcg.AgentOrchestrator.Dashboard.Tests.csproj --verbosity minimal",
+        "dashboard tests")]
     public void AcceptancePolicyRecognizesEquivalentAggregateProjectTestEvidence(
         string policyName,
         string commandLine,

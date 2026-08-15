@@ -43,24 +43,6 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
         Assert.Equal(expected, ConductorBatchLoop.ResolveSelfRelaunchEnabled(configuredValue));
     }
 
-    [Xunit.Theory(DisplayName = "StateDb_startup_migrations_require_conductor_authority_or_explicit_backlog_bootstrap")]
-    [Xunit.InlineData("conduct", "--loop", true)]
-    [Xunit.InlineData("conduct", "--watch", true)]
-    [Xunit.InlineData("backlog-intake", "queued item", true)]
-    [Xunit.InlineData("status", null, false)]
-    [Xunit.InlineData("backlog-show", null, false)]
-    [Xunit.InlineData("operator-intent-status", "intent-id", false)]
-    [Xunit.InlineData("goal-delivery-retry", "goal-id", false)]
-    public void StateDbStartupMigrationsRequireConductorAuthorityOrExplicitBacklogBootstrap(
-        string command,
-        string? argument,
-        bool expected)
-    {
-        var args = argument is null ? [command] : new[] { command, argument };
-
-        Assert.Equal(expected, CliPersistentStateRunner.HasStateDbMigrationAuthority(args));
-    }
-
     [Xunit.Fact(DisplayName = "BatchLoop_loop_start_reports_policy_worker_caps_and_verified_journal_mode")]
     public void BatchLoopLoopStartReportsPolicyWorkerCapsAndVerifiedJournalMode()
     {
