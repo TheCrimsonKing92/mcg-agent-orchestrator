@@ -1,4 +1,4 @@
-﻿using Mcg.AgentOrchestrator.App.Cli;
+using Mcg.AgentOrchestrator.App.Cli;
 using Mcg.AgentOrchestrator.App.CostControl;
 using Mcg.AgentOrchestrator.App.Dashboard.Api;
 using Mcg.AgentOrchestrator.App.Orchestration;
@@ -8,7 +8,6 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Text.Json;
 
-[Xunit.Collection("GoalWorktreeCleanupHooks")]
 public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
 {
     [Xunit.Fact(DisplayName = "TerminalGoalSweep_completed_with_assigned_task_reopens_goal_idempotently")]
@@ -21,8 +20,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var first = RunSweep(kernel, root, goal.Id);
+        var second = RunSweep(kernel, root, goal.Id);
 
         Xunit.Assert.True(first.Changed);
         var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "terminal-task-desync");
@@ -47,8 +46,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel = WithGoalStatus(kernel, goal.Id, status);
 
-        var first = TerminalGoalSweep.Run(kernel, root);
-        var second = TerminalGoalSweep.Run(kernel, root);
+        var first = RunSweep(kernel, root);
+        var second = RunSweep(kernel, root);
 
         Xunit.Assert.False(first.Changed);
         var result = first.Goals.Single();
@@ -80,7 +79,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
         }
 
-        var result = TerminalGoalSweep.Run(kernel, CreateTempDirectory());
+        var result = RunSweep(kernel, CreateTempDirectory());
         var output = CaptureConsole(() => ConsoleViews.PrintTerminalGoalSweep(result));
 
         Xunit.Assert.Equal(3, result.ExcludedGoalCount);
@@ -168,11 +167,11 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 DateTimeOffset.UtcNow));
             RunGit(root, "merge", "--ff-only", GoalWorktrees.BranchName(goal.Id));
 
-            var first = TerminalGoalSweep.Run(kernel, root);
+            var first = RunSweep(kernel, root);
             var attentionStore = CollaborationItemStore.ForDirectory(
                 OrchestratorWorkspace.ForDirectory(root).OrchestratorDirectory);
             var raisedAttention = await TerminalGoalSweepAttention.SurfaceAsync(kernel, first, attentionStore, goal.Id);
-            var second = TerminalGoalSweep.Run(kernel, root);
+            var second = RunSweep(kernel, root);
             var blocker = Xunit.Assert.Single(Xunit.Assert.Single(first.Goals).Blockers);
             Xunit.Assert.Equal("verified-merged-branch-missing-integrate-commit", blocker.Kind);
             Xunit.Assert.Equal(1, raisedAttention);
@@ -213,7 +212,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             RunGit(root, "add", "-A");
             RunGit(root, "commit", "-m", $"Operator bridged landing for goal {goal.Id.Value[..8]}");
 
-            var first = TerminalGoalSweep.Run(kernel, root);
+            var first = RunSweep(kernel, root);
             Xunit.Assert.Empty(first.Goals);
             Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
             Xunit.Assert.False(GoalOperationJournal.HasCompletedLandingEvidence(GoalOperationJournal.Read(root, goal.Id)));
@@ -253,7 +252,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 "manual",
                 $"Landed goal {goal.Id.Value[..8]} via operator bridge."));
 
-            var first = TerminalGoalSweep.Run(kernel, root);
+            var first = RunSweep(kernel, root);
             Xunit.Assert.Empty(first.Goals);
             Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
             Xunit.Assert.False(GoalOperationJournal.HasCompletedLandingEvidence(GoalOperationJournal.Read(root, goal.Id)));
@@ -285,8 +284,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 string.Empty,
                 DateTimeOffset.UtcNow));
 
-            var first = TerminalGoalSweep.Run(kernel, root);
-            var second = TerminalGoalSweep.Run(kernel, root);
+            var first = RunSweep(kernel, root);
+            var second = RunSweep(kernel, root);
 
             Xunit.Assert.False(first.Changed);
             Xunit.Assert.Equal(GoalStatus.Verified, kernel.GetGoal(goal.Id).Status);
@@ -314,7 +313,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             goal,
             new GoalTerminalDisposition(GoalTerminalDispositionKind.Retired, "goal-mark-landed retired ghost goal"));
 
-        var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var result = RunSweep(kernel, root, goal.Id);
 
         Xunit.Assert.Empty(result.Goals);
         Xunit.Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
@@ -386,7 +385,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             CommitGoalWork(root, goal.Id, "src/reappeared.txt", "goal work");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var result = RunSweep(kernel, root, goal.Id);
             var goalResult = Assert.Single(result.Goals);
 
             Assert.Contains(goalResult.Repairs, repair => repair.Kind == "completed-branch-normalized");
@@ -427,13 +426,13 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
 
             Assert.False(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
             Assert.StartsWith("- ", RunGitOutput(root, "cherry", "main", branch).Trim(), StringComparison.Ordinal);
-            var diagnosis = TerminalGoalSweep.Diagnose(kernel, root, goal.Id);
+            var diagnosis = DiagnoseSweep(kernel, root, goal.Id);
             var diagnosed = Assert.Single(diagnosis.Blockers);
             Assert.Equal("completed-branch-superseded", diagnosed.Kind);
             Assert.Equal($"conduct {goal.Id.Value[..8]} --loop", diagnosed.Command);
 
-            var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-            var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var first = RunSweep(kernel, root, goal.Id);
+            var second = RunSweep(kernel, root, goal.Id);
 
             var firstGoal = Assert.Single(first.Goals);
             Assert.Contains(firstGoal.Repairs, repair => repair.Kind == "completed-branch-superseded");
@@ -478,8 +477,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.False(GoalWorktrees.IsBranchMergedIntoCurrent(root, goal.Id));
             Assert.StartsWith("- ", RunGitOutput(root, "cherry", "main", branch).Trim(), StringComparison.Ordinal);
 
-            var diagnosis = TerminalGoalSweep.Diagnose(kernel, root, goal.Id);
-            var run = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var diagnosis = DiagnoseSweep(kernel, root, goal.Id);
+            var run = RunSweep(kernel, root, goal.Id);
 
             Assert.Equal("completed-branch-superseded", Assert.Single(diagnosis.Blockers).Kind);
             var blocker = Assert.Single(Assert.Single(run.Goals).Blockers);
@@ -528,7 +527,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 cherryLines,
                 line => Assert.StartsWith("+ ", line, StringComparison.Ordinal));
 
-            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var result = RunSweep(kernel, root, goal.Id);
             var blocker = Assert.Single(Assert.Single(result.Goals).Blockers);
 
             Assert.Equal("completed-branch-unmerged", blocker.Kind);
@@ -549,7 +548,6 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     {
         var root = CreateAcceptanceRepository();
         GoalId? cleanupGoalId = null;
-        var originalRunner = TerminalGoalSweep.GitRunner;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -562,13 +560,13 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
             CommitGoalWork(root, goal.Id, "src/inconclusive.txt", "goal work");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
-            TerminalGoalSweep.GitRunner = (workingDirectory, args) =>
+            GitCli.GitResult GitRunner(string workingDirectory, IReadOnlyList<string> args) =>
                 args.Count > 0 && args[0] == "cherry"
                     ? new GitCli.GitResult(0, "ambiguous output", string.Empty)
-                    : originalRunner(workingDirectory, args);
+                    : StableGitRunner(workingDirectory, args);
 
-            var diagnosis = TerminalGoalSweep.Diagnose(kernel, root, goal.Id);
-            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var diagnosis = DiagnoseSweep(kernel, root, goal.Id, GitRunner);
+            var result = RunSweep(kernel, root, goal.Id, gitRunner: GitRunner);
 
             var diagnosed = Assert.Single(diagnosis.Blockers);
             Assert.Equal("completed-branch-unmerged", diagnosed.Kind);
@@ -584,7 +582,6 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
         finally
         {
-            TerminalGoalSweep.GitRunner = originalRunner;
             CleanupAcceptanceRepository(root, cleanupGoalId);
         }
     }
@@ -603,7 +600,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         File.WriteAllText(task.LastProcess.StandardOutputPath, "HUMAN_INPUT: choose a recovery path");
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-        var result = TerminalGoalSweep.Run(kernel, root);
+        var result = RunSweep(kernel, root);
 
         var goalResult = result.Goals.Single();
         Xunit.Assert.True(result.Changed);
@@ -627,8 +624,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Superseded);
 
-        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var first = RunSweep(kernel, root, goal.Id);
+        var second = RunSweep(kernel, root, goal.Id);
 
         Xunit.Assert.True(first.Changed);
         var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "terminal-task-desync");
@@ -652,8 +649,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         kernel.RetryTask(goal.Id, task.Id, "retry after stale terminal completion");
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var first = RunSweep(kernel, root, goal.Id);
+        var second = RunSweep(kernel, root, goal.Id);
 
         var repair = first.Goals.Single().Repairs.Single(repair => repair.Kind == "terminal-task-desync");
         Xunit.Assert.Contains("goalState=Completed", repair.Evidence, StringComparison.Ordinal);
@@ -674,8 +671,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         RecordRunningProcess(kernel, goal, task, root, Environment.ProcessId);
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var first = RunSweep(kernel, root, goal.Id);
+        var second = RunSweep(kernel, root, goal.Id);
 
         Xunit.Assert.False(first.Changed);
         var blocker = first.Goals.Single().Blockers.Single(blocker => blocker.Kind == "terminal-live-dispatch");
@@ -710,8 +707,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         File.WriteAllText(Path.Combine(worktree, "dirty.txt"), "uncommitted");
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var first = RunSweep(kernel, root, goal.Id);
+        var second = RunSweep(kernel, root, goal.Id);
 
         Xunit.Assert.False(first.Changed);
         var blocker = first.Goals.Single().Blockers.Single(blocker => blocker.Kind == "terminal-dirty-worktree");
@@ -740,8 +737,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
         var before = kernel.ExportSnapshot();
 
-        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var first = RunSweep(kernel, root, goal.Id);
+        var second = RunSweep(kernel, root, goal.Id);
         var after = kernel.ExportSnapshot();
 
         Xunit.Assert.Empty(first.Goals);
@@ -856,8 +853,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-        var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-        var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+        var first = RunSweep(kernel, root, goal.Id);
+        var second = RunSweep(kernel, root, goal.Id);
         var sweptTask = kernel.GetTask(goal.Id, task.Id);
 
         Xunit.Assert.True(first.Changed);
@@ -881,8 +878,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         File.WriteAllText(task.LastProcess.StandardOutputPath, "done");
         kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-        var first = TerminalGoalSweep.Run(kernel, root);
-        var second = TerminalGoalSweep.Run(kernel, root);
+        var first = RunSweep(kernel, root);
+        var second = RunSweep(kernel, root);
         var sweptTask = kernel.GetTask(goal.Id, task.Id);
 
         Xunit.Assert.True(first.Changed);
@@ -1002,7 +999,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             CommitGoalWork(root, goal.Id, "src/raw-completed-assigned.txt", "goal work");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var result = RunSweep(kernel, root, goal.Id);
             var goalResult = Assert.Single(result.Goals);
 
             Assert.Contains(goalResult.Repairs, repair => repair.Kind == "terminal-task-desync");
@@ -1044,7 +1041,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 mainHead,
                 "terminal gate passed");
 
-            var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, root, goal.Id).Blockers);
+            var blocker = Assert.Single(DiagnoseSweep(kernel, root, goal.Id).Blockers);
 
             Assert.Equal(TerminalGoalRemedyVerb.Acceptance, blocker.Remedy.Verb);
             Assert.Equal(goal.Id, blocker.Remedy.GoalId);
@@ -1094,7 +1091,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 "Acceptance aborted:state-guard: Task task-one.Status expected Completed, actual Running.",
                 gateAt.AddMinutes(1));
 
-            var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, root, goal.Id).Blockers);
+            var blocker = Assert.Single(DiagnoseSweep(kernel, root, goal.Id).Blockers);
 
             Assert.Equal(TerminalGoalRemedyVerb.OperatorCommand, blocker.Remedy.Verb);
             Assert.Equal(TerminalGoalRemedySafetyClass.OperatorOnly, blocker.Remedy.SafetyClass);
@@ -1139,7 +1136,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var acceptance = GoalAcceptanceStatusProjector.Build(kernel, kernel.GetGoal(goal.Id), root);
             var acceptanceAbort = Assert.Single(acceptance.Blockers.Where(candidate => candidate.Kind == GoalAcceptanceBlockerKind.AcceptanceAborted));
             Assert.Contains("no passing gate receipt was recorded", acceptanceAbort.SuggestedAction, StringComparison.OrdinalIgnoreCase);
-            var blocker = Assert.Single(TerminalGoalSweep.Diagnose(kernel, root, goal.Id).Blockers);
+            var blocker = Assert.Single(DiagnoseSweep(kernel, root, goal.Id).Blockers);
 
             Assert.Equal(TerminalGoalRemedyVerb.OperatorCommand, blocker.Remedy.Verb);
             Assert.Contains("no passing gate receipt was recorded", blocker.Command, StringComparison.OrdinalIgnoreCase);
@@ -1237,8 +1234,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-            var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-            var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var first = RunSweep(kernel, root, goal.Id);
+            var second = RunSweep(kernel, root, goal.Id);
 
             Xunit.Assert.True(first.Changed);
             Xunit.Assert.Contains(first.Goals.Single().Repairs, repair => repair.Kind == "merged-branch-cleanup");
@@ -1274,7 +1271,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
             var cache = new TerminalGoalSweepCache();
 
-            var first = TerminalGoalSweep.Run(kernel, root, goal.Id, cache);
+            var first = RunSweep(kernel, root, goal.Id, cache);
 
             var firstRepair = Assert.Single(first.Goals.Single().Repairs);
             Assert.Equal("landing-intent-auto-repair", firstRepair.Kind);
@@ -1286,7 +1283,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.Equal(GoalStatus.Completed, kernel.GetGoal(goal.Id).Status);
             Assert.NotNull(GoalWorktrees.TryResolve(root, goal.Id));
 
-            var second = TerminalGoalSweep.Run(kernel, root, goal.Id, cache);
+            var second = RunSweep(kernel, root, goal.Id, cache);
             var secondRepairs = second.Goals.Single().Repairs;
             Assert.Contains(secondRepairs, repair => repair.Kind == "landing-intent-auto-repair-noop");
             Assert.Contains(secondRepairs, repair => repair.Kind == "merged-branch-cleanup");
@@ -1295,7 +1292,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Assert.Null(GoalWorktrees.TryResolve(root, goal.Id));
             Assert.Equal(string.Empty, RunGitOutput(root, "branch", "--list", GoalWorktrees.BranchName(goal.Id)).Trim());
 
-            var third = TerminalGoalSweep.Run(kernel, root, goal.Id, cache);
+            var third = RunSweep(kernel, root, goal.Id, cache);
             Assert.Empty(third.Goals);
 
             var journal = GoalOperationJournal.Read(root, goal.Id);
@@ -1339,7 +1336,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             RunGit(root, "checkout", "side");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var result = RunSweep(kernel, root, goal.Id);
 
             var repair = Assert.Single(result.Goals.Single().Repairs);
             Assert.Equal("landing-intent-auto-repair", repair.Kind);
@@ -1361,9 +1358,6 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     public void TerminalGoalSweepIncompleteCompletedWorktreeCleanupReportsBlocker()
     {
         var root = CreateAcceptanceRepository();
-        var originalDelete = GoalWorktrees.DeleteDirectory;
-        var originalAcl = GoalWorktrees.SandboxAclHelper;
-        var originalShutdown = GoalWorktrees.BuildServerShutdown;
         GoalId? cleanupGoalId = null;
         try
         {
@@ -1380,11 +1374,14 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             RunGit(root, "worktree", "prune");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-            GoalWorktrees.DeleteDirectory = _ => false;
-            GoalWorktrees.SandboxAclHelper = new NoOpSandboxAclHelper();
-            GoalWorktrees.BuildServerShutdown = (_, _) => { };
+            var cleanupHooks = StableCleanupHooks with
+            {
+                DeleteDirectory = _ => false,
+                ResetSandboxAcl = (_, _) => { },
+                BuildServerShutdown = (_, _) => { }
+            };
 
-            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var result = RunSweep(kernel, root, goal.Id, cleanupHooks: cleanupHooks);
             var goalResult = Assert.Single(result.Goals);
             var blocker = Assert.Single(goalResult.Blockers);
 
@@ -1397,9 +1394,6 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
         finally
         {
-            GoalWorktrees.DeleteDirectory = originalDelete;
-            GoalWorktrees.SandboxAclHelper = originalAcl;
-            GoalWorktrees.BuildServerShutdown = originalShutdown;
             CleanupAcceptanceRepository(root, cleanupGoalId);
         }
     }
@@ -1422,8 +1416,8 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             GoalOperationJournal.Completed(root, goal, "conductor:land", "landed");
             kernel = WithGoalStatus(kernel, goal.Id, GoalStatus.Completed);
 
-            var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
-            var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var first = RunSweep(kernel, root, goal.Id);
+            var second = RunSweep(kernel, root, goal.Id);
 
             Xunit.Assert.True(first.Changed);
             Xunit.Assert.DoesNotContain(first.Goals.Single().Repairs, repair => repair.Kind == "terminal-task-desync");
@@ -1470,14 +1464,14 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         var evidence = new GoalIntegrationEvidence("integrate-sha", "main-sha", $"Integrate goal/{goal.Id.Value[..8]}");
         var resolver = new StubGoalIntegrationEvidenceResolver(goal.Id, evidence);
 
-        var first = TerminalGoalSweep.Run(
+        var first = RunSweep(
             kernel,
             root,
             goal.Id,
             integrationEvidenceResolver: resolver,
             attentionStore: store);
         var newlyRaisedOrResolved = await TerminalGoalSweepAttention.SurfaceAsync(kernel, first, store, goal.Id);
-        var second = TerminalGoalSweep.Run(
+        var second = RunSweep(
             kernel,
             root,
             goal.Id,
@@ -1522,7 +1516,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         kernel.ReportTaskProgress(goal.Id, task.Id, WorkTaskStatus.Cancelled, "Cancelled.");
         var evidence = new GoalIntegrationEvidence("integrate-sha", "main-sha", $"Integrate goal/{goal.Id.Value[..8]}");
 
-        var result = TerminalGoalSweep.Run(
+        var result = RunSweep(
             kernel,
             root,
             goal.Id,
@@ -1581,7 +1575,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             Xunit.Assert.Equal(0, GitCli.Run(root, "merge-base", "--is-ancestor", integrateSha, mainSha).ExitCode);
 
             TerminalGoalSweepResult? result = null;
-            var incidentalOutput = CaptureConsole(() => result = TerminalGoalSweep.Run(kernel, root, goal.Id));
+            var incidentalOutput = CaptureConsole(() => result = RunSweep(kernel, root, goal.Id));
 
             var goalResult = Xunit.Assert.Single(Xunit.Assert.IsType<TerminalGoalSweepResult>(result).Goals);
             Xunit.Assert.DoesNotContain("Closed backlog item", incidentalOutput, StringComparison.Ordinal);
@@ -1642,7 +1636,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             var branchTip = RunGitOutput(root, "rev-parse", GoalWorktrees.BranchName(goal.Id)).Trim();
             Xunit.Assert.NotEqual(0, GitCli.Run(root, "merge-base", "--is-ancestor", branchTip, "refs/heads/main").ExitCode);
 
-            var result = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var result = RunSweep(kernel, root, goal.Id);
             await TerminalGoalSweepAttention.SurfaceAsync(
                 kernel,
                 result,
@@ -1668,7 +1662,6 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     {
         var root = CreateAcceptanceRepository();
         GoalId? cleanupGoalId = null;
-        var originalRunner = TerminalGoalSweep.GitRunner;
         try
         {
             var kernel = new AgentOrchestratorKernel();
@@ -1684,7 +1677,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             }
 
             var batchedGitCalls = new List<string>();
-            TerminalGoalSweep.GitRunner = (workingDirectory, args) =>
+            GitCli.GitResult GitRunner(string workingDirectory, IReadOnlyList<string> args)
             {
                 if (Path.GetFullPath(workingDirectory).Equals(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase) &&
                     args.Count > 0 &&
@@ -1693,10 +1686,10 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                     batchedGitCalls.Add(string.Join(" ", args));
                 }
 
-                return originalRunner(workingDirectory, args);
-            };
+                return StableGitRunner(workingDirectory, args);
+            }
 
-            var result = TerminalGoalSweep.Run(kernel, root);
+            var result = RunSweep(kernel, root, gitRunner: GitRunner);
 
             Assert.Equal(3, result.Goals.Count);
             Assert.Equal(1, batchedGitCalls.Count(call => call == "for-each-ref --format=%(refname:short) %(objectname) refs/heads/goal/"));
@@ -1706,7 +1699,6 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
         }
         finally
         {
-            TerminalGoalSweep.GitRunner = originalRunner;
             CleanupAcceptanceRepository(root, cleanupGoalId);
         }
     }
@@ -1715,41 +1707,33 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
     {
         var root = CreateTempDirectory();
         var goalId = GoalId.New();
-        var originalRunner = GoalIntegrationEvidenceResolver.GitRunner;
         var ancestryCalls = 0;
-        try
+        GitCli.GitResult GitRunner(string _, IReadOnlyList<string> args)
         {
-            GoalIntegrationEvidenceResolver.GitRunner = (_, args) =>
+            var command = string.Join(' ', args);
+            if (args.Count > 0 && args[0] == "log")
             {
-                var command = string.Join(' ', args);
-                if (args.Count > 0 && args[0] == "log")
-                {
-                    return new GitCli.GitResult(
-                        0,
-                        $"integrate-sha\tIntegrate goal/{goalId.Value[..8]}\n",
-                        string.Empty);
-                }
+                return new GitCli.GitResult(
+                    0,
+                    $"integrate-sha\tIntegrate goal/{goalId.Value[..8]}\n",
+                    string.Empty);
+            }
 
-                if (command == "merge-base --is-ancestor integrate-sha main-sha")
-                {
-                    ancestryCalls++;
-                    return new GitCli.GitResult(0, string.Empty, string.Empty);
-                }
+            if (command == "merge-base --is-ancestor integrate-sha main-sha")
+            {
+                ancestryCalls++;
+                return new GitCli.GitResult(0, string.Empty, string.Empty);
+            }
 
-                return new GitCli.GitResult(1, string.Empty, $"unexpected git command: {command}");
-            };
-            var resolver = GoalIntegrationEvidenceResolver.Build(root, "main-sha");
-
-            Xunit.Assert.True(resolver.TryResolve(goalId, out var first));
-            Xunit.Assert.True(resolver.TryResolve(goalId, out var second));
-
-            Xunit.Assert.Equal(first, second);
-            Xunit.Assert.Equal(1, ancestryCalls);
+            return new GitCli.GitResult(1, string.Empty, $"unexpected git command: {command}");
         }
-        finally
-        {
-            GoalIntegrationEvidenceResolver.GitRunner = originalRunner;
-        }
+        var resolver = GoalIntegrationEvidenceResolver.Build(root, "main-sha", GitRunner);
+
+        Xunit.Assert.True(resolver.TryResolve(goalId, out var first));
+        Xunit.Assert.True(resolver.TryResolve(goalId, out var second));
+
+        Xunit.Assert.Equal(first, second);
+        Xunit.Assert.Equal(1, ancestryCalls);
     }
 
     [Xunit.Fact]
@@ -1771,13 +1755,13 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             RunGit(root, "merge", "--no-ff", branch, "-m", $"Integrate {branch}");
             var worktree = GoalWorktrees.WorktreePath(root, goal.Id);
 
-            var first = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var first = RunSweep(kernel, root, goal.Id);
 
             Xunit.Assert.Equal(1, first.TerminalizedGoalCount);
             Xunit.Assert.True(Directory.Exists(worktree));
             Xunit.Assert.NotEqual(string.Empty, RunGitOutput(root, "branch", "--list", branch).Trim());
 
-            var second = TerminalGoalSweep.Run(kernel, root, goal.Id);
+            var second = RunSweep(kernel, root, goal.Id);
 
             Xunit.Assert.Contains(second.Goals.SelectMany(item => item.Repairs), repair =>
                 repair.Kind == "merged-branch-cleanup");
@@ -1815,7 +1799,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             neverMatchedGoal,
             new GoalIntegrationEvidence("unused", "main-sha", $"Integrate goal/{neverMatchedGoal.Value[..8]}"));
 
-        var result = TerminalGoalSweep.Run(
+        var result = RunSweep(
             kernel,
             root,
             integrationEvidenceResolver: resolver,
@@ -1845,7 +1829,7 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
                 "manual", root, 0, "passed", string.Empty, DateTimeOffset.UtcNow));
         }
 
-        var result = TerminalGoalSweep.Run(
+        var result = RunSweep(
             kernel,
             root,
             integrationEvidenceResolver: new AlwaysIntegratedEvidenceResolver(),
@@ -1893,6 +1877,37 @@ public sealed class CliCommandTestsTerminalSweepCommands : CliCommandTestBase
             return true;
         }
     }
+
+    private static readonly Func<string, IReadOnlyList<string>, GitCli.GitResult> StableGitRunner =
+        static (workingDirectory, args) => GitCli.Run(workingDirectory, args.ToArray());
+
+    private static readonly GoalWorktreeCleanupHooks StableCleanupHooks = new();
+
+    private static TerminalGoalSweepResult RunSweep(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        GoalId? onlyGoalId = null,
+        TerminalGoalSweepCache? cache = null,
+        IGoalIntegrationEvidenceResolver? integrationEvidenceResolver = null,
+        ICollaborationItemStore? attentionStore = null,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null,
+        GoalWorktreeCleanupHooks? cleanupHooks = null) =>
+        TerminalGoalSweep.Run(
+            kernel,
+            executionDirectory,
+            onlyGoalId,
+            cache,
+            integrationEvidenceResolver,
+            attentionStore,
+            gitRunner ?? StableGitRunner,
+            cleanupHooks ?? StableCleanupHooks);
+
+    private static TerminalGoalSweepResult DiagnoseSweep(
+        AgentOrchestratorKernel kernel,
+        string executionDirectory,
+        GoalId? onlyGoalId = null,
+        Func<string, IReadOnlyList<string>, GitCli.GitResult>? gitRunner = null) =>
+        TerminalGoalSweep.Diagnose(kernel, executionDirectory, onlyGoalId, gitRunner ?? StableGitRunner);
 
 
 }

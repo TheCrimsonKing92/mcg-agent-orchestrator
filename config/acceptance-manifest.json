@@ -14,7 +14,7 @@
     "infrastructureTestLanes": [
       {
         "name": "Cli",
-        "filter": "FullyQualifiedName~CliCommandTests&FullyQualifiedName!~CliCommandTestsGoalLifecycleCleanupHooks&FullyQualifiedName!~CliCommandTestsPersistentRunnerCommands&FullyQualifiedName!~CliCommandTestsSubscriptionDispatchCommands&FullyQualifiedName!~CliCommandTestsTerminalSweepCommands",
+        "filter": "FullyQualifiedName~CliCommandTests&FullyQualifiedName!~CliCommandTestsGoalLifecycleCleanupHooks&FullyQualifiedName!~CliCommandTestsPersistentRunnerCommands&FullyQualifiedName!~CliCommandTestsSubscriptionDispatchCommands",
         "estimatedSerialSeconds": 65.2
       },
       {
@@ -34,7 +34,7 @@
       },
       {
         "name": "Goal lifecycle commands",
-        "filter": "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooks|FullyQualifiedName~CliCommandTestsPersistentRunnerCommands|FullyQualifiedName~CliCommandTestsSubscriptionDispatchCommands|FullyQualifiedName~CliCommandTestsTerminalSweepCommands|FullyQualifiedName~GoalGitFactIndexTests|FullyQualifiedName~GoalsPruneTests|FullyQualifiedName~LandingExecutorTests",
+        "filter": "FullyQualifiedName~CliCommandTestsGoalLifecycleCleanupHooks|FullyQualifiedName~CliCommandTestsPersistentRunnerCommands|FullyQualifiedName~CliCommandTestsSubscriptionDispatchCommands|FullyQualifiedName~GoalsPruneTests|FullyQualifiedName~LandingExecutorTests",
         "estimatedSerialSeconds": 194.6,
         "exclusiveResourceKeys": [ "xunit:GoalWorktreeCleanupHooks" ]
       },
@@ -46,7 +46,7 @@
       },
       {
         "name": "Goal worktree parallel",
-        "filter": "FullyQualifiedName~GoalWorktreeTestsCreationResolution|FullyQualifiedName~GoalWorktreeTestsSqliteTooling",
+        "filter": "FullyQualifiedName~GoalGitFactIndexTests|FullyQualifiedName~GoalWorktreeTestsCreationResolution|FullyQualifiedName~GoalWorktreeTestsSqliteTooling",
         "estimatedSerialSeconds": 52.7
       },
       {
