@@ -4822,8 +4822,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var verifier = new GoalAcceptanceVerifier(async (args, _, timeout, cancellationToken) =>
             {
                 invocations.Enqueue(args);
-                var isTest = IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.RealProcessShardProbe");
-                if (isTest)
+                var isShardTest =
+                    IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.RealProcessShardProbe") &&
+                    (args.Contains("--filter-class") || args.Contains("--filter-not-class"));
+                if (isShardTest)
                 {
                     Assert.True(
                         DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(primaryBuildPermit),
@@ -4841,7 +4843,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                     shardEnvironment,
                     process =>
                     {
-                        if (isTest)
+                        if (isShardTest)
                         {
                             testProcessIds.Add(process.Id);
                         }

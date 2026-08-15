@@ -23,7 +23,7 @@ $expected = @'
 "failure","3","Tie-A","1","0","0.000000","1.000000","1.000000"
 "failure","4","Tie-B","1","0","0.000000","1.000000","1.000000"
 '@
-$expected = $expected.TrimEnd("`r", "`n")
+$expected = $expected.Replace("`r`n", "`n").TrimEnd("`r", "`n")
 if (-not [string]::Equals($expected, $first, [StringComparison]::Ordinal)) {
     throw "Unexpected ranking output.`nEXPECTED:`n$expected`nACTUAL:`n$first"
 }
