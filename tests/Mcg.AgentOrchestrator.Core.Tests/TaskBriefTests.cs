@@ -753,6 +753,27 @@ public sealed class TaskBriefTests
     Assert.Contains("## Accumulated retry/review feedback", developerBrief, StringComparison.Ordinal);
 }
 
+    [Xunit.Fact(DisplayName = "BuildTaskBrief_retry_feedback_preserves_atomic_entry")]
+    public void BuildTaskBriefRetryFeedbackPreservesAtomicEntry()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var goal = kernel.CreateGoal("Preserve complete retry evidence");
+        var task = goal.Tasks.Single();
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var completeEntry =
+            $"[FAIL] Example.Tests.CompleteIdentifier (Failed){Environment.NewLine}" +
+            $"assertion-prefix-{new string('x', 1300)}-assertion-end{Environment.NewLine}" +
+            $"Expected: 2{Environment.NewLine}Actual:   0{Environment.NewLine}" +
+            "at Example.Tests.CompleteIdentifier() in CompleteIdentifier.cs:line 42";
+        kernel.RecordCriterionRetryFeedback(goal.Id, task.Id, [completeEntry]);
+
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+        Assert.Contains(completeEntry, brief, StringComparison.Ordinal);
+        Assert.DoesNotContain("...[truncated", brief, StringComparison.Ordinal);
+        Assert.Contains("CompleteIdentifier.cs:line 42", brief, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "BuildTaskBrief_round_three_developer_carries_all_prior_review_bounces_with_status")]
     public void BuildTaskBriefRoundThreeDeveloperCarriesAllPriorReviewBouncesWithStatus()
 {

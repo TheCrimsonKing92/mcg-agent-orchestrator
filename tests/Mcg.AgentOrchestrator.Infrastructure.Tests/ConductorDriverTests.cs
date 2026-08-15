@@ -6,6 +6,7 @@ using Mcg.AgentOrchestrator.Core.Conductor;
 using Mcg.AgentOrchestrator.Infrastructure;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
+using System.Xml.Linq;
 
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class ConductorDriverTests
@@ -1994,6 +1995,152 @@ public sealed class ConductorDriverTests
         Assert.Contains("src/Foo.cs(12,34): error CS1002: ; expected", brief.Content, StringComparison.Ordinal);
         Assert.Contains("Mcg.AgentOrchestrator.Tests.RetryEvidenceTests.IncludesFailures [FAIL]", brief.Content, StringComparison.Ordinal);
         Assert.Contains("focused conductor tests failed", brief.Content, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_retry_feedback_uses_complete_trx_receipt_without_changing_retry_state")]
+    public void ConductorDriverRetryFeedbackUsesCompleteTrxReceiptWithoutChangingRetryState()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var trxPath = Path.Combine(
+            InfrastructureTestSupport.FindRepositoryRoot(),
+            "tests",
+            "Mcg.AgentOrchestrator.Infrastructure.Tests",
+            "TestData",
+            "Fixtures",
+            "mtp-xunit-v3-failures.trx.xml");
+        string? retryMessage = null;
+        var landCalled = false;
+        var unmet = new AcceptanceCheckResult(
+            "infrastructure tests: retry evidence",
+            false,
+            1,
+            "[FAIL] GoalAcceptanceVerifier: Assert.Contains() Failure: Sub-string not found",
+            ResultSummary: "infrastructure tests failed",
+            TestResultPaths: [trxPath]);
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [unmet]),
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback,
+            land: g =>
+            {
+                landCalled = true;
+                return new LandingResult(g.Id.Value, g.Id.Value[..8], new LandingDecision.Promote(), "integration", true, "Landed");
+            });
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+        var brief = kernel.BuildTaskBrief(goal.Id, task.Id).Content;
+
+        Assert.False(landCalled);
+        Assert.Equal(WorkTaskStatus.Assigned, task.Status);
+        Assert.Equal(1, task.CriterionRetryCount);
+        Assert.Contains(trxPath, retryMessage!, StringComparison.Ordinal);
+        Assert.Contains(
+            "[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures (Failed)",
+            retryMessage!,
+            StringComparison.Ordinal);
+        Assert.Contains("Expected: 2", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("Actual:   0", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("RetryEvidenceTests.cs:line 42", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("TimeoutTests.ReportsDuration (Timeout)", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains("Expected: 2", brief, StringComparison.Ordinal);
+        Assert.Contains("Actual:   0", brief, StringComparison.Ordinal);
+        Assert.Contains("RetryEvidenceTests.cs:line 42", brief, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_retry_feedback_drops_whole_trx_entries_and_names_receipt")]
+    public void ConductorDriverRetryFeedbackDropsWholeTrxEntriesAndNamesReceipt()
+    {
+        var tempDirectory = CreateTempDirectory();
+        var trxPath = Path.Combine(tempDirectory, "many-failures.trx");
+        try
+        {
+            new XDocument(
+                new XElement(
+                    "TestRun",
+                    new XElement(
+                        "Results",
+                        Enumerable.Range(1, 32).Select(index =>
+                            new XElement(
+                                "UnitTestResult",
+                                new XAttribute("testName", $"Example.Tests.CompleteTestName{index:D2}"),
+                                new XAttribute("outcome", "Failed"),
+                                new XElement(
+                                    "Output",
+                                    new XElement(
+                                        "ErrorInfo",
+                                        new XElement("Message", $"complete-message-{index:D2}-end"),
+                                        new XElement("StackTrace", $"complete-stack-{index:D2}-end"))))))))
+                .Save(trxPath);
+            var (kernel, goal) = SimpleGoal();
+            var task = goal.Tasks.Single();
+            PassVerification(kernel, goal, task);
+            string? retryMessage = null;
+            var unmet = new AcceptanceCheckResult(
+                "infrastructure tests: many failures",
+                false,
+                1,
+                "[FAIL] Example.Tests.CompleteTestName",
+                TestResultPaths: [trxPath]);
+            var driver = MakeDriver(
+                getFacts: _ => GoalLifecycleFacts.None,
+                runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [unmet]),
+                retryTask: (goalId, taskId, message) =>
+                {
+                    retryMessage = message;
+                    return kernel.RetryTask(goalId, taskId, message);
+                },
+                recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+            driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+            Assert.Contains("Example.Tests.CompleteTestName30 (Failed)", retryMessage!, StringComparison.Ordinal);
+            Assert.Contains("complete-message-30-end", retryMessage!, StringComparison.Ordinal);
+            Assert.Contains("complete-stack-30-end", retryMessage!, StringComparison.Ordinal);
+            Assert.DoesNotContain("Example.Tests.CompleteTestName31", retryMessage!, StringComparison.Ordinal);
+            Assert.Contains($"2 more failures omitted — see {trxPath}.", retryMessage!, StringComparison.Ordinal);
+            Assert.DoesNotContain("truncated", retryMessage!, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "ConductorDriver_retry_feedback_names_missing_trx_and_keeps_summary")]
+    public void ConductorDriverRetryFeedbackNamesMissingTrxAndKeepsSummary()
+    {
+        var (kernel, goal) = SimpleGoal();
+        var task = goal.Tasks.Single();
+        PassVerification(kernel, goal, task);
+        var missingPath = Path.Combine(Path.GetTempPath(), $"missing-{Guid.NewGuid():N}.trx");
+        string? retryMessage = null;
+        var unmet = new AcceptanceCheckResult(
+            "infrastructure tests: missing receipt",
+            false,
+            1,
+            "[FAIL] Summary.Name: Values differ",
+            TestResultPaths: [missingPath]);
+        var driver = MakeDriver(
+            getFacts: _ => GoalLifecycleFacts.None,
+            runAcceptanceSummary: _ => new AcceptanceVerificationSummary(true, [unmet]),
+            retryTask: (goalId, taskId, message) =>
+            {
+                retryMessage = message;
+                return kernel.RetryTask(goalId, taskId, message);
+            },
+            recordCriterionRetryFeedback: kernel.RecordCriterionRetryFeedback);
+
+        driver.AdvanceOnce(goal, ConductorAutonomyPolicy.Conservative);
+
+        Assert.Contains("[FAIL] Summary.Name: Values differ", retryMessage!, StringComparison.Ordinal);
+        Assert.Contains($"detail unavailable: no TRX exists for partition \"infrastructure tests: missing receipt\" at {missingPath}", retryMessage!, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorDriver_gate_environment_interference_regates_without_developer_retry")]

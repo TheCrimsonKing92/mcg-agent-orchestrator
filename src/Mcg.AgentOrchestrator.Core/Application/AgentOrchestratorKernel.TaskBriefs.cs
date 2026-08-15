@@ -387,7 +387,7 @@ public sealed partial class AgentOrchestratorKernel
             {
                 "## Unmet acceptance criteria from the prior attempt - fix these:"
             };
-            feedbackLines.AddRange(task.CriterionRetryFeedback.Select(item => $"- {PromptContextFormatter.TrimPromptBlock(item)}"));
+            feedbackLines.AddRange(task.CriterionRetryFeedback.Select(item => $"- {item}"));
             feedbackLines.Add(string.Empty);
             segments.Add(TaskBriefSegment.Fixed(feedbackLines));
         }

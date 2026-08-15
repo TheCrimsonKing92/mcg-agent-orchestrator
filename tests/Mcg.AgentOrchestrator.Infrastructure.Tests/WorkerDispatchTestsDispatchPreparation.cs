@@ -1927,16 +1927,26 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         AgentRole.Developer,
         "Run focused acceptance retry tests.");
     var goal = kernel.CreateGoal("Retry with deterministic criterion feedback", [task]);
+    var completeFailure =
+        $"[FAIL] Mcg.AgentOrchestrator.Infrastructure.Tests.CompleteRetryEvidence (Failed){Environment.NewLine}" +
+        $"Assert.Equal() Failure: Values differ{Environment.NewLine}" +
+        $"Expected: 2{Environment.NewLine}Actual:   0{Environment.NewLine}" +
+        $"{new string('x', 1300)}-message-end{Environment.NewLine}" +
+        "at Mcg.AgentOrchestrator.Infrastructure.Tests.CompleteRetryEvidence() in CompleteRetryEvidence.cs:line 42";
     kernel.RecordCriterionRetryFeedback(
         goal.Id,
         task.Id,
-        ["grep-present docs/usage.md contains Ready: docs/usage.md is missing Ready"]);
+        [completeFailure]);
 
     var contextDirectory = WorkerContextArtifacts.Write(goal, task, workingDirectory);
 
     var currentTask = File.ReadAllText(Path.Combine(contextDirectory, "current-task.md"));
     Assert.Contains("## Unmet acceptance criteria from the prior attempt - fix these:", currentTask, StringComparison.Ordinal);
-    Assert.Contains("docs/usage.md is missing Ready", currentTask, StringComparison.Ordinal);
+    Assert.Contains(completeFailure, currentTask, StringComparison.Ordinal);
+    Assert.Contains("Expected: 2", currentTask, StringComparison.Ordinal);
+    Assert.Contains("Actual:   0", currentTask, StringComparison.Ordinal);
+    Assert.Contains("CompleteRetryEvidence.cs:line 42", currentTask, StringComparison.Ordinal);
+    Assert.DoesNotContain("...[truncated", currentTask, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "BuildTaskBrief_puts_latest_acceptance_failure_before_context_digest_on_retry")]
