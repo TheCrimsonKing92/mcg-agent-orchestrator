@@ -1769,8 +1769,8 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Null(goal.Tasks.Single().LastDispatch);
     }
 
-    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_refinement_allows_concurrent_sqlite_writer")]
-    public async Task PersistentRunnerGoalRefinementAllowsConcurrentSqliteWriter()
+    [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_creation_returns_before_refinement_and_allows_concurrent_writer")]
+    public async Task PersistentRunnerGoalCreationReturnsBeforeRefinementAndAllowsConcurrentWriter()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -1800,32 +1800,27 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             ref profiles,
             ref currentGoal)));
 
-        try
-        {
-            Xunit.Assert.True(refiner.Entered.Wait(TimeSpan.FromSeconds(15)), "Goal refinement did not reach the blocking provider.");
-            var concurrentWriteElapsed = Stopwatch.StartNew();
-            await concurrentRepository.TransactAsync(
-                (kernel, _) =>
-                {
-                    kernel.CreateGoal("Concurrent conductor-style state writer");
-                    return Task.FromResult((true, true));
-                }).WaitAsync(TimeSpan.FromSeconds(15));
-            concurrentWriteElapsed.Stop();
-            Console.WriteLine(
-                $"GOAL_CREATE_LOCK_MEASUREMENT phase=refinement concurrentWriterElapsedMs={concurrentWriteElapsed.ElapsedMilliseconds}");
-        }
-        finally
-        {
-            refiner.Release.Set();
-        }
-
-        await createTask.WaitAsync(TimeSpan.FromSeconds(15));
+        await createTask.WaitAsync(TimeSpan.FromSeconds(2));
+        Xunit.Assert.False(refiner.Entered.IsSet);
+        var concurrentWriteElapsed = Stopwatch.StartNew();
+        await concurrentRepository.TransactAsync(
+            (kernel, _) =>
+            {
+                kernel.CreateGoal("Concurrent conductor-style state writer");
+                return Task.FromResult((true, true));
+            }).WaitAsync(TimeSpan.FromSeconds(15));
+        concurrentWriteElapsed.Stop();
+        Console.WriteLine(
+            $"GOAL_CREATE_LOCK_MEASUREMENT phase=pending-refinement concurrentWriterElapsedMs={concurrentWriteElapsed.ElapsedMilliseconds}");
 
         var restored = await repository.LoadAsync();
         Xunit.Assert.Equal(2, restored.Goals.Count);
         Xunit.Assert.Contains(restored.Goals, goal => goal.Objective == "Concurrent conductor-style state writer");
         var created = Xunit.Assert.Single(restored.Goals, goal => goal.Objective == "Implement deterministic unlocked goal refinement");
-        Xunit.Assert.NotNull(created.RefinedSpec);
+        Xunit.Assert.Null(created.RefinedSpec);
+        Xunit.Assert.Contains(created.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
         Xunit.Assert.Equal(GoalStatus.Active, created.Status);
     }
 
@@ -1871,15 +1866,6 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         var firstCreate = Task.Run(() => RunCreate(firstRepository, "Concurrent intake candidate one"));
         var secondCreate = Task.Run(() => RunCreate(secondRepository, "Concurrent intake candidate two"));
-        try
-        {
-            Xunit.Assert.True(refiner.AllEntered.WaitOne(TimeSpan.FromSeconds(15)), "Both goal creations did not reach refinement.");
-        }
-        finally
-        {
-            refiner.Release.Set();
-        }
-
         var outcomes = await Task.WhenAll(firstCreate, secondCreate).WaitAsync(TimeSpan.FromSeconds(15));
         Xunit.Assert.Single(outcomes, outcome => outcome is null);
         var rejected = Xunit.Assert.Single(outcomes, outcome => outcome is not null)!;
@@ -1888,7 +1874,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var restored = await firstRepository.LoadAsync();
         var winner = Xunit.Assert.Single(restored.Goals);
         Xunit.Assert.Equal(item.Id, winner.SourceBacklogItemId);
-        Xunit.Assert.NotNull(winner.RefinedSpec);
+        Xunit.Assert.Null(winner.RefinedSpec);
         Xunit.Assert.Equal(GoalStatus.Active, winner.Status);
         Xunit.Assert.Single(Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl"));
     }
@@ -1978,9 +1964,11 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         var restored = await repository.LoadAsync();
         var created = Xunit.Assert.Single(restored.Goals);
-        Xunit.Assert.NotNull(created.RefinedSpec);
-        Xunit.Assert.True(created.RefinedSpec!.HasOpenQuestions);
-        Xunit.Assert.NotEmpty(await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
+        Xunit.Assert.Null(created.RefinedSpec);
+        Xunit.Assert.Contains(created.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
+        Xunit.Assert.Empty(await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
             .ListAsync(created.Id.Value));
         Xunit.Assert.True(File.Exists(Path.Combine(
             workspace.GoalLifecycleEventsDirectory,

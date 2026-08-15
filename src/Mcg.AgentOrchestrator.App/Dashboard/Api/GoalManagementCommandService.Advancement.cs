@@ -92,9 +92,11 @@ private static async Task<object?> AdvanceRunAssignedTaskAsync(
     bool allowApiExecution = true,
     bool allowApiFallback = false)
 {
-    GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var task = goal.Tasks.Single(task => task.Id == taskId);
+    if (goal.RefinedSpec is null && task.RequiredRole != AgentRole.Researcher)
+        EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+    else if (goal.RefinedSpec is not null)
+        GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var agent = ResolveAssignedAgent(task, agents);
     if (agent.ExecutionPolicy is AgentExecutionPolicy.SubscriptionOnly or AgentExecutionPolicy.PreferSubscription)
     {
@@ -154,9 +156,11 @@ private static async Task<object?> AdvanceApiRunAssignedTaskAsync(
     Goal goal,
     TaskId taskId)
 {
-    GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var task = goal.Tasks.Single(task => task.Id == taskId);
+    if (goal.RefinedSpec is null && task.RequiredRole != AgentRole.Researcher)
+        EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+    else if (goal.RefinedSpec is not null)
+        GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var agent = ResolveAssignedAgent(task, agents);
     if (!AgentExecutionPolicies.AllowsApi(agent.ExecutionPolicy))
     {
@@ -194,12 +198,6 @@ public static AdvanceResultDto AdvanceGoalWithSubscriptions(
     bool allowLargePaidSubscriptionStart = false,
     IModelProviderRegistry? providers = null)
 {
-    GoalRefinementGate.EnsureRefined(
-        kernel,
-        workspace,
-        providers ?? new InMemoryModelProviderRegistry([]),
-        goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var actions = kernel.BuildNextActions(goal.Id);
     var item = actions.Items.FirstOrDefault();
     if (item is null)
@@ -252,12 +250,6 @@ public static AdvanceLoopResultDto AdvanceGoalWithSubscriptionsUntilBlocked(
     bool allowLargePaidSubscriptionStart = false,
     IModelProviderRegistry? providers = null)
 {
-    GoalRefinementGate.EnsureRefined(
-        kernel,
-        workspace,
-        providers ?? new InMemoryModelProviderRegistry([]),
-        goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     return AdvanceUntilBlockedAsync(
         kernel,
         goal,
@@ -470,8 +462,6 @@ private static DelegationPlan RefineAndActivateGoal(
     OrchestratorWorkspace workspace,
     Goal goal)
 {
-    GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     return kernel.ActivateGoal(goal.Id, agents);
 }
 

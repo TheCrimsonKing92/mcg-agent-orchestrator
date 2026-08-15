@@ -22,11 +22,19 @@ internal static class GoalRefinementGate
         ConductorAutonomyPolicy? policy = null,
         WorkerProfileCatalog? workerProfiles = null,
         IGoalLifecycleEventWriter? eventWriter = null,
-        CollaborationItemRaise? collaborationItemRaise = null)
+        CollaborationItemRaise? collaborationItemRaise = null,
+        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
+        TimeSpan? subscriptionTimeout = null)
     {
         if (goal.RefinedSpec is { } existing)
         {
-            var existingService = CreateService(workspace, providers, workerProfiles, collaborationItemRaise);
+            var existingService = CreateService(
+                workspace,
+                providers,
+                workerProfiles,
+                collaborationItemRaise,
+                subscriptionCompleterFactory,
+                subscriptionTimeout);
             // Pick up any operator answers submitted since refinement: resolved clarification items in
             // the store are written into the spec's open questions here (the listener only resolves the
             // store item), so an answered goal clears AwaitingClarification and planning resumes with the
@@ -43,16 +51,43 @@ internal static class GoalRefinementGate
             return new GoalRefinementGateResult(outcome, RanRefinement: false, existing);
         }
 
-        var service = CreateService(workspace, providers, workerProfiles, collaborationItemRaise);
+        var service = CreateService(
+            workspace,
+            providers,
+            workerProfiles,
+            collaborationItemRaise,
+            subscriptionCompleterFactory,
+            subscriptionTimeout);
         var result = service.RefineAsync(kernel, goal.Id, policy ?? ConductorAutonomyPolicy.Conservative).GetAwaiter().GetResult();
-        kernel.RecordGoalPolicyDecision(
-            goal.Id,
-            result.Outcome == RefinementOutcome.AwaitingClarification
-                ? "Goal refinement attached a RefinedSpec and raised clarification item(s); planning is held until they are resolved."
-                : "Goal refinement attached a RefinedSpec before planning.");
+        kernel.RecordGoalPolicyDecision(goal.Id, BuildPolicyReceipt(result));
         if (result.Outcome == RefinementOutcome.AwaitingClarification)
             eventWriter?.AppendClarificationNeeded(goal.Id, "spec");
         return new GoalRefinementGateResult(result.Outcome, RanRefinement: true, result.Spec);
+    }
+
+    internal static string BuildPolicyReceipt(RefinementResult result)
+    {
+        var metadata = result.Invocation;
+        var prefix = $"spec_refinement outcome={result.Disposition.ToString().ToLowerInvariant()}";
+        var failure = result.Failure is null
+            ? string.Empty
+            : $" reason_code={Token(result.Failure.ReasonCode)} detail={Token(result.Failure.Detail, 240)}";
+        var clarification = result.Outcome == RefinementOutcome.AwaitingClarification
+            ? " clarification=pending"
+            : " clarification=none";
+        return prefix + failure + clarification +
+            $" prompt_chars={metadata.PromptCharacterCount}" +
+            $" prompt_bytes={metadata.PromptUtf8ByteCount}" +
+            $" provider_kind={Token(metadata.ProviderKind)}" +
+            $" worker_profile={Token(metadata.WorkerProfile)}" +
+            $" model={Token(metadata.Model)}" +
+            $" reasoning_effort={Token(metadata.ReasoningEffort)}";
+    }
+
+    private static string Token(string value, int maxLength = 100)
+    {
+        var bounded = value.Length <= maxLength ? value : value[..maxLength];
+        return string.Concat(bounded.Select(character => char.IsWhiteSpace(character) ? '_' : character));
     }
 
     public static void ThrowIfAwaitingClarification(
@@ -139,14 +174,18 @@ internal static class GoalRefinementGate
         OrchestratorWorkspace workspace,
         IModelProviderRegistry providers,
         WorkerProfileCatalog? workerProfiles,
-        CollaborationItemRaise? collaborationItemRaise = null) =>
+        CollaborationItemRaise? collaborationItemRaise = null,
+        Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
+        TimeSpan? subscriptionTimeout = null) =>
         new(
             providers,
             ModelFunctionCatalogStore.Load(workspace.ModelFunctionCatalogPath),
             CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory),
             new SpecRefinerPrecedentStore(workspace.SpecRefinerPrecedentsPath),
             workerProfiles ?? WorkerProfileStore.Load(workspace.WorkerProfilePath),
-            raiseCollaborationItem: collaborationItemRaise);
+            subscriptionCompleterFactory,
+            raiseCollaborationItem: collaborationItemRaise,
+            subscriptionTimeout: subscriptionTimeout);
 
     private static IReadOnlyList<CollaborationItem> ListGoalCollaborationItems(
         OrchestratorWorkspace workspace,

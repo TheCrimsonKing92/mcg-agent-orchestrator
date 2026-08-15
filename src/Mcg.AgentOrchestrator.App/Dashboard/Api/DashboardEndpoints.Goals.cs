@@ -392,7 +392,6 @@ internal static partial class DashboardEndpoints
             current =>
             {
                 var goal = ResolveGoal(current, goalId);
-                GoalRefinementGate.EnsureRefined(current, services.Workspace, services.Providers, goal);
                 var plan = current.ActivateGoal(goal.Id, agents);
                 return Task.FromResult(Json(DashboardResponseMapper.ToDelegationPlanDto(plan)));
             });

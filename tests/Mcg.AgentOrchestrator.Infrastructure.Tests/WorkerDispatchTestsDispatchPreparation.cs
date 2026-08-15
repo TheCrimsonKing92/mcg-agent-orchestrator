@@ -63,13 +63,17 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         var restored = await repository.LoadAsync();
         var successor = Xunit.Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
         Xunit.Assert.Contains("GOAL_REPLACE_SUCCEEDED", output, StringComparison.Ordinal);
         var claim = new SourceBacklogClaimStore(workspace.SqliteStatePath).ResolveClaim(restored, item.Id);
         Xunit.Assert.Equal(successor.Id.Value, claim!.OwnerGoalId);
         Xunit.Assert.Equal(
             [AgentRole.Researcher, AgentRole.Planner, AgentRole.Developer, AgentRole.Tester, AgentRole.Reviewer],
             successor.Tasks.Select(task => task.RequiredRole));
+        Xunit.Assert.Null(successor.RefinedSpec);
+        Xunit.Assert.Contains(successor.Timeline, evt =>
+            evt.Kind == ProgressKind.GoalPolicyDecision &&
+            evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
         Xunit.Assert.All(successor.Tasks, task =>
         {
             Xunit.Assert.Null(task.LastDispatch);
@@ -128,7 +132,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
 
         var restored = await repository.LoadAsync();
         Xunit.Assert.Contains("GOAL_REPLACE_PROTECTED_OWNER", exception.Message, StringComparison.Ordinal);
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
         var restoredPredecessor = Xunit.Assert.Single(restored.Goals);
         Xunit.Assert.Equal(predecessor.Id, restoredPredecessor.Id);
         var restoredTask = Xunit.Assert.Single(restoredPredecessor.Tasks);

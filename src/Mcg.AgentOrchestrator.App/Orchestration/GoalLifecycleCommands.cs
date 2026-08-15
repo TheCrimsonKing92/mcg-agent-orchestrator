@@ -56,13 +56,7 @@ internal static class GoalLifecycleCommands
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         EnsureRequestedPipelineCanBeSatisfied(plan, agents);
         var goal = CreateGoalFromPlan(kernel, plan);
-        GoalRefinementGate.EnsureRefined(
-            kernel,
-            workspace,
-            providers,
-            goal,
-            eventWriter: eventWriter,
-            collaborationItemRaise: collaborationItemRaise);
+        RecordPendingRefinement(kernel, goal);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -146,13 +140,7 @@ internal static class GoalLifecycleCommands
         var plan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.DeveloperOnly, kernel.BuildTaskDurationStats());
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         var goal = CreateGoalFromPlan(kernel, plan);
-        GoalRefinementGate.EnsureRefined(
-            kernel,
-            workspace,
-            providers,
-            goal,
-            eventWriter: eventWriter,
-            collaborationItemRaise: collaborationItemRaise);
+        RecordPendingRefinement(kernel, goal);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -169,7 +157,7 @@ internal static class GoalLifecycleCommands
         var plan = GoalObjectivePlanner.Build(objective, pipeline, kernel.BuildTaskDurationStats());
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         var goal = CreateGoalFromPlan(kernel, plan, sliceBatchParentId);
-        GoalRefinementGate.EnsureRefined(kernel, workspace, providers, goal, eventWriter: eventWriter);
+        RecordPendingRefinement(kernel, goal);
         return goal;
     }
 
@@ -228,6 +216,11 @@ internal static class GoalLifecycleCommands
         RecordCapabilityWarnings(kernel, goal.Id, plan.CapabilityWarnings);
         return goal;
     }
+
+    private static void RecordPendingRefinement(AgentOrchestratorKernel kernel, Goal goal) =>
+        kernel.RecordGoalPolicyDecision(
+            goal.Id,
+            "spec_refinement outcome=pending owner=spec-consumer-gate consumers_held=true researcher_allowed=true");
 
     private static string BuildPipelineDecisionMessage(GoalObjectivePlan plan)
     {
