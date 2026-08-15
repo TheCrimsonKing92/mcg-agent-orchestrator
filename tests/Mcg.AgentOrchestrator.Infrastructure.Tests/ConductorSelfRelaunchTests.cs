@@ -58,6 +58,19 @@ public sealed class ConductorSelfRelaunchTests
         Assert.False(IsProcessAlive(result.Handoff.ProcessId));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_successor_process_failure_is_classified_as_self_check")]
+    public void RealSuccessorProcessFailureIsClassifiedAsSelfCheck()
+    {
+        using var fixture = RealRelaunchFixture.Create();
+        File.WriteAllText(fixture.Options.StateStorePath, "not-a-sqlite-database");
+
+        var result = ConductorSelfRelaunch.Create(fixture.Options)(
+            new ConductorSelfRelaunchRequest("goal-real-self-check-failure", 9));
+
+        Assert.False(result.HandedOff);
+        Assert.Equal("self-check", result.FailedPhase);
+    }
+
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_launches_prepared_content_addressed_successor")]
     public void LaunchesPreparedContentAddressedSuccessor()
     {

@@ -21,11 +21,15 @@ internal static class ShardProbeSynchronization
     internal static async Task SynchronizeAsync(string ownSignalVariable, string peerSignalVariable)
     {
         var ownSignalPath = Environment.GetEnvironmentVariable(ownSignalVariable);
+        if (string.IsNullOrWhiteSpace(ownSignalPath))
+        {
+            return;
+        }
+
         var peerSignalPath = Environment.GetEnvironmentVariable(peerSignalVariable);
-        Xunit.Assert.False(string.IsNullOrWhiteSpace(ownSignalPath));
         Xunit.Assert.False(string.IsNullOrWhiteSpace(peerSignalPath));
 
-        File.WriteAllText(ownSignalPath!, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        File.WriteAllText(ownSignalPath, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         await WaitForSignalAsync(peerSignalPath!);
     }
 

@@ -74,7 +74,7 @@ The maintenance tests are **not duplicates**. They pin one invariant at two nece
 - **Claim:** corrupt state is classified as a self-check failure, handoff is not attempted, and the incumbent retains its lease.
 - **Expensive region:** a full real App build and run-directory preparation precede the corrupt-state self-check.
 - **Deletion consequence:** corrupt state could reach handoff or cause the incumbent to surrender authority.
-- **Disposition: decompose (executed).** The claim is split into a direct `ConductorSuccessorSelfCheck.Run` corrupt-state classification test and a `TryRelaunch` typed preparation-failure test that asserts handoff is untouched and the real incumbent lease remains held. The retained real-build success test continues to own binary/CLI wiring.
+- **Disposition: decompose (executed).** A direct `ConductorSuccessorSelfCheck.Run` test owns corrupt-state rejection, and a `TryRelaunch` typed preparation-failure test owns the no-handoff and incumbent-authority decisions. A narrow real-successor-process test remains because only production `PrepareSuccessor` can prove that a nonzero successor self-check exit is classified as phase `self-check`; the retained real-build success test continues to own successful binary/CLI wiring.
 
 ## Explicit exclusions
 
