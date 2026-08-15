@@ -7007,7 +7007,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
 
         Assert.True(result.Passed);
         Assert.Equal(
-            AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 4,
+            AcceptanceGateEngineSettings.Load(root).InfrastructureTestLanes.Count + 5,
             calls.Count);
         Assert.Equal("tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", calls[2][2]);
         var infrastructureCalls = calls
