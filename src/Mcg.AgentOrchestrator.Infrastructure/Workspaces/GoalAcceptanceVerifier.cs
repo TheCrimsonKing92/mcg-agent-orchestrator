@@ -39,6 +39,7 @@ public static class AcceptanceFailureClassifications
     public const string GateEnvironmentInterference = "gate-environment-interference";
     public const string StructuralCoverageFailed = "structural-coverage-failed";
     public const string FocusedSelectionApparatusFailure = "focused-selection-apparatus-failure";
+    public const string FocusedSelectionReceiptUnreadable = "focused-selection-receipt-unreadable";
 }
 
 public enum FocusedEvidenceRejectionCode
@@ -948,8 +949,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static FindingEvidenceArmDisposition ClassifyFocusedEvidenceArm(
         IReadOnlyList<AcceptanceCheckResult> checks)
     {
-        if (checks.Any(check => check.FailureClassification ==
-                AcceptanceFailureClassifications.FocusedSelectionApparatusFailure))
+        if (checks.Any(check => check.FailureClassification is
+                AcceptanceFailureClassifications.FocusedSelectionApparatusFailure or
+                AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable))
         {
             return FindingEvidenceArmDisposition.ApparatusFailure;
         }
@@ -1633,8 +1635,72 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         // named Infrastructure acceptance lanes, so mapped focused items do not recover the former
         // four-lane concurrency. The operator receipt must replace these predictions with measured
         // wall-clock and tests_executed for both exact target sets.
+        var planned = new List<FocusedEvidencePlannedCheck>();
+        var batchedCompatibleItems = false;
+        var unbatchedReasons = new List<string>();
+        foreach (var projectGroup in validated.GroupBy(item => item.Project, StringComparer.OrdinalIgnoreCase))
+        {
+            var projectUnbatchedReasons = new HashSet<string>(StringComparer.Ordinal);
+            var compatible = projectGroup
+                .Where(item => item.Filter is not null && IsPositiveFocusedEvidenceDisjunction(item.Filter))
+                .ToArray();
+            if (compatible.Length > 1)
+            {
+                var tokens = compatible
+                    .SelectMany(item => item.Filter!.Tokens)
+                    .DistinctBy(token => token.CanonicalToken, StringComparer.Ordinal)
+                    .OrderBy(token => token.CanonicalToken, StringComparer.Ordinal)
+                    .ToArray();
+                var canonical = string.Join("|", tokens.Select(token => token.CanonicalToken));
+                if (canonical.Length <= MaxFocusedEvidenceFilterLength)
+                {
+                    planned.Add(new FocusedEvidencePlannedCheck(
+                        compatible.Select(item => item.Target).Distinct(StringComparer.Ordinal).ToArray(),
+                        projectGroup.Key,
+                        new FocusedEvidenceFilter(
+                            string.Join("; ", compatible.Select(item => item.Target)),
+                            canonical,
+                            tokens),
+                        compatible.Select(item => item.Filter!).ToArray()));
+                    batchedCompatibleItems = true;
+                }
+                else
+                {
+                    planned.AddRange(compatible.Select(item => new FocusedEvidencePlannedCheck(
+                        (IReadOnlyList<string>)[item.Target],
+                        item.Project,
+                        item.Filter,
+                        [item.Filter!])));
+                    projectUnbatchedReasons.Add("bounded-filter-overflow");
+                }
+            }
+            else
+            {
+                planned.AddRange(compatible.Select(item => new FocusedEvidencePlannedCheck(
+                    (IReadOnlyList<string>)[item.Target],
+                    item.Project,
+                    item.Filter,
+                    [item.Filter!])));
+            }
+
+            var incompatible = projectGroup
+                .Where(item => item.Filter is null || !IsPositiveFocusedEvidenceDisjunction(item.Filter))
+                .ToArray();
+            if (incompatible.Length > 0 && projectGroup.Count() > 1)
+            {
+                projectUnbatchedReasons.Add("incompatible-filter-semantics");
+            }
+            planned.AddRange(incompatible.Select(item => new FocusedEvidencePlannedCheck(
+                (IReadOnlyList<string>)[item.Target],
+                item.Project,
+                item.Filter,
+                item.Filter is null ? [] : [item.Filter])));
+            unbatchedReasons.AddRange(projectUnbatchedReasons.Select(reason =>
+                $"{ProjectLabel(projectGroup.Key)}={reason}"));
+        }
+
         var built = new List<AcceptanceManifestCheck>();
-        foreach (var item in validated)
+        foreach (var item in planned)
         {
             var check = new AcceptanceManifestCheck
             {
@@ -1650,33 +1716,50 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                     ? ["--verbosity", "minimal"]
                     : ["--verbosity", "minimal", "--filter", item.Filter.CanonicalText],
                 FocusedEvidenceTokens = item.Filter?.Tokens ?? [],
+                FocusedEvidenceSelections = item.SelectionFilters
+                    .Select(filter => filter.Tokens)
+                    .ToArray(),
                 IsFocusedEvidenceSelection = item.Filter is not null,
                 TimeoutMinutes = totalTargets <= FocusedEvidenceShortTimeoutTargetLimit ? 10 : null
             };
             built.Add(check);
         }
 
-        var targetToChecks = validated
-            .Select((item, index) => (item.Target, CheckName: built[index].Name))
+        var targetToChecks = planned
+            .SelectMany((item, index) => item.Targets.Select(target => (Target: target, CheckName: built[index].Name)))
             .GroupBy(item => item.Target, StringComparer.Ordinal)
             .Select(group => new FocusedEvidenceTargetCoverage(
                 group.Key,
                 group.Select(item => item.CheckName).ToArray()))
             .ToArray();
 
-        var hasFocusedFilters = validated.Any(item => item.Filter is not null);
-        var hasMappedProjects = validated.Any(item => item.Filter is null);
+        var hasFocusedFilters = planned.Any(item => item.Filter is not null);
+        var hasMappedProjects = planned.Any(item => item.Filter is null);
+        var executionReason = hasFocusedFilters && hasMappedProjects
+            ? "explicit-focused-and-mapped-project-request"
+            : hasFocusedFilters ? "explicit-focused-mapping" : "explicit-mapped-project-request";
+        if (batchedCompatibleItems)
+        {
+            executionReason += "+compatible-same-project-batch";
+        }
+        if (unbatchedReasons.Count > 0)
+        {
+            executionReason += $"+unbatched:{string.Join(',', unbatchedReasons.OrderBy(reason => reason, StringComparer.Ordinal))}";
+        }
         checks = built;
         coverage = new FocusedEvidenceCoverage(
             TargetToChecks: targetToChecks,
             ExecutionMode: hasFocusedFilters && hasMappedProjects
                 ? "mixed"
                 : hasFocusedFilters ? "focused" : "project",
-            ExecutionReason: hasFocusedFilters && hasMappedProjects
-                ? "explicit-focused-and-mapped-project-request"
-                : hasFocusedFilters ? "explicit-focused-mapping" : "explicit-mapped-project-request");
+            ExecutionReason: executionReason);
         return true;
     }
+
+    private static bool IsPositiveFocusedEvidenceDisjunction(FocusedEvidenceFilter filter) =>
+        filter.Tokens.Count > 0 &&
+        filter.Tokens.All(token => token.Kind is FocusedEvidenceTokenKind.Class or FocusedEvidenceTokenKind.Method) &&
+        !filter.CanonicalText.Contains('&', StringComparison.Ordinal);
 
     private static string? ResolveExtractedFocusedEvidenceProject(
         string worktreePath,
@@ -3868,18 +3951,29 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var processPassed = !result.TimedOut && result.ExitCode == 0;
         EmitMissingTrxReceiptIfNeeded(processPassed, telemetry);
         var executedTestCount = ExtractTrxExecutedTestCount(telemetry.Paths);
-        var zeroTestApparatusFailure = check.IsFocusedEvidenceSelection && executedTestCount == 0;
+        var selectionCoverage = check.IsFocusedEvidenceSelection && executedTestCount != 0
+            ? InspectFocusedEvidenceSelectionCoverage(check.FocusedEvidenceSelections, telemetry.Paths)
+            : FocusedEvidenceSelectionCoverage.Empty;
+        var uncoveredSelections = selectionCoverage.UncoveredSelections;
+        var unreadableReceipts = selectionCoverage.UnreadableReceiptPaths;
+        var zeroTestApparatusFailure = check.IsFocusedEvidenceSelection &&
+            (executedTestCount == 0 || uncoveredSelections.Count > 0 || unreadableReceipts.Count > 0);
         var passed = processPassed && !zeroTestApparatusFailure;
         IReadOnlyList<string> failingTestIdentities = passed || zeroTestApparatusFailure
             ? []
             : ExtractTrxFailureIdentities(telemetry.Paths);
         var durableTestResultPaths = CopyCompletedTestReceiptsToAttemptFolder(telemetry.Paths);
+        var apparatusDetail = unreadableReceipts.Count > 0
+            ? $"'{check.Name}' could not read test receipt(s): {string.Join(", ", unreadableReceipts)}."
+            : executedTestCount == 0
+            ? $"'{check.Name}' executed 0 tests."
+            : $"'{check.Name}' had selection(s) matching 0 tests: {string.Join(", ", uncoveredSelections)}.";
         var outputTail = zeroTestApparatusFailure
-            ? $"Focused evidence selection apparatus failure: '{check.Name}' executed 0 tests."
+            ? $"Focused evidence selection apparatus failure: {apparatusDetail}"
             : passed ? null : BuildMtpFailureOutput(check.Name, result, telemetry);
         var resultSummary = zeroTestApparatusFailure
             ? PrefixResultSummary(
-                "focused-selection-apparatus-failure executed=0",
+                $"{(unreadableReceipts.Count > 0 ? "focused-selection-receipt-unreadable" : "focused-selection-apparatus-failure")} executed={executedTestCount?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}",
                 BuildGenericCommandResultSummary(result))
             : BuildGenericCommandResultSummary(result);
         return (new AcceptanceCheckResult(
@@ -3894,7 +3988,9 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
             ResultSummary: resultSummary,
             TestResultPaths: durableTestResultPaths,
             FailureClassification: zeroTestApparatusFailure
-                ? AcceptanceFailureClassifications.FocusedSelectionApparatusFailure
+                ? unreadableReceipts.Count > 0
+                    ? AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable
+                    : AcceptanceFailureClassifications.FocusedSelectionApparatusFailure
                 : null,
             FailingTestIdentities: failingTestIdentities,
             ExecutedTestCount: executedTestCount), false);
@@ -7071,6 +7167,79 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         return null;
     }
 
+    private static FocusedEvidenceSelectionCoverage InspectFocusedEvidenceSelectionCoverage(
+        IReadOnlyList<IReadOnlyList<FocusedEvidenceFilterToken>> selections,
+        IEnumerable<string>? trxPaths)
+    {
+        if (selections.Count <= 1)
+        {
+            return FocusedEvidenceSelectionCoverage.Empty;
+        }
+
+        var extraction = ExtractTrxExecutedTestIdentities(trxPaths);
+        var uncoveredSelections = selections
+            .Where(selection => !selection.Any(token =>
+                extraction.Identities.Any(identity => IsFocusedEvidenceIdentityMatch(identity, token.Value))))
+            .Select(selection => string.Join("|", selection.Select(token => token.CanonicalToken)))
+            .ToArray();
+        return new FocusedEvidenceSelectionCoverage(uncoveredSelections, extraction.UnreadableReceiptPaths);
+    }
+
+    private static FocusedEvidenceIdentityExtraction ExtractTrxExecutedTestIdentities(IEnumerable<string>? trxPaths)
+    {
+        if (trxPaths is null)
+        {
+            return new FocusedEvidenceIdentityExtraction([], []);
+        }
+
+        var identities = new List<string>();
+        var unreadableReceiptPaths = new List<string>();
+        foreach (var trxPath in trxPaths.Where(File.Exists))
+        {
+            try
+            {
+                var document = XDocument.Load(trxPath, LoadOptions.None);
+                var definitionsByTestId = document
+                    .Descendants()
+                    .Where(element =>
+                        element.Name.LocalName.Equals("UnitTest", StringComparison.Ordinal) &&
+                        !string.IsNullOrWhiteSpace(element.Attribute("id")?.Value))
+                    .GroupBy(element => element.Attribute("id")!.Value, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+                identities.AddRange(document
+                    .Descendants()
+                    .Where(element => element.Name.LocalName.Equals("UnitTestResult", StringComparison.Ordinal))
+                    .Select(result =>
+                    {
+                        definitionsByTestId.TryGetValue(
+                            result.Attribute("testId")?.Value ?? string.Empty,
+                            out var definition);
+                        var testMethod = definition?.Descendants()
+                            .FirstOrDefault(element => element.Name.LocalName.Equals("TestMethod", StringComparison.Ordinal));
+                        var className = testMethod?.Attribute("className")?.Value?.Trim();
+                        var methodName = testMethod?.Attribute("name")?.Value?.Trim();
+                        return !string.IsNullOrWhiteSpace(className) && !string.IsNullOrWhiteSpace(methodName)
+                            ? $"{className}.{methodName}"
+                            : ResolveTrxTestName(result, definition);
+                    }));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+            {
+                unreadableReceiptPaths.Add(trxPath);
+            }
+        }
+
+        return new FocusedEvidenceIdentityExtraction(
+            identities
+                .Where(identity => !string.IsNullOrWhiteSpace(identity))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            unreadableReceiptPaths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    private static bool IsFocusedEvidenceIdentityMatch(string identity, string selection) =>
+        identity.Contains(selection, StringComparison.OrdinalIgnoreCase);
+
     private static string ResolveTrxTestName(XElement result, XElement? definition)
     {
         var testName = result.Attribute("testName")?.Value?.Trim();
@@ -8514,6 +8683,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         public IReadOnlyList<string> ExclusiveResourceKeys { get; init; } = [];
         public bool IsFocusedEvidenceSelection { get; init; }
         public IReadOnlyList<FocusedEvidenceFilterToken> FocusedEvidenceTokens { get; init; } = [];
+        public IReadOnlyList<IReadOnlyList<FocusedEvidenceFilterToken>> FocusedEvidenceSelections { get; init; } = [];
     }
 
     private static IEnumerable<string> TranslateFocusedEvidenceTokens(
@@ -8555,6 +8725,23 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         string OriginalToken,
         string CanonicalText,
         IReadOnlyList<FocusedEvidenceFilterToken> Tokens);
+
+    private sealed record FocusedEvidencePlannedCheck(
+        IReadOnlyList<string> Targets,
+        string Project,
+        FocusedEvidenceFilter? Filter,
+        IReadOnlyList<FocusedEvidenceFilter> SelectionFilters);
+
+    private sealed record FocusedEvidenceSelectionCoverage(
+        IReadOnlyList<string> UncoveredSelections,
+        IReadOnlyList<string> UnreadableReceiptPaths)
+    {
+        public static FocusedEvidenceSelectionCoverage Empty { get; } = new([], []);
+    }
+
+    private sealed record FocusedEvidenceIdentityExtraction(
+        IReadOnlyList<string> Identities,
+        IReadOnlyList<string> UnreadableReceiptPaths);
 
     private sealed record DotnetTestTelemetry(IReadOnlyList<string> Paths, string[] Arguments);
 

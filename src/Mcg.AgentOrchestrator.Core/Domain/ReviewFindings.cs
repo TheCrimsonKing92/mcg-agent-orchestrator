@@ -238,11 +238,11 @@ public enum FindingEvidenceNotHonouredReason
     Unknown,
     UnsupportedProject,
     UnparseableSelection,
-    PerRoundCap,
     CandidateShaMissing,
     ExecutorUnavailable,
     SelectionApparatusFailure,
-    RunFailed
+    RunFailed,
+    SupersededByActionableRed
 }
 
 public sealed class FindingEvidenceNotHonouredReasonJsonConverter : JsonConverter<FindingEvidenceNotHonouredReason>
@@ -253,11 +253,11 @@ public sealed class FindingEvidenceNotHonouredReasonJsonConverter : JsonConverte
             ["unknown"] = FindingEvidenceNotHonouredReason.Unknown,
             ["unsupported-project"] = FindingEvidenceNotHonouredReason.UnsupportedProject,
             ["unparseable-selection"] = FindingEvidenceNotHonouredReason.UnparseableSelection,
-            ["per-round-cap"] = FindingEvidenceNotHonouredReason.PerRoundCap,
             ["candidate-sha-missing"] = FindingEvidenceNotHonouredReason.CandidateShaMissing,
             ["executor-unavailable"] = FindingEvidenceNotHonouredReason.ExecutorUnavailable,
             ["selection-apparatus-failure"] = FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
-            ["run-failed"] = FindingEvidenceNotHonouredReason.RunFailed
+            ["run-failed"] = FindingEvidenceNotHonouredReason.RunFailed,
+            ["superseded-by-actionable-red"] = FindingEvidenceNotHonouredReason.SupersededByActionableRed
         };
 
     public override FindingEvidenceNotHonouredReason Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
@@ -272,11 +272,11 @@ public sealed class FindingEvidenceNotHonouredReasonJsonConverter : JsonConverte
     {
         FindingEvidenceNotHonouredReason.UnsupportedProject => "unsupported-project",
         FindingEvidenceNotHonouredReason.UnparseableSelection => "unparseable-selection",
-        FindingEvidenceNotHonouredReason.PerRoundCap => "per-round-cap",
         FindingEvidenceNotHonouredReason.CandidateShaMissing => "candidate-sha-missing",
         FindingEvidenceNotHonouredReason.ExecutorUnavailable => "executor-unavailable",
         FindingEvidenceNotHonouredReason.SelectionApparatusFailure => "selection-apparatus-failure",
         FindingEvidenceNotHonouredReason.RunFailed => "run-failed",
+        FindingEvidenceNotHonouredReason.SupersededByActionableRed => "superseded-by-actionable-red",
         _ => "unknown"
     };
 }
@@ -298,6 +298,12 @@ public sealed record FindingEvidenceArmReceipt(
     IReadOnlyList<string>? ReceiptPaths = null,
     IReadOnlyList<string>? FailingTestIdentities = null);
 
+public sealed record FindingEvidenceRequestDisposition(
+    string FindingStableId,
+    string RequestIdentity,
+    string Disposition,
+    string? Reason = null);
+
 public sealed record FindingEvidenceReceipt(
     string ReceiptId,
     string CandidateSha,
@@ -305,7 +311,9 @@ public sealed record FindingEvidenceReceipt(
     bool Accepted,
     bool Passed,
     string Summary,
-    IReadOnlyList<FindingEvidenceArmReceipt>? Arms = null);
+    IReadOnlyList<FindingEvidenceArmReceipt>? Arms = null,
+    IReadOnlyList<FindingEvidenceRequestDisposition>? RequestDispositions = null,
+    string? FindingRoundFingerprint = null);
 
 public sealed record ReviewFinding(
     [property: JsonPropertyName("stable_id")] string StableId,
