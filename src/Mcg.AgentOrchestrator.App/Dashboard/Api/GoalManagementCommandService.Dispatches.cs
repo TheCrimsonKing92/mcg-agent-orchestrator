@@ -19,8 +19,12 @@ public static IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTas
 {
     var results = new List<WorkerProfileDispatchResult>();
     var assigned = goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList();
-    if (goal.RefinedSpec is null && assigned.All(task => task.RequiredRole != AgentRole.Researcher))
-        _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, goal.Id);
+    if (assigned.Count > 0 &&
+        GoalRefinementWorkCoordinator.HasPendingWork(goal) &&
+        assigned.All(task => task.RequiredRole != AgentRole.Researcher))
+    {
+        EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+    }
 
     foreach (var task in assigned.Where(task => IsRefinementEligible(goal, task)))
     {
@@ -400,7 +404,7 @@ internal static void EnsureRefinedForSpecConsumer(
     Goal goal)
 {
     var current = kernel.GetGoal(goal.Id);
-    if (current.RefinedSpec is null)
+    if (GoalRefinementWorkCoordinator.HasPendingWork(current))
     {
         var launch = GoalRefinementWorkCoordinator.TryLaunch(workspace, goal.Id);
         throw new InvalidOperationException(
@@ -471,7 +475,8 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
 }
 
 private static bool IsRefinementEligible(Goal goal, TaskSpec task) =>
-    goal.RefinedSpec is not null || task.RequiredRole == AgentRole.Researcher;
+    !GoalRefinementWorkCoordinator.HasPendingWork(goal) ||
+    task.RequiredRole == AgentRole.Researcher;
 
 private sealed record ParallelSafeBatchSelection(
     HashSet<TaskId> TaskIds,
