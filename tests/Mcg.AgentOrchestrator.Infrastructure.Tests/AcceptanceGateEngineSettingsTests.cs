@@ -287,17 +287,18 @@ public sealed class AcceptanceGateEngineSettingsTests
               "engine": {
                 "infrastructureTestLanes": [{
                   "name": "exclusive candidate",
-                  "filter": "FullyQualifiedName~AcceptanceGateEngineSettingsTests",
+                  "filter": "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~WorkerDispatchJobAccountingTests",
                   "exclusiveResourceKeys": ["xunit:JobAccounting"]
                 }]
               }
             }
             """,
-            [typeof(AcceptanceGateEngineSettingsTests)]);
+            [typeof(AcceptanceGateEngineSettingsTests), typeof(WorkerDispatchJobAccountingTests)]);
 
         Xunit.Assert.Contains("exclusive candidate", error.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("xunit:JobAccounting", error.Message, StringComparison.Ordinal);
-        Xunit.Assert.Contains("no matched class belongs", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("matched classes do not belong to any declared exclusive xUnit collection", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("AcceptanceGateEngineSettingsTests", error.Message, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_lane_partition_rejects_empty_lane")]
@@ -1183,6 +1184,17 @@ public sealed class AcceptanceGateEngineSettingsTests
                     $"Acceptance lane '{lane.Name}' does not match any runnable test class.");
             }
 
+            var declaredXunitCollections = lane.ExclusiveResourceKeys
+                .Select(resourceKey => resourceKey.Trim())
+                .Where(resourceKey => resourceKey.StartsWith("xunit:", StringComparison.OrdinalIgnoreCase))
+                .Select(resourceKey => resourceKey["xunit:".Length..])
+                .ToArray();
+            var matchedXunitCollections = matchedClasses
+                .Select(type => type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name)
+                .Where(collectionName => collectionName is not null)
+                .ToHashSet(StringComparer.Ordinal);
+            var requiresDedicatedMembership = GoalAcceptanceVerifier.TranslateMtpFilter(lane.Filter)
+                .Contains("--filter-class", StringComparer.Ordinal);
             foreach (var resourceKey in lane.ExclusiveResourceKeys)
             {
                 const string xunitPrefix = "xunit:";
@@ -1193,17 +1205,24 @@ public sealed class AcceptanceGateEngineSettingsTests
                 }
 
                 var collectionName = normalizedKey[xunitPrefix.Length..];
-                if (matchedClasses.Any(type => string.Equals(
-                        type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name,
-                        collectionName,
-                        StringComparison.Ordinal)))
+                if (matchedXunitCollections.Contains(collectionName) &&
+                    (!requiresDedicatedMembership || matchedClasses.All(type =>
+                        declaredXunitCollections.Contains(
+                            type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name,
+                            StringComparer.Ordinal))))
                 {
                     continue;
                 }
 
+                var nonExclusiveClasses = matchedClasses
+                    .Where(type => !declaredXunitCollections.Contains(
+                        type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name,
+                        StringComparer.Ordinal))
+                    .Select(type => type.FullName ?? type.Name);
                 throw new InvalidDataException(
                     $"Acceptance lane '{lane.Name}' declares exclusive resource key '{normalizedKey}', " +
-                    $"but no matched class belongs to xUnit collection '{collectionName}'.");
+                    $"but matched classes do not belong to any declared exclusive xUnit collection: " +
+                    $"[{string.Join(", ", nonExclusiveClasses)}].");
             }
         }
     }
