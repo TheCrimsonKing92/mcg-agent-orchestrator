@@ -160,6 +160,19 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Contains(errors, e => e.Contains("maxConcurrentPaidWorkers", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_has_no_retired_focused_evidence_cap")]
+    public void ConductorAutonomyPolicyValidationHasNoRetiredFocusedEvidenceCap()
+    {
+        Assert.Null(typeof(ConductorAutonomyPolicy).GetProperty("MaxFocusedEvidenceRunsPerRound"));
+
+        foreach (var policy in ConductorAutonomyPolicy.All)
+        {
+            Assert.DoesNotContain(
+                policy.Validate(),
+                error => error.Contains("maxFocusedEvidenceRunsPerRound", StringComparison.Ordinal));
+        }
+    }
+
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_missing_lifecycle_state")]
     public void ConductorAutonomyPolicyValidationRejectsMissingLifecycleState()
     {
