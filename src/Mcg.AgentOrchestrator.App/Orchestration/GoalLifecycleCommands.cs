@@ -220,7 +220,7 @@ internal static class GoalLifecycleCommands
     private static void RecordPendingRefinement(AgentOrchestratorKernel kernel, Goal goal) =>
         kernel.RecordGoalPolicyDecision(
             goal.Id,
-            "spec_refinement outcome=pending owner=durable-outbox consumers_held=true researcher_allowed=true");
+            GoalRefinementWorkCoordinator.PendingPolicyReceipt);
 
     private static string BuildPipelineDecisionMessage(GoalObjectivePlan plan)
     {

@@ -408,7 +408,12 @@ internal static void EnsureRefinedForSpecConsumer(
             $"executor_started={launch.Started.ToString().ToLowerInvariant()} detail={launch.Detail}");
     }
 
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, current);
+    _ = GoalRefinementGate.EnsureRefined(
+        kernel,
+        workspace,
+        providers ?? new InMemoryModelProviderRegistry([]),
+        current);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, kernel.GetGoal(goal.Id));
 }
 
 private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(

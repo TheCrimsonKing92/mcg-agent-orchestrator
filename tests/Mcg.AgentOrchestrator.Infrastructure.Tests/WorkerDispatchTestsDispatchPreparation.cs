@@ -74,6 +74,9 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Xunit.Assert.Contains(successor.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
+        var refinementMessage = Xunit.Assert.Single(
+            await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+        Xunit.Assert.Equal(GoalRefinementWorkCoordinator.MessageId(successor.Id), refinementMessage.Id);
         Xunit.Assert.All(successor.Tasks, task =>
         {
             Xunit.Assert.Null(task.LastDispatch);

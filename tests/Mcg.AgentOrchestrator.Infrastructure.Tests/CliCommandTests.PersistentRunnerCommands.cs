@@ -1607,7 +1607,12 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 repository, workspace, ref agents, providers, ref profiles, ref currentGoal));
         }
 
-        Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
+        var stored = await repository.LoadAsync();
+        Xunit.Assert.Equal(2, stored.Goals.Count);
+        var refinementMessages = await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind);
+        Xunit.Assert.Equal(
+            stored.Goals.Select(goal => GoalRefinementWorkCoordinator.MessageId(goal.Id)).Order(),
+            refinementMessages.Select(message => message.Id).Order());
     }
 
     [Xunit.Fact]

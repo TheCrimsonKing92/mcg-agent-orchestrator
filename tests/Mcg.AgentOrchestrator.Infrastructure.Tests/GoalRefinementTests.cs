@@ -1467,8 +1467,8 @@ public sealed class GoalRefinementTests
 
     // --- Answer-back: a store-only resolution (the listener path) is synced into the spec by the gate ---
 
-    [Xunit.Fact(DisplayName = "GoalRefinementGate_EnsureRefined_syncs_store_resolved_answer_into_spec_and_resumes")]
-    public async Task EnsureRefinedSyncsStoreResolvedAnswerIntoSpecAndResumes()
+    [Xunit.Fact(DisplayName = "Spec_consumer_guard_syncs_store_resolved_answer_into_spec_and_resumes")]
+    public async Task SpecConsumerGuardSyncsStoreResolvedAnswerIntoSpecAndResumes()
     {
         var root = CreateTempDirectory();
         var workspace = OrchestratorWorkspace.ForDirectory(root);
@@ -1500,13 +1500,18 @@ public sealed class GoalRefinementTests
         await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory).TryResolveAsync(item.CorrelationKey!, "v2");
         Xunit.Assert.False(GoalRefinementGate.HasOpenClarification(workspace, goal));
 
-        // Conductor/gate path: EnsureRefined syncs the stored answer into the spec and clears AwaitingClarification.
-        var result = GoalRefinementGate.EnsureRefined(kernel, workspace, providers, kernel.GetGoal(goal.Id));
+        // Production dispatch path: the consumer guard syncs the stored answer into the spec before
+        // checking whether clarification still blocks the task.
+        GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+            kernel,
+            workspace,
+            providers,
+            kernel.GetGoal(goal.Id));
 
-        Xunit.Assert.Equal(RefinementOutcome.AutoRefined, result.Outcome);
-        Xunit.Assert.False(result.Spec.HasOpenQuestions);
-        Xunit.Assert.Contains(result.Spec.Decisions, decision => decision.Choice == "v2");
-        Xunit.Assert.False(kernel.GetGoal(goal.Id).RefinedSpec!.HasOpenQuestions);
+        var synced = kernel.GetGoal(goal.Id).RefinedSpec!;
+        Xunit.Assert.False(synced.HasOpenQuestions);
+        Xunit.Assert.Contains(synced.Decisions, decision => decision.Choice == "v2");
+        Xunit.Assert.Contains(synced.ClarificationAnswerHistory, answer => answer.Text == "v2");
     }
 
     [Xunit.Fact(DisplayName = "SubscriptionCliCompleter_BuildStartInfo_uses_utf8_stdio_encoding")]

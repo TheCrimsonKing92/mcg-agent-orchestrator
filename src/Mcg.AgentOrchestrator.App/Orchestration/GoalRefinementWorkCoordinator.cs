@@ -26,6 +26,8 @@ internal static class GoalRefinementWorkCoordinator
 {
     internal const string OutboxKind = "goal-spec-refinement";
     internal const string CommandName = "goal-refinement-run";
+    internal const string PendingPolicyReceipt =
+        "spec_refinement outcome=pending owner=durable-outbox consumers_held=true researcher_allowed=true";
     private const int ReceiptVersion = 1;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly ConcurrentDictionary<string, DateTimeOffset> RecoveryLaunches = new(StringComparer.Ordinal);
@@ -41,6 +43,12 @@ internal static class GoalRefinementWorkCoordinator
             DateTimeOffset.UtcNow);
 
     public static string MessageId(GoalId goalId) => $"{OutboxKind}:{goalId.Value}";
+
+    public static bool HasPendingWork(Goal goal) =>
+        goal.RefinedSpec is null &&
+        goal.Timeline.Any(entry =>
+            entry.Kind == ProgressKind.GoalPolicyDecision &&
+            entry.Message.Equals(PendingPolicyReceipt, StringComparison.Ordinal));
 
     public static GoalRefinementWorkReceipt Deserialize(OrchestratorStateOutboxMessage message)
     {

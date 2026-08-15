@@ -278,15 +278,18 @@ internal static class CliPersistentStateRunner
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
         string? postCommitFailure = null;
+        IReadOnlyList<GoalId> pendingRefinementGoalIds = [];
         var isAcceptanceRetry = args.Count > 0 &&
             args[0].Equals("acceptance-retry", StringComparison.OrdinalIgnoreCase);
         bool changed;
-        if (isAcceptanceRetry &&
-            stateRepository is IOrchestratorStateOutboxRepository outboxRepository)
+        if (stateRepository is IOrchestratorStateOutboxRepository outboxRepository)
         {
             changed = outboxRepository.TransactWithOutboxAsync(
                     (kernel, _) =>
                     {
+                        var existingGoalIds = kernel.Goals
+                            .Select(goal => goal.Id)
+                            .ToHashSet();
                         var outboxMessages = new List<OrchestratorStateOutboxMessage>();
                         var commandAgents = nextAgents;
                         var commandProfiles = nextWorkerProfiles;
@@ -307,6 +310,17 @@ internal static class CliPersistentStateRunner
                         nextAgents = commandAgents;
                         nextWorkerProfiles = commandProfiles;
                         nextCurrentGoal = commandGoal;
+                        pendingRefinementGoalIds = kernel.Goals
+                            .Where(goal => !existingGoalIds.Contains(goal.Id))
+                            .Where(GoalRefinementWorkCoordinator.HasPendingWork)
+                            .Select(goal => goal.Id)
+                            .ToArray();
+                        foreach (var goalId in pendingRefinementGoalIds)
+                        {
+                            var messageId = GoalRefinementWorkCoordinator.MessageId(goalId);
+                            if (outboxMessages.All(message => !message.Id.Equals(messageId, StringComparison.Ordinal)))
+                                outboxMessages.Add(GoalRefinementWorkCoordinator.CreateMessage(goalId));
+                        }
                         var mustCommit = shouldSave || postCommitFailure is not null;
                         return Task.FromResult((
                             mustCommit,
@@ -315,7 +329,8 @@ internal static class CliPersistentStateRunner
                     })
                 .GetAwaiter()
                 .GetResult();
-            DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
+            if (isAcceptanceRetry)
+                DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
         }
         else
         {
@@ -360,6 +375,9 @@ internal static class CliPersistentStateRunner
         {
             throw new InvalidOperationException(postCommitFailure);
         }
+
+        foreach (var goalId in pendingRefinementGoalIds)
+            _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, goalId);
 
         return changed;
     }
@@ -2095,6 +2113,7 @@ internal static class CliPersistentStateRunner
                 preparedGoal.Id,
                 deferredCollaborationWriter.SnapshotEffects(),
                 deferredEventWriter.SnapshotEffects());
+            var refinementMessage = GoalRefinementWorkCoordinator.CreateMessage(preparedGoal.Id);
 
             GoalReplacementReceipt receipt;
             try
@@ -2288,7 +2307,7 @@ internal static class CliPersistentStateRunner
                                     transferred.OwnerGoalId,
                                     transferred.Version,
                                     "replaced"),
-                                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage]));
+                                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage, refinementMessage]));
                         })
                     .GetAwaiter()
                     .GetResult();
@@ -2401,6 +2420,7 @@ internal static class CliPersistentStateRunner
                 deferredCollaborationWriter.CompleteDelivery();
                 deferredEventWriter.CompleteDeliveryTo(
                     new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel));
+                _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, preparedGoal.Id);
             }
             var outcomeCode = RenderGoalReplacementOutcomeCode(receipt.Outcome);
             var receiptOwner = receipt.OwnerGoalId ?? "unknown";
