@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="run-b" name="Fixture B" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-08-14T23:00:00Z" start="2026-08-14T23:00:00Z" finish="2026-08-14T23:00:10Z" />
+  <Results>
+    <UnitTestResult executionId="b1" testId="b1" testName="Alpha" outcome="Error" duration="00:00:03" />
+    <UnitTestResult executionId="b2" testId="b2" testName="Beta" outcome="Passed" duration="00:00:01.5" />
+    <UnitTestResult executionId="b3" testId="b3" testName="Tie-B" outcome="Passed" duration="00:00:01" />
+    <UnitTestResult executionId="b4" testId="b4" testName="Tie-A" outcome="Passed" duration="00:00:01" />
+  </Results>
+</TestRun>

@@ -18,6 +18,9 @@ coverage.*/
 *.coverage
 *.coveragexml
 *.trx
+!scripts/fixtures/test-cost-ranking/**/*.trx
+!scripts/fixtures/test-cost-ranking/*.trx
+!scripts/fixtures/test-cost-ranking-invalid/*.trx
 
 # Publish/package/build artifacts
 artifacts/

@@ -248,6 +248,26 @@
           "--minimum-expected-tests",
           "1"
         ]
+      },
+      {
+        "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj",
+        "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
+        "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
+        "arguments": [
+          "{executable}",
+          "--no-ansi",
+          "--progress",
+          "off",
+          "--results-directory",
+          "{resultsDirectory}",
+          "--report-trx",
+          "--report-trx-filename",
+          "{trxFileName}",
+          "--long-running",
+          "120",
+          "--minimum-expected-tests",
+          "1"
+        ]
       }
     ]
   },

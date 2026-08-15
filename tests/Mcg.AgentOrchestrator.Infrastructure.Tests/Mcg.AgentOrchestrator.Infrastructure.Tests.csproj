@@ -23,6 +23,7 @@
     <Compile Remove="Cli\**\*.cs" />
     <Compile Remove="Fixtures\IsolatedDotnetProbe\**\*.cs" />
     <Compile Remove="ProviderEnvironment\**\*.cs" />
+    <Compile Remove="Fixtures\RealProcessShardProbe\**\*.cs" />
     <Content Include="TestData\Fixtures\progressive-review-10bd7223.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\PlannerOutputContract\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
