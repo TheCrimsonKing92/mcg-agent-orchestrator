@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.App.Orchestration;
 
@@ -340,4 +341,14 @@ internal sealed record ConductEvidenceLifecycleEvent(
     [property: JsonPropertyName("tests_executed")] object? TestsExecuted = null,
     [property: JsonPropertyName("superseded_by")] string? SupersededBy = null,
     [property: JsonPropertyName("cause")] string? Cause = null,
-    [property: JsonPropertyName("detail")] string? Detail = null);
+    [property: JsonPropertyName("detail")] string? Detail = null,
+    [property: JsonPropertyName("candidate_sha")] string? CandidateSha = null,
+    [property: JsonPropertyName("policy")] string? Policy = null,
+    [property: JsonPropertyName("batch_id")] string? BatchId = null,
+    [property: JsonPropertyName("member_requests")] IReadOnlyList<string>? MemberRequests = null,
+    [property: JsonPropertyName("request_disposition")] string? RequestDisposition = null,
+    [property: JsonPropertyName("finding_round_fingerprint")] string? FindingRoundFingerprint = null,
+    [property: JsonPropertyName("finding_stable_id")] string? FindingStableId = null,
+    [property: JsonPropertyName("request_identity")] string? RequestIdentity = null,
+    [property: JsonPropertyName("receipt_id")] string? ReceiptId = null,
+    [property: JsonPropertyName("request_dispositions")] IReadOnlyList<FindingEvidenceRequestDisposition>? RequestDispositions = null);

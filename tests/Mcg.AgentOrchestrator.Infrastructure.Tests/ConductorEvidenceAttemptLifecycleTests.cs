@@ -9,6 +9,57 @@ namespace Mcg.AgentOrchestrator.Infrastructure.Tests;
 public sealed class ConductorEvidenceAttemptLifecycleTests
 {
     [Fact]
+    public void MultiSelectionSingleFindingUsesRequestDispositionForAttemptAndEventLabels()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var logPath = Path.Combine(root, "conduct-events.log");
+            var writer = new ConductEventLogWriter(logPath);
+            var kernel = new AgentOrchestratorKernel();
+            var goal = kernel.CreateGoal("Label one finding with multiple selections consistently");
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                [],
+                branchHeadSha: "abc1234",
+                mainHeadSha: "base1234");
+            var context = new ConductorFocusedEvidenceRequestContext(
+                "finding-round-single",
+                "batch-single",
+                [
+                    new FindingEvidenceRequestDisposition(
+                        "one-finding",
+                        "one-request",
+                        "executed-standalone",
+                        "single-request")
+                ]);
+            var coordinator = new ConductorParallelAcceptanceAttemptCoordinator(
+                Path.Combine(root, "attempts"),
+                isProcessAlive: _ => true,
+                launchOwnedProcess: _ => new ConductorParallelAcceptanceOwnedProcessLaunchResult(7100),
+                acquireStableSlotLease: (_, _) => null,
+                conductEventLogWriter: writer);
+
+            var run = coordinator.EvaluateFocusedEvidence(
+                candidate,
+                ConductorAutonomyPolicy.Permissive,
+                "Infrastructure.Tests:ConductorDriverTests; Infrastructure.Tests:GoalAcceptanceVerifierTests",
+                PassingEvidence,
+                context);
+
+            Assert.Equal("executed-standalone", run.Attempt?.FocusedEvidenceRequestDisposition);
+            var start = Assert.Single(ReadEvents(logPath).Where(item =>
+                item.GetProperty("eventKind").GetString() == "EVIDENCE_START"));
+            Assert.Equal("executed-standalone", start.GetProperty("request_disposition").GetString());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SupersedingLiveAttempt_RecordsTypedEndBeforeReplacementStartExactlyOnce()
     {
         var root = CreateTempDirectory();
@@ -19,7 +70,31 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var attemptRoot = Path.Combine(root, "attempts");
             var kernel = new AgentOrchestratorKernel();
             var goal = kernel.CreateGoal("Capture focused evidence lifecycle");
-            var candidate = ConductorParallelAcceptanceCandidate.Create(goal, 0, []);
+            var candidate = ConductorParallelAcceptanceCandidate.Create(
+                goal,
+                0,
+                [],
+                branchHeadSha: "abc1234",
+                mainHeadSha: "base1234");
+            const string batchedRequest =
+                "Infrastructure.Tests:ConductorDriverTests; " +
+                "Infrastructure.Tests:GateReadyCandidateProjectorTests";
+            const string roundFingerprint = "finding-round-1234";
+            var requestContext = new ConductorFocusedEvidenceRequestContext(
+                roundFingerprint,
+                "evidence-batch-round-1234",
+                [
+                    new FindingEvidenceRequestDisposition(
+                        "driver-finding",
+                        "Infrastructure.Tests:ConductorDriverTests",
+                        "executed-batched",
+                        "compatible-same-project"),
+                    new FindingEvidenceRequestDisposition(
+                        "projector-finding",
+                        "Infrastructure.Tests:GateReadyCandidateProjectorTests",
+                        "executed-batched",
+                        "compatible-same-project")
+                ]);
             var firstCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
                 attemptRoot,
                 isProcessAlive: _ => true,
@@ -30,8 +105,9 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var first = firstCoordinator.EvaluateFocusedEvidence(
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                "run focused tests",
-                PassingEvidence);
+                batchedRequest,
+                PassingEvidence,
+                requestContext);
             Assert.True(firstCoordinator.InvalidateCurrent(goal.Id.Value, "operator retry replaced attempt"));
 
             var replacementCoordinator = new ConductorParallelAcceptanceAttemptCoordinator(
@@ -44,15 +120,40 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             var replacement = replacementCoordinator.EvaluateFocusedEvidence(
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
-                "run focused tests",
-                PassingEvidence);
+                batchedRequest,
+                PassingEvidence,
+                requestContext);
+            var finalDispositions = requestContext.RequestDispositions
+                .Append(new FindingEvidenceRequestDisposition(
+                    "pending-finding",
+                    "Core.Tests:GoalLifecycleTests",
+                    "superseded",
+                    "superseded-by-actionable-red"))
+                .ToArray();
+            Assert.True(replacementCoordinator.RecordFocusedEvidenceRequestDispositions(
+                replacement.Attempt,
+                roundFingerprint,
+                "finding-evidence-receipt-1",
+                finalDispositions));
+            using (var metadata = JsonDocument.Parse(File.ReadAllText(replacement.Attempt.MetadataPath)))
+            {
+                Assert.Equal(
+                    roundFingerprint,
+                    metadata.RootElement.GetProperty("findingRoundFingerprint").GetString());
+                Assert.Equal(
+                    "finding-evidence-receipt-1",
+                    metadata.RootElement.GetProperty("focusedEvidenceReceiptId").GetString());
+                Assert.Equal(
+                    3,
+                    metadata.RootElement.GetProperty("focusedEvidenceRequestDispositions").GetArrayLength());
+            }
             replacementCoordinator.RunAttemptForTests(
                 first.Attempt,
                 candidate,
                 ConductorAutonomyPolicy.Permissive,
                 (attemptCandidate, _, _, _) => ConductorParallelAcceptanceRunResult.Focused(
                     attemptCandidate,
-                    PassingEvidence(attemptCandidate.Goal, "run focused tests", null, CancellationToken.None)));
+                    PassingEvidence(attemptCandidate.Goal, batchedRequest, null, CancellationToken.None)));
 
             var events = ReadEvents(logPath);
             var firstStart = Assert.Single(events.Where(item =>
@@ -62,6 +163,24 @@ public sealed class ConductorEvidenceAttemptLifecycleTests
             Assert.Equal(first.Attempt.AttemptId, firstStart.GetProperty("attempt").GetString());
             Assert.Equal(1, firstStart.GetProperty("ordinal").GetInt32());
             Assert.Equal(JsonValueKind.String, firstStart.GetProperty("timestamp").ValueKind);
+            Assert.Equal("abc1234", firstStart.GetProperty("candidate_sha").GetString());
+            Assert.Equal("Permissive", firstStart.GetProperty("policy").GetString());
+            Assert.Equal("evidence-batch-round-1234", firstStart.GetProperty("batch_id").GetString());
+            Assert.Equal("executed-batched", firstStart.GetProperty("request_disposition").GetString());
+            Assert.Equal(2, firstStart.GetProperty("member_requests").GetArrayLength());
+            Assert.Equal(roundFingerprint, firstStart.GetProperty("finding_round_fingerprint").GetString());
+            Assert.Equal(2, firstStart.GetProperty("request_dispositions").GetArrayLength());
+            Assert.Equal(first.Attempt.FocusedEvidenceBatchId, replacement.Attempt.FocusedEvidenceBatchId);
+            var dispositionEvents = events.Where(item =>
+                item.GetProperty("eventKind").GetString() == "EVIDENCE_REQUEST_DISPOSITION" &&
+                item.GetProperty("attempt").GetString() == replacement.Attempt.AttemptId)
+                .ToArray();
+            Assert.Equal(3, dispositionEvents.Length);
+            var superseded = Assert.Single(dispositionEvents.Where(item =>
+                item.GetProperty("finding_stable_id").GetString() == "pending-finding"));
+            Assert.Equal("superseded", superseded.GetProperty("request_disposition").GetString());
+            Assert.Equal("finding-evidence-receipt-1", superseded.GetProperty("receipt_id").GetString());
+            Assert.Equal(roundFingerprint, superseded.GetProperty("finding_round_fingerprint").GetString());
             var endIndexes = events
                 .Select((item, index) => (item, index))
                 .Where(pair => pair.item.GetProperty("eventKind").GetString() == "EVIDENCE_END" &&

@@ -30,15 +30,13 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.False(ConductorAutonomyPolicy.Manual.AllowsAutonomousHighRiskOwnership);
     }
 
-    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_presets_have_positive_worker_and_evidence_caps")]
-    public void ConductorAutonomyPolicyPresetsHavePositiveWorkerAndEvidenceCaps()
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_presets_have_positive_worker_caps")]
+    public void ConductorAutonomyPolicyPresetsHavePositiveWorkerCaps()
     {
         foreach (var policy in ConductorAutonomyPolicy.All)
         {
             Assert.True(policy.MaxConcurrentPaidWorkers > 0,
                 $"{policy.Name}: MaxConcurrentPaidWorkers must be > 0");
-            Assert.True(policy.MaxFocusedEvidenceRunsPerRound > 0,
-                $"{policy.Name}: MaxFocusedEvidenceRunsPerRound must be > 0");
         }
     }
 
@@ -162,14 +160,17 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Contains(errors, e => e.Contains("maxConcurrentPaidWorkers", StringComparison.Ordinal));
     }
 
-    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_nonpositive_focused_evidence_cap")]
-    public void ConductorAutonomyPolicyValidationRejectsNonpositiveFocusedEvidenceCap()
+    [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_has_no_retired_focused_evidence_cap")]
+    public void ConductorAutonomyPolicyValidationHasNoRetiredFocusedEvidenceCap()
     {
-        var policy = ConductorAutonomyPolicy.Conservative with { MaxFocusedEvidenceRunsPerRound = 0 };
-        var errors = policy.Validate();
+        Assert.Null(typeof(ConductorAutonomyPolicy).GetProperty("MaxFocusedEvidenceRunsPerRound"));
 
-        Assert.Contains(errors, error =>
-            error.Contains("maxFocusedEvidenceRunsPerRound", StringComparison.Ordinal));
+        foreach (var policy in ConductorAutonomyPolicy.All)
+        {
+            Assert.DoesNotContain(
+                policy.Validate(),
+                error => error.Contains("maxFocusedEvidenceRunsPerRound", StringComparison.Ordinal));
+        }
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_validation_rejects_missing_lifecycle_state")]
@@ -205,7 +206,7 @@ public sealed class ConductorAutonomyPolicyTests
         Assert.Equal(original.EmptyOutputRetryMaxDelaySeconds, restored.EmptyOutputRetryMaxDelaySeconds);
         Assert.Equal(original.ReviewAutoRetryWarningRound, restored.ReviewAutoRetryWarningRound);
         Assert.Equal(original.ReviewAutoRetryStopRound, restored.ReviewAutoRetryStopRound);
-        Assert.Equal(original.MaxFocusedEvidenceRunsPerRound, restored.MaxFocusedEvidenceRunsPerRound);
+        Assert.DoesNotContain("maxFocusedEvidenceRunsPerRound", json, StringComparison.Ordinal);
         Assert.Equal(original.AutoPromoteRiskThreshold, restored.AutoPromoteRiskThreshold);
         foreach (var state in Enum.GetValues<GoalLifecycleState>())
         {
@@ -234,9 +235,10 @@ public sealed class ConductorAutonomyPolicyTests
             {
               "maxTotalBudget": 20.0,
               "perProviderBudgetCaps": {
-                "anthropic": 15.0,
-                "openai": 10.0
+                 "anthropic": 15.0,
+                 "openai": 10.0
               },
+              "maxFocusedEvidenceRunsPerRound": 2,
             """ + currentJson[1..];
 
         var restored = ConductorAutonomyPolicy.ParseJson(legacyJson);
@@ -254,6 +256,7 @@ public sealed class ConductorAutonomyPolicyTests
         }
         Assert.DoesNotContain("maxTotalBudget", reserialized, StringComparison.Ordinal);
         Assert.DoesNotContain("perProviderBudgetCaps", reserialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("maxFocusedEvidenceRunsPerRound", reserialized, StringComparison.Ordinal);
     }
 
     [Xunit.Fact(DisplayName = "ConductorAutonomyPolicy_ParseJson_ignores_malformed_retired_total_budget")]
