@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="run-old" name="Old fixture" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-08-13T20:00:00Z" start="2026-08-13T20:00:00Z" finish="2026-08-13T20:00:10Z" />
+  <Results>
+    <UnitTestResult executionId="old1" testId="old1" testName="TooOld" outcome="Failed" duration="00:01:40" />
+  </Results>
+</TestRun>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="missing-finish" name="Invalid fixture" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2026-08-15T00:00:00Z" start="2026-08-15T00:00:00Z" />
+  <Results>
+    <UnitTestResult executionId="bad1" testId="bad1" testName="MustFailLoudly" outcome="Passed" duration="00:00:01" />
+  </Results>
+</TestRun>

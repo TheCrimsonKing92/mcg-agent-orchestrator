@@ -4822,7 +4822,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             var verifier = new GoalAcceptanceVerifier(async (args, _, timeout, cancellationToken) =>
             {
                 invocations.Enqueue(args);
-                var isTest = IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.Infrastructure.Tests");
+                var isTest = IsMtpExecutableCall(args, "Mcg.AgentOrchestrator.RealProcessShardProbe");
                 if (isTest)
                 {
                     Assert.True(
@@ -4876,7 +4876,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 call[1].Equals("build", StringComparison.OrdinalIgnoreCase));
             var firstShardIndex = Array.FindIndex(
                 invocationArray,
-                call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+                call => IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.RealProcessShardProbe"));
             Assert.True(firstShardIndex >= 0);
             Assert.DoesNotContain(
                 invocationArray.Skip(firstShardIndex),
@@ -5464,7 +5464,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_invalidates_on_candidate_or_main_sha_change")]
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheInvalidatesOnCandidateOrMainShaChange()
     {
-        var root = CreateCheckedInManifestShapeWorkspace();
+        var root = CreateTwoLanePartitionVerdictManifestWorkspace();
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         SetPartitionVerdictKeyHooks("tree-a", "main-a", "commit-a");
@@ -5590,7 +5590,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_partition_verdict_cache_backstop_forces_full_rerun")]
     public async Task GoalAcceptanceVerifierPartitionVerdictCacheBackstopForcesFullRerun()
     {
-        var root = CreateCheckedInManifestShapeWorkspace();
+        var root = CreateTwoLanePartitionVerdictManifestWorkspace();
         var goalId = new GoalId("12345678123456781234567812345678");
         var calls = new List<string[]>();
         var failFirstPartitionOnForcedRerun = false;
@@ -7468,6 +7468,31 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             }
             """);
 
+    private static string CreateTwoLanePartitionVerdictManifestWorkspace() =>
+        CreateManifestWorkspace($$"""
+            {
+              "version": 1,
+              "engine": {
+                "infrastructureTestLanes": [
+                  { "name": "Cli", "filter": "{{CheckedInCliLaneFilter}}" },
+                  {
+                    "name": "Remainder",
+                    "filter": "FullyQualifiedName!~CliCommandTests&Category!=HostIntegration"
+                  }
+                ]
+              },
+              "checks": [
+                {
+                  "name": "infrastructure tests",
+                  "type": "dotnet-test",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "arguments": ["--verbosity", "minimal"]
+                }
+              ],
+              "forbiddenChangedPathGlobs": []
+            }
+            """);
+
     private static string CreateRealProcessShardManifestWorkspace() =>
         CreateManifestWorkspace("""
             {
@@ -7477,16 +7502,16 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 "infrastructureTestLanes": [
                   {
                     "name": "Real process alpha",
-                    "filter": "FullyQualifiedName~RealProcessShardAlphaSmokeTests"
+                    "filter": "FullyQualifiedName~ShardProbeAlphaTests"
                   },
                   {
                     "name": "Real process beta",
-                    "filter": "FullyQualifiedName~RealProcessShardBetaSmokeTests"
+                    "filter": "FullyQualifiedName~ShardProbeBetaTests"
                   }
                 ],
                 "mtpInvocations": [
                   {
-                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                    "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj",
                     "executablePathTemplate": "bin/{projectName}/{configuration}/{projectName}{executableExtension}",
                     "firewallExecutablePathTemplate": "bin/{projectName}/{configuration}/{projectName}.exe",
                     "arguments": [
@@ -7510,7 +7535,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                   "name": "infrastructure tests",
                   "type": "dotnet-test",
                   "runner": "mtp",
-                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj",
+                  "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Fixtures/RealProcessShardProbe/Mcg.AgentOrchestrator.RealProcessShardProbe.csproj",
                   "arguments": ["--verbosity", "minimal"]
                 }
               ],

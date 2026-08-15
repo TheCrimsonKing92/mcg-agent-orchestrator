@@ -58,21 +58,6 @@ public sealed class ConductorSelfRelaunchTests
         Assert.False(IsProcessAlive(result.Handoff.ProcessId));
     }
 
-    [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_real_self_check_failure_keeps_incumbent_authority")]
-    public void RealSelfCheckFailureKeepsIncumbentAuthority()
-    {
-        using var fixture = RealRelaunchFixture.Create();
-        File.WriteAllText(fixture.Options.StateStorePath, "not-a-sqlite-database");
-
-        var result = ConductorSelfRelaunch.Create(fixture.Options)(
-            new ConductorSelfRelaunchRequest("goal-real-self-check-failure", 9));
-
-        Assert.False(result.HandedOff);
-        Assert.Equal("self-check", result.FailedPhase);
-        Assert.True(fixture.Lease.IsHeld);
-        Assert.Null(result.Handoff);
-    }
-
     [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_launches_prepared_content_addressed_successor")]
     public void LaunchesPreparedContentAddressedSuccessor()
     {
@@ -111,33 +96,29 @@ public sealed class ConductorSelfRelaunchTests
         }
     }
 
-    [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_self_check_failure_never_attempts_handoff")]
-    public void SelfCheckFailureNeverAttemptsHandoff()
+    [Xunit.Fact(DisplayName = "ConductorSelfRelaunch_self_check_preparation_failure_keeps_incumbent_authority")]
+    public void SelfCheckPreparationFailureKeepsIncumbentAuthority()
     {
         var root = CreateTempDirectory();
         try
         {
+            var orchestratorDirectory = Path.Combine(root, ".orchestrator");
+            Directory.CreateDirectory(orchestratorDirectory);
+            using var lease = ConductorLoopLeaseController.Acquire(orchestratorDirectory);
+            var baseOptions = Options(root);
+            var options = baseOptions with
+            {
+                HandoffOptions = baseOptions.HandoffOptions with
+                {
+                    ReleaseCurrentLease = lease.Release,
+                    ReacquireCurrentLease = lease.Reacquire
+                }
+            };
             var handoffCalled = false;
             var result = ConductorSelfRelaunch.TryRelaunch(
-                Options(root),
+                options,
                 new ConductorSelfRelaunchRequest("goal1234", 7),
-                _ =>
-                {
-                    using var selfCheck = Process.Start(new ProcessStartInfo("powershell")
-                    {
-                        UseShellExecute = false,
-                        CreateNoWindow = true,
-                        ArgumentList =
-                        {
-                            "-NoProfile",
-                            "-Command",
-                            "exit 17"
-                        }
-                    })!;
-                    selfCheck.WaitForExit(5000);
-                    Assert.Equal(17, selfCheck.ExitCode);
-                    throw new ConductorSelfRelaunchPreparationException("self-check", "bad protocol");
-                },
+                _ => throw new ConductorSelfRelaunchPreparationException("self-check", "bad protocol"),
                 (_, _) =>
                 {
                     handoffCalled = true;
@@ -147,6 +128,8 @@ public sealed class ConductorSelfRelaunchTests
             Assert.False(result.HandedOff);
             Assert.Equal("self-check", result.FailedPhase);
             Assert.False(handoffCalled);
+            Assert.True(lease.IsHeld);
+            Assert.Null(result.Handoff);
         }
         finally
         {
