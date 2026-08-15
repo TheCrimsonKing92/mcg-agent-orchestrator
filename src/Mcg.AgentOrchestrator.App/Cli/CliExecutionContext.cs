@@ -34,7 +34,8 @@ internal sealed class CliExecutionContext(
     CollaborationItemRaise? refinementCollaborationItemRaise = null,
     Func<AgentOrchestratorKernel, IReadOnlyCollection<GoalId>, IReadOnlyList<GoalSnapshotCheckpointResult>>? checkpointGoalKernel = null,
     TransientSqliteLoadHold? initialConductLoopLoadHold = null,
-    Action<Goal, GoalReplacementCommand>? finalizeGoalReplacement = null)
+    Action<Goal, GoalReplacementCommand>? finalizeGoalReplacement = null,
+    Action? reportGoalCreationProgress = null)
 {
 public AgentOrchestratorKernel Kernel { get; } = kernel;
 
@@ -171,6 +172,10 @@ public AcceptanceMergeGuardPreflightResult PrepareAcceptanceMergeGuard(Acceptanc
 public void RegisterAcceptanceGuardAbort() => registerAcceptanceGuardAbort?.Invoke();
 
 public void FinalizeGoalCreation(Goal goal) => finalizeGoalCreation?.Invoke(goal);
+
+public bool HasGoalCreationFinalizer => finalizeGoalCreation is not null;
+
+public void ReportGoalCreationProgress() => reportGoalCreationProgress?.Invoke();
 
 public void FinalizeGoalReplacement(Goal goal, GoalReplacementCommand command) =>
     (finalizeGoalReplacement ?? throw new InvalidOperationException("goal-replace requires durable replacement support."))(goal, command);

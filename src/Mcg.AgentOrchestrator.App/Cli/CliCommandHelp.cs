@@ -5,7 +5,8 @@ namespace Mcg.AgentOrchestrator.App.Cli;
 internal static class CliCommandHelp
 {
     public const string ConductUsage = "Usage: conduct <goal-id-prefix> [--policy <Conservative|Permissive|Manual>] [--watch [--poll-seconds <n>]], or conduct --loop [--max-iterations <n>] [--max-duration <seconds>] [--watch|--daemon] [--poll-seconds <n>] [--unscoped-stall-ticks <n>]";
-    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|five-role>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] | goal --text-file <path> [--pipeline <auto|five-role>] | goal --brief-file <path> [--pipeline <auto|five-role>]";
+    public const string GoalUsage = "Usage: goal <objective> [--pipeline <auto|five-role>] [--simple] [--from-backlog] [--run --confirm-batch-start] [--backlog-item <id-prefix> --backlog-coverage <full|slice>] [--request-key <key>] | goal --text-file <path> [--pipeline <auto|five-role>] [--request-key <key>] | goal --brief-file <path> [--pipeline <auto|five-role>] [--request-key <key>]";
+    public const string GoalIntakeStatusUsage = "Usage: goal-intake-status <request-key>";
     public const string GoalReplaceUsage = "Usage: goal-replace <predecessor-goal-id> --brief-file <path> --reason-file <path> --request-id <guid> --disposition <zero-work-correction|abandon-failed-attempt|supersede-unlanded-attempt> --confirm-goal-replace [--pipeline <auto|five-role>] [--ideation <agent>|--researcher <agent>|--planner <agent>|--developer <agent>|--tester <agent>|--reviewer <agent>]";
     public const string AddTaskUsage = "Usage: add-task [--goal <goal-prefix>] <role> <description> [--before-role <role>] | add-task [--goal <goal-prefix>] <role> --text-file <path> [--before-role <role>]";
     public const string RetryUsage = "Usage: retry [--goal <goal-prefix>] <task-number> <message> [--goal <goal-prefix>] [--mechanical] | retry [--goal <goal-prefix>] <task-number> --text-file <path> [--goal <goal-prefix>] [--mechanical]";
@@ -87,9 +88,14 @@ internal static class CliCommandHelp
     private static readonly CommandHelpEntry Goal = new(
         GoalUsage,
         "Create a goal. Before authoring criteria, assign evidence owners using docs/role-capability-matrix.md.",
-        new[] { "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--backlog-coverage", "--text-file", "--brief-file", "--help", "-h" }
+        new[] { "--pipeline", "--simple", "--from-backlog", "--run", "--confirm-batch-start", "--backlog-item", "--backlog-coverage", "--request-key", "--text-file", "--brief-file", "--help", "-h" }
             .ToHashSet(StringComparer.OrdinalIgnoreCase),
         ValidateFlags: false);
+
+    private static readonly CommandHelpEntry GoalIntakeStatus = new(
+        GoalIntakeStatusUsage,
+        "Poll a keyed goal-intake request without starting or retrying work.",
+        ["--help", "-h"]);
 
     private static readonly CommandHelpEntry GoalReplace = new(
         GoalReplaceUsage,
@@ -412,6 +418,7 @@ internal static class CliCommandHelp
         Console.WriteLine();
         Console.WriteLine("Commands:");
         Console.WriteLine("  goal              Create a goal.");
+        Console.WriteLine("  goal-intake-status Poll keyed goal creation status.");
         Console.WriteLine("  goal-replace      Replace an eligible terminal source-linked goal.");
         Console.WriteLine("  goals             List goals.");
         Console.WriteLine("  status            Show goal or orchestrator status.");
@@ -498,6 +505,12 @@ internal static class CliCommandHelp
         if (args[0].Equals("goal-replace", StringComparison.OrdinalIgnoreCase))
         {
             entry = GoalReplace;
+            return true;
+        }
+
+        if (args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase))
+        {
+            entry = GoalIntakeStatus;
             return true;
         }
 

@@ -115,24 +115,43 @@ public sealed class BacklogIntakeRecordStore
         if (string.IsNullOrWhiteSpace(goalId))
             throw new ArgumentException("Value cannot be empty.", nameof(goalId));
 
-        var now = DateTimeOffset.UtcNow.ToString("O");
+        if (StateDbWriteSession.TryExecute(
+                _dbPath,
+                connection => MarkGoalCreated(connection, sourceBacklogItemId, goalId)))
+        {
+            return;
+        }
+
         WithBusyRetry(() =>
         {
             using var conn = OpenConnection();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = """
-                UPDATE backlog_intake_records
-                SET goal_id = $goal_id,
-                    status = 'GoalCreated',
-                    last_heartbeat_at = $last_heartbeat_at
-                WHERE source_backlog_item_id = $source_backlog_item_id
-                """;
-            cmd.Parameters.AddWithValue("$goal_id", goalId);
-            cmd.Parameters.AddWithValue("$last_heartbeat_at", now);
-            cmd.Parameters.AddWithValue("$source_backlog_item_id", sourceBacklogItemId);
-            cmd.ExecuteNonQuery();
+            MarkGoalCreated(conn, sourceBacklogItemId, goalId);
             return true;
         });
+    }
+
+    private static void MarkGoalCreated(
+        SqliteConnection connection,
+        string sourceBacklogItemId,
+        string goalId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE backlog_intake_records
+            SET goal_id = $goal_id,
+                status = 'GoalCreated',
+                last_heartbeat_at = $last_heartbeat_at
+            WHERE source_backlog_item_id = $source_backlog_item_id
+              AND goal_id IS NULL
+            """;
+        command.Parameters.AddWithValue("$goal_id", goalId);
+        command.Parameters.AddWithValue("$last_heartbeat_at", DateTimeOffset.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$source_backlog_item_id", sourceBacklogItemId);
+        if (command.ExecuteNonQuery() != 1)
+        {
+            throw new InvalidOperationException(
+                $"BACKLOG_INTAKE_INVALID_TRANSITION source={sourceBacklogItemId} goal={goalId}");
+        }
     }
 
     public BacklogIntakeRecord? Get(string sourceBacklogItemId)

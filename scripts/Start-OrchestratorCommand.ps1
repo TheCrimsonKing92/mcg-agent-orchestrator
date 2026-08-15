@@ -249,13 +249,29 @@ try {
         [Environment]::SetEnvironmentVariable("MCG_ORCHESTRATOR_CONDUCT_BATCH_NAME", $previousBatchName, "Process")
     }
 
-    [pscustomobject]@{
+    $requestKey = $null
+    for ($index = 0; $index -lt $Arguments.Count; $index++) {
+        if ($Arguments[$index] -eq "--request-key" -and $index + 1 -lt $Arguments.Count) {
+            $requestKey = $Arguments[$index + 1]
+            break
+        }
+        if ($Arguments[$index].StartsWith("--request-key=", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $requestKey = $Arguments[$index].Substring("--request-key=".Length)
+            break
+        }
+    }
+
+    $receipt = [ordered]@{
         pid = [int]$process.Id
         stdoutPath = $stdoutPath
         stderrPath = $stderrPath
         args = @($processArguments)
         startedAt = $startedAt
-    } | ConvertTo-Json -Compress
+    }
+    if (-not [string]::IsNullOrWhiteSpace($requestKey)) {
+        $receipt["requestKey"] = $requestKey
+    }
+    [pscustomobject]$receipt | ConvertTo-Json -Compress
 }
 catch {
     Write-LaunchFailure `
