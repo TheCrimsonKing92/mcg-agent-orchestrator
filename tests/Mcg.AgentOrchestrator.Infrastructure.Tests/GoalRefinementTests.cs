@@ -154,12 +154,16 @@ public sealed class GoalRefinementTests
         Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", pending.Message, StringComparison.Ordinal);
         Xunit.Assert.False(provider.Started.Task.IsCompleted);
 
-        var refinement = GoalRefinementWorkCoordinator.ProcessAsync(
+        // The production coordinator runs in its own process. Keep this invocation off xUnit's
+        // synchronization context because EnsureRefined is intentionally a synchronous gate over
+        // the asynchronous provider call; running it on that context would block this test from
+        // delivering the provider response below.
+        var refinement = Task.Run(() => GoalRefinementWorkCoordinator.ProcessAsync(
             repository,
             workspace,
             providers,
             WorkerProfileCatalog.Default(),
-            goal.Id);
+            goal.Id));
         await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
         Xunit.Assert.False(refinement.IsCompleted);
 
