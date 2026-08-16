@@ -134,11 +134,11 @@ public sealed class WorkerContextPackageTests
 
         if (OperatingSystem.IsWindows())
         {
-            Assert.Contains("chcp 65001 > nul &", startInfo.Arguments, StringComparison.Ordinal);
+            Assert.Contains("chcp 65001 > nul &&", startInfo.Arguments, StringComparison.Ordinal);
         }
         else
         {
-            Assert.DoesNotContain("chcp", startInfo.ArgumentList);
+            Assert.DoesNotContain("chcp", startInfo.ArgumentList.Last(), StringComparison.Ordinal);
         }
     }
 

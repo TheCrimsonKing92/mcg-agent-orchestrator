@@ -8195,7 +8195,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 // MTP formats theory arguments before writing them. Under an OEM console code page,
                 // Windows best-fit conversion irreversibly changes CJK and combining characters before
                 // capture, so decoding the resulting bytes cannot repair the discovery identity.
-                command = $"chcp 65001 > nul & {command}";
+                command = $"chcp 65001 > nul && {command}";
             }
             if (!string.IsNullOrWhiteSpace(stdoutRedirectTarget))
             {
