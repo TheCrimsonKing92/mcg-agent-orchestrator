@@ -102,9 +102,9 @@ function New-IsolatedDotnetArguments {
 
     [pscustomobject]@{
         RunRoot = $runRoot
+        ArtifactsPath = $artifactsPath
         Arguments = @(
-            "--artifacts-path",
-            $artifactsPath,
+            "--property:McgIsolatedArtifactsPath=$artifactsPath",
             "-maxcpucount:$maxCpuCount"
         )
     }
@@ -142,7 +142,11 @@ try {
         throw "dotnet build failed with exit code $LASTEXITCODE."
     }
 
-    dotnet test $Solution --no-build --verbosity minimal @isolatedArguments
+    $testIsolationArguments = @(
+        "--property:McgIsolatedArtifactsPath=$($buildIsolation.ArtifactsPath)",
+        "--property:BuildInParallel=false"
+    )
+    dotnet test --solution $Solution --no-build --verbosity minimal @testIsolationArguments
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet test failed with exit code $LASTEXITCODE."
     }

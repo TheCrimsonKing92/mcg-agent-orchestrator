@@ -4151,6 +4151,7 @@ public sealed class DotnetBuildEnvironmentManagerTests
             startInfo.EnvironmentVariables["PATH"] = shimDirectory + Path.PathSeparator + (Environment.GetEnvironmentVariable("PATH") ?? string.Empty);
             startInfo.EnvironmentVariables["DOTNET_SHIM_LOG"] = logPath;
             startInfo.EnvironmentVariables[DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable] = Path.Combine(root, "isolated-dotnet");
+            startInfo.EnvironmentVariables["MCG_BUILD_MAXCPUCOUNT"] = "7";
             startInfo.EnvironmentVariables[WorkerSandboxOptions.EnabledVariable] = "1";
             startInfo.EnvironmentVariables.Remove(WorkerSandboxOptions.DispatchWorkerVariable);
             startInfo.EnvironmentVariables[WorkerSandboxOptions.AccountVariable] = "sandbox-user";
@@ -4167,9 +4168,11 @@ public sealed class DotnetBuildEnvironmentManagerTests
 
             var log = File.ReadAllText(logPath);
             Assert.True(log.Contains($"cwd={workDirectory}", StringComparison.OrdinalIgnoreCase));
-            Assert.True(log.Contains("args=test Fake.Tests.csproj --no-restore --filter FullyQualifiedName~FocusedTests --artifacts-path ", StringComparison.Ordinal));
-            Assert.True(log.Contains("-maxcpucount:", StringComparison.Ordinal));
-            Assert.True(log.Contains("-p:BuildInParallel=false", StringComparison.Ordinal));
+            Assert.True(log.Contains("args=test --project Fake.Tests.csproj --no-restore --property:McgIsolatedArtifactsPath=", StringComparison.Ordinal));
+            Assert.True(log.Contains("--property:BuildInParallel=false -- --filter-class *FocusedTests* --no-ansi --progress off", StringComparison.Ordinal));
+            Assert.DoesNotContain("-maxcpucount:", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("--filter FullyQualifiedName~FocusedTests", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("--artifacts-path", log, StringComparison.Ordinal);
             Assert.True(log.Contains($"repo={workDirectory}", StringComparison.OrdinalIgnoreCase));
             Assert.True(log.Contains("args=build-server shutdown", StringComparison.Ordinal));
             Assert.DoesNotContain("--disable-build-servers", log);

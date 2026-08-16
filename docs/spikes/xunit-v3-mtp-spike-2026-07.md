@@ -106,6 +106,14 @@ With SDK 10, `dotnet test` against the MTP-enabled project failed with:
 Testing with VSTest target is no longer supported by Microsoft.Testing.Platform on .NET 10 SDK and later.
 ```
 
+Superseded 2026-08-16: SDK 10 opts into the native driver through the top-level
+`global.json` `test.runner` value, not `TestingPlatformDotnetTestSupport`. The repository keeps
+that property absent. Native one-step execution also cannot use the SDK-reserved `ArtifactsPath`
+property with `xunit.v3.mtp-v2` 3.2.2 because the driver forwards it to the apphost as an unsupported
+option. `McgIsolatedArtifactsPath` now maps project-scoped output and intermediate paths without
+changing the apphost argument vector; the measured controls are in
+`docs/negative-controls/8ab0a29d.md` and `docs/negative-controls/8ab0a29d-argv.md`.
+
 Package compatibility delta:
 
 - `xunit.v3` 3.2.2 plus `Microsoft.Testing.Extensions.TrxReport` 2.3.2 failed at executable startup with `System.TypeLoadException` for `Microsoft.Testing.Platform.Extensions.TestHost.IDataConsumer`.

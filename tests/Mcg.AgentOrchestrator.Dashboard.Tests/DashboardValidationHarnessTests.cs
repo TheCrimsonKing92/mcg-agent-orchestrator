@@ -44,9 +44,10 @@ public sealed class DashboardValidationHarnessTests
     Assert.Contains("api/system/build-test-cleanup", buildTestCycle, StringComparison.Ordinal);
     Assert.Contains("Stop-Process -Id $processId", buildTestCycle, StringComparison.Ordinal);
     Assert.Contains("dotnet build $Solution --no-restore --verbosity minimal @isolatedArguments", buildTestCycle, StringComparison.Ordinal);
-    Assert.Contains("dotnet test $Solution --no-build --verbosity minimal @isolatedArguments", buildTestCycle, StringComparison.Ordinal);
-    Assert.Contains("--artifacts-path", buildTestCycle, StringComparison.Ordinal);
+    Assert.Contains("dotnet test --solution $Solution --no-build --verbosity minimal @testIsolationArguments", buildTestCycle, StringComparison.Ordinal);
+    Assert.DoesNotContain("--artifacts-path", buildTestCycle, StringComparison.Ordinal);
     Assert.Contains("-maxcpucount:$maxCpuCount", buildTestCycle, StringComparison.Ordinal);
+    Assert.Contains("--property:McgIsolatedArtifactsPath=$($buildIsolation.ArtifactsPath)", buildTestCycle, StringComparison.Ordinal);
     Assert.Contains("if ($cycleSucceeded)", buildTestCycle, StringComparison.Ordinal);
     Assert.Contains("Remove-Item -LiteralPath $buildIsolation.RunRoot", buildTestCycle, StringComparison.Ordinal);
     Assert.Contains("Wait-DashboardHealth", buildTestCycle, StringComparison.Ordinal);

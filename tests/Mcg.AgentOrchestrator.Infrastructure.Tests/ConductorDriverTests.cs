@@ -490,7 +490,7 @@ public sealed class ConductorDriverTests
         new(
             sha,
             [
-                "dotnet test tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal --filter FullyQualifiedName~ConductorDriverTests"
+                "dotnet test --project tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj --verbosity minimal --filter FullyQualifiedName~ConductorDriverTests"
             ],
             "Infrastructure.Tests: FullyQualifiedName~ConductorDriverTests",
             "Orchestration change mapped to ConductorDriverTests.",
