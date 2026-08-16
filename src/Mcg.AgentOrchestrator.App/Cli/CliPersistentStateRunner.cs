@@ -95,9 +95,6 @@ internal static class CliPersistentStateRunner
                 ref currentGoal);
         }
 
-        if (stateRepository is IOrchestratorStateOutboxRepository refinementOutboxRepository)
-            GoalRefinementWorkCoordinator.TryLaunchFirstPending(refinementOutboxRepository, workspace);
-
         if (IsOperatorIntentStatusCommand(args))
         {
             PrintOperatorIntentStatus(args, workspace);

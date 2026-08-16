@@ -118,6 +118,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     return true;
                 }
                 catch (InvalidOperationException profileEx)
+                    when (profileEx.Message.StartsWith("SPEC_REFINEMENT_PENDING", StringComparison.Ordinal))
+                {
+                    throw;
+                }
+                catch (InvalidOperationException profileEx)
                 {
                     throw new InvalidOperationException(
                         $"Goal '{context.CurrentGoal.Id.Value[..8]}' task {ConsoleViews.GetTaskDisplayNumber(context.CurrentGoal, profileTask.Id)}: {profileEx.Message}", profileEx);
@@ -179,6 +184,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
                     LaunchLatestDispatch(context, context.CurrentGoal!, subscriptionTask, parts, "subscription-dispatch", refreshBeforeStart: false);
                 return true;
+            }
+            catch (InvalidOperationException subscriptionEx)
+                when (subscriptionEx.Message.StartsWith("SPEC_REFINEMENT_PENDING", StringComparison.Ordinal))
+            {
+                throw;
             }
             catch (InvalidOperationException subscriptionEx)
             {

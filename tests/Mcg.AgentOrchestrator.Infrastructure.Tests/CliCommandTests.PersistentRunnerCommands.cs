@@ -2076,9 +2076,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(item.Id, winner.SourceBacklogItemId);
         Xunit.Assert.Null(winner.RefinedSpec);
         Xunit.Assert.Equal(GoalStatus.Active, winner.Status);
-        Xunit.Assert.Empty(Directory.Exists(workspace.GoalLifecycleEventsDirectory)
-            ? Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl")
-            : []);
+        Xunit.Assert.Single(Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl"));
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_rejects_competing_backlog_link_atomically")]
@@ -2172,7 +2170,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
         Xunit.Assert.Empty(await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
             .ListAsync(created.Id.Value));
-        Xunit.Assert.False(File.Exists(Path.Combine(
+        Xunit.Assert.True(File.Exists(Path.Combine(
             workspace.GoalLifecycleEventsDirectory,
             $"{created.Id.Value}.jsonl")));
         Xunit.Assert.Contains(created.Id.Value[..8], output);
