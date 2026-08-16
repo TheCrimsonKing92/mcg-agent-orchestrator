@@ -50,7 +50,7 @@ public sealed class WorkerContextPackageTests
 
     [Xunit.Theory]
     [Xunit.InlineData("final newline\n")]
-    [Xunit.InlineData("non-ASCII café 漢字 e\u0301\r\n")]
+    [Xunit.InlineData("non-ASCII café 漢字 e\u0301\0delimiter\r\n")]
     [Xunit.InlineData("embedded\0delimiter\n")]
     public void InlineFullRecoversExactUtf8Bytes(string content)
     {
@@ -66,6 +66,80 @@ public sealed class WorkerContextPackageTests
         Assert.Equal(artifact.ContentHash, WorkerContextArtifact.Hash(recovered));
         Assert.Equal(1, Count(rendered, "identity=instructions/task.md"));
         Assert.DoesNotContain("MANDATORY READ: identity=instructions/task.md", rendered, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void StructuralCoverageUnicodeIdentityReconcilesAndMissingControlStaysRed()
+    {
+        const string unicodeIdentity =
+            "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
+        const string genuinelyUnexecuted =
+            "WorkerContextPackageTests.InlineFullUsesBase64ForInvalidUtf8WithoutChangingBytes";
+        var trx = WriteCoverageTrx(unicodeIdentity);
+        try
+        {
+            var covered = TestCoverageInvariant.Evaluate(
+                new HashSet<string>([unicodeIdentity], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("focused", true, [trx])]);
+
+            Assert.True(covered.Passed, covered.Summary);
+            Assert.Empty(covered.MissingTests);
+
+            var filteredOut = TestCoverageInvariant.Evaluate(
+                new HashSet<string>([unicodeIdentity, genuinelyUnexecuted], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("focused", true, [trx])]);
+
+            Assert.False(filteredOut.Passed);
+            Assert.Equal([genuinelyUnexecuted], filteredOut.MissingTests);
+            Assert.Contains("executed=1, recorded=1, missing=1", filteredOut.Summary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact]
+    public void StructuralCoverageMismatchKeepsBothIdentityForms()
+    {
+        const string discovered =
+            "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café ?? e'\\0delimiter\\r\\n\")";
+        const string executed =
+            "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
+        var trx = WriteCoverageTrx(executed);
+        try
+        {
+            var result = TestCoverageInvariant.Evaluate(
+                new HashSet<string>([discovered], StringComparer.OrdinalIgnoreCase),
+                [new TestPartitionCoverage("focused", true, [trx])]);
+
+            Assert.False(result.Passed);
+            var mismatch = Assert.Single(result.IdentityMismatches!);
+            Assert.Equal(discovered, mismatch.Discovered);
+            Assert.Equal(executed, mismatch.Executed);
+        }
+        finally
+        {
+            File.Delete(trx);
+        }
+    }
+
+    [Xunit.Fact]
+    public void DiscoveryCaptureForcesUtf8BeforeMtpStarts()
+    {
+        var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            ["dotnet", "tests.dll", "--list-tests", "json"],
+            Path.GetTempPath(),
+            forceUtf8ConsoleOutput: true);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains("chcp 65001 > nul &", startInfo.Arguments, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain("chcp", startInfo.ArgumentList);
+        }
     }
 
     [Xunit.Fact]
@@ -1465,6 +1539,16 @@ public sealed class WorkerContextPackageTests
 
     private static int Count(string value, string needle) =>
         (value.Length - value.Replace(needle, string.Empty, StringComparison.Ordinal).Length) / needle.Length;
+
+    private static string WriteCoverageTrx(string identity)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"coverage-{Guid.NewGuid():N}.trx");
+        var escaped = System.Security.SecurityElement.Escape(identity);
+        File.WriteAllText(
+            path,
+            $"<TestRun><TestDefinitions><UnitTest id=\"1\" name=\"{escaped}\"><TestMethod className=\"WorkerContextPackageTests\" name=\"InlineFullRecoversExactUtf8Bytes\" /></UnitTest></TestDefinitions><Results><UnitTestResult testId=\"1\" testName=\"{escaped}\" outcome=\"Passed\" /></Results></TestRun>");
+        return path;
+    }
 
     private static void AssertRecoveredContainsSemanticValue(byte[] recovered, string expected)
     {
