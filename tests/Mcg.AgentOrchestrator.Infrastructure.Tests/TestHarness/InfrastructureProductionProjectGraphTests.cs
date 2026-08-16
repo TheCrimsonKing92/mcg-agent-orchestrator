@@ -6,40 +6,40 @@ public sealed class InfrastructureProductionProjectGraphTests
         "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj";
     private const string CoreProject =
         "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
-
-    private static readonly string[] ProviderSources =
-    [
-        "AgentCatalogStore.cs",
-        "ModelProviders.cs",
-        "OllamaDefaults.cs",
-        "ProviderSmokeTester.cs"
-    ];
+    private const string InfrastructureProject =
+        "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj";
+    private const string AppProject =
+        "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
 
     [Xunit.Fact(DisplayName = "Infrastructure production project graph is acyclic and Providers owns its seam once")]
     public void ProvidersAssemblyOwnsProviderSources()
     {
-        var root = FindRepositoryRoot();
+        var root = InfrastructureTestSupport.FindRepositoryRoot();
         var projects = LoadProductionProjects(root);
         var providers = projects[ProvidersProject];
+        var providerSources = Directory
+            .EnumerateFiles(
+                Path.Combine(root, "src", "Mcg.AgentOrchestrator.Infrastructure.Providers"),
+                "*.cs",
+                SearchOption.AllDirectories)
+            .Where(path => !IsGeneratedPath(path))
+            .Select(path => Normalize(Path.GetRelativePath(root, path)))
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         Assert.Equal([CoreProject], providers.References);
         Assert.DoesNotContain(
             providers.References,
             reference => reference.Equals(
-                "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj",
+                InfrastructureProject,
                 StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(ProvidersProject, projects[InfrastructureProject].References);
+        Assert.Contains(ProvidersProject, projects[AppProject].References);
         AssertAcyclic(projects);
+        Assert.NotEmpty(providerSources);
 
-        foreach (var sourceName in ProviderSources)
+        foreach (var source in providerSources)
         {
-            var sourceFiles = Directory
-                .EnumerateFiles(Path.Combine(root, "src"), sourceName, SearchOption.AllDirectories)
-                .Where(path => !IsGeneratedPath(path))
-                .Select(path => Normalize(Path.GetRelativePath(root, path)))
-                .ToArray();
-            var source = Assert.Single(sourceFiles);
-            Assert.Equal($"src/Mcg.AgentOrchestrator.Infrastructure.Providers/{sourceName}", source);
-
             var owners = projects.Values
                 .Where(project => project.OwnsSource(root, source))
                 .Select(project => project.Path)
@@ -118,19 +118,6 @@ public sealed class InfrastructureProductionProjectGraphTests
         Normalize(path).Split('/').Any(segment =>
             segment.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("obj", StringComparison.OrdinalIgnoreCase));
-
-    private static string FindRepositoryRoot()
-    {
-        var current = new DirectoryInfo(AppContext.BaseDirectory);
-        while (current is not null)
-        {
-            if (File.Exists(Path.Combine(current.FullName, "Mcg.AgentOrchestrator.sln")))
-                return current.FullName;
-            current = current.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate Mcg.AgentOrchestrator.sln.");
-    }
 
     private static string Normalize(string path) => path.Replace('\\', '/');
 

@@ -3031,8 +3031,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         foreach (var shard in manifestChecks.Where(IsFullPolicyShardCheck))
         {
-            if (checks.Any(result => result.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase)))
+            var existingIndex = checks.FindIndex(result =>
+                result.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
+            if (existingIndex >= 0)
+            {
+                var existing = checks[existingIndex];
+                var executionEvidence = $"changed file in dependency closure; {policyShardPlan.Evidence}";
+                checks[existingIndex] = existing with
+                {
+                    ResultSummary = string.IsNullOrWhiteSpace(existing.ResultSummary)
+                        ? executionEvidence
+                        : $"{existing.ResultSummary}; {executionEvidence}"
+                };
                 continue;
+            }
 
             if (!policyShardPlan.IncludesProject(shard.Project))
             {

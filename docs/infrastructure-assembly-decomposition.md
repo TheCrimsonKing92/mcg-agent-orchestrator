@@ -22,8 +22,9 @@ values, a production publish inventory, or an unrelated-build hash/timestamp com
 Those omissions are not executable from a subscription Tester lane. Before any performance
 or isolation claim, the operator must attach a same-host receipt containing the baseline and
 post-extraction numeric lane/gate values, corpus receipt identifiers and sample counts, the
-published Providers assembly count, and the Providers output `Get-FileHash` plus
-`LastWriteTimeUtc` before and after an unrelated-module build. Until then the slice may be
+build/run-directory Providers assembly count and single-file publish bundle inventory, and
+the Providers output `Get-FileHash` plus `LastWriteTimeUtc` before and after an unrelated-module
+build. Until then the slice may be
 reviewed for source/build correctness, but no velocity or production-isolation claim is made.
 
 ## Slice status
