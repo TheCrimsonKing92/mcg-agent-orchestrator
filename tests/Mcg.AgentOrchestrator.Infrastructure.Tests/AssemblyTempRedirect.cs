@@ -98,7 +98,8 @@ internal static class AssemblyTempRedirect
             }
 
             var siblings = Directory.EnumerateDirectories(sharedRoot).Select(Path.GetFileName).OfType<string>();
-            foreach (var orphan in SelectReapableRoots(siblings, Environment.ProcessId, IsProcessAlive))
+            var livePids = SnapshotLiveProcessIds();
+            foreach (var orphan in SelectReapableRoots(siblings, Environment.ProcessId, livePids.Contains))
             {
                 TryDeleteTree(Path.Combine(sharedRoot, orphan));
             }
@@ -111,28 +112,23 @@ internal static class AssemblyTempRedirect
         }
     }
 
-    private static bool IsProcessAlive(int processId)
+    // One process-table snapshot for the whole sweep. Probing each root with
+    // Process.GetProcessById costs a full snapshot *per call* on Windows, so the old form was
+    // O(orphan roots) snapshots on every test host start: measured at 53.5s with 1106 roots
+    // against a 201.2s budget for the entire "Dotnet build slots" lane, and 3.1s once the roots
+    // were cleared. Membership in the snapshot also preserves the previous semantics for a PID
+    // that cannot be opened — it still enumerates, so it still counts as alive and its root is
+    // left alone.
+    private static HashSet<int> SnapshotLiveProcessIds()
     {
-        try
+        var live = new HashSet<int>();
+        foreach (var process in System.Diagnostics.Process.GetProcesses())
         {
-            using var process = System.Diagnostics.Process.GetProcessById(processId);
-            return !process.HasExited;
+            live.Add(process.Id);
+            process.Dispose();
         }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-        catch (System.ComponentModel.Win32Exception)
-        {
-            // The PID exists but cannot be opened: another user, a higher integrity level, or a
-            // protected process. Treat it as alive. Reaping a live run's temp root is destructive,
-            // while declining to reap is only untidy.
-            return true;
-        }
+
+        return live;
     }
 
     private static void TryDeleteTree(string path)
