@@ -172,6 +172,42 @@ Corollary: **prefer bounding a wait to removing it, but treat a bound as a hang 
 than a fix.** Bounded waits turn a hang into a red, which is necessary and not sufficient. A test
 that still needs a bound to be safe is still describing an API that can block indefinitely.
 
+**(p) A test that would pass with the behaviour broken is not evidence of the behaviour.** Before
+accepting any test as proof, name the input that makes it fail. If you cannot, it pins
+configuration or documents an intention; it does not demonstrate anything. This is rule (l)'s
+record-versus-world error in its cheapest form — asserting on the description of the system
+instead of the system.
+
+Three instances on 2026-08-16, all found only by executing what had already been accepted:
+
+- Goal `8ab0a29d`, review finding `MTP-OPTIN-NO-EVIDENCE-01`. The criterion's test loaded
+  `Directory.Build.props` and four csproj files with `XDocument` and compared property text. It
+  passed whether or not `dotnet test` worked. The executable test alongside it,
+  `Native_MTP_dotnet_test_runs_a_repository_project_in_one_step`, was failing the whole time on a
+  stray `-maxcpucount:1` that reached the test application's argv.
+- Goal `ea3d7766`. A legacy-snapshot recovery path was accepted as resolving "handoff wedges all
+  dispatch", guarded by `candidate.Length > VerificationTextBounds.BoundThreshold || !candidate.Equals(...)`.
+  Recovery therefore succeeded only when the snapshot fit inside the preview — only when nothing
+  had been lost. The receipt validating it necessarily used a short output, so it could not have
+  failed. The defect resurfaced three rounds later.
+- Goal `e5c18520`. The negative-control document specified a class filter it called singular that
+  matched two tests, and a mutation that did not compile. The control could not produce a receipt
+  at all, which nobody discovered until the controls were run.
+
+The check is one question, and it is the same one `dispositive-decision-discipline` asks of a
+verdict: **would this have failed before the fix?** Answer it with a concrete input, not with "the
+test passed". A green run proves the assertion held; it says nothing about whether the assertion
+could ever have been red.
+
+Corollary for negative controls: a control whose RED arm fails for an unrelated reason proves
+nothing. Record the RED failure *message*, not just the count, and check it against the predicted
+one. The four controls on `e5c18520` were only trustworthy because each RED was confirmed to fail
+for its stated cause — `Assert.NotEqual` on the slot, the missing adoption message, `LiveMatch`
+instead of `DeadOrRecycled`, and the empty occupancy collection.
+
+Related: backlog `dfa78c8d` tracks the same failure applied to closing review findings rather than
+to writing tests.
+
 ## Cross-Tick Conductor Tests
 
 Use the held-attempt cross-tick fixture only for invariants that are cross-tick by nature: counters, markers, live attempts, deferral bookkeeping, and requeue state that must survive a tick boundary. It is never for convenience and never a substitute for a narrower single-tick unit test. Every such test must carry the `CrossTick` category and a 30-second timeout as a hang detector; assert ordering and state, never elapsed time. `ParallelAcceptanceFairness_LiveOldest_AllowsDeclaredCapacityAcrossTicks` is the worked example. Follow-on coverage for post-loop-stop auto-requeue (`0b81147a`), recovery-marker clearing, stale-dispatch escalation recovery, and the max-duration handoff/rebuild race belongs with each corresponding fix rather than in this harness slice.
