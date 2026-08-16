@@ -211,6 +211,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static readonly string[] DiffBaseArgs = ["git", "diff", "--unified=0", "main...HEAD", "--"];
     private const string CoreProject = "src/Mcg.AgentOrchestrator.Core/Mcg.AgentOrchestrator.Core.csproj";
+    private const string ProvidersProject = "src/Mcg.AgentOrchestrator.Infrastructure.Providers/Mcg.AgentOrchestrator.Infrastructure.Providers.csproj";
     private const string InfrastructureProject = "src/Mcg.AgentOrchestrator.Infrastructure/Mcg.AgentOrchestrator.Infrastructure.csproj";
     private const string AppProject = "src/Mcg.AgentOrchestrator.App/Mcg.AgentOrchestrator.App.csproj";
     private const string CoreTestsProject = "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj";
@@ -236,7 +237,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     private static readonly Dictionary<string, string[]> ReferencingProjectsByProject = new(StringComparer.OrdinalIgnoreCase)
     {
-        [CoreProject] = [InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [CoreProject] = [ProvidersProject, InfrastructureProject, AppProject, CoreTestsProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
+        [ProvidersProject] = [InfrastructureProject, AppProject, InfrastructureTestsProject, ProviderEnvironmentTestsProject],
         [InfrastructureProject] = [AppProject, InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [AppProject] = [InfrastructureTestsProject, DashboardTestsProject, TestSupportProject, ProviderEnvironmentTestsProject, CliTestsProject],
         [CoreTestsProject] = [],
@@ -323,6 +325,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
     private static readonly string[] CacheableProjects =
     [
         CoreProject,
+        ProvidersProject,
         InfrastructureProject,
         AppProject,
         CoreTestsProject,
@@ -2614,6 +2617,8 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
         var normalized = NormalizePath(path)!;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Core/", StringComparison.OrdinalIgnoreCase))
             return CoreProject;
+        if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.Providers/", StringComparison.OrdinalIgnoreCase))
+            return ProvidersProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase))
             return InfrastructureProject;
         if (normalized.StartsWith("src/Mcg.AgentOrchestrator.App/", StringComparison.OrdinalIgnoreCase))
@@ -2635,6 +2640,7 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
     internal static string ProjectLabel(string project) =>
         project.Equals(CoreProject, StringComparison.OrdinalIgnoreCase) ? "Core" :
+        project.Equals(ProvidersProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure.Providers" :
         project.Equals(InfrastructureProject, StringComparison.OrdinalIgnoreCase) ? "Infrastructure" :
         project.Equals(AppProject, StringComparison.OrdinalIgnoreCase) ? "App" :
         project.Equals(CoreTestsProject, StringComparison.OrdinalIgnoreCase) ? "Core.Tests" :
@@ -3025,8 +3031,20 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
 
         foreach (var shard in manifestChecks.Where(IsFullPolicyShardCheck))
         {
-            if (checks.Any(result => result.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase)))
+            var existingIndex = checks.FindIndex(result =>
+                result.Name.Equals(shard.Name, StringComparison.OrdinalIgnoreCase));
+            if (existingIndex >= 0)
+            {
+                var existing = checks[existingIndex];
+                var executionEvidence = $"changed file in dependency closure; {policyShardPlan.Evidence}";
+                checks[existingIndex] = existing with
+                {
+                    ResultSummary = string.IsNullOrWhiteSpace(existing.ResultSummary)
+                        ? executionEvidence
+                        : $"{existing.ResultSummary}; {executionEvidence}"
+                };
                 continue;
+            }
 
             if (!policyShardPlan.IncludesProject(shard.Project))
             {

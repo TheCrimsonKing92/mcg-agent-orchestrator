@@ -95,10 +95,10 @@ public static class RepositoryChangeClassifier
         "src/Mcg.AgentOrchestrator.Core/Application/VerificationPolicyCompiler",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/GoalAcceptanceVerifier",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workspaces/DotnetBuildEnvironmentManager.cs",
+        "src/Mcg.AgentOrchestrator.Infrastructure.Providers/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Workers/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Processes/",
         "src/Mcg.AgentOrchestrator.Infrastructure/Persistence/ModelFunction",
-        "src/Mcg.AgentOrchestrator.Infrastructure/Persistence/AgentCatalogStore",
         "config/acceptance-manifest.json",
         "scripts/resolve-run-dir.ps1",
         "scripts/Update-AppDllGitHeadMarker.ps1",
@@ -230,6 +230,7 @@ public static class RepositoryChangeClassifier
             securitySensitive ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Core/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("src/Mcg.AgentOrchestrator.Infrastructure.Providers/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("src/Mcg.AgentOrchestrator.App/Dashboard/Api/", StringComparison.OrdinalIgnoreCase);
 
         return new RepositoryChangedFile(

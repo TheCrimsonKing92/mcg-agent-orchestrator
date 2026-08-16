@@ -1056,7 +1056,7 @@ public sealed class LauncherScriptTests
         try
         {
             var appDll = Path.Combine(appOutput, "Mcg.AgentOrchestrator.App.dll");
-            var dependency = Path.Combine(appOutput, "Mcg.AgentOrchestrator.Infrastructure.dll");
+            var dependency = Path.Combine(appOutput, "Mcg.AgentOrchestrator.Infrastructure.Providers.dll");
             File.WriteAllText(appDll, "unchanged app");
             File.WriteAllText(dependency, "dependency v1");
             File.WriteAllText(
@@ -1087,6 +1087,11 @@ public sealed class LauncherScriptTests
             Assert.Equal(
                 "dependency v2",
                 File.ReadAllText(Path.Combine(secondRunDirectory, Path.GetFileName(dependency))));
+            Assert.Single(
+                Directory.EnumerateFiles(
+                    secondRunDirectory,
+                    "Mcg.AgentOrchestrator.Infrastructure.Providers.dll",
+                    SearchOption.AllDirectories));
         }
         finally
         {
