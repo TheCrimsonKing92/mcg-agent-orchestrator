@@ -2442,8 +2442,8 @@ public static class WorkerProfileDispatcher
         if (task.LastVerification is not null)
         {
             var currentIdentity = new LogicalArtifactIdentity("task/last-verification/stdout");
-            var currentOutput = RequireAuthoritativeOutput(task.LastVerification, currentIdentity);
-            AddSource(WorkerContextSemanticSource.LastVerificationOutput, currentIdentity.Value, ContextArtifactKind.RegisteredContext, Encoding.UTF8.GetBytes(currentOutput));
+            var currentOutput = WorkerVerificationEvidence.ResolveStandardOutputForContext(task.LastVerification, currentIdentity);
+            AddSource(WorkerContextSemanticSource.LastVerificationOutput, currentIdentity.Value, ContextArtifactKind.RegisteredContext, Encoding.UTF8.GetBytes(currentOutput.Content));
             if (task.LastVerification.AuthoritativeStandardError is { } currentError)
             {
                 AddSource(WorkerContextSemanticSource.LastVerificationError, "task/last-verification/stderr", ContextArtifactKind.RegisteredContext, Encoding.UTF8.GetBytes(currentError));
@@ -2454,8 +2454,8 @@ public static class WorkerProfileDispatcher
             .Where(candidate => candidate.LastVerification is not null))
         {
             var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
-            var output = RequireAuthoritativeOutput(priorTask.LastVerification!, identity);
-            AddSource(WorkerContextSemanticSource.PriorTaskVerificationOutput, identity.Value, ContextArtifactKind.PriorTaskEvidence, Encoding.UTF8.GetBytes(output));
+            var output = WorkerVerificationEvidence.ResolveStandardOutputForContext(priorTask.LastVerification!, identity);
+            AddSource(WorkerContextSemanticSource.PriorTaskVerificationOutput, identity.Value, ContextArtifactKind.PriorTaskEvidence, Encoding.UTF8.GetBytes(output.Content));
         }
 
         foreach (var entry in registry.Artifacts.OrderBy(item => item.Path, StringComparer.Ordinal))
@@ -2505,7 +2505,8 @@ public static class WorkerProfileDispatcher
                     candidate =>
                     {
                         var identity = new LogicalArtifactIdentity($"prior/{candidate.Id.Value}/verification-output");
-                        return Encoding.UTF8.GetBytes(RequireAuthoritativeOutput(candidate.LastVerification!, identity));
+                        var output = WorkerVerificationEvidence.ResolveStandardOutputForContext(candidate.LastVerification!, identity);
+                        return Encoding.UTF8.GetBytes(output.Content);
                     },
                     StringComparer.Ordinal);
             var resolver = new LegacyHandoffCompatibilityResolver(identity =>

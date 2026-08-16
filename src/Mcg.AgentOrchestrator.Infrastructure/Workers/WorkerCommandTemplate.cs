@@ -33,12 +33,19 @@ public static partial class WorkerCommandTemplate
                 lines.Add($"Notes: {priorTask.LastVerification.ModelFitNote}");
             }
             lines.Add(string.Empty);
-            lines.Add("### Authoritative Verification Evidence");
             var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
-            var authoritativeOutput = WorkerVerificationEvidence.RequireAuthoritativeStandardOutput(
+            var contextOutput = WorkerVerificationEvidence.ResolveStandardOutputForContext(
                 priorTask.LastVerification,
                 identity);
-            var authoritativeBytes = Encoding.UTF8.GetBytes(authoritativeOutput);
+            lines.Add(contextOutput.IsAuthoritative
+                ? "### Authoritative Verification Evidence"
+                : "### Legacy Verification Context (non-authoritative)");
+            if (!contextOutput.IsAuthoritative)
+            {
+                lines.Add($"Unavailable reason: {contextOutput.UnavailableReason}");
+            }
+
+            var authoritativeBytes = Encoding.UTF8.GetBytes(contextOutput.Content);
             var materializationPath = $".orchestrator-context/legacy-handoff/{priorTask.Id.Value}/verification-output.bin";
             var absoluteMaterializationPath = Path.Combine(
                 workingDirectory,

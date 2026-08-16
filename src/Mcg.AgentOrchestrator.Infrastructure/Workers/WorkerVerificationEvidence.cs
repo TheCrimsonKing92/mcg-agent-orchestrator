@@ -6,6 +6,11 @@ internal static class WorkerVerificationEvidence
 {
     private const string LegacySnapshotUnavailableReason = "legacy-snapshot-authoritative-output-unavailable";
 
+    internal sealed record ContextOutput(
+        string Content,
+        bool IsAuthoritative,
+        string? UnavailableReason);
+
     public static string RequireAuthoritativeStandardOutput(
         TaskVerificationRecord verification,
         LogicalArtifactIdentity identity)
@@ -24,6 +29,43 @@ internal static class WorkerVerificationEvidence
             identity,
             verification.FullStandardOutputUnavailableReason ?? "authoritative-evidence-unavailable",
             "Complete stdout is unavailable; the bounded verification preview is not authoritative evidence.");
+    }
+
+    public static ContextOutput ResolveStandardOutputForContext(
+        TaskVerificationRecord verification,
+        LogicalArtifactIdentity identity)
+    {
+        if (verification.AuthoritativeStandardOutput is { } authoritativeOutput)
+        {
+            return new ContextOutput(authoritativeOutput, true, null);
+        }
+
+        if (TryRecoverLegacySnapshotStandardOutput(verification, out var recoveredOutput))
+        {
+            return new ContextOutput(recoveredOutput, true, null);
+        }
+
+        if (!string.Equals(
+                verification.FullStandardOutputUnavailableReason,
+                LegacySnapshotUnavailableReason,
+                StringComparison.Ordinal))
+        {
+            return new ContextOutput(
+                RequireAuthoritativeStandardOutput(verification, identity),
+                true,
+                null);
+        }
+
+        var content = string.Join(
+            Environment.NewLine,
+            "[legacy verification context]",
+            "authoritative: false",
+            $"unavailable-reason: {LegacySnapshotUnavailableReason}",
+            "The complete historical stdout was never retained with an integrity digest. " +
+            "The bounded preview below is context only and must not be treated as authoritative evidence.",
+            string.Empty,
+            verification.StandardOutput);
+        return new ContextOutput(content, false, LegacySnapshotUnavailableReason);
     }
 
     public static bool TryRecoverLegacySnapshotStandardOutput(
