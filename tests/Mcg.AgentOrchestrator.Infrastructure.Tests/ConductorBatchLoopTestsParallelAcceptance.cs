@@ -2216,7 +2216,10 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
             var terminalRelease = Assert.Single(records, record =>
                 record.EventKind == "acceptance-lease" &&
                 record.GoalId == goal.Id.Value[..8] &&
-                record.Detail.Contains("ACCEPTANCE_LEASE_RELEASE", StringComparison.Ordinal));
+                string.Equals(
+                    record.Detail.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(),
+                    "ACCEPTANCE_LEASE_RELEASE",
+                    StringComparison.Ordinal));
 
             static string ReadToken(ConductEventRecord record, string token) =>
                 Assert.Single(
