@@ -24,6 +24,7 @@ internal static partial class DashboardEndpoints
                         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(current, agents, submission.Objective, services.Workspace, services.Providers)
                         : GoalLifecycleCommands.CreateAndActivateGoal(current, agents, submission.Objective, services.Workspace, services.Providers);
                     createdGoalId = goal.Id;
+                    GoalRefinementWorkCoordinator.RecordPending(current, goal.Id);
                     enqueue(GoalRefinementWorkCoordinator.CreateMessage(goal.Id));
                     return Task.FromResult<IResult>(Json(
                         BuildCreatedGoalResponse(current, goal, services.Workspace.ExecutionDirectory),

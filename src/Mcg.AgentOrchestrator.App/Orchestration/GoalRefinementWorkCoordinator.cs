@@ -44,6 +44,9 @@ internal static class GoalRefinementWorkCoordinator
 
     public static string MessageId(GoalId goalId) => $"{OutboxKind}:{goalId.Value}";
 
+    public static void RecordPending(AgentOrchestratorKernel kernel, GoalId goalId) =>
+        kernel.RecordGoalPolicyDecision(goalId, PendingPolicyReceipt);
+
     public static bool HasPendingWork(Goal goal) =>
         goal.RefinedSpec is null &&
         goal.Timeline.Any(entry =>

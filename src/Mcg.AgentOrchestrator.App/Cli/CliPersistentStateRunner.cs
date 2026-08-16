@@ -666,8 +666,8 @@ internal static class CliPersistentStateRunner
     internal static bool IsGoalCreateCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
         ((args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
-          !args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))) ||
-         (args[0].Equals("simple-goal", StringComparison.OrdinalIgnoreCase) && HasRequestKey(args)));
+           !args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))) ||
+          args[0].Equals("simple-goal", StringComparison.OrdinalIgnoreCase));
 
     internal static bool IsGoalIntakeStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase);
@@ -1956,6 +1956,7 @@ internal static class CliPersistentStateRunner
 
         void FinalizeGoalReplacement(Goal preparedGoal, GoalReplacementCommand command)
         {
+            GoalRefinementWorkCoordinator.RecordPending(kernel, preparedGoal.Id);
             var preparedSnapshot = kernel.ExportGoalSnapshot(preparedGoal.Id);
             var fingerprintInputs = BuildGoalReplacementFingerprint(command, preparedSnapshot);
             var fingerprint = fingerprintInputs.Fingerprint;
@@ -3346,6 +3347,7 @@ internal static class CliPersistentStateRunner
 
         void FinalizeGoalCreation(Goal goal)
         {
+            GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
             var preparedSnapshot = kernel.ExportGoalSnapshot(goal.Id);
             GoalCreationSideEffectDelivery.BeforeStateCommit?.Invoke(goal.Id);
             var deliveryMessage = GoalCreationSideEffectDelivery.CreateMessage(
@@ -3420,6 +3422,12 @@ internal static class CliPersistentStateRunner
             {
                 throw new InvalidOperationException("GOAL_CREATE_COMMIT_MISSING reason=finalizer-not-invoked");
             }
+        }
+        catch (InvalidOperationException ex)
+            when (request is null &&
+                  ex.Message.StartsWith("GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL", StringComparison.Ordinal))
+        {
+            return false;
         }
         catch (Exception ex) when (request is not null && committedSnapshot is null)
         {

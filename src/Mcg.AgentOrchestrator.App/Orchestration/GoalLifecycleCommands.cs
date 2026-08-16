@@ -56,7 +56,6 @@ internal static class GoalLifecycleCommands
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         EnsureRequestedPipelineCanBeSatisfied(plan, agents);
         var goal = CreateGoalFromPlan(kernel, plan);
-        RecordPendingRefinement(kernel, goal);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -140,7 +139,6 @@ internal static class GoalLifecycleCommands
         var plan = GoalObjectivePlanner.Build(objective, GoalIntakePipeline.DeveloperOnly, kernel.BuildTaskDurationStats());
         GoalObjectivePlanner.ThrowIfBlocked(plan);
         var goal = CreateGoalFromPlan(kernel, plan);
-        RecordPendingRefinement(kernel, goal);
         kernel.ActivateGoal(goal.Id, agents);
         return goal;
     }
@@ -156,9 +154,7 @@ internal static class GoalLifecycleCommands
     {
         var plan = GoalObjectivePlanner.Build(objective, pipeline, kernel.BuildTaskDurationStats());
         GoalObjectivePlanner.ThrowIfBlocked(plan);
-        var goal = CreateGoalFromPlan(kernel, plan, sliceBatchParentId);
-        RecordPendingRefinement(kernel, goal);
-        return goal;
+        return CreateGoalFromPlan(kernel, plan, sliceBatchParentId);
     }
 
     public static Goal CreateActivateAndHandoffGoal(
@@ -216,11 +212,6 @@ internal static class GoalLifecycleCommands
         RecordCapabilityWarnings(kernel, goal.Id, plan.CapabilityWarnings);
         return goal;
     }
-
-    private static void RecordPendingRefinement(AgentOrchestratorKernel kernel, Goal goal) =>
-        kernel.RecordGoalPolicyDecision(
-            goal.Id,
-            GoalRefinementWorkCoordinator.PendingPolicyReceipt);
 
     private static string BuildPipelineDecisionMessage(GoalObjectivePlan plan)
     {

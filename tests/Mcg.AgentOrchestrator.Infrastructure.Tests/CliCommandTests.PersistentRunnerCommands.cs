@@ -1471,7 +1471,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "--from-backlog"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsBacklogIntakeCommand(["goal", "--from-backlog"]));
-        Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command", "--request-key", "key"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal-mark-landed", "abc"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand([]));
@@ -1757,7 +1757,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                     args, repository, workspace, ref agents,
                     new InMemoryModelProviderRegistry([new FakeSmokeProvider(providerName: "OpenAI")]),
                     ref profiles, ref currentGoal));
-            Xunit.Assert.Contains(BackgroundDispatchRunner.DisableDispatchStartVariable, first.Message);
+            Xunit.Assert.StartsWith("SPEC_REFINEMENT_PENDING", first.Message, StringComparison.Ordinal);
 
             var replay = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
                 args, repository, workspace, ref agents,
@@ -1795,17 +1795,30 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var providers = new InMemoryModelProviderRegistry([refiner]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
+        GoalId? launchedGoalId = null;
+        GoalRefinementWorkCoordinator.LaunchOverride = (_, goalId) =>
+        {
+            launchedGoalId = goalId;
+            return new GoalRefinementWorkLaunchResult(true, 42, "test-launch");
+        };
 
-        var createTask = Task.Run(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
-            ["goal", "Implement deterministic unlocked goal refinement"],
-            repository,
-            workspace,
-            ref agents,
-            providers,
-            ref profiles,
-            ref currentGoal)));
+        try
+        {
+            var createTask = Task.Run(() => CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+                ["goal", "Implement deterministic unlocked goal refinement"],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal)));
+            await createTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        finally
+        {
+            GoalRefinementWorkCoordinator.LaunchOverride = null;
+        }
 
-        await createTask.WaitAsync(TimeSpan.FromSeconds(2));
         Xunit.Assert.False(refiner.Entered.IsSet);
         var concurrentWriteElapsed = Stopwatch.StartNew();
         await concurrentRepository.TransactAsync(
@@ -1822,10 +1835,14 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(2, restored.Goals.Count);
         Xunit.Assert.Contains(restored.Goals, goal => goal.Objective == "Concurrent conductor-style state writer");
         var created = Xunit.Assert.Single(restored.Goals, goal => goal.Objective == "Implement deterministic unlocked goal refinement");
+        Xunit.Assert.Equal(created.Id, launchedGoalId);
         Xunit.Assert.Null(created.RefinedSpec);
         Xunit.Assert.Contains(created.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
+        var pendingWork = Xunit.Assert.Single(
+            await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+        Xunit.Assert.Equal(created.Id.Value, GoalRefinementWorkCoordinator.Deserialize(pendingWork).GoalId);
         Xunit.Assert.Equal(GoalStatus.Active, created.Status);
     }
 
@@ -1881,7 +1898,9 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Equal(item.Id, winner.SourceBacklogItemId);
         Xunit.Assert.Null(winner.RefinedSpec);
         Xunit.Assert.Equal(GoalStatus.Active, winner.Status);
-        Xunit.Assert.Single(Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl"));
+        Xunit.Assert.Empty(Directory.Exists(workspace.GoalLifecycleEventsDirectory)
+            ? Directory.GetFiles(workspace.GoalLifecycleEventsDirectory, "*.jsonl")
+            : []);
     }
 
     [Xunit.Fact(DisplayName = "CliPersistentStateRunner_goal_create_rejects_competing_backlog_link_atomically")]
@@ -1975,7 +1994,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
         Xunit.Assert.Empty(await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
             .ListAsync(created.Id.Value));
-        Xunit.Assert.True(File.Exists(Path.Combine(
+        Xunit.Assert.False(File.Exists(Path.Combine(
             workspace.GoalLifecycleEventsDirectory,
             $"{created.Id.Value}.jsonl")));
         Xunit.Assert.Contains(created.Id.Value[..8], output);
@@ -2081,7 +2100,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             ref currentGoal)));
 
         Xunit.Assert.Null(error);
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
         var restored = await repository.LoadAsync();
         Xunit.Assert.Equal(2, restored.Goals.Count);
         var successor = Xunit.Assert.Single(restored.Goals, goal => goal.Id != predecessor.Id);
@@ -2107,7 +2126,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains("GOAL_REPLACE_REPLAYED", replayOutput, StringComparison.Ordinal);
         Xunit.Assert.Contains($"Goal {successor.Id.Value[..8]}", replayOutput, StringComparison.Ordinal);
         Xunit.Assert.Equal(successor.Id, replayCurrentGoal!.Id);
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
         Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
         await backlogStore.ReopenAsync(item.Id, "Continue the replacement landing fixture.");
         var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(requestId);
@@ -2144,7 +2163,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 providers,
                 ref profiles,
                 ref currentGoal))));
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
 
         await File.WriteAllTextAsync(reasonPath, "A different immutable operator reason.");
         var idempotencyConflict = Xunit.Assert.Throws<GoalReplacementIdempotencyConflictException>(() =>
@@ -2311,23 +2330,30 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var exception = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
-            CliPersistentStateRunner.ExecuteCommand(
-                [
-                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
-                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
-                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                    "--pipeline", "five-role"
-                ],
-                repository,
-                workspace,
-                ref agents,
-                new InMemoryModelProviderRegistry([
-                    new CallbackGoalRefinerProvider(() =>
-                        RunGit(root, "branch", GoalWorktrees.BranchName(predecessor.Id)))
-                ]),
-                ref profiles,
-                ref currentGoal)));
+        GoalReplacementEvidence.AfterFinalTransferValidation = _ =>
+            RunGit(root, "branch", GoalWorktrees.BranchName(predecessor.Id));
+        InvalidOperationException exception;
+        try
+        {
+            exception = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    [
+                        "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                        "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                        "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                        "--pipeline", "five-role"
+                    ],
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([]),
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalReplacementEvidence.AfterFinalTransferValidation = null;
+        }
 
         Xunit.Assert.Contains("GOAL_REPLACE_INELIGIBLE_DISPOSITION", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("reason=ineligible-disposition", exception.Message, StringComparison.Ordinal);
@@ -2491,17 +2517,17 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
                 ref currentGoal)));
 
         var first = Replace();
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
         await backlogStore.CloseAsync(item.Id);
         var replay = Replace();
 
         Xunit.Assert.Contains("GOAL_REPLACE_PROTECTED_OWNER", first.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("GOAL_REPLACE_PROTECTED_OWNER", replay.Message, StringComparison.Ordinal);
         Xunit.Assert.DoesNotContain("PERSISTENCE_FAILED", replay.Message, StringComparison.Ordinal);
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
         await File.WriteAllTextAsync(reasonPath, "Changed protected-owner retry reason.");
         Xunit.Assert.IsType<GoalReplacementIdempotencyConflictException>(Replace());
-        Xunit.Assert.Equal(1, refiner.InvocationCount);
+        Xunit.Assert.Equal(0, refiner.InvocationCount);
         var audit = new SourceBacklogClaimStore(workspace.SqliteStatePath).FindAudit(requestId);
         Xunit.Assert.Equal(GoalReplacementOutcome.ProtectedOwner, audit!.Outcome);
         Xunit.Assert.NotEmpty(audit.ObjectiveHash);
@@ -3198,22 +3224,30 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var exception = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
-            CliPersistentStateRunner.ExecuteCommand(
-                [
-                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
-                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
-                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                    "--pipeline", "five-role"
-                ],
-                repository,
-                workspace,
-                ref agents,
-                new InMemoryModelProviderRegistry([
-                    new CallbackGoalRefinerProvider(() => backlogStore.CloseAsync(item.Id).GetAwaiter().GetResult())
-                ]),
-                ref profiles,
-                ref currentGoal)));
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+            backlogStore.CloseAsync(item.Id).GetAwaiter().GetResult();
+        InvalidOperationException exception;
+        try
+        {
+            exception = Xunit.Assert.ThrowsAny<InvalidOperationException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    [
+                        "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                        "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                        "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                        "--pipeline", "five-role"
+                    ],
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([]),
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+        }
 
         Xunit.Assert.Contains("GOAL_REPLACE_VALIDATION_REJECTED", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("reason=source-backlog-not-open", exception.Message, StringComparison.Ordinal);
@@ -3252,29 +3286,36 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        var exception = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
-            CliPersistentStateRunner.ExecuteCommand(
-                [
-                    "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
-                    "--reason-file", reasonPath, "--request-id", requestId.ToString(),
-                    "--disposition", "zero-work-correction", "--confirm-goal-replace",
-                    "--pipeline", "five-role"
-                ],
-                repository,
-                workspace,
-                ref agents,
-                new InMemoryModelProviderRegistry([
-                    new CallbackGoalRefinerProvider(() =>
-                    {
-                        var competingKernel = repository.LoadAsync().GetAwaiter().GetResult();
-                        var competing = competingKernel.CreateGoal("Competing historical association");
-                        competingKernel.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Full);
-                        competingKernel.CancelGoal(competing.Id, "Legacy duplicate association.");
-                        repository.SaveAsync(competingKernel).GetAwaiter().GetResult();
-                    })
-                ]),
-                ref profiles,
-                ref currentGoal)));
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
+        {
+            var competingKernel = repository.LoadAsync().GetAwaiter().GetResult();
+            var competing = competingKernel.CreateGoal("Competing historical association");
+            competingKernel.SetGoalSourceBacklogItemLink(competing.Id, item.Id, SourceBacklogCoverage.Full);
+            competingKernel.CancelGoal(competing.Id, "Legacy duplicate association.");
+            repository.SaveAsync(competingKernel).GetAwaiter().GetResult();
+        };
+        InvalidOperationException exception;
+        try
+        {
+            exception = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
+                CliPersistentStateRunner.ExecuteCommand(
+                    [
+                        "goal-replace", predecessor.Id.Value, "--brief-file", briefPath,
+                        "--reason-file", reasonPath, "--request-id", requestId.ToString(),
+                        "--disposition", "zero-work-correction", "--confirm-goal-replace",
+                        "--pipeline", "five-role"
+                    ],
+                    repository,
+                    workspace,
+                    ref agents,
+                    new InMemoryModelProviderRegistry([]),
+                    ref profiles,
+                    ref currentGoal)));
+        }
+        finally
+        {
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
+        }
 
         Xunit.Assert.Contains("GOAL_REPLACE_LEGACY_OWNER_AMBIGUOUS", exception.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains("reason=legacy-owner-ambiguous", exception.Message, StringComparison.Ordinal);
@@ -3352,6 +3393,44 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal", "Create a goal with durably retryable clarification delivery"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var created = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        var deliveryMessage = GoalCreationSideEffectDelivery.CreateMessage(
+            created.Id,
+            [new GoalCreationCollaborationEffect(
+                $"{created.Id.Value}:collaboration:1",
+                CollaborationItemType.Clarification,
+                created.Id.Value,
+                "Confirm the delivery retry contract",
+                "This test fixture verifies idempotent post-commit delivery.",
+                $"test:{created.Id.Value}:delivery")],
+            [
+                new GoalCreationLifecycleEffect(
+                    $"{created.Id.Value}:lifecycle:1",
+                    GoalCreationLifecycleEffectKind.GoalCreated,
+                    created.Id.Value,
+                    GoalCreationSideEffectDelivery.SerializePayload(
+                        new GoalCreationLifecycleEffectDelivery.TextPayload(created.Objective))),
+                new GoalCreationLifecycleEffect(
+                    $"{created.Id.Value}:lifecycle:2",
+                    GoalCreationLifecycleEffectKind.ClarificationNeeded,
+                    created.Id.Value,
+                    GoalCreationSideEffectDelivery.SerializePayload(
+                        new GoalCreationLifecycleEffectDelivery.TextPayload("spec")))
+            ]);
+        await repository.TransactWithOutboxAsync(
+            (kernel, _) => Task.FromResult((
+                ShouldSave: true,
+                Result: true,
+                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage])));
+
         var lifecycleAttempts = 0;
         GoalCreationSideEffectDelivery.BeforeEffectDelivery = deliveryId =>
         {
@@ -3367,7 +3446,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         {
             error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                 CliPersistentStateRunner.ExecuteCommand(
-                    ["goal", "Create a goal with durably retryable clarification delivery"],
+                    ["goal-delivery-retry", created.Id.Value],
                     repository,
                     workspace,
                     ref agents,
@@ -3381,7 +3460,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         }
 
         var committedKernel = await repository.LoadAsync();
-        var created = Xunit.Assert.Single(committedKernel.Goals);
+        Xunit.Assert.Single(committedKernel.Goals);
         Xunit.Assert.Contains("GOAL_CREATE_DELIVERY_INCOMPLETE", error.Message, StringComparison.Ordinal);
         Xunit.Assert.Contains($"goal-delivery-retry {created.Id.Value}", error.Message, StringComparison.Ordinal);
         Xunit.Assert.True(lifecycleAttempts >= 2);
@@ -3454,7 +3533,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Single((await repository.LoadAsync()).Goals);
     }
 
-    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_goal_create_delivery_releases_state_writer_during_external_io")]
+    [Xunit.Theory(DisplayName = "CliPersistentStateRunner_goal_delivery_retry_releases_state_writer_during_external_io")]
     [Xunit.InlineData(false)]
     [Xunit.InlineData(true)]
     public async Task PersistentRunnerGoalCreateDeliveryReleasesStateWriterDuringExternalIo(bool retry)
@@ -3474,6 +3553,29 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var providers = new InMemoryModelProviderRegistry([new ClarifyingGoalRefinerProvider()]);
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["goal", "Create a goal whose delivery runs outside the state transaction"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+        var initialCreated = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        var deliveryMessage = GoalCreationSideEffectDelivery.CreateMessage(
+            initialCreated.Id,
+            [],
+            [new GoalCreationLifecycleEffect(
+                $"{initialCreated.Id.Value}:lifecycle:lock-check",
+                GoalCreationLifecycleEffectKind.GoalCreated,
+                initialCreated.Id.Value,
+                GoalCreationSideEffectDelivery.SerializePayload(
+                    new GoalCreationLifecycleEffectDelivery.TextPayload(initialCreated.Objective)))]);
+        await repository.TransactWithOutboxAsync(
+            (kernel, _) => Task.FromResult((
+                ShouldSave: true,
+                Result: true,
+                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage])));
 
         if (retry)
         {
@@ -3483,7 +3585,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
             {
                 var error = Xunit.Assert.Throws<InvalidOperationException>(() => CaptureConsole(() =>
                     CliPersistentStateRunner.ExecuteCommand(
-                        ["goal", "Create a goal whose delivery will be retried outside the state transaction"],
+                        ["goal-delivery-retry", initialCreated.Id.Value],
                         repository,
                         workspace,
                         ref agents,
@@ -3516,29 +3618,14 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         var deliveryTask = Task.Run(() => CaptureConsole(() =>
         {
-            if (retry)
-            {
-                var created = Xunit.Assert.Single(repository.LoadAsync().GetAwaiter().GetResult().Goals);
-                _ = CliPersistentStateRunner.ExecuteCommand(
-                    ["goal-delivery-retry", created.Id.Value],
-                    repository,
-                    workspace,
-                    ref agents,
-                    providers,
-                    ref profiles,
-                    ref currentGoal);
-            }
-            else
-            {
-                _ = CliPersistentStateRunner.ExecuteCommand(
-                    ["goal", "Create a goal whose initial delivery runs outside the state transaction"],
-                    repository,
-                    workspace,
-                    ref agents,
-                    providers,
-                    ref profiles,
-                    ref currentGoal);
-            }
+            _ = CliPersistentStateRunner.ExecuteCommand(
+                ["goal-delivery-retry", initialCreated.Id.Value],
+                repository,
+                workspace,
+                ref agents,
+                providers,
+                ref profiles,
+                ref currentGoal);
         }));
 
         try
@@ -3565,8 +3652,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         Xunit.Assert.Contains(restored.Goals, goal => goal.Objective == "Concurrent writer during goal-creation delivery");
         Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalCreationSideEffectDelivery.OutboxKind));
 
-        var createdGoal = Xunit.Assert.Single(restored.Goals, goal =>
-            goal.Objective != "Concurrent writer during goal-creation delivery");
+        var createdGoal = Xunit.Assert.Single(restored.Goals, goal => goal.Id == initialCreated.Id);
         var collaborationItems = await CollaborationItemStore.ForDirectory(workspace.OrchestratorDirectory)
             .ListAsync(createdGoal.Id.Value);
         Xunit.Assert.Equal(

@@ -65,7 +65,7 @@ public sealed class GoalRefinementTests
             providers);
 
         Xunit.Assert.Null(goal.RefinedSpec);
-        Xunit.Assert.Contains(goal.Timeline, evt =>
+        Xunit.Assert.DoesNotContain(goal.Timeline, evt =>
             evt.Kind == ProgressKind.GoalPolicyDecision &&
             evt.Message.StartsWith("spec_refinement outcome=pending", StringComparison.Ordinal));
 
@@ -104,20 +104,18 @@ public sealed class GoalRefinementTests
         ]));
         var kernel = new AgentOrchestratorKernel();
 
-        var creation = Task.Run(() => GoalLifecycleCommands.CreateAndActivateGoal(
+        var goal = GoalLifecycleCommands.CreateAndActivateGoal(
             kernel,
             AgentCatalog.Default().Agents,
             "Research and plan a focused implementation with tests.",
             workspace,
-            providers));
-        var completed = await Task.WhenAny(creation, Task.Delay(TimeSpan.FromSeconds(1)));
+            providers);
 
-        Xunit.Assert.Same(creation, completed);
-        var goal = await creation;
         Xunit.Assert.Null(goal.RefinedSpec);
         Xunit.Assert.False(provider.Started.Task.IsCompleted);
 
         var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
         await repository.TransactWithOutboxAsync(
             (persistedKernel, _) =>
             {

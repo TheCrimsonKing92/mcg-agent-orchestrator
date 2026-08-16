@@ -246,7 +246,6 @@ public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
     EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
     goal = kernel.GetGoal(goal.Id);
-    safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
     return WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
@@ -308,7 +307,6 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
     EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
     goal = kernel.GetGoal(goal.Id);
-    safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
@@ -371,14 +369,21 @@ private static void EnsureRefinedForSelectedTasks(
     Goal goal,
     IReadOnlySet<TaskId> taskIds)
 {
-    if (goal.RefinedSpec is not null)
+    var selected = goal.Tasks.Where(task => taskIds.Contains(task.Id)).ToArray();
+    if (selected.Length == 0)
     {
-        GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
+        var assignedCandidates = goal.Tasks.Where(IsSubscriptionStartCandidate).ToArray();
+        if (GoalRefinementWorkCoordinator.HasPendingWork(goal) &&
+            assignedCandidates.Length > 0 &&
+            assignedCandidates.All(task => task.RequiredRole != AgentRole.Researcher))
+        {
+            EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+        }
+
         return;
     }
 
-    var selected = goal.Tasks.Where(task => taskIds.Contains(task.Id)).ToArray();
-    if (selected.Length == 0 || selected.All(task => task.RequiredRole == AgentRole.Researcher))
+    if (goal.RefinedSpec is null && selected.All(task => task.RequiredRole == AgentRole.Researcher))
         return;
 
     EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
