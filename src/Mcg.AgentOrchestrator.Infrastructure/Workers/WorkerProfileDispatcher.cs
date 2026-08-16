@@ -2,6 +2,7 @@ using Mcg.AgentOrchestrator.Core;
 using Mcg.AgentOrchestrator.Core.Conductor;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -150,6 +151,35 @@ public static class WorkerProfileDispatcher
     private const string HighRiskReviewerReasoningEffort = "xhigh";
     private const string IntakeRiskLabelsMarker = "risk labels:";
     private static readonly WorkerProviderCatalog DefaultProviders = WorkerProviderCatalog.Default();
+    private static readonly IReadOnlyDictionary<string, RegistryArtifactSource> RegistryArtifactSources =
+        new Dictionary<string, RegistryArtifactSource>(StringComparer.Ordinal)
+        {
+            ["artifact-registry.json"] = new(ContextArtifactKind.ContextManifest, RegistryArtifactDisposition.CanonicalManifestAlias),
+            ["context-package.json"] = new(ContextArtifactKind.ContextManifest, RegistryArtifactDisposition.CanonicalManifestAlias),
+            ["manifest.md"] = new(ContextArtifactKind.ContextManifest, RegistryArtifactDisposition.CanonicalManifestAlias),
+            ["digest.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.DomainProjection),
+            ["objective.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.DomainProjection),
+            ["current-task.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.DomainProjection),
+            ["diff-summary.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.DomainProjection),
+            ["prior-task-summaries.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.DomainProjection),
+            ["research-notes.md"] = new(ContextArtifactKind.ResearcherEvidence, RegistryArtifactDisposition.Deliver),
+            ["planner-plan.md"] = new(ContextArtifactKind.PlannerPlan, RegistryArtifactDisposition.Deliver),
+            ["prior-task-evidence.md"] = new(ContextArtifactKind.PriorTaskEvidence, RegistryArtifactDisposition.Deliver),
+            ["prior-goal-evidence.md"] = new(ContextArtifactKind.PriorTaskEvidence, RegistryArtifactDisposition.Deliver),
+            ["AGENTS.md"] = new(ContextArtifactKind.OperatorInstructions, RegistryArtifactDisposition.Deliver),
+            ["deterministic-verification.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
+            ["workflow-brokers.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
+            ["context-budget.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
+            ["selected-skills.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
+            ["source-survey.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver),
+            ["subscription-preflight.md"] = new(ContextArtifactKind.RegisteredContext, RegistryArtifactDisposition.Deliver)
+        };
+
+    internal static IReadOnlyList<string> DeliverableRegistryArtifactPaths => RegistryArtifactSources
+        .Where(entry => entry.Value.Disposition == RegistryArtifactDisposition.Deliver)
+        .Select(entry => entry.Key)
+        .OrderBy(path => path, StringComparer.Ordinal)
+        .ToArray();
 
     public static WorkerProfileDispatchResult PrepareTask(
         AgentOrchestratorKernel kernel,
@@ -216,7 +246,9 @@ public static class WorkerProfileDispatcher
             task,
             workingDirectory,
             preflightFindings,
-            citedPriorEvidence);
+            citedPriorEvidence,
+            providerName,
+            modelName);
         var targetContext = TryReadCurrentTargetContext(workingDirectory);
         var reviewerRoundTouchScope = ReadReviewRoundTouchScope(
             goal,
@@ -245,10 +277,32 @@ public static class WorkerProfileDispatcher
             reviewerRoundTouchScope.TouchedAnchors,
             reviewerRoundTouchScope.Diagnostic,
             effectiveReviewRetryCap);
+        WorkerContextPackageReceipt? contextPackageReceipt = null;
+        var packagedBrief = brief;
+        if (WorkerContextHelpers.UsesTypedContextPackage(task.RequiredRole, providerName, modelName))
+        {
+            var contextPackage = BuildContextPackage(
+                goal,
+                task,
+                workingDirectory,
+                contextDirectory,
+                brief,
+                humanInputRequests: kernel.HumanInputRequests
+                    .Where(request => request.GoalId == goal.Id)
+                    .ToArray(),
+                reviewerScopeChangedFiles: reviewerScopeChangedFiles,
+                reviewerScopeMergeBase: reviewerScopeMergeBase,
+                reviewerScopeTotalChangedFileCount: reviewerScopeTotalChangedFileCount,
+                reviewerMergeTreeClean: reviewerMergeTreeClean,
+                reviewerMergeTreeConflictPaths: reviewerMergeTreeConflictPaths,
+                reviewerMergeTreeTotalConflictPathCount: reviewerMergeTreeTotalConflictPathCount);
+            packagedBrief = brief with { Content = WorkerContextPackageBuilder.Render(contextPackage) };
+            contextPackageReceipt = WorkerContextPackageBuilder.CreateReceipt(contextPackage);
+        }
         TaskBrief budgetedBrief;
         try
         {
-            budgetedBrief = WorkerPromptInputBudget.Apply(brief, providerName, modelName).Brief;
+            budgetedBrief = WorkerPromptInputBudget.Apply(packagedBrief, providerName, modelName).Brief;
         }
         catch (WorkerPromptInputBudgetExceededException error)
             when (UsesResearchFirstArtifactHandoff(goal, task))
@@ -290,7 +344,8 @@ public static class WorkerProfileDispatcher
             ModelSelectionReason: modelSelectionReason,
             ReviewFindingTouchedAnchors: reviewerRoundTouchScope.TouchedAnchors,
             ReviewFindingTouchProofDiagnostic: reviewerRoundTouchScope.Diagnostic,
-            ReviewRetryCap: effectiveReviewRetryCap),
+            ReviewRetryCap: effectiveReviewRetryCap,
+            ContextPackageReceipt: contextPackageReceipt),
             allowPendingRecordedDispatchRefresh);
         return new WorkerProfileDispatchResult(task, preparation.PromptPath);
     }
@@ -2165,6 +2220,863 @@ public static class WorkerProfileDispatcher
 
         return provider.Identity.Kind is ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark or ProviderKind.OpenAICodexOssCli &&
             !string.IsNullOrWhiteSpace(reasoningEffort);
+    }
+
+    internal static WorkerContextPackage BuildContextPackage(
+        Goal goal,
+        TaskSpec task,
+        string workingDirectory,
+        string contextDirectory,
+        TaskBrief brief,
+        ICollection<SemanticSourceObservation>? observedSources = null,
+        IReadOnlyList<HumanInputRequest>? humanInputRequests = null,
+        IReadOnlyList<string>? reviewerScopeChangedFiles = null,
+        string? reviewerScopeMergeBase = null,
+        int? reviewerScopeTotalChangedFileCount = null,
+        bool? reviewerMergeTreeClean = null,
+        IReadOnlyList<string>? reviewerMergeTreeConflictPaths = null,
+        int? reviewerMergeTreeTotalConflictPathCount = null)
+    {
+        var targetRole = task.RequiredRole;
+        var registryPath = Path.Combine(contextDirectory, "artifact-registry.json");
+        var registry = JsonSerializer.Deserialize<ContextArtifactRegistryDocument>(
+            File.ReadAllText(registryPath),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? throw new InvalidOperationException("Worker context artifact registry was empty.");
+        var artifacts = new List<WorkerContextArtifact>();
+        var goalHumanInputRequests = humanInputRequests ?? [];
+        var clarificationAnswerHistory = goal.RefinedSpec?.ClarificationAnswerHistory ?? [];
+
+        void AddSource(
+            WorkerContextSemanticSource source,
+            string identityValue,
+            ContextArtifactKind kind,
+            byte[] bytes,
+            IReadOnlyList<AgentRole>? roleVisibility = null,
+            ContextDeliveryMode? deliveryMode = null)
+        {
+            var identity = new LogicalArtifactIdentity(identityValue);
+            bytes = ApplyHumanInputRetractions(bytes, goalHumanInputRequests, clarificationAnswerHistory);
+            var mode = deliveryMode ?? WorkerContextPackageBuilder.SelectDeliveryMode(kind);
+            string? relativePath = null;
+            if (mode == ContextDeliveryMode.MandatoryFile)
+            {
+                relativePath = $".orchestrator-context/{goal.Id.Value}/authoritative/{task.Id.Value}/typed/{identity.Value}";
+                var materializationPath = Path.Combine(
+                    workingDirectory,
+                    relativePath.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(materializationPath)!);
+                File.WriteAllBytes(materializationPath, bytes);
+            }
+
+            artifacts.Add(WorkerContextArtifact.Create(
+                identity,
+                kind,
+                bytes,
+                roleVisibility ?? [targetRole],
+                mode,
+                ContextContractVersion.V1,
+                relativePath));
+            observedSources?.Add(new SemanticSourceObservation(source, identity.Value));
+        }
+
+        AddSource(WorkerContextSemanticSource.GoalObjective, "goal/objective.md", ContextArtifactKind.TaskObjective, Encoding.UTF8.GetBytes(goal.Objective));
+        AddSource(WorkerContextSemanticSource.TaskDescription, "task/description.md", ContextArtifactKind.RoleOutputContract, Encoding.UTF8.GetBytes(task.Description));
+        AddSource(
+            WorkerContextSemanticSource.TaskMetadata,
+            "task/metadata.json",
+            ContextArtifactKind.RoleOutputContract,
+            JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                GoalId = goal.Id.Value,
+                GoalStatus = goal.Status.ToString(),
+                TaskId = task.Id.Value,
+                TaskRole = task.RequiredRole.ToString(),
+                TaskStatus = task.Status.ToString()
+            }));
+        if (!string.IsNullOrWhiteSpace(task.VerificationPlan))
+        {
+            AddSource(WorkerContextSemanticSource.TaskVerificationPlan, "task/verification-plan.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(task.VerificationPlan));
+        }
+        AddSource(
+            WorkerContextSemanticSource.CriterionRetryFeedback,
+            "task/criterion-retry-feedback.json",
+            ContextArtifactKind.AcceptanceCriteria,
+            JsonSerializer.SerializeToUtf8Bytes(task.CriterionRetryFeedback));
+        if (goal.RefinedSpec is { } refinedSpec)
+        {
+            AddSource(
+                WorkerContextSemanticSource.RefinedSpec,
+                "goal/refined-spec.json",
+                ContextArtifactKind.AcceptanceCriteria,
+                JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    refinedSpec.BehavioralContract,
+                    refinedSpec.AcceptanceCriteria,
+                    VerificationClass = refinedSpec.VerificationClass.ToString(),
+                    refinedSpec.Decisions,
+                    refinedSpec.OpenQuestions,
+                    refinedSpec.OperatorOwnedAcceptanceCriteria,
+                    ClarificationAnswerHistory = refinedSpec.AuthoritativeClarificationAnswerHistory.Select(answer => new
+                    {
+                        answer.Id,
+                        answer.Text,
+                        Origin = answer.Origin.ToString(),
+                        answer.SupersededByAnswerId,
+                        answer.BriefVersion
+                    }).ToArray()
+                }));
+        }
+        if (goal.EffectiveAcceptanceCriteriaCorrections.Count > 0)
+        {
+            AddSource(
+                WorkerContextSemanticSource.EffectiveAcceptanceCriteriaCorrections,
+                "goal/effective-acceptance-criteria-corrections.json",
+                ContextArtifactKind.AcceptanceCriteria,
+                JsonSerializer.SerializeToUtf8Bytes(goal.EffectiveAcceptanceCriteriaCorrections
+                    .OrderBy(correction => correction.SupersededCriterion, StringComparer.Ordinal)
+                    .ThenBy(correction => correction.Correction, StringComparer.Ordinal)
+                    .ThenBy(correction => correction.Actor, StringComparer.Ordinal)
+                    .Select(correction => new
+                    {
+                        correction.SupersededCriterion,
+                        correction.Correction,
+                        correction.Actor,
+                        SourceTaskId = correction.SourceTaskId?.Value,
+                        SourceKind = correction.SourceKind.ToString(),
+                        correction.IsWaiver,
+                        correction.CapturedAcceptanceCriteriaHash
+                    }).ToArray()));
+        }
+        if (goal.LatestAcceptanceFailure is { } acceptanceFailure)
+        {
+            AddSource(
+                WorkerContextSemanticSource.LatestAcceptanceFailure,
+                "goal/latest-acceptance-failure.json",
+                ContextArtifactKind.AcceptanceCriteria,
+                JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    acceptanceFailure.FailedChecks,
+                    acceptanceFailure.BranchHeadSha,
+                    acceptanceFailure.MainHeadSha,
+                    acceptanceFailure.CheckAttributions,
+                    acceptanceFailure.BaselineAttestation
+                }));
+        }
+        if (targetRole == AgentRole.Reviewer)
+        {
+            AddCompleteReviewerScopeArtifactWhenPreviewIsCapped(
+                WorkerContextSemanticSource.ReviewerChangedFileScope,
+                "reviewer/changed-files.v1.json",
+                "git-diff-name-only-main-three-dot-head",
+                reviewerScopeMergeBase,
+                reviewerScopeChangedFiles,
+                reviewerScopeTotalChangedFileCount,
+                AddSource);
+            if (reviewerMergeTreeClean is false)
+            {
+                AddCompleteReviewerScopeArtifactWhenPreviewIsCapped(
+                    WorkerContextSemanticSource.ReviewerMergeConflictScope,
+                    "reviewer/merge-conflict-paths.v1.json",
+                    "git-merge-tree-write-tree-name-only-main-head",
+                    null,
+                    reviewerMergeTreeConflictPaths,
+                    reviewerMergeTreeTotalConflictPathCount,
+                    AddSource);
+            }
+        }
+        var timeline = goal.Timeline.ToArray();
+        AddSource(
+            WorkerContextSemanticSource.Timeline,
+            "goal/timeline.json",
+            ContextArtifactKind.RegisteredContext,
+            SerializeSemanticTimeline(timeline, workingDirectory, contextDirectory));
+        var reviewFindingHistory = goal.Tasks
+            .SelectMany(candidate => candidate.VerificationHistory.Select(verification => new
+            {
+                TaskId = candidate.Id.Value,
+                Role = candidate.RequiredRole.ToString(),
+                Findings = verification.MergedReviewFindings ?? [],
+                EvidenceReceipts = verification.FindingEvidenceReceipts ?? []
+            }))
+            .Where(item => item.Findings.Count > 0 || item.EvidenceReceipts.Count > 0)
+            .ToArray();
+        if (reviewFindingHistory.Length > 0)
+        {
+            AddSource(
+                WorkerContextSemanticSource.ReviewFindingHistory,
+                "goal/review-finding-history.json",
+                ContextArtifactKind.AcceptanceCriteria,
+                JsonSerializer.SerializeToUtf8Bytes(reviewFindingHistory));
+        }
+
+        if (task.LastExecution is not null)
+        {
+            var identity = new LogicalArtifactIdentity("task/last-model-output.txt");
+            var output = task.LastExecution.AuthoritativeOutput
+                ?? throw new WorkerContextPreparationException(
+                    identity,
+                    "authoritative-execution-output-unavailable",
+                    "Complete model output is unavailable; the bounded execution preview is not authoritative evidence.");
+            AddSource(WorkerContextSemanticSource.LastModelOutput, identity.Value, ContextArtifactKind.RegisteredContext, Encoding.UTF8.GetBytes(output));
+        }
+
+        if (task.LastDispatch is not null)
+        {
+            AddSource(
+                WorkerContextSemanticSource.LastDispatch,
+                "task/last-dispatch.json",
+                ContextArtifactKind.RegisteredContext,
+                JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    task.LastDispatch.WorkerName,
+                    task.LastDispatch.ProviderName,
+                    task.LastDispatch.ModelName,
+                    task.LastDispatch.ReasoningEffort,
+                    task.LastDispatch.TaskComplexity,
+                    task.LastDispatch.BaseCommit,
+                    task.LastDispatch.ResultCommit
+                }));
+        }
+
+        if (task.LastVerification is not null)
+        {
+            var currentIdentity = new LogicalArtifactIdentity("task/last-verification/stdout");
+            var currentOutput = WorkerVerificationEvidence.ResolveStandardOutputForContext(task.LastVerification, currentIdentity);
+            AddSource(WorkerContextSemanticSource.LastVerificationOutput, currentIdentity.Value, ContextArtifactKind.RegisteredContext, Encoding.UTF8.GetBytes(currentOutput.Content));
+            if (task.LastVerification.AuthoritativeStandardError is { } currentError)
+            {
+                AddSource(WorkerContextSemanticSource.LastVerificationError, "task/last-verification/stderr", ContextArtifactKind.RegisteredContext, Encoding.UTF8.GetBytes(currentError));
+            }
+        }
+
+        foreach (var priorTask in goal.Tasks.TakeWhile(candidate => candidate.Id != task.Id)
+            .Where(candidate => candidate.LastVerification is not null))
+        {
+            var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
+            var output = WorkerVerificationEvidence.ResolveStandardOutputForContext(priorTask.LastVerification!, identity);
+            AddSource(WorkerContextSemanticSource.PriorTaskVerificationOutput, identity.Value, ContextArtifactKind.PriorTaskEvidence, Encoding.UTF8.GetBytes(output.Content));
+        }
+
+        foreach (var entry in registry.Artifacts.OrderBy(item => item.Path, StringComparer.Ordinal))
+        {
+            var source = ClassifyRegistryArtifact(entry.Path);
+            if (source.Disposition != RegistryArtifactDisposition.Deliver)
+            {
+                continue;
+            }
+
+            var visibility = ParseRoleVisibility(entry.RoleVisibility);
+            if (!visibility.Contains(targetRole))
+            {
+                continue;
+            }
+
+            RequireRegistryArtifactReady(entry.Path, entry.Exists, entry.HashVerified);
+
+            var path = Path.Combine(contextDirectory, entry.Path.Replace('/', Path.DirectorySeparatorChar));
+            var bytes = File.ReadAllBytes(path);
+            var actualHash = WorkerContextArtifact.Hash(bytes);
+            if (!actualHash.Equals(entry.Sha256, StringComparison.Ordinal))
+            {
+                throw new WorkerContextPreparationException(
+                    new LogicalArtifactIdentity($"context/{entry.Path.Replace('\\', '/') }"),
+                    "registry-hash-mismatch",
+                    $"Registry expected {entry.Sha256}, found {actualHash}.");
+            }
+
+            AddSource(
+                WorkerContextSemanticSource.RegistryArtifact,
+                $"context/{entry.Path.Replace('\\', '/')}",
+                source.Kind,
+                bytes,
+                visibility,
+                source.DeliveryModeOverride);
+        }
+
+        var handoffPath = Path.Combine(workingDirectory, ".orchestrator-handoff.md");
+        if (File.Exists(handoffPath))
+        {
+            var authoritativeByIdentity = goal.Tasks
+                .TakeWhile(candidate => candidate.Id != task.Id)
+                .Where(candidate => candidate.LastVerification is not null)
+                .ToDictionary(
+                    candidate => $"prior/{candidate.Id.Value}/verification-output",
+                    candidate =>
+                    {
+                        var identity = new LogicalArtifactIdentity($"prior/{candidate.Id.Value}/verification-output");
+                        var output = WorkerVerificationEvidence.ResolveStandardOutputForContext(candidate.LastVerification!, identity);
+                        return Encoding.UTF8.GetBytes(output.Content);
+                    },
+                    StringComparer.Ordinal);
+            var resolver = new LegacyHandoffCompatibilityResolver(identity =>
+                authoritativeByIdentity.TryGetValue(identity, out var bytes) ? bytes : null);
+            foreach (var recovered in resolver.ResolveArtifactsFromMarkdown(File.ReadAllText(handoffPath)))
+            {
+                var existing = artifacts.FirstOrDefault(artifact =>
+                    artifact.Identity.Value.Equals(recovered.LogicalIdentity, StringComparison.Ordinal));
+                if (existing is not null)
+                {
+                    if (!existing.ContentHash.Equals(WorkerContextArtifact.Hash(recovered.Bytes), StringComparison.Ordinal))
+                    {
+                        throw new WorkerContextPreparationException(
+                            existing.Identity,
+                            "legacy-alias-hash-mismatch",
+                            "The compatibility representation does not match the typed authoritative artifact.");
+                    }
+
+                    continue;
+                }
+
+                AddSource(WorkerContextSemanticSource.LegacyHandoffArtifact, recovered.LogicalIdentity, ContextArtifactKind.PriorTaskEvidence, recovered.Bytes);
+            }
+        }
+
+        var headerResidual = ExtractCanonicalHeaderResidual(brief.Content);
+        if (!string.IsNullOrWhiteSpace(headerResidual))
+        {
+            AddSource(WorkerContextSemanticSource.HeaderResidual, "brief/header-residual.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(headerResidual));
+        }
+
+        var residualBrief = RemoveTypedSourceProjections(brief.Content, targetRole);
+        if (targetRole == AgentRole.Reviewer)
+        {
+            residualBrief = RemoveLargeReviewerScopeInlinePreviews(
+                residualBrief,
+                reviewerScopeTotalChangedFileCount > WorkerGitContext.ReviewerChangedFilePromptMaxFiles,
+                reviewerMergeTreeTotalConflictPathCount > WorkerGitContext.ReviewerChangedFilePromptMaxFiles);
+        }
+        AddSource(WorkerContextSemanticSource.CurrentBrief, "brief/current.md", ContextArtifactKind.OperatorInstructions, Encoding.UTF8.GetBytes(residualBrief));
+
+        var builder = new WorkerContextPackageBuilder();
+        var preparedWithoutManifest = builder.Prepare(targetRole, workingDirectory, artifacts);
+        return FinalizeContextPackageWithManifest(builder, preparedWithoutManifest, observedSources);
+    }
+
+    private static void AddCompleteReviewerScopeArtifactWhenPreviewIsCapped(
+        WorkerContextSemanticSource source,
+        string logicalIdentity,
+        string sourceCommand,
+        string? baseline,
+        IReadOnlyList<string>? paths,
+        int? totalPathCount,
+        Action<WorkerContextSemanticSource, string, ContextArtifactKind, byte[], IReadOnlyList<AgentRole>?, ContextDeliveryMode?> addSource)
+    {
+        var normalizedPaths = (paths ?? [])
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Trim().Replace('\\', '/').Normalize(NormalizationForm.FormC))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var total = totalPathCount ?? normalizedPaths.Length;
+        var identity = new LogicalArtifactIdentity(logicalIdentity);
+        if (normalizedPaths.Length != total)
+        {
+            throw new WorkerContextPreparationException(
+                identity,
+                "reviewer-scope-incomplete",
+                $"Expected {total} complete path entries but received {normalizedPaths.Length}; a capped preview cannot be used as authoritative scope.");
+        }
+        if (total <= WorkerGitContext.ReviewerChangedFilePromptMaxFiles)
+        {
+            return;
+        }
+
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new ReviewerPathScopeDocument(
+            ContextContractVersion.V1.Value,
+            sourceCommand,
+            string.IsNullOrWhiteSpace(baseline) ? null : baseline.Trim(),
+            total,
+            normalizedPaths));
+        addSource(
+            source,
+            identity.Value,
+            ContextArtifactKind.RegisteredContext,
+            bytes,
+            [AgentRole.Reviewer],
+            ContextDeliveryMode.MandatoryFile);
+    }
+
+    internal static WorkerContextPackage FinalizeContextPackageWithManifest(
+        WorkerContextPackageBuilder builder,
+        WorkerContextPackage preparedWithoutManifest,
+        ICollection<SemanticSourceObservation>? observedSources = null)
+    {
+        var inventory = preparedWithoutManifest.Artifacts.Select(artifact => new ContextArtifactInventoryEntry(
+            artifact.Identity.Value,
+            artifact.ContentHash,
+            artifact.RoleVisibility.Select(role => role.ToString()).ToArray(),
+            artifact.DeliveryMode.ToString(),
+            artifact.ContractVersion.Value)).ToArray();
+        var authoritativeInventoryBytes = JsonSerializer.SerializeToUtf8Bytes(new ContextArtifactInventoryDocument(
+            ContextContractVersion.V1.Value,
+            ["artifact-registry.json", "context-package.json", "manifest.md"],
+            inventory));
+        var manifestArtifact = WorkerContextArtifact.Create(
+            new LogicalArtifactIdentity("context/manifest.v1.json"),
+            ContextArtifactKind.ContextManifest,
+            authoritativeInventoryBytes,
+            [preparedWithoutManifest.TargetRole],
+            ContextDeliveryMode.InlineFull,
+            ContextContractVersion.V1);
+
+        observedSources?.Add(new SemanticSourceObservation(
+            WorkerContextSemanticSource.ContextManifest,
+            manifestArtifact.Identity.Value));
+        return builder.AppendFinalizedInlineArtifact(preparedWithoutManifest, manifestArtifact);
+    }
+
+    internal static string RemoveTypedSourceProjections(string content, AgentRole targetRole)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        _ = targetRole;
+
+        var instructions = FindBriefHeading(content, "## Instructions", 0);
+        if (instructions < 0)
+        {
+            throw new InvalidOperationException("Typed context brief is missing its Instructions source boundary.");
+        }
+
+        var residual = content[instructions..];
+        foreach (var heading in new[]
+        {
+            "## Refined Spec",
+            "## Durable Research Notes",
+            "## Durable Planner Plan",
+            "## Verification Plan",
+            "## Unmet acceptance criteria from the prior attempt - fix these:",
+            "## Last Model Output",
+            "## Last Dispatch",
+            "## Last Verification",
+            "## Prior Task Evidence",
+            "## Recent Timeline"
+        })
+        {
+            residual = RemoveHeadingSection(residual, heading);
+        }
+
+        return residual.Trim();
+    }
+
+    internal static string RemoveLargeReviewerScopeInlinePreviews(
+        string content,
+        bool removeChangedPaths,
+        bool removeConflictPaths)
+    {
+        if (!removeChangedPaths && !removeConflictPaths)
+        {
+            return content;
+        }
+
+        var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var output = new List<string>(lines.Length);
+        var inChangedFileScope = false;
+        var inChangedPathList = false;
+        var inConflictPathList = false;
+        var inConvergenceChangedFiles = false;
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("## ", StringComparison.Ordinal))
+            {
+                inChangedFileScope = line.Equals("## Reviewer Changed-File Scope", StringComparison.Ordinal);
+                inChangedPathList = false;
+                inConflictPathList = false;
+                inConvergenceChangedFiles = false;
+            }
+
+            if (inChangedFileScope)
+            {
+                if (removeConflictPaths && line.StartsWith("Conflicting paths:", StringComparison.Ordinal))
+                {
+                    output.Add(ReplaceShowingCount(line));
+                    inConflictPathList = true;
+                    continue;
+                }
+                if (line.StartsWith("Staleness policy:", StringComparison.Ordinal))
+                {
+                    inConflictPathList = false;
+                    inChangedPathList = removeChangedPaths;
+                }
+                if (line.StartsWith("Independent scope checks", StringComparison.Ordinal))
+                {
+                    inChangedPathList = false;
+                }
+                if (removeChangedPaths && line.StartsWith("Changed files:", StringComparison.Ordinal))
+                {
+                    output.Add(ReplaceShowingCount(line));
+                    continue;
+                }
+                if ((inConflictPathList &&
+                     (line.StartsWith("- conflict: ", StringComparison.Ordinal) ||
+                      line.Contains("additional conflict path", StringComparison.Ordinal))) ||
+                    (inChangedPathList && line.StartsWith("- ", StringComparison.Ordinal)))
+                {
+                    continue;
+                }
+            }
+
+            if (removeChangedPaths &&
+                line.StartsWith("GOAL_DIFF_CHANGED_FILES ", StringComparison.Ordinal))
+            {
+                inConvergenceChangedFiles = true;
+                output.Add(line);
+                continue;
+            }
+            if (inConvergenceChangedFiles && line.StartsWith("Actively check ", StringComparison.Ordinal))
+            {
+                inConvergenceChangedFiles = false;
+            }
+            if (inConvergenceChangedFiles && line.StartsWith("- ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            output.Add(line);
+        }
+
+        return string.Join(Environment.NewLine, output).Trim();
+    }
+
+    private static string ReplaceShowingCount(string line)
+    {
+        var separator = line.IndexOf(';');
+        return separator < 0
+            ? line
+            : line[..separator] + "; complete path list is delivered only by its typed MandatoryFile artifact.";
+    }
+
+    private static string RemoveHeadingSection(string content, string heading)
+    {
+        var start = FindBriefHeading(content, heading, 0);
+        if (start < 0)
+        {
+            return content;
+        }
+
+        var next = content.IndexOf("## ", start + heading.Length, StringComparison.Ordinal);
+        while (next >= 0 && next > 0 && content[next - 1] != '\n')
+        {
+            next = content.IndexOf("## ", next + 3, StringComparison.Ordinal);
+        }
+
+        return content.Remove(start, (next < 0 ? content.Length : next) - start);
+    }
+
+    private static string RemoveMarkedBriefBlock(string content, string startMarker, string endMarker)
+    {
+        var start = content.IndexOf(startMarker, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return content;
+        }
+
+        var end = content.IndexOf(endMarker, start + startMarker.Length, StringComparison.Ordinal);
+        if (end < 0)
+        {
+            throw new InvalidOperationException($"Typed context brief block '{startMarker}' has no closing marker '{endMarker}'.");
+        }
+
+        end += endMarker.Length;
+        while (end < content.Length && (content[end] == '\r' || content[end] == '\n'))
+        {
+            end++;
+        }
+
+        return content.Remove(start, end - start);
+    }
+
+    private static string RemoveBriefSection(string content, string startHeading, string? endHeading)
+    {
+        var start = FindBriefHeading(content, startHeading, startIndex: 0);
+        if (start < 0)
+        {
+            return content;
+        }
+
+        var end = endHeading is null
+            ? content.Length
+            : FindBriefHeading(content, endHeading, start + startHeading.Length);
+        if (end < 0)
+        {
+            throw new InvalidOperationException($"Typed context brief section '{startHeading}' has no expected boundary '{endHeading}'.");
+        }
+
+        return content.Remove(start, end - start);
+    }
+
+    private static int FindBriefHeading(string content, string heading, int startIndex)
+    {
+        var candidate = content.IndexOf(heading, startIndex, StringComparison.Ordinal);
+        while (candidate >= 0)
+        {
+            if (candidate == 0 || content[candidate - 1] == '\n')
+            {
+                return candidate;
+            }
+
+            candidate = content.IndexOf(heading, candidate + heading.Length, StringComparison.Ordinal);
+        }
+
+        return -1;
+    }
+
+    private static string RequireAuthoritativeOutput(
+        TaskVerificationRecord verification,
+        LogicalArtifactIdentity identity) =>
+        WorkerVerificationEvidence.RequireAuthoritativeStandardOutput(verification, identity);
+
+    private static RegistryArtifactSource ClassifyRegistryArtifact(string path) =>
+        RegistryArtifactSources.TryGetValue(path, out var source)
+            ? source
+            : new RegistryArtifactSource(
+                ContextArtifactKind.RegisteredContext,
+                RegistryArtifactDisposition.Deliver,
+                ContextDeliveryMode.InlineFull);
+
+    private static byte[] ApplyHumanInputRetractions(
+        byte[] bytes,
+        IReadOnlyList<HumanInputRequest> requests,
+        IReadOnlyList<HumanInputAnswerRecord> clarificationAnswerHistory)
+    {
+        string content;
+        try
+        {
+            content = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            return bytes;
+        }
+
+        var filtered = HumanInputRetractionPolicy.Apply(content, requests, clarificationAnswerHistory);
+        return string.Equals(content, filtered, StringComparison.Ordinal)
+            ? bytes
+            : Encoding.UTF8.GetBytes(filtered);
+    }
+
+    internal static void RequireRegistryArtifactReady(string logicalPath, bool exists, bool hashVerified)
+    {
+        var identity = new LogicalArtifactIdentity($"context/{logicalPath.Replace('\\', '/')}");
+        if (!exists)
+        {
+            throw new WorkerContextPreparationException(
+                identity,
+                "registry-artifact-missing",
+                "A required registry artifact is marked missing; dispatch cannot omit it.");
+        }
+
+        if (!hashVerified)
+        {
+            throw new WorkerContextPreparationException(
+                identity,
+                "registry-artifact-hash-unverified",
+                "A required registry artifact is not hash-verified; dispatch cannot omit it.");
+        }
+    }
+
+    internal static string ExtractCanonicalHeaderResidual(string content)
+    {
+        var instructions = FindBriefHeading(content, "## Instructions", 0);
+        if (instructions < 0)
+        {
+            throw new InvalidOperationException("Typed context brief is missing its Instructions source boundary.");
+        }
+
+        var residual = content[..instructions];
+        residual = RemoveMarkedBriefBlock(
+            residual,
+            "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
+            "<!-- ACCUMULATED_RETRY_FEEDBACK_END -->");
+        residual = RemoveMarkedBriefBlock(
+            residual,
+            "<!-- EFFECTIVE_ACCEPTANCE_CRITERIA_CORRECTIONS_START -->",
+            "<!-- EFFECTIVE_ACCEPTANCE_CRITERIA_CORRECTIONS_END -->");
+        residual = RemoveMarkedBriefBlock(
+            residual,
+            "<!-- ACCEPTANCE_FAILURE_START -->",
+            "<!-- ACCEPTANCE_FAILURE_END -->");
+        residual = RemoveLineRange(residual, "Goal: ", "Goal id: ");
+        residual = RemoveLineRange(residual, "Task: ", "Task role: ");
+        foreach (var prefix in new[]
+        {
+            "# Agent Task Brief",
+            "Goal id: ",
+            "Goal status: ",
+            "Task role: ",
+            "Task status: ",
+            "Task id: ",
+            "Working directory, use absolute paths: ",
+            "Context files: read "
+        })
+        {
+            residual = RemoveLineWithPrefix(residual, prefix);
+        }
+
+        return residual.Trim();
+    }
+
+    private static string RemoveLineRange(string content, string startPrefix, string endPrefix)
+    {
+        var start = FindLineWithPrefix(content, startPrefix, 0);
+        if (start < 0)
+        {
+            return content;
+        }
+
+        var end = FindLineWithPrefix(content, endPrefix, start + startPrefix.Length);
+        if (end < 0)
+        {
+            throw new InvalidOperationException($"Typed context brief source '{startPrefix}' has no boundary '{endPrefix}'.");
+        }
+
+        return content.Remove(start, end - start);
+    }
+
+    private static string RemoveLineWithPrefix(string content, string prefix)
+    {
+        var start = FindLineWithPrefix(content, prefix, 0);
+        if (start < 0)
+        {
+            return content;
+        }
+
+        var end = content.IndexOf('\n', start);
+        return content.Remove(start, end < 0 ? content.Length - start : end + 1 - start);
+    }
+
+    private static int FindLineWithPrefix(string content, string prefix, int startIndex)
+    {
+        var candidate = content.IndexOf(prefix, startIndex, StringComparison.Ordinal);
+        while (candidate >= 0)
+        {
+            if (candidate == 0 || content[candidate - 1] == '\n')
+            {
+                return candidate;
+            }
+
+            candidate = content.IndexOf(prefix, candidate + prefix.Length, StringComparison.Ordinal);
+        }
+
+        return -1;
+    }
+
+    internal static byte[] SerializeSemanticTimeline(
+        IEnumerable<ProgressEvent> timeline,
+        string workingDirectory,
+        string contextDirectory) =>
+        // Goal state retains the operational timestamps and original paths for audit. The package's
+        // authoritative timeline bytes retain causal order/content while canonicalizing those fields.
+        JsonSerializer.SerializeToUtf8Bytes(timeline.Select(evt => new
+        {
+            TaskId = evt.TaskId?.Value,
+            Kind = evt.Kind.ToString(),
+            Message = NormalizeSemanticTimelineText(evt.Message, workingDirectory, contextDirectory),
+            evt.RequeueSkipped,
+            OperatorGates = evt.OperatorGates?.Select(gate => new
+            {
+                gate.DeliverableId,
+                gate.SourceRecordId,
+                SatisfactionEvidence = NormalizeSemanticTimelineText(
+                    gate.SatisfactionEvidence,
+                    workingDirectory,
+                    contextDirectory)
+            }).ToArray()
+        }));
+
+    private static string? NormalizeSemanticTimelineText(
+        string? value,
+        string workingDirectory,
+        string contextDirectory)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        var normalized = value.Replace('\\', '/');
+        var roots = new[]
+        {
+            (Path: contextDirectory, Token: "${context-root}"),
+            (Path: workingDirectory, Token: "${workspace-root}")
+        }
+            .Select(root => (Path: root.Path.Replace('\\', '/').TrimEnd('/'), root.Token))
+            .Where(root => root.Path.Length > 0)
+            .OrderByDescending(root => root.Path.Length);
+        foreach (var root in roots)
+        {
+            normalized = normalized.Replace(root.Path, root.Token, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return normalized;
+    }
+
+    private static AgentRole[] ParseRoleVisibility(IReadOnlyList<string> values) => values
+        .Select(value => Enum.TryParse<AgentRole>(value, ignoreCase: true, out var role)
+            ? role
+            : throw new InvalidOperationException($"Artifact registry contains unknown role visibility '{value}'."))
+        .ToArray();
+
+    private sealed record ContextArtifactRegistryDocument(IReadOnlyList<ContextArtifactRegistryItem> Artifacts);
+    private sealed record ContextArtifactRegistryItem(
+        string Path,
+        bool Exists,
+        string Sha256,
+        IReadOnlyList<string> RoleVisibility,
+        bool HashVerified);
+    private sealed record ContextArtifactInventoryEntry(
+        string LogicalIdentity,
+        string Sha256,
+        IReadOnlyList<string> RoleVisibility,
+        string DeliveryMode,
+        int ContractVersion);
+    private sealed record ContextArtifactInventoryDocument(
+        int ContractVersion,
+        IReadOnlyList<string> CompatibilityAliases,
+        IReadOnlyList<ContextArtifactInventoryEntry> Artifacts);
+    private sealed record RegistryArtifactSource(
+        ContextArtifactKind Kind,
+        RegistryArtifactDisposition Disposition,
+        ContextDeliveryMode? DeliveryModeOverride = null);
+    internal sealed record SemanticSourceObservation(
+        WorkerContextSemanticSource Source,
+        string LogicalIdentity);
+    internal enum WorkerContextSemanticSource
+    {
+        GoalObjective,
+        TaskDescription,
+        TaskMetadata,
+        TaskVerificationPlan,
+        CriterionRetryFeedback,
+        RefinedSpec,
+        EffectiveAcceptanceCriteriaCorrections,
+        LatestAcceptanceFailure,
+        ReviewerChangedFileScope,
+        ReviewerMergeConflictScope,
+        Timeline,
+        ReviewFindingHistory,
+        LastModelOutput,
+        LastDispatch,
+        LastVerificationOutput,
+        LastVerificationError,
+        PriorTaskVerificationOutput,
+        RegistryArtifact,
+        LegacyHandoffArtifact,
+        HeaderResidual,
+        CurrentBrief,
+        ContextManifest
+    }
+    private sealed record ReviewerPathScopeDocument(
+        int ContractVersion,
+        string SourceCommand,
+        string? Baseline,
+        int TotalPathCount,
+        IReadOnlyList<string> Paths);
+    private enum RegistryArtifactDisposition
+    {
+        Deliver,
+        DomainProjection,
+        CanonicalManifestAlias
     }
 
     public static Dictionary<string, string?> BuildDispatchVariables(

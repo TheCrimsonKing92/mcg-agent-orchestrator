@@ -19,6 +19,7 @@ public sealed class WorkerProfileTests
     Assert.Equal("local-echo", profile.Name);
     Assert.Contains("{promptPath}", profile.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("codex exec", codex.CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("--json", codex.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("--skip-git-repo-check", codex.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("--model {subscriptionModelName}", codex.CommandTemplate, StringComparison.Ordinal);
     Assert.Contains("-c model_reasoning_effort={subscriptionReasoningEffort}", codex.CommandTemplate, StringComparison.Ordinal);
@@ -295,8 +296,23 @@ public sealed class WorkerProfileTests
     var restored = WorkerProfileStore.Load(path);
 
     Assert.Contains("--sandbox {sandboxMode}", restored.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+    Assert.Contains("--json", restored.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
     Assert.True(!restored.GetRequired("codex-cli").CommandTemplate.Contains("--sandbox workspace-write", StringComparison.Ordinal));
 }
+
+    [Xunit.Fact(DisplayName = "WorkerProfileStore_load_repairs_codex_profile_without_json")]
+    public void WorkerProfileStoreLoadRepairsCodexProfileWithoutJson()
+    {
+        var root = CreateTempDirectory();
+        var path = Path.Combine(root, "workers.json");
+        var saved = WorkerProfileCatalog.Default()
+            .Upsert(new WorkerProfile("codex-cli", "codex exec --skip-git-repo-check --model {subscriptionModelName} -c model_reasoning_effort={subscriptionReasoningEffort} --sandbox {sandboxMode} --cd {workingDirectory}"));
+
+        WorkerProfileStore.Save(path, saved);
+        var restored = WorkerProfileStore.Load(path);
+
+        Assert.Contains("--json", restored.GetRequired("codex-cli").CommandTemplate, StringComparison.Ordinal);
+    }
     [Xunit.Fact(DisplayName = "WorkerProfileStore_load_preserves_valid_codex_oss_default_profile")]
     public void WorkerProfileStoreLoadPreservesValidCodexOssDefaultProfile()
 {

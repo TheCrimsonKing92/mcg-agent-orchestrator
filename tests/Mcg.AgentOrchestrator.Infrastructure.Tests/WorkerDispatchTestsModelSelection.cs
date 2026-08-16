@@ -927,7 +927,7 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
-    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Equal(TaskComplexity.Complex, task.LastDispatch.TaskComplexity);
     Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
     Assert.DoesNotContain("gpt-5.3-codex-spark", task.LastDispatch.Command, StringComparison.Ordinal);
@@ -1040,11 +1040,11 @@ public void WorkerProfileDispatcherRejectsVerifiedTaskDispatch()
 
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     // Subscription launch profiles always pin the configured alias; fallback from spark still uses the configured default alias.
-    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Equal("codex-cli", task.LastDispatch.DispatchLane);
     Assert.Contains("fallback-default-lane: spark unavailable", task.LastDispatch.ModelSelectionReason, StringComparison.Ordinal);
     // Subscription launch profiles always pin the configured alias; fallback from spark still uses the configured default alias.
-    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
+    Assert.Contains($"--model '{AgentCatalog.OpenAiSolSubscriptionModelAlias}'", task.LastDispatch.Command, StringComparison.Ordinal);
     Assert.DoesNotContain("gpt-5.3-codex-spark", task.LastDispatch.Command, StringComparison.Ordinal);
 }
 
@@ -1499,8 +1499,8 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.Contains("model-selection: provider-constrained: Planner remains on OpenAI", preflight, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "AgentCatalogStore_stale_catalog_repair_preserves_explicit_provider_constraint")]
-    public void AgentCatalogStoreStaleCatalogRepairPreservesExplicitProviderConstraint()
+    [Xunit.Fact]
+    public void AgentCatalogStoreStaleCatalogRepairKeepsBuiltInRoutingAutomatic()
 {
     var root = CreateTempDirectory();
     var path = Path.Combine(root, "agents.json");
@@ -1517,7 +1517,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var repairedAgent = repairedCatalog.GetRequired(AgentRole.Researcher);
     var kernel = new AgentOrchestratorKernel();
     var task = new TaskSpec(TaskId.New(), "Research the requested source change.", AgentRole.Researcher);
-    var goal = kernel.CreateGoal("Route a repaired explicit catalog", [task]);
+    var goal = kernel.CreateGoal("Route a repaired built-in catalog", [task]);
     kernel.ActivateGoal(goal.Id, [repairedAgent]);
     var sandbox = new WorkerSandboxOptions(false, WorkerSandboxOptions.DefaultAccount, WorkerSandboxOptions.DefaultCredentialTarget);
     var planItem = SubscriptionPlanBuilder.Build(
@@ -1527,11 +1527,11 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         sandboxOptions: sandbox,
         commandExists: _ => true).Items.Single();
 
-    Assert.True(repairedAgent.IsProviderRoutingConstrained);
-    Assert.Contains("1 customized assignment(s) are provider-constrained", warning, StringComparison.Ordinal);
-    Assert.Equal("OpenAI", planItem.ProviderName);
-    Assert.Equal("codex-cli", planItem.ProfileName);
-    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, planItem.SubscriptionModelName);
+    Assert.False(repairedAgent.IsProviderRoutingConstrained);
+    Assert.Contains("1 built-in-compatible assignment(s) remain automatic", warning, StringComparison.Ordinal);
+    Assert.Equal("Anthropic", planItem.ProviderName);
+    Assert.Equal(WorkerProfileDispatcher.AnthropicSubscriptionProfileName, planItem.ProfileName);
+    Assert.Equal(WorkerProfileDispatcher.LightRoleAnthropicModelName, planItem.SubscriptionModelName);
 }
 
     [Xunit.Fact(DisplayName = "AgentCatalogStore_legacy_built_in_catalog_routing_is_fallback_independent")]
@@ -1669,7 +1669,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
-    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Contains("model-selection: full-profile: light-role profile unavailable", preflight, StringComparison.Ordinal);
     Assert.Contains("not the expected claude CLI", preflight, StringComparison.Ordinal);
 }
@@ -1829,7 +1829,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
-    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Contains("model-selection: fallback-full-profile: prior Researcher WORKER_RESULT missing field(s): citations", preflight, StringComparison.Ordinal);
 }
 
@@ -1889,7 +1889,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     Assert.True(planItem.CanPrepare);
     Assert.Equal("codex-cli", planItem.ProfileName);
     Assert.Equal("OpenAI", planItem.ProviderName);
-    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, planItem.SubscriptionModelName);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, planItem.SubscriptionModelName);
     Assert.Equal(planItem.ProfileName, task.LastDispatch!.WorkerName);
     Assert.Equal(planItem.ProviderName, task.LastDispatch.ProviderName);
     Assert.Equal(planItem.SubscriptionModelName, task.LastDispatch.ModelName);
@@ -2115,7 +2115,7 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
     var preflight = File.ReadAllText(Path.Combine(workingDirectory, ".orchestrator-context", goal.Id.Value, "subscription-preflight.md"));
     Assert.Equal("codex-cli", task.LastDispatch!.WorkerName);
     Assert.Equal("OpenAI", task.LastDispatch.ProviderName);
-    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, task.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, task.LastDispatch.ModelName);
     Assert.Contains("model-selection: full-profile: role is write-capable or gate-heavy", preflight, StringComparison.Ordinal);
 }
 
@@ -2274,16 +2274,16 @@ public void WorkerProfileDispatcherRejectsVerifiedSubscriptionDispatch()
         dispatchedAt);
 
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
-    Assert.Contains($"--model '{AgentCatalog.OpenAiSubscriptionModelAlias}'", developer.LastDispatch!.Command, StringComparison.Ordinal);
+    Assert.Contains($"--model '{AgentCatalog.OpenAiSolSubscriptionModelAlias}'", developer.LastDispatch!.Command, StringComparison.Ordinal);
     Assert.Equal("OpenAI", developer.LastDispatch.ProviderName);
     // Subscription launch profiles always pin the configured alias; complexity only changes API-side model/effort.
-    Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, developer.LastDispatch.ModelName);
+    Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, developer.LastDispatch.ModelName);
     Assert.Contains("model_reasoning_effort='high'", developer.LastDispatch.Command, StringComparison.Ordinal);
     var dispatchEvent = goal.Timeline.Single(evt =>
         evt.TaskId == developer.Id &&
         evt.Kind == ProgressKind.TaskDispatchRecorded);
     // Subscription launch profiles always pin the configured alias in dispatch metadata.
-    Assert.Contains($"OpenAI/{AgentCatalog.OpenAiSubscriptionModelAlias}", dispatchEvent.Message, StringComparison.Ordinal);
+    Assert.Contains($"OpenAI/{AgentCatalog.OpenAiSolSubscriptionModelAlias}", dispatchEvent.Message, StringComparison.Ordinal);
 }
 
     [Xunit.Fact(DisplayName = "SubscriptionDispatch_override_model_beats_complex_path")]
@@ -2798,8 +2798,8 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
         DateTimeOffset.UtcNow));
 }
 
-    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_writes_handoff_file_with_full_evidence")]
-    public void WorkerProfileDispatcherWritesHandoffFileWithFullEvidence()
+    [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_writes_hash_bound_handoff_without_duplicate_payload")]
+    public void WorkerProfileDispatcherWritesHashBoundHandoffWithoutDuplicatePayload()
 {
     var root = CreateTempDirectory();
     var workingDirectory = Path.Combine(root, "repo");
@@ -2817,7 +2817,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
     var fullStdout = new string('a', 20000) + new string('b', 10000);
     kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
-        "dotnet test", workingDirectory, 0, fullStdout, string.Empty, DateTimeOffset.UtcNow));
+        "dotnet test", workingDirectory, 0, fullStdout, string.Empty, DateTimeOffset.UtcNow,
+        FullStandardOutput: fullStdout,
+        FullStandardError: string.Empty));
     var profile = new WorkerProfile("codex", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
 
     WorkerProfileDispatcher.PrepareTask(kernel, goal, currentTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);
@@ -2826,10 +2828,22 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     Assert.True(File.Exists(handoffPath));
     var content = File.ReadAllText(handoffPath);
     Assert.Contains("Developer: Fix the login bug.", content, StringComparison.Ordinal);
-    Assert.Contains(new string('a', VerificationTextBounds.PreviewHeadChars), content, StringComparison.Ordinal);
-    Assert.Contains("full output path not recorded", content, StringComparison.Ordinal);
-    Assert.Contains(new string('b', VerificationTextBounds.PreviewTailChars), content, StringComparison.Ordinal);
-    Assert.True(!content.Contains(new string('a', VerificationTextBounds.PreviewHeadChars + 1), StringComparison.Ordinal));
+    Assert.Contains("Compatibility pointer (v1, hash-bound", content, StringComparison.Ordinal);
+    Assert.Contains($"prior/{priorTask.Id.Value}/verification-output", content, StringComparison.Ordinal);
+    Assert.Contains("MANDATORY READ: path=.orchestrator-context/legacy-handoff/", content, StringComparison.Ordinal);
+    Assert.DoesNotContain(new string('a', VerificationTextBounds.PreviewHeadChars), content, StringComparison.Ordinal);
+    Assert.DoesNotContain(new string('b', VerificationTextBounds.PreviewTailChars), content, StringComparison.Ordinal);
+    var materializationPath = Path.Combine(
+        workingDirectory,
+        ".orchestrator-context",
+        "legacy-handoff",
+        priorTask.Id.Value,
+        "verification-output.bin");
+    Assert.Equal(System.Text.Encoding.UTF8.GetBytes(fullStdout), File.ReadAllBytes(materializationPath));
+    Assert.Equal(
+        System.Text.Encoding.UTF8.GetBytes(fullStdout),
+        Assert.Single(new LegacyHandoffCompatibilityResolver(_ => null, workingDirectory)
+            .ResolveAllFromMarkdown(content)));
 }
 
     [Xunit.Fact(DisplayName = "WorkerProfileDispatcher_overwrites_handoff_file_on_each_dispatch")]
@@ -2851,7 +2865,9 @@ public void WorkerProfileDispatcherRejectsDeveloperSubscriptionProfilesThatCanno
     kernel.ActivateGoal(goal.Id, [agent]);
     kernel.ReportTaskProgress(goal.Id, priorTask.Id, WorkTaskStatus.Completed, "Done.");
     kernel.RecordTaskVerification(goal.Id, priorTask.Id, new TaskVerificationRecord(
-        "dotnet test", workingDirectory, 0, "Tests passed.", string.Empty, DateTimeOffset.UtcNow));
+        "dotnet test", workingDirectory, 0, "Tests passed.", string.Empty, DateTimeOffset.UtcNow,
+        FullStandardOutput: "Tests passed.",
+        FullStandardError: string.Empty));
     var profile = new WorkerProfile("codex", "codex exec --sandbox workspace-write --cd {workingDirectory} (Get-Content -Raw {promptPath})");
 
     WorkerProfileDispatcher.PrepareTask(kernel, goal, currentTask, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow);

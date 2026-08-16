@@ -26,6 +26,243 @@ public sealed class TaskVerificationTests
         Assert.False(receipt.IsAtCap);
     }
 
+    [Xunit.Fact]
+    public void TaskDispatchSnapshotRoundTripsContextPackageReceiptAndTypedUsage()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Persist context package receipt", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var receipt = new WorkerContextPackageReceipt(
+            "ctxpkg-v1-sha256:" + new string('a', 64),
+            [new WorkerContextSectionReceipt("brief/current.md", 12, 12, new string('b', 64), ContextDeliveryMode.InlineFull, 1, [AgentRole.Developer])],
+            ProviderUsageValue.Reported(123),
+            ProviderUsageValue.Unknown("unsupported"),
+            ProviderUsageValue.Reported(45));
+        kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
+            "developer",
+            "run",
+            "C:\\repo",
+            DateTimeOffset.UtcNow,
+            ContextPackageReceipt: receipt));
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        var restoredReceipt = restored.GetTask(goal.Id, developer.Id).LastDispatch!.ContextPackageReceipt!;
+
+        Assert.Equal(receipt.SemanticPackageId, restoredReceipt.SemanticPackageId);
+        Assert.Equal(123, restoredReceipt.InputTokens.Value);
+        Assert.Equal(ProviderUsageState.Unknown, restoredReceipt.CachedInputTokens.State);
+        Assert.Equal("unsupported", restoredReceipt.CachedInputTokens.UnknownReason);
+        Assert.Equal(ContextDeliveryMode.InlineFull, Assert.Single(restoredReceipt.Sections).DeliveryMode);
+    }
+
+    [Xunit.Fact]
+    public void TaskDispatchSnapshot_RetryReceipts_RetainsEachAttempt()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Retain attempt receipts", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var firstAt = DateTimeOffset.Parse("2026-08-11T20:00:00Z");
+        var secondRequestedAt = firstAt;
+        var secondRecordedAt = firstAt.AddTicks(1);
+        WorkerContextPackageReceipt Receipt(char id) => new(
+            "ctxpkg-v1-sha256:" + new string(id, 64),
+            [new WorkerContextSectionReceipt("brief/current.md", 12, 12, new string(id, 64), ContextDeliveryMode.InlineFull, 1, [AgentRole.Developer])],
+            ProviderUsageValue.Unknown("not-yet-reported"),
+            ProviderUsageValue.Unknown("not-yet-reported"),
+            ProviderUsageValue.Unknown("not-yet-reported"));
+
+        kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
+            "developer", "first", "C:\\repo", firstAt, ContextPackageReceipt: Receipt('a')));
+        kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
+            "developer", "second", "C:\\repo", secondRequestedAt, ContextPackageReceipt: Receipt('b')),
+            allowPendingRecordedDispatchRefresh: true);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot())
+            .GetTask(goal.Id, developer.Id);
+
+        Assert.Equal(2, restored.DispatchHistory.Count);
+        Assert.Equal(firstAt, restored.DispatchHistory[0].DispatchedAt);
+        Assert.EndsWith(new string('a', 64), restored.DispatchHistory[0].ContextPackageReceipt!.SemanticPackageId, StringComparison.Ordinal);
+        Assert.Equal(secondRecordedAt, restored.DispatchHistory[1].DispatchedAt);
+        Assert.EndsWith(new string('b', 64), restored.DispatchHistory[1].ContextPackageReceipt!.SemanticPackageId, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void ContextPackageUsageUpdateTargetsOriginatingDispatchAttempt()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var developer = new TaskSpec(TaskId.New(), "Implement", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Attribute usage by dispatch attempt", [developer]);
+        kernel.ActivateGoal(goal.Id, DefaultAgents());
+        var firstAt = DateTimeOffset.Parse("2026-08-11T20:00:00Z");
+        var secondAt = firstAt.AddMinutes(1);
+        WorkerContextPackageReceipt Receipt(char id) => new(
+            "ctxpkg-v1-sha256:" + new string(id, 64),
+            [],
+            ProviderUsageValue.Unknown("not-yet-reported"),
+            ProviderUsageValue.Unknown("not-yet-reported"),
+            ProviderUsageValue.Unknown("not-yet-reported"));
+        kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
+            "developer", "first", "C:\\repo", firstAt, ContextPackageReceipt: Receipt('a')));
+        kernel.RecordTaskDispatch(goal.Id, developer.Id, new TaskDispatchRecord(
+            "developer", "second", "C:\\repo", secondAt, ContextPackageReceipt: Receipt('b')),
+            allowPendingRecordedDispatchRefresh: true);
+
+        kernel.RecordDispatchContextPackageReceipt(
+            goal.Id,
+            developer.Id,
+            firstAt,
+            Receipt('a').WithProviderUsage(new ProviderReportedUsage(4_000_000_000L, 17, 3_000_000_000L)));
+
+        var task = kernel.GetTask(goal.Id, developer.Id);
+        Assert.Equal(4_000_000_000L, task.DispatchHistory[0].ContextPackageReceipt!.InputTokens.Value);
+        Assert.Equal(3_000_000_000L, task.DispatchHistory[0].ContextPackageReceipt!.CachedInputTokens.Value);
+        Assert.Equal(ProviderUsageState.Unknown, task.DispatchHistory[1].ContextPackageReceipt!.InputTokens.State);
+        Assert.Equal(secondAt, task.LastDispatch!.DispatchedAt);
+    }
+
+    [Xunit.Fact]
+    public void TaskVerificationSnapshotRetainsCompleteAuthoritativeOutputBeyondPreview()
+    {
+        var full = "head-" + new string('x', VerificationTextBounds.MaxRetainedChars + 100) + "-tail";
+        var record = new TaskVerificationRecord(
+            "verify",
+            "C:\\repo",
+            0,
+            full,
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            FullStandardOutput: full,
+            FullStandardError: string.Empty);
+        Assert.NotEqual(full, record.StandardOutput);
+        Assert.Equal(full, record.AuthoritativeStandardOutput);
+
+        var kernel = new AgentOrchestratorKernel();
+        var tester = new TaskSpec(TaskId.New(), "Test", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Retain complete evidence", [tester]);
+        kernel.RecordTaskVerification(goal.Id, tester.Id, record);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
+        Assert.Equal(full, restored.GetTask(goal.Id, tester.Id).LastVerification!.AuthoritativeStandardOutput);
+    }
+
+    [Xunit.Fact]
+    public void TaskExecutionSnapshotWithoutAuthorityDoesNotPromoteBoundedPreview()
+    {
+        var taskId = TaskId.New();
+        var goalId = GoalId.New();
+        var legacyExecution = new TaskExecutionSnapshot(
+            "agent",
+            "Developer",
+            "OpenAI",
+            "gpt",
+            "bounded preview only",
+            "stop",
+            null,
+            null,
+            DateTimeOffset.Parse("2026-08-11T20:00:00Z"));
+        var snapshot = new OrchestratorSnapshot(
+            [new GoalSnapshot(
+                goalId.Value,
+                "Restore legacy execution",
+                GoalStatus.Active,
+                [new TaskSnapshot(
+                    taskId.Value,
+                    "Implement",
+                    AgentRole.Developer,
+                    WorkTaskStatus.Completed,
+                    null,
+                    legacyExecution,
+                    null,
+                    null,
+                    null,
+                    null)],
+                [])],
+            []);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(snapshot).GetTask(goalId, taskId).LastExecution!;
+
+        Assert.Equal("bounded preview only", restored.Output);
+        Assert.Null(restored.AuthoritativeOutput);
+    }
+
+    [Xunit.Fact]
+    public void TaskVerificationSnapshotPreservesExplicitCompleteOutputAbsenceWithoutPromotingPreview()
+    {
+        var record = new TaskVerificationRecord(
+            "verify",
+            "C:\\repo",
+            1,
+            "bounded preview only",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            FullStandardOutputUnavailableReason: "missing");
+        var kernel = new AgentOrchestratorKernel();
+        var tester = new TaskSpec(TaskId.New(), "Test", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Do not promote bounded previews", [tester]);
+        kernel.RecordTaskVerification(goal.Id, tester.Id, record);
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot())
+            .GetTask(goal.Id, tester.Id).LastVerification!;
+
+        Assert.Equal("bounded preview only", restored.StandardOutput);
+        Assert.Null(restored.AuthoritativeStandardOutput);
+        Assert.Equal("missing", restored.FullStandardOutputUnavailableReason);
+    }
+
+    [Xunit.Fact]
+    public void LegacySnapshotWithoutAuthorityMetadataDoesNotPromoteBoundedPreview()
+    {
+        var kernel = new AgentOrchestratorKernel();
+        var tester = new TaskSpec(TaskId.New(), "Test", AgentRole.Tester);
+        var goal = kernel.CreateGoal("Restore legacy bounded evidence", [tester]);
+        kernel.RecordTaskVerification(goal.Id, tester.Id, new TaskVerificationRecord(
+            "verify",
+            "C:\\repo",
+            0,
+            "bounded preview only",
+            string.Empty,
+            DateTimeOffset.UtcNow,
+            FullStandardOutput: "bounded preview only",
+            FullStandardError: string.Empty));
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(snapshot.Goals);
+        var taskSnapshot = Assert.Single(goalSnapshot.Tasks);
+        var legacyVerification = taskSnapshot.LastVerification! with
+        {
+            AuthoritativeStandardOutput = null,
+            AuthoritativeStandardOutputUnavailableReason = null
+        };
+        var legacySnapshot = snapshot with
+        {
+            Goals =
+            [
+                goalSnapshot with
+                {
+                    Tasks =
+                    [
+                        taskSnapshot with
+                        {
+                            LastVerification = legacyVerification,
+                            VerificationHistory = [legacyVerification]
+                        }
+                    ]
+                }
+            ]
+        };
+
+        var restored = AgentOrchestratorKernel.FromSnapshot(legacySnapshot)
+            .GetTask(goal.Id, tester.Id).LastVerification!;
+
+        Assert.Equal("bounded preview only", restored.StandardOutput);
+        Assert.Null(restored.AuthoritativeStandardOutput);
+        Assert.Equal(
+            "legacy-snapshot-authoritative-output-unavailable",
+            restored.FullStandardOutputUnavailableReason);
+    }
+
     [Xunit.Fact(DisplayName = "PreReviewEvidenceReceipt_round_trips_through_snapshot")]
     public void PreReviewEvidenceReceiptRoundTripsThroughSnapshot()
     {

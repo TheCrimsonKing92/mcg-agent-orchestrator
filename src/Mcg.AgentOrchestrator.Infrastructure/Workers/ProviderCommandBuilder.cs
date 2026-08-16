@@ -58,6 +58,7 @@ public static class ProviderCommandBuilder
         {
             "codex",
             "exec",
+            "--json",
             "--skip-git-repo-check",
             "--model",
             Expand(modelAlias)

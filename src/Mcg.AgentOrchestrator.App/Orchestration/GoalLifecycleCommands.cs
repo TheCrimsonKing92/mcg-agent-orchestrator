@@ -180,6 +180,7 @@ internal static class GoalLifecycleCommands
         OrchestratorWorkspace workspace,
         string objective,
         bool simple,
+        bool allowLargePaidSubscriptionStart = false,
         IModelProviderRegistry? providers = null)
     {
         var goal = simple
@@ -202,6 +203,7 @@ internal static class GoalLifecycleCommands
             profiles,
             workspace,
             goal,
+            allowLargePaidSubscriptionStart,
             providers: providers);
 
         return goal;

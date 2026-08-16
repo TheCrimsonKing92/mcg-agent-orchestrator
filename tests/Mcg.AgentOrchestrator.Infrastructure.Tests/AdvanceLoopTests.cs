@@ -51,6 +51,7 @@ public sealed class AdvanceLoopTests
             profiles,
             workspace,
             goal,
+            allowLargePaidSubscriptionStart: true,
             providers: providers);
         researcher = goal.Tasks.First(task => task.RequiredRole == AgentRole.Researcher);
         var handoffDiagnostic =

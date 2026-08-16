@@ -4,6 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Mcg.AgentOrchestrator.Core;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
 
@@ -77,7 +78,8 @@ public static class DispatchProcessHost
         string? PrepExitCodePath = null,
         string? ChildExitRecordPath = null,
         string? HostDiagnosticPath = null,
-        int HeartbeatIntervalMilliseconds = 15_000);
+        int HeartbeatIntervalMilliseconds = 15_000,
+        IReadOnlyList<MandatoryContextFileDescriptor>? MandatoryContextFiles = null);
 
     public sealed record DispatchChildExitRecord(
         int ProcessId,
@@ -107,6 +109,146 @@ public static class DispatchProcessHost
     {
         WriteAllTextDurable(path, JsonSerializer.Serialize(record, JsonOptions));
         return path;
+    }
+
+    internal static IDisposable AcquireMandatoryContextFileLeases(DispatchRunParameters parameters)
+    {
+        if (parameters.MandatoryContextFiles is not { Count: > 0 })
+        {
+            return MandatoryContextFileLeaseSet.Empty;
+        }
+
+        var root = Path.GetFullPath(parameters.WorkingDirectory);
+        var streams = new List<FileStream>();
+        try
+        {
+            foreach (var descriptor in parameters.MandatoryContextFiles)
+            {
+                if (descriptor.ContractVersion != ContextContractVersion.V1.Value)
+                {
+                    throw new InvalidOperationException($"Mandatory context '{descriptor.LogicalIdentity}' has unsupported contract version {descriptor.ContractVersion}.");
+                }
+
+                if (!descriptor.RoleVisibility.Contains(descriptor.TargetRole))
+                {
+                    throw new InvalidOperationException(
+                        $"Mandatory context '{descriptor.LogicalIdentity}' is not visible to target role {descriptor.TargetRole}.");
+                }
+
+                var relative = new LogicalArtifactIdentity(descriptor.RelativePath).Value;
+                var fullPath = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+                var relativeToRoot = Path.GetRelativePath(root, fullPath);
+                if (Path.IsPathRooted(relativeToRoot) || relativeToRoot == ".." ||
+                    relativeToRoot.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException($"Mandatory context '{descriptor.LogicalIdentity}' resolves outside the dispatch worktree.");
+                }
+
+
+                for (FileSystemInfo? current = new FileInfo(fullPath); current is not null; current = current switch
+                    {
+                        FileInfo file => file.Directory,
+                        DirectoryInfo directory => directory.Parent,
+                        _ => null
+                    })
+                {
+                    if ((current.Attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"Mandatory context '{descriptor.LogicalIdentity}' traverses a reparse point.");
+                    }
+
+                    if (string.Equals(
+                        current.FullName.TrimEnd(Path.DirectorySeparatorChar),
+                        root.TrimEnd(Path.DirectorySeparatorChar),
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+                }
+
+                var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                streams.Add(stream);
+                var actualHash = Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+                if (!actualHash.Equals(descriptor.Sha256, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Mandatory context '{descriptor.LogicalIdentity}' hash mismatch: expected {descriptor.Sha256}, found {actualHash}.");
+                }
+
+                stream.Position = 0;
+            }
+
+            return new MandatoryContextFileLeaseSet(streams);
+        }
+        catch
+        {
+            foreach (var stream in streams)
+            {
+                stream.Dispose();
+            }
+
+            throw;
+        }
+    }
+
+    internal static void PrependMandatoryContextAuthorityPreflight(
+        ProcessStartInfo startInfo,
+        DispatchRunParameters parameters)
+    {
+        if (parameters.MandatoryContextFiles is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var lastIndex = startInfo.ArgumentList.Count - 1;
+        if (lastIndex < 0)
+        {
+            throw new InvalidOperationException("Mandatory context authority preflight requires a worker command argument.");
+        }
+
+        var root = Path.GetFullPath(parameters.WorkingDirectory);
+        var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(
+            parameters.MandatoryContextFiles.Select(descriptor => new
+            {
+                descriptor.LogicalIdentity,
+                Path = Path.GetFullPath(Path.Combine(
+                    root,
+                    descriptor.RelativePath.Replace('/', Path.DirectorySeparatorChar))),
+                descriptor.Sha256
+            }),
+            JsonOptions);
+        var manifestHash = Convert.ToHexString(SHA256.HashData(manifestBytes)).ToLowerInvariant();
+        var manifestPath = Path.Combine(
+            root,
+            ".mcg-sandbox",
+            $"mandatory-context-authority-{manifestHash}.json");
+        // The authority manifest exists on every platform, including those where the Windows
+        // integrity sandbox is not applied. Keep that host-owned scratch out of worktree status
+        // at its creation seam rather than relying on platform-specific sandbox preparation.
+        ExcludeSandboxFromGit(parameters.WorkingDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
+        WriteAllTextDurable(manifestPath, Encoding.UTF8.GetString(manifestBytes));
+        var encodedManifestPath = Convert.ToBase64String(Encoding.UTF8.GetBytes(manifestPath));
+        var preflight =
+            "$mcgContextManifestPath=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encodedManifestPath + "')); " +
+            "$mcgContextManifestBytes=[IO.File]::ReadAllBytes($mcgContextManifestPath); " +
+            "$mcgContextManifestSha=[Security.Cryptography.SHA256]::Create(); " +
+            "$mcgContextManifestActual=-join ($mcgContextManifestSha.ComputeHash($mcgContextManifestBytes) | ForEach-Object { $_.ToString('x2') }); " +
+            "$mcgContextManifestSha.Dispose(); " +
+            "if (-not [String]::Equals($mcgContextManifestActual,'" + manifestHash + "',[StringComparison]::Ordinal)) { [Console]::Error.WriteLine('[dispatch-host] mandatory context authority manifest hash mismatch'); exit 86 }; " +
+            "$mcgContextJson=[Text.Encoding]::UTF8.GetString($mcgContextManifestBytes); " +
+            "$mcgContextItems=$mcgContextJson | ConvertFrom-Json; " +
+            "foreach ($mcgContextItem in $mcgContextItems) { " +
+            "$mcgContextStream=$null; $mcgContextSha=$null; try { " +
+            "$mcgContextStream=[IO.File]::Open($mcgContextItem.Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read); " +
+            "$mcgContextSha=[Security.Cryptography.SHA256]::Create(); " +
+            "$mcgContextActual=-join ($mcgContextSha.ComputeHash($mcgContextStream) | ForEach-Object { $_.ToString('x2') }); " +
+            "if (-not [String]::Equals($mcgContextActual,$mcgContextItem.Sha256,[StringComparison]::Ordinal)) { throw \"hash mismatch under launched worker authority\" } " +
+            "} catch { [Console]::Error.WriteLine('[dispatch-host] mandatory context authority preflight failed for ' + $mcgContextItem.LogicalIdentity + ': ' + $_.Exception.Message); exit 86 } " +
+            "finally { if ($null -ne $mcgContextSha) { $mcgContextSha.Dispose() }; if ($null -ne $mcgContextStream) { $mcgContextStream.Dispose() } } " +
+            "}; ";
+        startInfo.ArgumentList[lastIndex] = preflight + startInfo.ArgumentList[lastIndex];
     }
 
     private static void WriteAllTextDurable(string path, string payload)
@@ -1201,6 +1343,7 @@ public static void DropToLow() {
             // orchestrator's stdin. Under a background/detached launch that handle is an open pipe
             // that never reaches EOF, so the worker blocks indefinitely waiting for stdin.
             var startInfo = WorkerProcessRunner.BuildPowerShellStartInfo(parameters.Command, parameters.WorkingDirectory);
+            PrependMandatoryContextAuthorityPreflight(startInfo, parameters);
 
             if (parameters.DisableSharedCompilation)
             {
@@ -1239,6 +1382,7 @@ public static void DropToLow() {
             CompletePrep(0);
 
             WriteHeartbeat("starting");
+            using var mandatoryContextLeases = AcquireMandatoryContextFileLeases(parameters);
             RequireStartGate();
             startInfo.Environment[WorkerSandboxOptions.DispatchWorkerVariable] = "1";
             worker = ProcessTreeGuiSuppression.Start(startInfo);
@@ -1330,6 +1474,25 @@ public static void DropToLow() {
         }
 
         return exitCode;
+    }
+
+    private sealed class MandatoryContextFileLeaseSet : IDisposable
+    {
+        public static MandatoryContextFileLeaseSet Empty { get; } = new([]);
+        private readonly IReadOnlyList<FileStream> _streams;
+
+        public MandatoryContextFileLeaseSet(IReadOnlyList<FileStream> streams)
+        {
+            _streams = streams;
+        }
+
+        public void Dispose()
+        {
+            foreach (var stream in _streams)
+            {
+                stream.Dispose();
+            }
+        }
     }
 
     private static long FileLength(string path)

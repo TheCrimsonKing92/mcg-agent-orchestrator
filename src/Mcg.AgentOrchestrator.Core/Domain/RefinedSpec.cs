@@ -30,6 +30,9 @@ public sealed record RefinedSpec(
 
     public IReadOnlyList<HumanInputAnswerRecord> ClarificationAnswerHistory { get; init; } = [];
 
+    public IReadOnlyList<HumanInputAnswerRecord> AuthoritativeClarificationAnswerHistory =>
+        ClarificationAnswerHistory.Where(answer => !answer.IsRetracted).ToArray();
+
     public bool HasOpenQuestions => OpenQuestions.Any(q =>
         string.Equals(q.Status, "Open", StringComparison.OrdinalIgnoreCase));
 }

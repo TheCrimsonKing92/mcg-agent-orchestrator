@@ -113,7 +113,8 @@ public sealed record TaskSnapshot(
     RetryRoundKind? PendingRetryRoundKind = null,
     PreReviewEvidenceReceipt? PreReviewEvidenceReceipt = null,
     string? InterruptedDispatchRecoveryId = null,
-    bool WasCancelledByConductor = false);
+    bool WasCancelledByConductor = false,
+    IReadOnlyList<TaskDispatchSnapshot>? DispatchHistory = null);
 
 public sealed record TaskExecutionSnapshot(
     string AgentId,
@@ -127,7 +128,9 @@ public sealed record TaskExecutionSnapshot(
     DateTimeOffset CompletedAt,
     TaskComplexity? TaskComplexity = null,
     int? MaxOutputTokens = null,
-    int? PromptCharacterCount = null)
+    int? PromptCharacterCount = null,
+    int? CachedInputTokens = null,
+    string? AuthoritativeOutput = null)
 {
     public string Output { get; init; } = VerificationTextBounds.BoundText(Output, path: null);
 }
@@ -152,7 +155,11 @@ public sealed record TaskVerificationSnapshot(
     int? ChildProcessId = null,
     int? ChildExitCode = null,
     IReadOnlyList<FindingEvidenceReceipt>? FindingEvidenceReceipts = null,
-    string? ReviewFindingTouchProofDiagnostic = null)
+    string? ReviewFindingTouchProofDiagnostic = null,
+    string? AuthoritativeStandardOutput = null,
+    string? AuthoritativeStandardError = null,
+    string? AuthoritativeStandardOutputUnavailableReason = null,
+    string? AuthoritativeStandardErrorUnavailableReason = null)
 {
     public string StandardOutput { get; init; } = VerificationTextBounds.BoundText(StandardOutput, StandardOutputPath);
 
@@ -186,7 +193,8 @@ public sealed record TaskDispatchSnapshot(
     int BriefVersion = 1,
     string? BriefSnapshot = null,
     string? ReviewFindingTouchProofDiagnostic = null,
-    ReviewRetryCapReceipt? ReviewRetryCap = null);
+    ReviewRetryCapReceipt? ReviewRetryCap = null,
+    WorkerContextPackageReceipt? ContextPackageReceipt = null);
 
 public sealed record TaskProcessSnapshot(
     int ProcessId,

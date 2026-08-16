@@ -531,6 +531,116 @@ public sealed class DispatchProcessHostTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_mandatory_context_preflight_runs_after_integrity_drop_before_provider_command")]
+    public void MandatoryContextPreflightRunsAfterIntegrityDropBeforeProviderCommand()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-context-authority-preflight", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var contextPath = Path.Combine(root, "context.md");
+            var bytes = Encoding.UTF8.GetBytes("sandbox-visible context");
+            File.WriteAllBytes(contextPath, bytes);
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root };
+            startInfo.ArgumentList.Add("Write-Output 'provider-command-marker'");
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output 'provider-command-marker'",
+                root,
+                Path.Combine(root, "out.log"),
+                Path.Combine(root, "err.log"),
+                Path.Combine(root, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                SandboxLowIntegrity: true,
+                Provider: WorkerSandboxProvider.Codex,
+                MandatoryContextFiles:
+                [
+                    new MandatoryContextFileDescriptor(
+                        "context/required.md",
+                        "context.md",
+                        WorkerContextArtifact.Hash(bytes),
+                        1,
+                        AgentRole.Developer,
+                        [AgentRole.Developer])
+                ]);
+
+            DispatchProcessHost.PrependMandatoryContextAuthorityPreflight(startInfo, parameters);
+            if (OperatingSystem.IsWindows())
+            {
+                DispatchProcessHost.ApplyWorkerSandbox(
+                    startInfo,
+                    parameters,
+                    new WorkerSandboxPreparer(new RecordingIntegrityLabeler(new IntegrityLabelState(Exists: true, Low: true, Inheritable: true))),
+                    protectWorkspaceBoundary: _ => { });
+            }
+
+            var command = startInfo.ArgumentList[^1];
+            var integrityDrop = command.IndexOf("drop-to-low.ps1", StringComparison.Ordinal);
+            var authorityRead = command.IndexOf("$mcgContextManifestPath", StringComparison.Ordinal);
+            var providerCommand = command.IndexOf("provider-command-marker", StringComparison.Ordinal);
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.True(integrityDrop >= 0, command);
+                Assert.True(authorityRead > integrityDrop, command);
+            }
+            else
+            {
+                Assert.True(authorityRead >= 0, command);
+            }
+            Assert.True(providerCommand > authorityRead, command);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DispatchProcessHost_mandatory_context_manifest_is_git_excluded_on_every_platform")]
+    public void MandatoryContextManifestIsGitExcludedOnEveryPlatform()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "mcg-context-authority-git-exclude", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.True(GitCli.Run(root, "init").Succeeded);
+            var contextPath = Path.Combine(root, "context.md");
+            var bytes = Encoding.UTF8.GetBytes("required context");
+            File.WriteAllBytes(contextPath, bytes);
+            var startInfo = new ProcessStartInfo { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = root };
+            startInfo.ArgumentList.Add("Write-Output ok");
+            var parameters = new DispatchProcessHost.DispatchRunParameters(
+                "Write-Output ok",
+                root,
+                Path.Combine(root, "out.log"),
+                Path.Combine(root, "err.log"),
+                Path.Combine(root, "exit.txt"),
+                null,
+                ShutdownBuildServerOnExit: false,
+                DisableSharedCompilation: false,
+                MandatoryContextFiles:
+                [
+                    new MandatoryContextFileDescriptor(
+                        "context/required.md",
+                        "context.md",
+                        WorkerContextArtifact.Hash(bytes),
+                        ContextContractVersion.V1.Value,
+                        AgentRole.Developer,
+                        [AgentRole.Developer])
+                ]);
+
+            DispatchProcessHost.PrependMandatoryContextAuthorityPreflight(startInfo, parameters);
+
+            var sandboxStatus = GitCli.Run(root, "status", "--short", "--untracked-files=all", "--", ".mcg-sandbox");
+            Assert.True(sandboxStatus.Succeeded, sandboxStatus.Error);
+            Assert.Equal(string.Empty, sandboxStatus.Output.Trim());
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DispatchProcessHost_ApplyWorkerSandbox_redirects_PowerShell_cache_when_OS_sandbox_is_disabled")]
     public void ApplyWorkerSandboxRedirectsPowerShellCacheWhenOsSandboxIsDisabled()
     {

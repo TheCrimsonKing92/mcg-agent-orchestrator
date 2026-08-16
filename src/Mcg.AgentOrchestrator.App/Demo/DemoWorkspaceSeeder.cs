@@ -184,7 +184,9 @@ public static class PrototypeWorkspaceSeeder
                 0,
                 "prototype implementation complete",
                 string.Empty,
-                now.AddSeconds(3)));
+                now.AddSeconds(3),
+                FullStandardOutput: "prototype implementation complete",
+                FullStandardError: string.Empty));
 
         kernel.ReportTaskProgress(goal.Id, tester.Id, WorkTaskStatus.Completed, "Prototype tester completed a sample check.");
         kernel.RecordTaskVerification(

@@ -1103,6 +1103,57 @@ public sealed class WorkerDispatchTestsSubscriptionPreflight : WorkerDispatchTes
     Assert.True(task.LastDispatch is null);
 }
 
+    [Xunit.Fact(DisplayName = "SubscriptionPromptCostGuard_counts_context_manifest_when_evaluating_prepared_dispatch")]
+    public void SubscriptionPromptCostGuardCountsContextManifestWhenEvaluatingPreparedDispatch()
+{
+    var kernel = new AgentOrchestratorKernel();
+    var goal = kernel.CreateGoal(
+        "Guard a prepared subscription prompt",
+        [new TaskSpec(TaskId.New(), "Do paid subscription work.", AgentRole.Developer)]);
+    var agent = new AgentDefinition(
+        new AgentId("developer"),
+        "Developer",
+        AgentRole.Developer,
+        new ModelProfile("OpenAI", "gpt-5-codex", ModelCapability.Text, SubscriptionMode.ApiKey),
+        ExecutionPolicy: AgentExecutionPolicy.SubscriptionOnly,
+        Subscription: new SubscriptionLaunchProfile("codex-cli", "gpt-5-codex"));
+    kernel.ActivateGoal(goal.Id, [agent]);
+    var task = goal.Tasks.Single();
+    var usageUnknown = ProviderUsageValue.Unknown("not-yet-reported");
+    var receipt = new WorkerContextPackageReceipt(
+        "ctxpkg-v1-sha256:" + new string('0', 64),
+        [new WorkerContextSectionReceipt(
+            "context/manifest.v1.json",
+            CharacterCount: 20000,
+            ByteCount: 20000,
+            ContentHash: new string('0', 64),
+            DeliveryMode: ContextDeliveryMode.InlineFull,
+            ContractVersion: 1,
+            RoleVisibility: [AgentRole.Developer])],
+        usageUnknown,
+        usageUnknown,
+        usageUnknown);
+    kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(
+        "codex-cli",
+        "codex exec",
+        "C:\\repo",
+        DateTimeOffset.UtcNow,
+        ProviderName: "OpenAI",
+        ModelName: "gpt-5-codex",
+        TaskComplexity: TaskComplexity.Simple,
+        PromptCharacterCount: 20000,
+        WorkerProviderKind: ProviderKind.OpenAICodexCli,
+        ContextPackageReceipt: receipt));
+
+    var risk = SubscriptionPromptCostGuard.EvaluatePreparedDispatchStart(goal, task);
+
+    Assert.NotNull(risk);
+    Assert.Equal(20000, risk!.PromptCharacterCount);
+    Assert.True(risk.IsAnomalous);
+    Assert.ThrowsAny<InvalidOperationException>(() =>
+        SubscriptionPromptCostGuard.ThrowIfConfirmationRequired(risk, confirmed: false));
+}
+
 private static TaskVerificationRecord ProviderConnectivityVerification(
     string command,
     string workingDirectory,

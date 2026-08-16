@@ -103,9 +103,11 @@ internal static class AssemblyTempRedirect
                 TryDeleteTree(Path.Combine(sharedRoot, orphan));
             }
         }
-        catch (Exception ex) when (IsFileSystemFailure(ex))
+        catch (Exception)
         {
-            // Reaping is best-effort; never fail a test run over temp housekeeping.
+            // Reaping is best-effort; never fail a test run over temp housekeeping. This runs from
+            // a ModuleInitializer, so anything escaping here kills the apphost before discovery and
+            // the lane reports zero tests with no failing test to point at.
         }
     }
 
@@ -123,6 +125,13 @@ internal static class AssemblyTempRedirect
         catch (InvalidOperationException)
         {
             return false;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // The PID exists but cannot be opened: another user, a higher integrity level, or a
+            // protected process. Treat it as alive. Reaping a live run's temp root is destructive,
+            // while declining to reap is only untidy.
+            return true;
         }
     }
 

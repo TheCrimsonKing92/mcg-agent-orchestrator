@@ -5,6 +5,7 @@ public sealed class TaskSpec
     internal const int VerificationHistoryLimit = 20;
 
     private readonly CappedVerificationHistory _verificationHistory = [];
+    private readonly List<TaskDispatchRecord> _dispatchHistory = [];
 
     public TaskSpec(TaskId id, string description, AgentRole requiredRole, string? verificationPlan = null)
     {
@@ -51,6 +52,8 @@ public sealed class TaskSpec
     public IReadOnlyList<TaskVerificationRecord> VerificationHistory => _verificationHistory;
 
     public TaskDispatchRecord? LastDispatch { get; private set; }
+
+    public IReadOnlyList<TaskDispatchRecord> DispatchHistory => _dispatchHistory;
 
     public TaskProcessRecord? LastProcess { get; private set; }
 
@@ -101,7 +104,9 @@ public sealed class TaskSpec
                     LastExecution.CompletedAt,
                     LastExecution.TaskComplexity,
                     LastExecution.MaxOutputTokens,
-                    LastExecution.PromptCharacterCount),
+                    LastExecution.PromptCharacterCount,
+                    LastExecution.Usage?.CachedInputTokens,
+                    LastExecution.AuthoritativeOutput),
             LastVerification is null
                 ? null
                 : new TaskVerificationSnapshot(
@@ -124,7 +129,11 @@ public sealed class TaskSpec
                     LastVerification.ChildProcessId,
                     LastVerification.ChildExitCode,
                     LastVerification.FindingEvidenceReceipts,
-                    LastVerification.ReviewFindingTouchProofDiagnostic),
+                    LastVerification.ReviewFindingTouchProofDiagnostic,
+                    LastVerification.AuthoritativeStandardOutput,
+                    LastVerification.AuthoritativeStandardError,
+                    LastVerification.FullStandardOutputUnavailableReason,
+                    LastVerification.FullStandardErrorUnavailableReason),
             _verificationHistory
                 .Select(verification => new TaskVerificationSnapshot(
                     verification.Command,
@@ -146,7 +155,11 @@ public sealed class TaskSpec
                     verification.ChildProcessId,
                     verification.ChildExitCode,
                     verification.FindingEvidenceReceipts,
-                    verification.ReviewFindingTouchProofDiagnostic))
+                    verification.ReviewFindingTouchProofDiagnostic,
+                    verification.AuthoritativeStandardOutput,
+                    verification.AuthoritativeStandardError,
+                    verification.FullStandardOutputUnavailableReason,
+                    verification.FullStandardErrorUnavailableReason))
                 .ToList(),
             LastDispatch is null
                 ? null
@@ -177,7 +190,8 @@ public sealed class TaskSpec
                     LastDispatch.BriefVersion,
                     LastDispatch.BriefSnapshot,
                     LastDispatch.ReviewFindingTouchProofDiagnostic,
-                    LastDispatch.ReviewRetryCap),
+                    LastDispatch.ReviewRetryCap,
+                    LastDispatch.ContextPackageReceipt),
             LastProcess is null
                 ? null
                 : new TaskProcessSnapshot(
@@ -219,7 +233,8 @@ public sealed class TaskSpec
             PendingRetryRoundKind,
             PreReviewEvidenceReceipt,
             InterruptedDispatchRecoveryId,
-            WasCancelledByConductor);
+            WasCancelledByConductor,
+            _dispatchHistory.Select(ToDispatchSnapshot).ToArray());
     }
 
     internal static TaskSpec FromSnapshot(TaskSnapshot snapshot)
@@ -242,11 +257,13 @@ public sealed class TaskSpec
                 snapshot.LastExecution.ModelName,
                 snapshot.LastExecution.Output,
                 snapshot.LastExecution.StopReason,
-                new ModelUsage(snapshot.LastExecution.InputTokens, snapshot.LastExecution.OutputTokens),
+                new ModelUsage(snapshot.LastExecution.InputTokens, snapshot.LastExecution.OutputTokens, snapshot.LastExecution.CachedInputTokens),
                 snapshot.LastExecution.CompletedAt,
                 snapshot.LastExecution.TaskComplexity,
                 snapshot.LastExecution.MaxOutputTokens,
-                snapshot.LastExecution.PromptCharacterCount));
+                snapshot.LastExecution.PromptCharacterCount,
+                snapshot.LastExecution.AuthoritativeOutput,
+                OutputIsAuthoritative: snapshot.LastExecution.AuthoritativeOutput is not null));
         }
 
         if (snapshot.VerificationHistory is { Count: > 0 })
@@ -273,7 +290,17 @@ public sealed class TaskSpec
                     DispatchStartedAt: verification.DispatchStartedAt,
                     ChildProcessId: verification.ChildProcessId,
                     ChildExitCode: verification.ChildExitCode,
-                    FindingEvidenceReceipts: verification.FindingEvidenceReceipts));
+                    FindingEvidenceReceipts: verification.FindingEvidenceReceipts,
+                    FullStandardOutput: verification.AuthoritativeStandardOutput,
+                    FullStandardError: verification.AuthoritativeStandardError,
+                    FullStandardOutputUnavailableReason: RestoredAuthorityUnavailableReason(
+                        verification.AuthoritativeStandardOutput,
+                        verification.AuthoritativeStandardOutputUnavailableReason),
+                    FullStandardErrorUnavailableReason: RestoredAuthorityUnavailableReason(
+                        verification.AuthoritativeStandardError,
+                        verification.AuthoritativeStandardErrorUnavailableReason),
+                    StandardOutputIsAuthoritative: verification.AuthoritativeStandardOutput is not null,
+                    StandardErrorIsAuthoritative: verification.AuthoritativeStandardError is not null));
             }
         }
 
@@ -299,7 +326,17 @@ public sealed class TaskSpec
                 DispatchStartedAt: snapshot.LastVerification.DispatchStartedAt,
                 ChildProcessId: snapshot.LastVerification.ChildProcessId,
                 ChildExitCode: snapshot.LastVerification.ChildExitCode,
-                FindingEvidenceReceipts: snapshot.LastVerification.FindingEvidenceReceipts);
+                FindingEvidenceReceipts: snapshot.LastVerification.FindingEvidenceReceipts,
+                FullStandardOutput: snapshot.LastVerification.AuthoritativeStandardOutput,
+                FullStandardError: snapshot.LastVerification.AuthoritativeStandardError,
+                FullStandardOutputUnavailableReason: RestoredAuthorityUnavailableReason(
+                    snapshot.LastVerification.AuthoritativeStandardOutput,
+                    snapshot.LastVerification.AuthoritativeStandardOutputUnavailableReason),
+                FullStandardErrorUnavailableReason: RestoredAuthorityUnavailableReason(
+                    snapshot.LastVerification.AuthoritativeStandardError,
+                    snapshot.LastVerification.AuthoritativeStandardErrorUnavailableReason),
+                StandardOutputIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardOutput is not null,
+                StandardErrorIsAuthoritative: snapshot.LastVerification.AuthoritativeStandardError is not null);
             if (!task._verificationHistory.Contains(latestVerification))
             {
                 task.RestoreVerificationHistory(latestVerification);
@@ -308,36 +345,29 @@ public sealed class TaskSpec
             task.LastVerification = latestVerification;
         }
 
+        if (snapshot.DispatchHistory is { Count: > 0 })
+        {
+            foreach (var dispatch in snapshot.DispatchHistory)
+            {
+                task._dispatchHistory.Add(FromDispatchSnapshot(dispatch));
+            }
+        }
+
         if (snapshot.LastDispatch is not null)
         {
-            task.RecordDispatch(new TaskDispatchRecord(
-                snapshot.LastDispatch.WorkerName,
-                snapshot.LastDispatch.Command,
-                snapshot.LastDispatch.WorkingDirectory,
-                snapshot.LastDispatch.DispatchedAt,
-                snapshot.LastDispatch.ProviderName,
-                snapshot.LastDispatch.ModelName,
-                snapshot.LastDispatch.ReasoningEffort,
-                snapshot.LastDispatch.TaskComplexity,
-                snapshot.LastDispatch.PromptCharacterCount,
-                snapshot.LastDispatch.UsesComplexModel,
-                snapshot.LastDispatch.BaseCommit,
-                snapshot.LastDispatch.ResultCommit,
-                snapshot.LastDispatch.SandboxLowIntegrity,
-                snapshot.LastDispatch.PromptPath,
-                snapshot.LastDispatch.WorkerProviderKind,
-                ReasoningEffortReason: snapshot.LastDispatch.ReasoningEffortReason,
-                DispatchLane: snapshot.LastDispatch.DispatchLane,
-                ModelSelectionReason: snapshot.LastDispatch.ModelSelectionReason,
-                ProviderSessionId: snapshot.LastDispatch.ProviderSessionId,
-                WorktreeHeadSha: snapshot.LastDispatch.WorktreeHeadSha,
-                DirtyStateHash: snapshot.LastDispatch.DirtyStateHash,
-                ProviderSessionRetiredAt: snapshot.LastDispatch.ProviderSessionRetiredAt,
-                ReviewFindingTouchedAnchors: snapshot.LastDispatch.ReviewFindingTouchedAnchors,
-                ReviewFindingTouchProofDiagnostic: snapshot.LastDispatch.ReviewFindingTouchProofDiagnostic,
-                BriefVersion: snapshot.LastDispatch.BriefVersion,
-                BriefSnapshot: snapshot.LastDispatch.BriefSnapshot,
-                ReviewRetryCap: snapshot.LastDispatch.ReviewRetryCap));
+            var currentDispatch = FromDispatchSnapshot(snapshot.LastDispatch);
+            var historyIndex = task._dispatchHistory.FindIndex(
+                dispatch => dispatch.DispatchedAt == currentDispatch.DispatchedAt);
+            if (historyIndex >= 0)
+            {
+                task._dispatchHistory[historyIndex] = currentDispatch;
+            }
+            else
+            {
+                task._dispatchHistory.Add(currentDispatch);
+            }
+
+            task.LastDispatch = currentDispatch;
         }
 
         if (snapshot.LastProcess is not null)
@@ -557,27 +587,71 @@ public sealed class TaskSpec
 
     internal void RecordDispatch(TaskDispatchRecord dispatch)
     {
+        if (_dispatchHistory.Count > 0)
+        {
+            var latestAttemptAt = _dispatchHistory.Max(candidate => candidate.DispatchedAt);
+            if (dispatch.DispatchedAt <= latestAttemptAt)
+            {
+                if (latestAttemptAt == DateTimeOffset.MaxValue)
+                {
+                    throw new InvalidOperationException("Cannot allocate a unique dispatch attempt timestamp after DateTimeOffset.MaxValue.");
+                }
+
+                dispatch = dispatch with { DispatchedAt = latestAttemptAt.AddTicks(1) };
+            }
+        }
+
         SubscriptionRetryAfter = null;
         LastDispatch = dispatch;
+        _dispatchHistory.Add(dispatch);
         LastProcess = null;
+    }
+
+    internal void ReplacePreparedDispatch(TaskDispatchRecord dispatch)
+    {
+        if (Status != WorkTaskStatus.Running || LastDispatch is null || LastProcess is not null)
+        {
+            throw new InvalidOperationException("Only the current prepared dispatch may be rewritten before its process starts.");
+        }
+
+        if (LastDispatch.DispatchedAt != dispatch.DispatchedAt)
+        {
+            throw new InvalidOperationException("A prepared-dispatch rewrite must preserve the originating attempt timestamp.");
+        }
+
+        ReplaceLastDispatch(dispatch);
+    }
+
+    private static string? RestoredAuthorityUnavailableReason(string? authoritativeText, string? unavailableReason) =>
+        authoritativeText is null && unavailableReason is null
+            ? "legacy-snapshot-authoritative-output-unavailable"
+            : unavailableReason;
+
+    private void ReplaceLastDispatch(TaskDispatchRecord dispatch)
+    {
+        LastDispatch = dispatch;
+        if (_dispatchHistory.Count > 0)
+        {
+            _dispatchHistory[^1] = dispatch;
+        }
     }
 
     internal void SetDispatchBaseCommit(string baseCommit)
     {
         if (LastDispatch is not null)
-            LastDispatch = LastDispatch with { BaseCommit = baseCommit };
+            ReplaceLastDispatch(LastDispatch with { BaseCommit = baseCommit });
     }
 
     internal void SetDispatchResultCommit(string resultCommit)
     {
         if (LastDispatch is not null)
-            LastDispatch = LastDispatch with { ResultCommit = resultCommit };
+            ReplaceLastDispatch(LastDispatch with { ResultCommit = resultCommit });
     }
 
     internal void SetDispatchSandboxLowIntegrity(bool sandboxLowIntegrity)
     {
         if (LastDispatch is not null)
-            LastDispatch = LastDispatch with { SandboxLowIntegrity = sandboxLowIntegrity };
+            ReplaceLastDispatch(LastDispatch with { SandboxLowIntegrity = sandboxLowIntegrity });
     }
 
     internal void SetDispatchSpawnReceipt(
@@ -588,29 +662,116 @@ public sealed class TaskSpec
     {
         if (LastDispatch is not null)
         {
-            LastDispatch = LastDispatch with
+            ReplaceLastDispatch(LastDispatch with
             {
                 Command = command,
                 ProviderSessionId = NormalizeOptional(providerSessionId),
                 WorktreeHeadSha = NormalizeOptional(worktreeHeadSha),
                 DirtyStateHash = NormalizeOptional(dirtyStateHash)
-            };
+            });
         }
     }
 
     internal void SetDispatchProviderSessionId(string providerSessionId)
     {
         if (LastDispatch is not null && !string.IsNullOrWhiteSpace(providerSessionId))
-            LastDispatch = LastDispatch with { ProviderSessionId = providerSessionId.Trim() };
+            ReplaceLastDispatch(LastDispatch with { ProviderSessionId = providerSessionId.Trim() });
     }
 
     internal void RetireDispatchProviderSession(DateTimeOffset retiredAt)
     {
         if (LastDispatch is not null)
-            LastDispatch = LastDispatch with { ProviderSessionRetiredAt = retiredAt };
+            ReplaceLastDispatch(LastDispatch with { ProviderSessionRetiredAt = retiredAt });
+    }
+
+    internal void SetDispatchContextPackageReceipt(DateTimeOffset dispatchedAt, WorkerContextPackageReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        var matches = _dispatchHistory
+            .Select((dispatch, index) => (dispatch, index))
+            .Where(item => item.dispatch.DispatchedAt == dispatchedAt)
+            .Select(item => item.index)
+            .ToArray();
+        if (matches.Length == 0)
+        {
+            throw new InvalidOperationException($"Cannot record context usage for unknown dispatch attempt {dispatchedAt:O}.");
+        }
+        if (matches.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Cannot record context usage because dispatch attempt timestamp {dispatchedAt:O} is ambiguous ({matches.Length} records).");
+        }
+
+        var index = matches[0];
+        var updated = _dispatchHistory[index] with { ContextPackageReceipt = receipt };
+        _dispatchHistory[index] = updated;
+        if (index == _dispatchHistory.Count - 1)
+        {
+            LastDispatch = updated;
+        }
     }
 
     internal void RecordProcess(TaskProcessRecord process) => LastProcess = process;
+
+    private static TaskDispatchSnapshot ToDispatchSnapshot(TaskDispatchRecord dispatch) => new(
+        dispatch.WorkerName,
+        dispatch.Command,
+        dispatch.WorkingDirectory,
+        dispatch.DispatchedAt,
+        dispatch.ProviderName,
+        dispatch.ModelName,
+        dispatch.ReasoningEffort,
+        dispatch.TaskComplexity,
+        dispatch.PromptCharacterCount,
+        dispatch.UsesComplexModel,
+        dispatch.BaseCommit,
+        dispatch.ResultCommit,
+        dispatch.SandboxLowIntegrity,
+        dispatch.PromptPath,
+        dispatch.WorkerProviderKind,
+        dispatch.ReasoningEffortReason,
+        dispatch.DispatchLane,
+        dispatch.ModelSelectionReason,
+        dispatch.ProviderSessionId,
+        dispatch.WorktreeHeadSha,
+        dispatch.DirtyStateHash,
+        dispatch.ProviderSessionRetiredAt,
+        dispatch.ReviewFindingTouchedAnchors,
+        dispatch.BriefVersion,
+        dispatch.BriefSnapshot,
+        dispatch.ReviewFindingTouchProofDiagnostic,
+        dispatch.ReviewRetryCap,
+        dispatch.ContextPackageReceipt);
+
+    private static TaskDispatchRecord FromDispatchSnapshot(TaskDispatchSnapshot dispatch) => new(
+        dispatch.WorkerName,
+        dispatch.Command,
+        dispatch.WorkingDirectory,
+        dispatch.DispatchedAt,
+        dispatch.ProviderName,
+        dispatch.ModelName,
+        dispatch.ReasoningEffort,
+        dispatch.TaskComplexity,
+        dispatch.PromptCharacterCount,
+        dispatch.UsesComplexModel,
+        dispatch.BaseCommit,
+        dispatch.ResultCommit,
+        dispatch.SandboxLowIntegrity,
+        dispatch.PromptPath,
+        dispatch.WorkerProviderKind,
+        dispatch.ReasoningEffortReason,
+        dispatch.DispatchLane,
+        dispatch.ModelSelectionReason,
+        dispatch.ProviderSessionId,
+        dispatch.WorktreeHeadSha,
+        dispatch.DirtyStateHash,
+        dispatch.ProviderSessionRetiredAt,
+        dispatch.ReviewFindingTouchedAnchors,
+        dispatch.BriefVersion,
+        dispatch.BriefSnapshot,
+        dispatch.ReviewFindingTouchProofDiagnostic,
+        dispatch.ReviewRetryCap,
+        dispatch.ContextPackageReceipt);
 
     private static string? NormalizeOptional(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

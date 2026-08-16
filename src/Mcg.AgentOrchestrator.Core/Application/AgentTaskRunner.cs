@@ -213,7 +213,9 @@ public sealed class AgentTaskRunner
                     output,
                     string.Empty,
                     execution.CompletedAt,
-                    WorkerResultPresent: true));
+                    WorkerResultPresent: true,
+                    FullStandardOutput: output,
+                    FullStandardError: string.Empty));
             return new AgentTaskRunResult(goal, task, execution);
         }
 

@@ -579,7 +579,7 @@ public sealed class StatePersistenceAndPerformanceTests
         Assert.True(agent.Subscription is not null);
         var subscription = agent.Subscription!;
         Assert.Equal("codex-cli", subscription.WorkerProfileName);
-        Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, subscription.ModelAlias);
+        Assert.Equal(AgentCatalog.OpenAiSolSubscriptionModelAlias, subscription.ModelAlias);
         Assert.Equal(AgentCatalog.RoutineSubscriptionReasoningEffort, subscription.ReasoningEffort);
         Assert.True(agent.ComplexModel is not null);
         Assert.Equal("OpenAI", agent.ComplexModel!.ProviderName);

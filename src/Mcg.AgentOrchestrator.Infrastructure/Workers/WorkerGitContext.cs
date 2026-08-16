@@ -101,7 +101,7 @@ internal sealed class WorkerGitContext
             .ToArray();
         return new ReviewerChangedFileScope(
             mergeBaseResult.Output.Trim(),
-            changedFiles.Take(ReviewerChangedFilePromptMaxFiles).ToArray(),
+            changedFiles,
             changedFiles.Length);
     }
 
@@ -251,7 +251,7 @@ internal sealed class WorkerGitContext
         {
             return new ReviewerMergeTreeStatus(
                 IsClean: false,
-                conflictPaths.Take(ReviewerChangedFilePromptMaxFiles).ToArray(),
+                conflictPaths,
                 conflictPaths.Length);
         }
 
@@ -539,7 +539,7 @@ internal sealed class WorkerGitContext
         return new SourceLineRange(anchorLine + 1, lines.Length);
     }
 
-    internal string BuildDiffSummary(string workingDirectory)
+    internal string BuildDiffSummary(string workingDirectory, bool preserveCompleteArtifact = false)
     {
         var lines = new List<string>
         {
@@ -571,7 +571,8 @@ internal sealed class WorkerGitContext
         lines.Add("## Diff Stat Against HEAD");
         lines.AddRange(ReadGitSection(workingDirectory, ["diff", "--stat", "HEAD", "--"]));
 
-        return WorkerContextHelpers.TrimArtifactBlock(string.Join(Environment.NewLine, lines), DiffSummaryMaxChars);
+        var summary = string.Join(Environment.NewLine, lines);
+        return WorkerContextHelpers.TrimArtifactBlock(summary, DiffSummaryMaxChars, preserveCompleteArtifact);
     }
 
     private static bool LooksLikeGitWorkspace(string workingDirectory)

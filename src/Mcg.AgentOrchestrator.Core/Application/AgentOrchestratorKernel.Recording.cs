@@ -1031,6 +1031,16 @@ public sealed partial class AgentOrchestratorKernel
         task.RetireDispatchProviderSession(retiredAt);
     }
 
+    public void RecordDispatchContextPackageReceipt(
+        GoalId goalId,
+        TaskId taskId,
+        DateTimeOffset dispatchedAt,
+        WorkerContextPackageReceipt receipt)
+    {
+        var goal = GetGoal(goalId);
+        goal.FindTask(taskId).SetDispatchContextPackageReceipt(dispatchedAt, receipt);
+    }
+
     public void RecordTaskDispatch(
         GoalId goalId,
         TaskId taskId,
@@ -1060,6 +1070,15 @@ public sealed partial class AgentOrchestratorKernel
         task.SetStatus(WorkTaskStatus.Running);
         goal.SetStatus(GoalStatus.Active);
         Append(goal, taskId, ProgressKind.TaskDispatchRecorded, $"Dispatched to {dispatch.WorkerName}{FormatDispatchTimelineModelSelection(dispatch)}: {dispatch.Command}");
+    }
+
+    public void ReplacePreparedTaskDispatch(GoalId goalId, TaskId taskId, TaskDispatchRecord dispatch)
+    {
+        var goal = GetGoal(goalId);
+        var task = goal.FindTask(taskId);
+        dispatch.BriefVersion = task.LastDispatch?.BriefVersion ?? goal.AuthoritativeBrief.Version;
+        dispatch.BriefSnapshot = task.LastDispatch?.BriefSnapshot ?? goal.Objective;
+        task.ReplacePreparedDispatch(dispatch);
     }
 
     private static string FormatDispatchTimelineModelSelection(TaskDispatchRecord dispatch)

@@ -8,6 +8,7 @@ using Mcg.AgentOrchestrator.Infrastructure;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 
@@ -532,7 +533,7 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 DispatchRecordCheckpointPhase.BeforeProcessStart));
     }
 
-    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_keeps_within_budget_prompt_unchanged")]
+    [Xunit.Fact(DisplayName = "Within-budget worker context remains byte-identical with no dropped sections")]
     public void WorkerPromptInputBudgetKeepsWithinBudgetPromptUnchanged()
 {
     var brief = CreateBudgetBrief("brief instructions only");
@@ -544,10 +545,11 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.Empty(result.DroppedSections);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_drops_evidence_before_other_context")]
-    public void WorkerPromptInputBudgetDropsEvidenceBeforeOtherContext()
+    [Xunit.Fact(DisplayName = "Over-budget required context fails instead of dropping prior evidence")]
+    public void WorkerPromptInputBudgetRejectsOverBudgetWithoutDroppingEvidence()
 {
     var brief = CreateBudgetBrief(
+        "## Worker Context Package",
         "brief instructions",
         "## Prior Task Evidence",
         new string('e', 240),
@@ -557,21 +559,22 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         "digest-kept");
     var budget = WorkerPromptInputBudget.CountTokens(brief.Content.Replace(new string('e', 240), string.Empty, StringComparison.Ordinal));
 
-    var result = WorkerPromptInputBudget.Apply(brief, "Anthropic", "claude-sonnet-4-6", budget);
+    var error = Assert.Throws<WorkerPromptInputBudgetExceededException>(() =>
+        WorkerPromptInputBudget.Apply(brief, "Anthropic", "claude-sonnet-4-6", budget));
 
-    Assert.True(result.DroppedSections.SequenceEqual(["evidence"]));
-    Assert.False(result.Brief.Content.Contains("Prior Task Evidence", StringComparison.Ordinal));
-    Assert.True(result.Brief.Content.Contains("source-survey-kept", StringComparison.Ordinal));
-    Assert.True(result.Brief.Content.Contains("digest-kept", StringComparison.Ordinal));
+    Assert.Equal(WorkerPromptInputBudget.CountTokens(brief.Content), error.TokenCount);
+    Assert.Contains("required context is lossless", error.Message, StringComparison.Ordinal);
+    Assert.Contains("Prior Task Evidence", brief.Content, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_never_trims_durable_research_or_plan_sections")]
+    [Xunit.Fact(DisplayName = "Over-budget required context preserves durable research and planner bytes")]
     public void WorkerPromptInputBudgetNeverTrimsDurableResearchOrPlanSections()
     {
         var research = "RESEARCH-PIN-" + new string('r', 240);
         var plan = "PLAN-PIN-" + new string('p', 240);
         var noise = new string('n', 400);
         var brief = CreateBudgetBrief(
+            "## Worker Context Package",
             "brief instructions",
             "## Durable Research Notes",
             research,
@@ -587,22 +590,22 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
                 "## Durable Planner Plan",
                 plan).Content);
 
-        var result = WorkerPromptInputBudget.Apply(
+        Assert.Throws<WorkerPromptInputBudgetExceededException>(() => WorkerPromptInputBudget.Apply(
             brief,
             "Anthropic",
             "claude-sonnet-4-6",
-            budget);
+            budget));
 
-        Assert.Contains("RESEARCH-PIN-", result.Brief.Content, StringComparison.Ordinal);
-        Assert.Contains("PLAN-PIN-", result.Brief.Content, StringComparison.Ordinal);
-        Assert.DoesNotContain(noise, result.Brief.Content, StringComparison.Ordinal);
-        Assert.Equal(["evidence"], result.DroppedSections);
+        Assert.Contains("RESEARCH-PIN-", brief.Content, StringComparison.Ordinal);
+        Assert.Contains("PLAN-PIN-", brief.Content, StringComparison.Ordinal);
+        Assert.Contains(noise, brief.Content, StringComparison.Ordinal);
     }
 
-    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_drops_context_sections_in_fixed_priority_order_until_fit")]
-    public void WorkerPromptInputBudgetDropsContextSectionsInFixedPriorityOrderUntilFit()
+    [Xunit.Fact(DisplayName = "Over-budget required context preserves every context section")]
+    public void WorkerPromptInputBudgetNeverDropsContextSections()
 {
     var brief = CreateBudgetBrief(
+        "## Worker Context Package",
         "brief instructions",
         "## Prior Task Evidence",
         new string('e', 240),
@@ -612,16 +615,15 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         new string('d', 240));
     var budget = WorkerPromptInputBudget.CountTokens("brief instructions") + 2;
 
-    var result = WorkerPromptInputBudget.Apply(brief, "Anthropic", "claude-sonnet-4-6", budget);
+    Assert.Throws<WorkerPromptInputBudgetExceededException>(() =>
+        WorkerPromptInputBudget.Apply(brief, "Anthropic", "claude-sonnet-4-6", budget));
 
-    Assert.True(result.DroppedSections.SequenceEqual(["evidence", "source survey", "digest"]));
-    Assert.False(result.Brief.Content.Contains("Prior Task Evidence", StringComparison.Ordinal));
-    Assert.False(result.Brief.Content.Contains("Source Survey", StringComparison.Ordinal));
-    Assert.False(result.Brief.Content.Contains("Worker Context Digest", StringComparison.Ordinal));
-    Assert.True(result.Brief.Content.Contains("brief instructions", StringComparison.Ordinal));
+    Assert.Contains("Prior Task Evidence", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("Source Survey", brief.Content, StringComparison.Ordinal);
+    Assert.Contains("Worker Context Digest", brief.Content, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_rejects_irreducible_over_budget_prompt")]
+    [Xunit.Fact(DisplayName = "Irreducible worker prompt fails with provider and model diagnostics")]
     public void WorkerPromptInputBudgetRejectsIrreducibleOverBudgetPrompt()
 {
     var brief = CreateBudgetBrief(
@@ -1368,6 +1370,422 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         Assert.Contains(expectedPriority, digest, StringComparison.Ordinal);
     }
 
+    [Xunit.Fact]
+    public void PrepareTask_IdeationDispatch_PreservesLegacyBriefAndProfile()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Propose one bounded improvement.", AgentRole.Ideation);
+        var oversized = "legacy-head-" + new string('x', 800) + "-legacy-tail";
+        var goal = kernel.CreateGoal(oversized, [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var profile = new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}");
+
+        var result = WorkerProfileDispatcher.PrepareTask(
+            kernel, goal, task, profile, Path.Combine(root, "prompts"), workingDirectory, DateTimeOffset.UtcNow,
+            providerName: "OpenAI", modelName: AgentCatalog.OpenAiSubscriptionModelAlias);
+
+        var prompt = File.ReadAllText(result.PromptPath);
+        Assert.DoesNotContain("## Worker Context Package", prompt, StringComparison.Ordinal);
+        Assert.Null(result.Task.LastDispatch!.ContextPackageReceipt);
+        Assert.DoesNotContain("--json", result.Task.LastDispatch.Command, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(AgentCatalog.OpenAiSubscriptionModelAlias, result.Task.LastDispatch.ModelName);
+        var digest = File.ReadAllText(Path.Combine(
+            workingDirectory,
+            ".orchestrator-context",
+            goal.Id.Value,
+            "digest.md"));
+        Assert.Contains("...[truncated", digest, StringComparison.Ordinal);
+        Assert.DoesNotContain("-legacy-tail", digest, StringComparison.Ordinal);
+    }
+
+    [Xunit.Theory]
+    [Xunit.InlineData("OpenAI", AgentCatalog.OpenAiSubscriptionModelAlias)]
+    [Xunit.InlineData("Anthropic", AgentCatalog.OpenAiSolSubscriptionModelAlias)]
+    public void PrepareTask_NonTypedContextRoute_PreservesLegacyArtifactCaps(
+        string providerName,
+        string modelName)
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement through a legacy context route.", AgentRole.Developer);
+        var oversized = "legacy-head-" + new string('x', 800) + "-legacy-tail";
+        var goal = kernel.CreateGoal(oversized, [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var profile = new WorkerProfile("subscription", "worker --cd {workingDirectory}");
+
+        var result = WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            task,
+            profile,
+            Path.Combine(root, "prompts"),
+            workingDirectory,
+            DateTimeOffset.UtcNow,
+            providerName: providerName,
+            modelName: modelName);
+
+        Assert.Null(result.Task.LastDispatch!.ContextPackageReceipt);
+        var digest = File.ReadAllText(Path.Combine(
+            workingDirectory,
+            ".orchestrator-context",
+            goal.Id.Value,
+            "digest.md"));
+        Assert.Contains("...[truncated", digest, StringComparison.Ordinal);
+        Assert.DoesNotContain("-legacy-tail", digest, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TypedContextPackageRemovesSemanticSourceProjectionsFromResidualBrief()
+    {
+        var brief = string.Join(Environment.NewLine,
+        [
+            "# Agent Task Brief",
+            "<!-- ACCUMULATED_RETRY_FEEDBACK_START -->",
+            "## Accumulated retry/review feedback",
+            "formatted causal event that is not byte-equal to timeline JSON",
+            "formatted review finding that is not byte-equal to review-finding JSON",
+            "<!-- ACCUMULATED_RETRY_FEEDBACK_END -->",
+            "Goal id: goal-1",
+            "## Instructions",
+            "preserve this worker-only instruction",
+            "## Refined Spec",
+            "Behavioral contract: formatted typed specification",
+            "Acceptance criteria:",
+            "- formatted criterion",
+            "## Developer Requirements",
+            "preserve this role contract",
+            "## Durable Research Notes",
+            "complete research payload",
+            "## Durable Planner Plan",
+            "complete planner payload",
+            "## Prior Task Evidence",
+            "- formatted aggregate and per-task output projection",
+            "## Recent Timeline",
+            "- formatted timeline projection"
+        ]);
+
+        var residual = WorkerProfileDispatcher.RemoveTypedSourceProjections(brief, AgentRole.Developer);
+
+        Assert.DoesNotContain("formatted causal event", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("formatted review finding", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("formatted typed specification", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("formatted aggregate and per-task output projection", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("formatted timeline projection", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("complete research payload", residual, StringComparison.Ordinal);
+        Assert.DoesNotContain("complete planner payload", residual, StringComparison.Ordinal);
+        Assert.Contains("preserve this worker-only instruction", residual, StringComparison.Ordinal);
+        Assert.Contains("preserve this role contract", residual, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void TypedContextPackageWiresRecoveredV0HandoffBytesIntoMandatoryDelivery()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        File.WriteAllText(Path.Combine(workingDirectory, ".orchestrator-handoff.md"), string.Join(Environment.NewLine,
+        [
+            "# Prior Task Handoff",
+            "",
+            "## Planner: legacy plan",
+            "",
+            "### Verification Output",
+            "legacy complete payload",
+            "",
+            "---"
+        ]));
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Implement from legacy evidence.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve legacy evidence", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var profile = new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}");
+
+        var result = WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            task,
+            profile,
+            Path.Combine(root, "prompts"),
+            workingDirectory,
+            DateTimeOffset.UtcNow,
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
+        var prompt = File.ReadAllText(result.PromptPath);
+        var receipt = result.Task.LastDispatch!.ContextPackageReceipt!;
+        var section = Assert.Single(receipt.Sections,
+            item => item.LogicalIdentity == "legacy-handoff/v0/1");
+
+        Assert.Equal(ContextDeliveryMode.MandatoryFile, section.DeliveryMode);
+        Assert.Contains(receipt.Sections, item =>
+            item.LogicalIdentity == "goal/timeline.json" &&
+            item.DeliveryMode == ContextDeliveryMode.MandatoryFile);
+        Assert.Contains(receipt.Sections, item => item.LogicalIdentity == "brief/current.md");
+        Assert.Contains(receipt.Sections, item => item.LogicalIdentity == "context/manifest.v1.json");
+        Assert.Contains("MANDATORY READ: identity=legacy-handoff/v0/1", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("legacy complete payload", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Context files: read", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("--json", result.Task.LastDispatch.Command, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("artifact-registry.json", prompt, StringComparison.Ordinal);
+        Assert.Contains("context-package.json", prompt, StringComparison.Ordinal);
+        Assert.Contains("manifest.md", prompt, StringComparison.Ordinal);
+        Assert.Equal(
+            Encoding.UTF8.GetBytes("legacy complete payload"),
+            File.ReadAllBytes(Path.Combine(workingDirectory, section.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));
+    }
+
+    [Xunit.Fact]
+    public void PrepareTask_RestoredLegacyVerification_RecoversValidatedOutputFileBeforeDispatch()
+    {
+        var root = CreateSeededDispatchRepository();
+        var outputPath = Path.Combine(root, "legacy-planner.out.log");
+        var authoritativeOutput = "legacy planner evidence\r\nwith final newline å\r\n";
+        File.WriteAllText(outputPath, authoritativeOutput);
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan from legacy evidence.", AgentRole.Planner);
+        var developer = new TaskSpec(TaskId.New(), "Implement the recovered plan.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover a legacy verification snapshot", [planner, developer]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Completed, "Legacy planner completed.");
+        kernel.RecordTaskVerification(goal.Id, planner.Id, new TaskVerificationRecord(
+            "legacy planner command",
+            root,
+            0,
+            authoritativeOutput,
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-15T12:00:00Z"),
+            StandardOutputPath: outputPath,
+            FullStandardOutput: authoritativeOutput,
+            FullStandardError: string.Empty));
+
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(snapshot.Goals);
+        var plannerSnapshot = goalSnapshot.Tasks.Single(task => task.Id == planner.Id.Value);
+        var legacyVerification = plannerSnapshot.LastVerification! with
+        {
+            AuthoritativeStandardOutput = null,
+            AuthoritativeStandardOutputUnavailableReason = null
+        };
+        var restoredKernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals =
+            [
+                goalSnapshot with
+                {
+                    Tasks = goalSnapshot.Tasks.Select(task => task.Id == planner.Id.Value
+                        ? task with
+                        {
+                            LastVerification = legacyVerification,
+                            VerificationHistory = [legacyVerification]
+                        }
+                        : task).ToArray()
+                }
+            ]
+        });
+        var restoredGoal = restoredKernel.GetGoal(goal.Id);
+        var restoredPlanner = restoredGoal.Tasks.Single(task => task.Id == planner.Id);
+        var restoredDeveloper = restoredGoal.Tasks.Single(task => task.Id == developer.Id);
+
+        File.WriteAllText(outputPath, "changed after the legacy snapshot was recorded");
+        WorkerCommandTemplate.WriteHandoffFile(restoredGoal.Tasks, restoredDeveloper.Id, root);
+        var unavailableHandoff = File.ReadAllText(Path.Combine(root, ".orchestrator-handoff.md"));
+        Assert.Contains("Legacy Verification Context (non-authoritative)", unavailableHandoff, StringComparison.Ordinal);
+        Assert.Contains("legacy-snapshot-authoritative-output-unavailable", unavailableHandoff, StringComparison.Ordinal);
+        var unavailablePointer = Assert.Single(new LegacyHandoffCompatibilityResolver(
+                _ => null,
+                root)
+            .ResolveArtifactsFromMarkdown(unavailableHandoff));
+        var unavailableContent = Encoding.UTF8.GetString(unavailablePointer.Bytes);
+        Assert.Contains("authoritative: false", unavailableContent, StringComparison.Ordinal);
+        Assert.Contains("legacy-snapshot-authoritative-output-unavailable", unavailableContent, StringComparison.Ordinal);
+        Assert.Contains(authoritativeOutput, unavailableContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("changed after the legacy snapshot was recorded", unavailableContent, StringComparison.Ordinal);
+        File.WriteAllText(outputPath, authoritativeOutput);
+
+        var prepared = WorkerProfileDispatcher.PrepareTask(
+            restoredKernel,
+            restoredGoal,
+            restoredDeveloper,
+            new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}"),
+            Path.Combine(root, "prompts"),
+            root,
+            DateTimeOffset.Parse("2026-08-15T12:01:00Z"),
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
+
+        var identity = $"prior/{planner.Id.Value}/verification-output";
+        var section = Assert.Single(prepared.Task.LastDispatch!.ContextPackageReceipt!.Sections,
+            item => item.LogicalIdentity == identity);
+        Assert.Equal(ContextDeliveryMode.MandatoryFile, section.DeliveryMode);
+        Assert.Equal(WorkerContextArtifact.Hash(Encoding.UTF8.GetBytes(authoritativeOutput)), section.ContentHash);
+        Assert.Equal(
+            Encoding.UTF8.GetBytes(authoritativeOutput),
+            File.ReadAllBytes(Path.Combine(root, section.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));
+        Assert.Contains($"MANDATORY READ: identity={identity}", File.ReadAllText(prepared.PromptPath), StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void WorkerVerificationEvidence_DoesNotPromoteBoundedLegacyPreviewWithoutHash()
+    {
+        var root = CreateTempDirectory();
+        var outputPath = Path.Combine(root, "legacy-worker.out.log");
+        var fullOutput = "head\n" + new string('x', VerificationTextBounds.BoundThreshold + 500) + "\ntail";
+        File.WriteAllText(outputPath, fullOutput);
+        var legacyVerification = new TaskVerificationRecord(
+            "legacy worker command",
+            root,
+            0,
+            VerificationTextBounds.BoundText(fullOutput, outputPath),
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-15T12:00:00Z"),
+            StandardOutputPath: outputPath,
+            FullStandardOutputUnavailableReason: "legacy-snapshot-authoritative-output-unavailable",
+            StandardOutputIsAuthoritative: false);
+
+        Assert.False(WorkerVerificationEvidence.TryRecoverLegacySnapshotStandardOutput(
+            legacyVerification,
+            out _));
+
+        var identity = new LogicalArtifactIdentity("prior/legacy/verification-output");
+        var contextOutput = WorkerVerificationEvidence.ResolveStandardOutputForContext(legacyVerification, identity);
+        Assert.False(contextOutput.IsAuthoritative);
+        Assert.Equal("legacy-snapshot-authoritative-output-unavailable", contextOutput.UnavailableReason);
+        Assert.Contains("authoritative: false", contextOutput.Content, StringComparison.Ordinal);
+        Assert.Contains(legacyVerification.StandardOutput, contextOutput.Content, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('x', VerificationTextBounds.BoundThreshold + 500), contextOutput.Content, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void WorkerVerificationEvidence_DeliversMarkedPreviewForCapturedUnavailabilityReason()
+    {
+        const string unavailableReason = "stdout-capture-failed";
+        const string preview = "captured head and tail only";
+        var verification = new TaskVerificationRecord(
+            "worker command",
+            CreateTempDirectory(),
+            0,
+            preview,
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
+            FullStandardOutputUnavailableReason: unavailableReason,
+            StandardOutputIsAuthoritative: false);
+
+        var contextOutput = WorkerVerificationEvidence.ResolveStandardOutputForContext(
+            verification,
+            new LogicalArtifactIdentity("prior/captured/verification-output"));
+
+        Assert.False(contextOutput.IsAuthoritative);
+        Assert.Equal(unavailableReason, contextOutput.UnavailableReason);
+        Assert.Contains($"unavailable-reason: {unavailableReason}", contextOutput.Content, StringComparison.Ordinal);
+        Assert.Contains(preview, contextOutput.Content, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void WorkerVerificationEvidence_MissingAuthoritativeOutputWithoutReasonFailsClosed()
+    {
+        var verification = new TaskVerificationRecord(
+            "worker command",
+            CreateTempDirectory(),
+            0,
+            "bounded preview",
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
+            StandardOutputIsAuthoritative: false);
+        var identity = new LogicalArtifactIdentity("prior/invariant-break/verification-output");
+
+        var failure = Assert.Throws<WorkerContextPreparationException>(() =>
+            WorkerVerificationEvidence.ResolveStandardOutputForContext(verification, identity));
+
+        Assert.Equal(identity, failure.Identity);
+        Assert.Equal("authoritative-evidence-unavailable", failure.Reason);
+    }
+
+    [Xunit.Fact]
+    public void PrepareTask_RestoredLongLegacyVerification_DeliversMarkedPreviewWithoutTrustingOutputFile()
+    {
+        var root = CreateSeededDispatchRepository();
+        var outputPath = Path.Combine(root, "legacy-long-planner.out.log");
+        var omittedMiddle = new string('x', VerificationTextBounds.BoundThreshold + 500);
+        var fullOutput = $"legacy head{Environment.NewLine}{omittedMiddle}{Environment.NewLine}legacy tail";
+        File.WriteAllText(outputPath, fullOutput);
+        var kernel = new AgentOrchestratorKernel();
+        var planner = new TaskSpec(TaskId.New(), "Plan from long legacy evidence.", AgentRole.Planner);
+        var developer = new TaskSpec(TaskId.New(), "Implement with explicit legacy limitations.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Preserve legacy context without inventing authority", [planner, developer]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        kernel.ReportTaskProgress(goal.Id, planner.Id, WorkTaskStatus.Completed, "Legacy planner completed.");
+        kernel.RecordTaskVerification(goal.Id, planner.Id, new TaskVerificationRecord(
+            "legacy planner command",
+            root,
+            0,
+            fullOutput,
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-15T12:00:00Z"),
+            StandardOutputPath: outputPath,
+            FullStandardOutput: fullOutput,
+            FullStandardError: string.Empty));
+
+        var snapshot = kernel.ExportSnapshot();
+        var goalSnapshot = Assert.Single(snapshot.Goals);
+        var plannerSnapshot = goalSnapshot.Tasks.Single(task => task.Id == planner.Id.Value);
+        var legacyVerification = plannerSnapshot.LastVerification! with
+        {
+            AuthoritativeStandardOutput = null,
+            AuthoritativeStandardOutputUnavailableReason = null
+        };
+        var restoredKernel = AgentOrchestratorKernel.FromSnapshot(snapshot with
+        {
+            Goals =
+            [
+                goalSnapshot with
+                {
+                    Tasks = goalSnapshot.Tasks.Select(task => task.Id == planner.Id.Value
+                        ? task with
+                        {
+                            LastVerification = legacyVerification,
+                            VerificationHistory = [legacyVerification]
+                        }
+                        : task).ToArray()
+                }
+            ]
+        });
+        var restoredGoal = restoredKernel.GetGoal(goal.Id);
+        var restoredDeveloper = restoredGoal.Tasks.Single(task => task.Id == developer.Id);
+        File.WriteAllText(
+            outputPath,
+            fullOutput.Replace(omittedMiddle, new string('y', omittedMiddle.Length), StringComparison.Ordinal));
+
+        var prepared = WorkerProfileDispatcher.PrepareTask(
+            restoredKernel,
+            restoredGoal,
+            restoredDeveloper,
+            new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}"),
+            Path.Combine(root, "prompts"),
+            root,
+            DateTimeOffset.Parse("2026-08-15T12:01:00Z"),
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
+
+        var identity = $"prior/{planner.Id.Value}/verification-output";
+        var section = Assert.Single(prepared.Task.LastDispatch!.ContextPackageReceipt!.Sections,
+            item => item.LogicalIdentity == identity);
+        var delivered = File.ReadAllText(Path.Combine(
+            root,
+            section.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar)));
+        Assert.Equal(ContextDeliveryMode.MandatoryFile, section.DeliveryMode);
+        Assert.Contains("authoritative: false", delivered, StringComparison.Ordinal);
+        Assert.Contains("legacy-snapshot-authoritative-output-unavailable", delivered, StringComparison.Ordinal);
+        Assert.Contains(legacyVerification.StandardOutput, delivered, StringComparison.Ordinal);
+        Assert.DoesNotContain(omittedMiddle, delivered, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('y', omittedMiddle.Length), delivered, StringComparison.Ordinal);
+        Assert.Contains($"MANDATORY READ: identity={identity}", File.ReadAllText(prepared.PromptPath), StringComparison.Ordinal);
+        Assert.Null(restoredDeveloper.LastProcess);
+    }
+
     [Xunit.Fact(DisplayName = "WorkerSkillSelector_routes_hyphenated_worker_skill_signal_in_isolation")]
     public void WorkerSkillSelectorRoutesHyphenatedWorkerSkillSignalInIsolation()
     {
@@ -2102,11 +2520,12 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     Assert.DoesNotContain("LATEST_DEVELOPER_RETRY_BLOCKER_START", prompt, StringComparison.Ordinal);
 }
 
-    [Xunit.Fact(DisplayName = "WorkerPromptInputBudget_keeps_developer_retry_blocker_when_dropping_lower_context")]
-    public void WorkerPromptInputBudgetKeepsDeveloperRetryBlockerWhenDroppingLowerContext()
+    [Xunit.Fact]
+    public void WorkerPromptInputBudgetKeepsAllRetryAndContextBytesWhenRejecting()
 {
     var exactBlocker = "Reviewer blocker: src/Mcg.AgentOrchestrator.Infrastructure/Workers/WorkerProfileDispatcher.cs method PrepareSubscriptionTask still ignores latest retry feedback.";
     var content = string.Join(Environment.NewLine, [
+        "## Worker Context Package",
         "# Agent Task Brief",
         string.Empty,
         "<!-- LATEST_DEVELOPER_RETRY_BLOCKER_START -->",
@@ -2137,16 +2556,14 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
         .Replace(new string('v', 400), string.Empty, StringComparison.Ordinal)
         .Replace(new string('d', 400), string.Empty, StringComparison.Ordinal));
 
-    var result = WorkerPromptInputBudget.Apply(brief, "Ollama", "qwen3:8b", budget);
+    Assert.Throws<WorkerPromptInputBudgetExceededException>(() =>
+        WorkerPromptInputBudget.Apply(brief, "Ollama", "qwen3:8b", budget));
 
-    Assert.True(result.Trimmed);
-    Assert.Contains(result.DroppedSections, section => section == "evidence");
-    Assert.Contains(result.DroppedSections, section => section == "digest");
-    Assert.Contains("LATEST DEVELOPER RETRY BLOCKER", result.Brief.Content, StringComparison.Ordinal);
-    Assert.Contains(exactBlocker, result.Brief.Content, StringComparison.Ordinal);
-    Assert.Contains("PrepareSubscriptionTask", result.Brief.Content, StringComparison.Ordinal);
-    Assert.DoesNotContain(new string('p', 400), result.Brief.Content, StringComparison.Ordinal);
-    Assert.DoesNotContain(new string('d', 400), result.Brief.Content, StringComparison.Ordinal);
+    Assert.Contains("LATEST DEVELOPER RETRY BLOCKER", brief.Content, StringComparison.Ordinal);
+    Assert.Contains(exactBlocker, brief.Content, StringComparison.Ordinal);
+    Assert.Contains("PrepareSubscriptionTask", brief.Content, StringComparison.Ordinal);
+    Assert.Contains(new string('p', 400), brief.Content, StringComparison.Ordinal);
+    Assert.Contains(new string('d', 400), brief.Content, StringComparison.Ordinal);
 }
 
 }

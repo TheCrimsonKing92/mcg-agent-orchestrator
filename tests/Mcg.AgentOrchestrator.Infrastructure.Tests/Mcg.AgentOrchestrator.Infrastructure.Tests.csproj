@@ -26,5 +26,6 @@
     <Compile Remove="Fixtures\RealProcessShardProbe\**\*.cs" />
     <Content Include="TestData\Fixtures\progressive-review-10bd7223.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\PlannerOutputContract\*.out.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\CodexJsonl\*.jsonl" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

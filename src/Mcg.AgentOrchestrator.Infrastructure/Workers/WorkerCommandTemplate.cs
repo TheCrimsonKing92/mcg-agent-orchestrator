@@ -1,4 +1,5 @@
 using Mcg.AgentOrchestrator.Core;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Mcg.AgentOrchestrator.Infrastructure;
@@ -7,8 +8,6 @@ public sealed record WorkerDispatchPreparation(string PromptPath, string Command
 
 public static partial class WorkerCommandTemplate
 {
-    private const int HandoffVerificationMaxChars = 20000;
-
     public static void WriteHandoffFile(
         IReadOnlyList<TaskSpec> goalTasks,
         TaskId taskId,
@@ -34,18 +33,33 @@ public static partial class WorkerCommandTemplate
                 lines.Add($"Notes: {priorTask.LastVerification.ModelFitNote}");
             }
             lines.Add(string.Empty);
-            lines.Add("### Verification Output");
-            var stdout = priorTask.LastVerification.StandardOutput;
-            if (stdout.Length > HandoffVerificationMaxChars)
+            var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
+            var contextOutput = WorkerVerificationEvidence.ResolveStandardOutputForContext(
+                priorTask.LastVerification,
+                identity);
+            lines.Add(contextOutput.IsAuthoritative
+                ? "### Authoritative Verification Evidence"
+                : "### Legacy Verification Context (non-authoritative)");
+            if (!contextOutput.IsAuthoritative)
             {
-                var truncated = stdout.Length - HandoffVerificationMaxChars;
-                lines.Add(stdout[..HandoffVerificationMaxChars]);
-                lines.Add($"...[truncated {truncated} chars]...");
+                lines.Add($"Unavailable reason: {contextOutput.UnavailableReason}");
             }
-            else
-            {
-                lines.Add(stdout);
-            }
+
+            var authoritativeBytes = Encoding.UTF8.GetBytes(contextOutput.Content);
+            var materializationPath = $".orchestrator-context/legacy-handoff/{priorTask.Id.Value}/verification-output.bin";
+            var absoluteMaterializationPath = Path.Combine(
+                workingDirectory,
+                materializationPath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(absoluteMaterializationPath)!);
+            File.WriteAllBytes(absoluteMaterializationPath, authoritativeBytes);
+            var pointer = LegacyHandoffCompatibilityResolver.CreateV1Pointer(
+                identity,
+                authoritativeBytes,
+                materializationPath);
+            lines.Add($"Compatibility pointer (v1, hash-bound; resolve from authoritative task evidence): {pointer}");
+            lines.Add(
+                $"MANDATORY READ: path={materializationPath}; identity={identity.Value}; " +
+                $"sha256={WorkerContextArtifact.Hash(authoritativeBytes)}; contract=v1.");
             lines.Add(string.Empty);
             lines.Add("---");
         }

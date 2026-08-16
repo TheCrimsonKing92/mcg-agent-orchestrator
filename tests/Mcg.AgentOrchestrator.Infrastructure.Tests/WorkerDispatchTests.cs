@@ -1148,18 +1148,30 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
             new WorkerProfile("test-profile", "echo {promptPath}"),
             promptRoot,
             worktree,
-            dispatchedAt.AddMinutes(1));
+            dispatchedAt.AddMinutes(1),
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
 
         var contextDirectory = Path.Combine(worktree, ".orchestrator-context", goal.Id.Value);
         var priorEvidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md"));
         var prompt = File.ReadAllText(prepared.PromptPath!);
+        var plannerSection = Assert.Single(prepared.Task.LastDispatch!.ContextPackageReceipt!.Sections.Where(section =>
+            section.LogicalIdentity == "context/planner-plan.md"));
         Assert.Contains("### Durable Planner Plan", priorEvidence, StringComparison.Ordinal);
         Assert.Contains("STOP-UNIQUE-PLAN-SEQUENCE-7421", priorEvidence, StringComparison.Ordinal);
         Assert.DoesNotContain("### Stdout", priorEvidence, StringComparison.Ordinal);
-        Assert.Contains("complete Durable Planner Plan", prompt, StringComparison.Ordinal);
+        Assert.Equal(ContextDeliveryMode.MandatoryFile, plannerSection.DeliveryMode);
+        Assert.Contains("MANDATORY READ: identity=context/planner-plan.md", prompt, StringComparison.Ordinal);
+        Assert.Contains($"sha256={plannerSection.ContentHash}", prompt, StringComparison.Ordinal);
+        Assert.Contains($"path={plannerSection.MandatoryRelativePath}", prompt, StringComparison.Ordinal);
+        var materializedPlan = File.ReadAllText(Path.Combine(
+            worktree,
+            plannerSection.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar)));
+        Assert.Contains("STOP-UNIQUE-PLAN-SEQUENCE-7421", materializedPlan, StringComparison.Ordinal);
         Assert.Null(developer.LastProcess);
 
-        // Keep durable-receipt revalidation pinned to the measurable section-substance rule.
+        // Corrupting the delivery materialization must recover from the persisted authoritative
+        // stdout bytes rather than making the complete Planner handoff unavailable.
         var tamperedOutput = File.ReadAllText(stdoutPath).Replace(
             "The premise is valid because the named source seams were inspected in the fixture repository and the task can be completed without inventing missing dependencies or external behavior.",
             "TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD TBD",
@@ -1168,9 +1180,10 @@ public sealed class WorkerDispatchPlannerHandoffTests : WorkerDispatchTestSuppor
         new WorkerArtifactWriter().Write(goal, developer, worktree);
         var revalidatedSummary = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-summaries.md"));
         var revalidatedEvidence = File.ReadAllText(Path.Combine(contextDirectory, "prior-task-evidence.md"));
-        Assert.Contains("Durable plan: UNAVAILABLE", revalidatedSummary, StringComparison.Ordinal);
-        Assert.Contains("durable Planner plan failed retrieval revalidation", revalidatedEvidence, StringComparison.Ordinal);
-        Assert.DoesNotContain("STOP-UNIQUE-PLAN-SEQUENCE-7421", revalidatedEvidence, StringComparison.Ordinal);
+        Assert.Contains("Durable plan: complete Planner plan", revalidatedSummary, StringComparison.Ordinal);
+        Assert.Contains("### Durable Planner Plan", revalidatedEvidence, StringComparison.Ordinal);
+        Assert.Contains("STOP-UNIQUE-PLAN-SEQUENCE-7421", revalidatedEvidence, StringComparison.Ordinal);
+        Assert.DoesNotContain("durable Planner plan failed retrieval revalidation", revalidatedEvidence, StringComparison.Ordinal);
 
         var ignoredArtifacts = ReadGit(
             worktree,

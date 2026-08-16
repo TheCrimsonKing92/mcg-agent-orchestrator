@@ -137,6 +137,31 @@ public sealed class ProviderCommandBuilderParityTests
             string.Join(' ', command));
     }
 
+    [Xunit.Theory(DisplayName = "ProviderCommandBuilder_composes_structured_output_for_subscription_codex")]
+    [Xunit.InlineData(ProviderKind.OpenAICodexCli)]
+    [Xunit.InlineData(ProviderKind.OpenAICodexSpark)]
+    public void ProviderCommandBuilderComposesStructuredOutputForSubscriptionCodex(
+        ProviderKind providerKind)
+    {
+        var profile = WorkerProfileCatalog.Default().GetRequired(
+            WorkerProviderCatalog.Default().Resolve(providerKind).ProfileName);
+        var command = WorkerProfileDispatcher.BuildDispatchCommandTemplate(
+            profile,
+            providerKind,
+            new Dictionary<string, string?>
+            {
+                ["subscriptionModelName"] = AgentCatalog.OpenAiSolSubscriptionModelAlias,
+                ["subscriptionReasoningEffort"] = "high",
+                ["permissionMode"] = "plan",
+                ["sandboxMode"] = "read-only",
+                ["workingDirectory"] = @"C:\worker repo"
+            });
+
+        Assert.Equal(
+            $"codex exec --json --skip-git-repo-check --model '{AgentCatalog.OpenAiSolSubscriptionModelAlias}' -c model_reasoning_effort='high' --sandbox 'read-only' --cd 'C:\\worker repo'",
+            command);
+    }
+
     [Xunit.Fact(DisplayName = "ProviderCommandBuilder_preserves_blank_codex_template_literals")]
     public void ProviderCommandBuilderPreservesBlankCodexTemplateLiterals()
     {
@@ -151,7 +176,7 @@ public sealed class ProviderCommandBuilderParityTests
                 workingDirectory: null));
 
         Assert.Equal(
-            $"codex exec --skip-git-repo-check --model '{AgentCatalog.OpenAiSubscriptionModelAlias}' -c model_reasoning_effort= --sandbox 'read-only' --cd ",
+            $"codex exec --json --skip-git-repo-check --model '{AgentCatalog.OpenAiSubscriptionModelAlias}' -c model_reasoning_effort= --sandbox 'read-only' --cd ",
             command);
     }
 

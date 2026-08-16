@@ -22,7 +22,10 @@ public sealed record DispatchRefreshOutcome(
     DispatchRecoveryDecision? RecoveryDecision = null,
     ProviderFailureKind ProviderFailureKind = ProviderFailureKind.Unknown,
     DispatchDiagnosticPayload? DiagnosticPayload = null,
-    DispatchAutoRequeueDisposition? AutoRequeueDisposition = null);
+    DispatchAutoRequeueDisposition? AutoRequeueDisposition = null,
+    ProviderReportedUsage? ProviderUsage = null,
+    string ProviderUsageUnavailableReason = "unsupported",
+    DateTimeOffset? DispatchAttemptAt = null);
 
 public sealed record DispatchDiagnosticPayload(
     int ExitCode,
@@ -340,7 +343,17 @@ public sealed class BackgroundDispatchRunner
             PrepHeartbeatPath: prepHeartbeatPath,
             PrepExitCodePath: prepExitCodePath,
             ChildExitRecordPath: childExitRecordPath,
-            HostDiagnosticPath: hostDiagnosticPath));
+            HostDiagnosticPath: hostDiagnosticPath,
+            MandatoryContextFiles: dispatch.ContextPackageReceipt?.Sections
+                .Where(section => section.DeliveryMode == ContextDeliveryMode.MandatoryFile)
+                .Select(section => new MandatoryContextFileDescriptor(
+                    section.LogicalIdentity,
+                    section.MandatoryRelativePath ?? string.Empty,
+                    section.ContentHash,
+                    section.ContractVersion,
+                    task.RequiredRole,
+                    section.RoleVisibility))
+                .ToArray()));
 
         // Launch the native dispatch host detached: it outlives this CLI process, runs the worker
         // command through the resolved PowerShell host, performs sandbox prep off the conductor tick,
@@ -857,6 +870,27 @@ public sealed class BackgroundDispatchRunner
         DispatchRefreshOutcome outcome)
     {
         var task = kernel.GetTask(goalId, taskId);
+        if (outcome.Verification is not null && outcome.DispatchAttemptAt is { } dispatchAttemptAt)
+        {
+            var dispatch = task.DispatchHistory.SingleOrDefault(candidate => candidate.DispatchedAt == dispatchAttemptAt)
+                ?? throw new InvalidOperationException(
+                    $"Cannot record provider usage for unknown dispatch attempt {dispatchAttemptAt:O}.");
+            var receipt = dispatch.ContextPackageReceipt
+                ?? throw new InvalidOperationException(
+                    $"Dispatch attempt {dispatchAttemptAt:O} has no context package receipt.");
+            kernel.RecordDispatchContextPackageReceipt(
+                goalId,
+                taskId,
+                dispatchAttemptAt,
+                receipt.WithProviderUsage(outcome.ProviderUsage, outcome.ProviderUsageUnavailableReason));
+            task = kernel.GetTask(goalId, taskId);
+            if (task.LastDispatch?.DispatchedAt != dispatchAttemptAt)
+            {
+                // Delayed telemetry belongs to the originating attempt, but its stale process and
+                // verification must not be applied to the newer current dispatch.
+                return;
+            }
+        }
         var previousProcess = task.LastProcess;
         var verification = outcome.Verification;
         if (outcome.ResultCommit is not null)
@@ -1158,6 +1192,12 @@ public sealed class BackgroundDispatchRunner
     {
         var observedExitCode = exitCode;
         var exitArtifactAlreadyExisted = File.Exists(processRecord.ExitCodePath);
+        var task = kernel.GetTask(goalId, taskId);
+        var dispatchAttempt = ResolveDispatchAttempt(task, processRecord);
+        DateTimeOffset? contextReceiptAttemptAt = dispatchAttempt?.ContextPackageReceipt is null
+            ? null
+            : dispatchAttempt.DispatchedAt;
+        var jsonl = NormalizeStructuredCodexOutput(dispatchAttempt, processRecord.StandardOutputPath);
         var outputSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardOutputPath);
         var errorSnapshot = ReadProcessLogBestEffort(processRecord, processRecord.StandardErrorPath);
         var decisionStandardOutput = outputSnapshot.DecisionText;
@@ -1172,7 +1212,6 @@ public sealed class BackgroundDispatchRunner
         {
             resourceAccounting = resourceAccounting with { Reaped = true };
         }
-        var task = kernel.GetTask(goalId, taskId);
         var goal = kernel.GetGoal(goalId);
         var humanInputDirective = AgentOutputDirectives.ParseHumanInputRequest(decisionStandardOutput, task.RequiredRole);
         var hasRoleCapability = DispatchRoleOutputCapabilities.TryGet(task.RequiredRole, out var dispatchRoleCapability);
@@ -1553,6 +1592,8 @@ public sealed class BackgroundDispatchRunner
         // Keep orchestrator-ingested plan text in the captured stdout artifact, whose path is
         // recorded below, but out of the worker decision stream and bounded verification
         // snapshot. Kernel classification reparses the snapshot for directives and blockers.
+        var fullStandardOutput = ReadCompleteLog(processRecord.StandardOutputPath);
+        var fullStandardError = ReadCompleteLog(processRecord.StandardErrorPath);
         var standardOutput = outputSnapshot.BoundedText;
         var standardError = AppendDiagnostic(
             AppendDiagnostic(errorSnapshot.BoundedText, standardErrorDiagnostic),
@@ -1611,7 +1652,11 @@ public sealed class BackgroundDispatchRunner
             HumanInputBlockerFingerprint: humanInputDirective.Directive?.BlockerFingerprint,
             ObservedRootExitCode: observedExitCode,
             ReconciledToSuccess: wrapperExitReconciled,
-            ReconciliationOriginRule: wrapperExitReconciled ? reconciliationOriginRule : null);
+            ReconciliationOriginRule: wrapperExitReconciled ? reconciliationOriginRule : null,
+            FullStandardOutput: fullStandardOutput.Content,
+            FullStandardError: fullStandardError.Content,
+            FullStandardOutputUnavailableReason: fullStandardOutput.UnavailableReason,
+            FullStandardErrorUnavailableReason: fullStandardError.UnavailableReason);
 
         var outcome = new DispatchRefreshOutcome(
             completed,
@@ -1620,10 +1665,19 @@ public sealed class BackgroundDispatchRunner
             resultCommitProvenance,
             recoveryDecision,
             providerFailureKind,
-            new DispatchDiagnosticPayload(exitCode, standardOutput, standardError));
+            new DispatchDiagnosticPayload(exitCode, standardOutput, standardError),
+            ProviderUsage: jsonl?.Usage,
+            ProviderUsageUnavailableReason: jsonl?.UsageUnavailableReason ?? "unsupported",
+            DispatchAttemptAt: contextReceiptAttemptAt);
         EvictProcessLogCache(processRecord);
         return outcome;
     }
+
+    private static TaskDispatchRecord? ResolveDispatchAttempt(TaskSpec task, TaskProcessRecord processRecord) =>
+        task.DispatchHistory
+            .Where(dispatch => dispatch.DispatchedAt <= processRecord.StartedAt)
+            .OrderByDescending(dispatch => dispatch.DispatchedAt)
+            .FirstOrDefault();
 
     internal static bool ShouldReconcileWrapperExit(WrapperExitReconciliationEvidence evidence) =>
         evidence.ObservedRootExitCode != 0 &&
@@ -1681,7 +1735,9 @@ public sealed class BackgroundDispatchRunner
             DispatchStartedAt: processRecord.StartedAt,
             ChildProcessId: childExitRecord.ProcessId,
             ChildExitCode: childExitRecord.ExitCode,
-            ObservedRootExitCode: observedRootExitCode);
+            ObservedRootExitCode: observedRootExitCode,
+            FullStandardOutput: standardOutput,
+            FullStandardError: diagnosticStandardError);
         var origin = DispatchFailureClassifier.Classify(
             task,
             verification,
@@ -3135,6 +3191,82 @@ public sealed class BackgroundDispatchRunner
 
         return snapshot;
     }
+
+    internal static CodexJsonlParseResult? NormalizeStructuredCodexOutput(
+        TaskDispatchRecord? dispatch,
+        string standardOutputPath,
+        Func<string, string>? readAllText = null)
+    {
+        if (dispatch?.WorkerProviderKind is not (ProviderKind.OpenAICodexCli or ProviderKind.OpenAICodexSpark) ||
+            !dispatch.Command.Contains("--json", StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(standardOutputPath))
+        {
+            return null;
+        }
+
+        var rawAuditPath = standardOutputPath + ".jsonl";
+        var rawSourcePath = File.Exists(rawAuditPath) ? rawAuditPath : standardOutputPath;
+        string raw;
+        try
+        {
+            raw = (readAllText ?? File.ReadAllText)(rawSourcePath);
+        }
+        catch (IOException)
+        {
+            return new CodexJsonlParseResult(string.Empty, null, "unreadable", Recognized: false);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new CodexJsonlParseResult(string.Empty, null, "unreadable", Recognized: false);
+        }
+
+        var parsed = CodexJsonlUsageParser.Parse(raw);
+        if (!parsed.Recognized || string.IsNullOrEmpty(parsed.WorkerOutput))
+        {
+            return parsed;
+        }
+
+        try
+        {
+            if (!File.Exists(rawAuditPath))
+            {
+                File.Copy(standardOutputPath, rawAuditPath, overwrite: false);
+            }
+
+            File.WriteAllText(standardOutputPath, parsed.WorkerOutput, new UTF8Encoding(false));
+        }
+        catch (IOException)
+        {
+            // The process log remains authoritative when a lock or a competing replay prevents
+            // normalization. Parsed provider usage is still safe to attribute to this attempt.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Preserve the raw process log and continue recording the completion outcome.
+        }
+
+        return parsed;
+    }
+
+    private static CompleteLogReadResult ReadCompleteLog(string path)
+    {
+        try
+        {
+            return File.Exists(path)
+                ? new CompleteLogReadResult(File.ReadAllText(path), null)
+                : new CompleteLogReadResult(null, "missing");
+        }
+        catch (IOException)
+        {
+            return new CompleteLogReadResult(null, "unreadable");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new CompleteLogReadResult(null, "unreadable");
+        }
+    }
+
+    private sealed record CompleteLogReadResult(string? Content, string? UnavailableReason);
 
     private ProcessLogSnapshot ReadProcessLogFileBestEffort(string path, long length)
     {
