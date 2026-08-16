@@ -2330,7 +2330,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         var profiles = WorkerProfileCatalog.Default();
         Goal? currentGoal = null;
 
-        GoalReplacementEvidence.AfterFinalTransferValidation = _ =>
+        GoalCreationSideEffectDelivery.BeforeStateCommit = _ =>
             RunGit(root, "branch", GoalWorktrees.BranchName(predecessor.Id));
         InvalidOperationException exception;
         try
@@ -2352,7 +2352,7 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
         }
         finally
         {
-            GoalReplacementEvidence.AfterFinalTransferValidation = null;
+            GoalCreationSideEffectDelivery.BeforeStateCommit = null;
         }
 
         Xunit.Assert.Contains("GOAL_REPLACE_INELIGIBLE_DISPOSITION", exception.Message, StringComparison.Ordinal);
