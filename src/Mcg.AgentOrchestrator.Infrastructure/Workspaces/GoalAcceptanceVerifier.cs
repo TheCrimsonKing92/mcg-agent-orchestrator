@@ -8195,7 +8195,10 @@ public sealed class GoalAcceptanceVerifier : IGoalAcceptanceVerifier
                 // MTP formats theory arguments before writing them. Under an OEM console code page,
                 // Windows best-fit conversion irreversibly changes CJK and combining characters before
                 // capture, so decoding the resulting bytes cannot repair the discovery identity.
-                command = $"chcp 65001 > nul && {command}";
+                // Group the preflight with the child command so owned stdout/stderr redirections
+                // are opened before chcp runs. A failed preflight then returns its non-zero exit
+                // code and captured stderr instead of leaving the named-pipe readers unconnected.
+                command = $"(chcp 65001 > nul && {command})";
             }
             if (!string.IsNullOrWhiteSpace(stdoutRedirectTarget))
             {

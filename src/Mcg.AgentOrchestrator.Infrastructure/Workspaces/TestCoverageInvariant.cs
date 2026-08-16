@@ -461,15 +461,18 @@ internal static class TestCoverageInvariant
     private static string? FindClosestExecutedForm(string discovered, IReadOnlySet<string> completedTests)
     {
         var discoveredMethod = NormalizeMethodName(GetIdentityMethodName(discovered));
+        var discoveredClass = GetIdentityClassQualifier(discovered);
         if (string.IsNullOrWhiteSpace(discoveredMethod))
         {
             return null;
         }
 
         return completedTests
-            .Where(executed => NormalizeMethodName(GetIdentityMethodName(executed)).Equals(
-                discoveredMethod,
-                StringComparison.OrdinalIgnoreCase))
+            .Where(executed =>
+                IdentityClassQualifiersMatch(discoveredClass, GetIdentityClassQualifier(executed)) &&
+                NormalizeMethodName(GetIdentityMethodName(executed)).Equals(
+                    discoveredMethod,
+                    StringComparison.OrdinalIgnoreCase))
             .OrderBy(executed => EditDistance(discovered, executed))
             .ThenBy(executed => executed, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
@@ -534,6 +537,26 @@ internal static class TestCoverageInvariant
         var separatorIndex = Math.Max(normalized.LastIndexOf('.'), normalized.LastIndexOf(':'));
         return (separatorIndex >= 0 ? normalized[(separatorIndex + 1)..] : normalized).Trim();
     }
+
+    private static string GetIdentityClassQualifier(string identity)
+    {
+        var normalized = NormalizeIdentity(identity);
+        var argumentsIndex = normalized.IndexOf('(');
+        if (argumentsIndex >= 0)
+        {
+            normalized = normalized[..argumentsIndex];
+        }
+
+        var separatorIndex = Math.Max(normalized.LastIndexOf('.'), normalized.LastIndexOf(':'));
+        return separatorIndex > 0 ? normalized[..separatorIndex].Trim() : string.Empty;
+    }
+
+    private static bool IdentityClassQualifiersMatch(string left, string right) =>
+        !string.IsNullOrWhiteSpace(left) &&
+        !string.IsNullOrWhiteSpace(right) &&
+        (left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+         left.EndsWith($".{right}", StringComparison.OrdinalIgnoreCase) ||
+         right.EndsWith($".{left}", StringComparison.OrdinalIgnoreCase));
 
     private static string NormalizeMethodName(string methodName)
     {

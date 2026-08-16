@@ -106,12 +106,15 @@ public sealed class WorkerContextPackageTests
             "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café ?? e'\\0delimiter\\r\\n\")";
         const string executed =
             "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
+        const string closerButUnrelatedClass =
+            "W0rkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café ?? e'\\0delimiter\\r\\n\")";
         var trx = WriteCoverageTrx(executed);
+        var unrelatedTrx = WriteCoverageTrx(closerButUnrelatedClass);
         try
         {
             var result = TestCoverageInvariant.Evaluate(
                 new HashSet<string>([discovered], StringComparer.OrdinalIgnoreCase),
-                [new TestPartitionCoverage("focused", true, [trx])]);
+                [new TestPartitionCoverage("focused", true, [trx, unrelatedTrx])]);
 
             Assert.False(result.Passed);
             var mismatch = Assert.Single(result.IdentityMismatches!);
@@ -121,6 +124,7 @@ public sealed class WorkerContextPackageTests
         finally
         {
             File.Delete(trx);
+            File.Delete(unrelatedTrx);
         }
     }
 
@@ -130,11 +134,15 @@ public sealed class WorkerContextPackageTests
         var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
             ["dotnet", "tests.dll", "--list-tests", "json"],
             Path.GetTempPath(),
+            @"\\.\pipe\utf8-discovery-out",
+            @"\\.\pipe\utf8-discovery-err",
             forceUtf8ConsoleOutput: true);
 
         if (OperatingSystem.IsWindows())
         {
-            Assert.Contains("chcp 65001 > nul &&", startInfo.Arguments, StringComparison.Ordinal);
+            Assert.Contains("(chcp 65001 > nul &&", startInfo.Arguments, StringComparison.Ordinal);
+            Assert.Contains(") > ", startInfo.Arguments, StringComparison.Ordinal);
+            Assert.Contains("2> ", startInfo.Arguments, StringComparison.Ordinal);
         }
         else
         {
