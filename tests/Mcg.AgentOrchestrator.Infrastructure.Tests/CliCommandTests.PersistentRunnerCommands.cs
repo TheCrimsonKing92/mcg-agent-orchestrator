@@ -1471,10 +1471,45 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
 
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal", "--from-backlog"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsBacklogIntakeCommand(["goal", "--from-backlog"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsBacklogIntakeGoalCreationCommand(["goal", "--from-backlog"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsBacklogIntakeGoalCreationCommand(
+            ["backlog-intake", "slice", "--create-goal", "--backlog-coverage", "full"]));
+        Xunit.Assert.True(CliPersistentStateRunner.IsBacklogIntakeGoalCreationCommand(
+            ["backlog-intake", "slice", "--create-simple-goal", "--request-key", "key", "--backlog-coverage", "full"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsBacklogIntakeGoalCreationCommand(["backlog-intake", "slice"]));
+        Xunit.Assert.False(CliPersistentStateRunner.IsBacklogIntakeGoalCreationCommand(
+            ["backlog-intake", "slice", "--request-key", "preview-key"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command"]));
         Xunit.Assert.True(CliPersistentStateRunner.IsGoalCreateCommand(["simple-goal", "Sibling command", "--request-key", "key"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand(["goal-mark-landed", "abc"]));
         Xunit.Assert.False(CliPersistentStateRunner.IsGoalCreateCommand([]));
+    }
+
+    [Xunit.Fact]
+    public async Task BacklogIntakePreviewDoesNotRequireGoalCreationFinalizer()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync(
+            "Preview this backlog slice without creating a goal");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        var output = CaptureConsole(() => Xunit.Assert.False(
+            CliPersistentStateRunner.ExecuteCommand(
+                ["backlog-intake", item.Id],
+                repository,
+                workspace,
+                ref agents,
+                new InMemoryModelProviderRegistry([]),
+                ref profiles,
+                ref currentGoal)));
+
+        Xunit.Assert.Contains("Preview this backlog slice", output, StringComparison.Ordinal);
+        Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
+        Xunit.Assert.Empty(await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
     }
 
     [Xunit.Fact]

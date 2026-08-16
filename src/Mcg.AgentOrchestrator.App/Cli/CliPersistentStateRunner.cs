@@ -198,14 +198,14 @@ internal static class CliPersistentStateRunner
             return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
-        if (IsBacklogIntakeCommand(args) && HasRequestKey(args))
+        if (IsBacklogIntakeGoalCreationCommand(args))
         {
             return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
         if (IsBacklogIntakeCommand(args))
         {
-            return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
+            return ExecuteBacklogIntakeOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
 
         if (IsGoalCreateDeliveryRetryCommand(args))
@@ -660,8 +660,16 @@ internal static class CliPersistentStateRunner
         return args.Count > 0 &&
             (args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase) ||
              (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
-              args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))));
+               args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))));
     }
+
+    internal static bool IsBacklogIntakeGoalCreationCommand(IReadOnlyList<string> args) =>
+        IsBacklogIntakeCommand(args) &&
+        ((args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
+          args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))) ||
+         args.Any(arg =>
+             arg.Equals("--create-goal", StringComparison.OrdinalIgnoreCase) ||
+             arg.Equals("--create-simple-goal", StringComparison.OrdinalIgnoreCase)));
 
     internal static bool IsGoalCreateCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
@@ -671,11 +679,6 @@ internal static class CliPersistentStateRunner
 
     internal static bool IsGoalIntakeStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase);
-
-    private static bool HasRequestKey(IReadOnlyList<string> args) =>
-        args.Any(arg =>
-            arg.Equals("--request-key", StringComparison.OrdinalIgnoreCase) ||
-            arg.StartsWith("--request-key=", StringComparison.OrdinalIgnoreCase));
 
     internal static bool IsGoalReplacementCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("goal-replace", StringComparison.OrdinalIgnoreCase);
