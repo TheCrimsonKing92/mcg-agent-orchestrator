@@ -5500,17 +5500,11 @@ internal sealed class ConductorDriver
             return criteria.Select(FormatUnmetCriterion).ToArray();
         }
 
-        var cappedEvidence = concreteEvidence.Take(MaxCriterionRetryEvidenceLines).ToList();
-        if (concreteEvidence.Count > MaxCriterionRetryEvidenceLines)
-        {
-            cappedEvidence.Add($"... truncated {concreteEvidence.Count - MaxCriterionRetryEvidenceLines} acceptance evidence line(s)");
-        }
-
         var feedback = new List<string>
         {
             "Concrete acceptance failure evidence:",
         };
-        feedback.AddRange(cappedEvidence);
+        feedback.AddRange(concreteEvidence);
         feedback.Add("Acceptance criteria summary:");
         feedback.AddRange(criteria.Select(FormatUnmetCriterion));
         return feedback.ToArray();
@@ -5518,21 +5512,124 @@ internal sealed class ConductorDriver
 
     private static List<string> ExtractConcreteRetryEvidence(IReadOnlyList<AcceptanceCheckResult> criteria)
     {
-        var outputEvidence = criteria
-            .SelectMany(ExtractConcreteOutputEvidence)
-            .ToList();
-        if (outputEvidence.Count == 0)
+        var evidence = new List<string>();
+        var remainingEvidenceEntries = MaxCriterionRetryEvidenceLines;
+        foreach (var criterion in criteria.Where(criterion => !criterion.Passed))
         {
-            return [];
+            var outputEvidence = ExtractConcreteOutputEvidence(criterion).ToArray();
+            var testResultPaths = criterion.TestResultPaths?
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray() ?? [];
+
+            if (outputEvidence.Length == 0 && testResultPaths.Length == 0)
+            {
+                continue;
+            }
+
+            evidence.Add(FormatFailedCheckEvidence(criterion));
+
+            if (testResultPaths.Length == 0)
+            {
+                AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                evidence.Add($"detail unavailable: no TRX path was recorded for partition \"{criterion.Name}\"");
+                continue;
+            }
+
+            var fallbackAdded = false;
+            foreach (var testResultPath in testResultPaths)
+            {
+                var receipt = AcceptanceTrxFailureReader.Read(testResultPath);
+                if (receipt.Status != AcceptanceTrxReadStatus.Readable)
+                {
+                    if (!fallbackAdded)
+                    {
+                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        fallbackAdded = true;
+                    }
+
+                    var detail = string.IsNullOrWhiteSpace(receipt.Detail) ? string.Empty : $" ({receipt.Detail})";
+                    evidence.Add(
+                        $"detail unavailable: {DescribeTrxReadFailure(receipt.Status)} for partition \"{criterion.Name}\" at {receipt.Path}{detail}");
+                    continue;
+                }
+
+                evidence.Add($"TRX receipt for partition \"{criterion.Name}\": {receipt.Path}");
+                if (receipt.Failures.Count == 0)
+                {
+                    if (!fallbackAdded)
+                    {
+                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        fallbackAdded = true;
+                    }
+
+                    evidence.Add(
+                        $"detail unavailable: readable TRX for partition \"{criterion.Name}\" contained no non-passing results at {receipt.Path}");
+                    continue;
+                }
+
+                var omittedFailures = 0;
+                foreach (var failure in receipt.Failures)
+                {
+                    if (string.IsNullOrWhiteSpace(failure.TestName))
+                    {
+                        evidence.Add(
+                            $"detail unavailable: test identity unavailable for outcome \"{failure.Outcome}\" in partition \"{criterion.Name}\" at {receipt.Path}");
+                        continue;
+                    }
+
+                    if (remainingEvidenceEntries == 0)
+                    {
+                        omittedFailures++;
+                        continue;
+                    }
+
+                    evidence.Add(FormatTrxFailureEvidence(failure));
+                    remainingEvidenceEntries--;
+                }
+
+                if (omittedFailures > 0)
+                {
+                    evidence.Add($"{omittedFailures} more failures omitted — see {receipt.Path}.");
+                }
+            }
         }
 
-        var evidence = criteria
-            .Where(criterion => !criterion.Passed)
-            .Select(FormatFailedCheckEvidence)
-            .ToList();
-        evidence.AddRange(outputEvidence);
         return evidence;
     }
+
+    private static void AddBoundedOutputEvidence(
+        ICollection<string> evidence,
+        IReadOnlyList<string> outputEvidence,
+        ref int remainingEvidenceEntries)
+    {
+        var retainedCount = Math.Min(outputEvidence.Count, remainingEvidenceEntries);
+        for (var index = 0; index < retainedCount; index++)
+        {
+            evidence.Add(outputEvidence[index]);
+        }
+
+        remainingEvidenceEntries -= retainedCount;
+        if (retainedCount < outputEvidence.Count)
+        {
+            evidence.Add($"{outputEvidence.Count - retainedCount} more acceptance evidence entries omitted.");
+        }
+    }
+
+    private static string FormatTrxFailureEvidence(AcceptanceTrxFailure failure)
+    {
+        var message = string.IsNullOrEmpty(failure.Message) ? "failure message unavailable" : failure.Message;
+        var stackTrace = string.IsNullOrEmpty(failure.StackTrace) ? "stack trace unavailable" : failure.StackTrace;
+        return $"[FAIL] {failure.TestName} ({failure.Outcome}){Environment.NewLine}{message}{Environment.NewLine}{stackTrace}";
+    }
+
+    private static string DescribeTrxReadFailure(AcceptanceTrxReadStatus status) => status switch
+    {
+        AcceptanceTrxReadStatus.Missing => "no TRX exists",
+        AcceptanceTrxReadStatus.Unparseable => "TRX is unparseable",
+        AcceptanceTrxReadStatus.Unreadable => "TRX is unreadable",
+        _ => "no readable TRX"
+    };
 
     private static string FormatFailedCheckEvidence(AcceptanceCheckResult criterion) =>
         $"failed check: {criterion.Name} (exit code {criterion.ExitCode})";

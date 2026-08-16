@@ -1822,6 +1822,39 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             line.Contains("Passing MTP test is not surfaced", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "AcceptanceTrxFailureReader_preserves_full_nonpassing_evidence")]
+    public void AcceptanceTrxFailureReaderPreservesFullNonpassingEvidence()
+    {
+        var fixturePath = MtpFailureFixturePath();
+
+        var receipt = AcceptanceTrxFailureReader.Read(fixturePath);
+
+        Assert.Equal(AcceptanceTrxReadStatus.Readable, receipt.Status);
+        Assert.Equal(fixturePath, receipt.Path);
+        Assert.Equal(3, receipt.Failures.Count);
+        var assertion = receipt.Failures[0];
+        Assert.Equal(
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures",
+            assertion.TestName);
+        Assert.Equal(
+            "Assert.Contains() Failure: Sub-string not found\n" +
+            "String:    \"infrastructure tests: Cli: failed: 1\"\n" +
+            "Not found: \"RetryEvidenceTests.IncludesFailures\"\n" +
+            "Expected: 2\n" +
+            "Actual:   0",
+            assertion.Message);
+        Assert.Equal(
+            "at Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures() in D:\\a\\mcg-agent-orchestrator\\RetryEvidenceTests.cs:line 42",
+            assertion.StackTrace);
+        Assert.Equal(
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42)",
+            receipt.Failures[1].TestName);
+        Assert.Equal("Timeout", receipt.Failures[2].Outcome);
+        Assert.Contains("30 second partition timeout", receipt.Failures[2].Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(receipt.Failures, failure =>
+            failure.TestName?.Contains("Passing MTP test is not surfaced", StringComparison.Ordinal) == true);
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failed_mtp_shard_surfaces_fixture_test_names_and_messages")]
     public async Task GoalAcceptanceVerifierFailedMtpShardSurfacesFixtureTestNamesAndMessages()
     {
