@@ -8084,7 +8084,12 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.False(args.Any(arg => arg.Equals("--disable-build-servers", StringComparison.Ordinal)));
         Assert.False(args.Any(arg => arg.Equals("-p:UseSharedCompilation=false", StringComparison.Ordinal)));
         Assert.True(args.Any(arg => arg.StartsWith("-maxcpucount:", StringComparison.Ordinal) && !arg.Equals("-maxcpucount:1", StringComparison.Ordinal)));
-        Assert.Contains("mcg-dotnet-isolated", GetArtifactsPath(args), StringComparison.Ordinal);
+        var isolatedRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
+        Assert.False(string.IsNullOrWhiteSpace(isolatedRoot));
+        Assert.True(
+            Path.GetFullPath(GetArtifactsPath(args)).StartsWith(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(isolatedRoot)) + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     private static string GetArtifactsPath(string[] args)
