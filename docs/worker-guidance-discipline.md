@@ -49,6 +49,37 @@ reasoning about a concrete artifact rather than parsing an abstract requirement.
 Maintain the exemplars deliberately. When a role produces an unusually good record, cite it by
 path in the next brief that needs the same shape.
 
+## Retry feedback and brief text are not interchangeable
+
+**If a correction fails twice through retry feedback, move it into the brief.** Do not reword it
+a third time.
+
+Worked A/B, same requirement, 2026-08-15/16. Goal `15c4a259` was rejected four times with
+`acceptance criterion mapping is incomplete: criterion 5 is unmapped`. The Planner had judged the
+criterion operator-owned — correctly — and said so in prose each round rather than emitting a
+mapping entry. Three operator corrections through retry feedback failed, including one supplying
+the literal `disposition=undecidable` syntax with its three required fields.
+
+The goal was cancelled and re-filed as `da7a1747` with one change: the criterion now states its
+own mapping form inline in the brief.
+
+    5. OPERATOR-OWNED, NOT WORKER-SATISFIABLE. ...
+       **Planner: map this as `disposition=undecidable` with `would-settle`, `required-source`
+       and `unavailable-because`, as a numbered entry in the mapping list.** Prose outside the
+       list reads to the contract as unmapped.
+
+The re-intaken goal `70eebe35` passed the contract on its Planner's **first attempt**.
+
+The mechanism is worth understanding rather than memorising: a Planner plans against the brief.
+Retry feedback arrives as a correction to a plan it has already reasoned out, and a worker that
+believes its analysis is right — as this one was — will preserve the analysis and adjust around
+the correction. The brief is the input; feedback is commentary on the output. Requirements belong
+in the input.
+
+Cost of learning this the slow way: four contract rejections, three operator rounds, an
+irreversible mis-waive on a safety constraint while trying to bypass the problem, and a cancelled
+goal.
+
 ## Corollaries
 
 **State the mechanism, not the property.** "Durable" is an adjective; "persisted to the outbox,

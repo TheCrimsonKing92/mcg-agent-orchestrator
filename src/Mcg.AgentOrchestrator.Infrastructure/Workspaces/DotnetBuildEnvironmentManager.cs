@@ -2446,6 +2446,8 @@ public static class DotnetBuildEnvironmentManager
 public sealed class DotnetBuildEnvironmentLease : IDisposable
 {
     private readonly FileStream _stream;
+    private readonly object _releaseObserverGate = new();
+    private Action? _executionLockReleaseObserver;
     private int _state;
 
     internal DotnetBuildEnvironmentLease(DotnetBuildEnvironment environment, FileStream stream)
@@ -2469,6 +2471,26 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
         ReleaseExecutionLockCore();
     }
 
+    internal void RegisterExecutionLockReleaseObserver(Action observer)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+
+        lock (_releaseObserverGate)
+        {
+            if (_state != 0)
+            {
+                throw new InvalidOperationException("The execution lock has already been released.");
+            }
+
+            if (_executionLockReleaseObserver is not null)
+            {
+                throw new InvalidOperationException("An execution lock release observer is already registered.");
+            }
+
+            _executionLockReleaseObserver = observer;
+        }
+    }
+
     public void Dispose()
     {
         ReleaseExecutionLockCore();
@@ -2488,6 +2510,22 @@ public sealed class DotnetBuildEnvironmentLease : IDisposable
         finally
         {
             _stream.Dispose();
+        }
+
+        Action? observer;
+        lock (_releaseObserverGate)
+        {
+            observer = _executionLockReleaseObserver;
+            _executionLockReleaseObserver = null;
+        }
+
+        try
+        {
+            observer?.Invoke();
+        }
+        catch
+        {
+            // Permit-release telemetry is advisory and cannot alter gate disposition.
         }
     }
 }

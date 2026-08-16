@@ -8,6 +8,8 @@ using Microsoft.Data.Sqlite;
 [Xunit.Collection(TestCollections.GoalWorktreeCleanupHooks)]
 public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
 {
+    private static readonly Lazy<byte[]> MigratedStateTemplate = new(CreateMigratedStateTemplate);
+
     [Fact]
     public void DeveloperDispatchIntegration_CleanDivergence_MergesMainAndLeavesGoalWorktreeClean()
     {
@@ -805,7 +807,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     [Fact]
     public void ProductionRed_RunsBothPartitions_AndClassifiesInteraction()
     {
-        var repo = CreateAcceptanceCohortRepository();
+        var repo = CreateReducedAcceptanceCohortRepository();
         try
         {
             AddAcceptanceManifest(repo);
@@ -884,7 +886,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     [Fact]
     public void ProductionRed_OneFailedMember_RequeuesGreenPeer()
     {
-        var repo = CreateAcceptanceCohortRepository();
+        var repo = CreateReducedAcceptanceCohortRepository();
         try
         {
             AddAcceptanceManifest(repo);
@@ -1125,7 +1127,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     [Fact]
     public void ProductionBatch_SelectsRunsPersistsLandsAndCleansOneSharedCohort()
     {
-        var repo = CreateAcceptanceCohortRepository();
+        var repo = CreateReducedAcceptanceCohortRepository();
         var trx = Path.Combine(Path.GetTempPath(), $"cohort-production-{Guid.NewGuid():N}.trx");
         var previousIsolatedRoot = Environment.GetEnvironmentVariable(
             DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
@@ -1307,7 +1309,7 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
     [Fact]
     public void RetryableLandingHold_PreservesPassingReceipt_AndLaterRelandsIdenticalState()
     {
-        var repo = CreateAcceptanceCohortRepository();
+        var repo = CreateReducedAcceptanceCohortRepository();
         try
         {
             AddAcceptanceManifest(repo);
@@ -1652,6 +1654,48 @@ public sealed class AcceptanceCohortWorkflowTests : GoalWorktreeTestBase
         var repo = CreateSeededRepository();
         RunGit(repo, "branch", "-M", "main");
         return repo;
+    }
+
+    private static string CreateReducedAcceptanceCohortRepository()
+    {
+        var tempRoot = OperatingSystem.IsWindows()
+            ? Path.Combine(FindCurrentSourceRoot(), ".scratch", "mcg-wt")
+            : Path.Combine(Path.GetTempPath(), "mcg-worktree-tests");
+        var repo = Path.Combine(tempRoot, Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(repo);
+        RunGit(repo, "init");
+        RunGit(repo, "config", "user.email", "tests@example.com");
+        RunGit(repo, "config", "user.name", "Worktree Tests");
+        File.AppendAllText(
+            Path.Combine(repo, ".git", "info", "exclude"),
+            ".orchestrator/" + Environment.NewLine);
+        File.WriteAllText(Path.Combine(repo, "seed.txt"), "seed");
+        RunGit(repo, "add", "-A");
+        RunGit(repo, "commit", "-m", "Seed");
+        RunGit(repo, "branch", "-M", "main");
+
+        var statePath = OrchestratorWorkspace.ForDirectory(repo).SqliteStatePath;
+        Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
+        File.WriteAllBytes(statePath, MigratedStateTemplate.Value);
+        return repo;
+    }
+
+    private static byte[] CreateMigratedStateTemplate()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"mcg-state-template-{Guid.NewGuid():N}");
+        var statePath = Path.Combine(root, "state.db");
+        try
+        {
+            _ = CreateMigratedStateRepository(statePath);
+            if (!StateDbMigrations.IsUpToDate(statePath))
+                throw new InvalidOperationException("The reduced acceptance fixture state template is not fully migrated.");
+
+            return File.ReadAllBytes(statePath);
+        }
+        finally
+        {
+            DeleteDirectory(root);
+        }
     }
 
     private static void AssertNoCohortWorkspaces(string repo)

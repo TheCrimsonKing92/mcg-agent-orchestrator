@@ -2177,16 +2177,22 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
         var kernel = new AgentOrchestratorKernel();
         var goal = CreateVerifiedSimpleGoal(kernel, "Update src/Mcg.AgentOrchestrator.App/Orchestration/LeaseEvents.cs");
         var attemptRoot = CreateTempDirectory("mcg-conductor-acceptance-attempts");
+        var clock = new RecordingTimeProvider();
 
         try
         {
             var driver = MakeDriver(
                 getFacts: _ => new GoalLifecycleFacts(WorkspaceExists: true),
-                runAcceptanceWithSlot: (_, _) => AcceptanceVerificationSummary.PassedWithNoUnmetCriteria,
+                runAcceptanceWithSlot: (_, _) =>
+                {
+                    clock.Advance(TimeSpan.FromMilliseconds(1234));
+                    return AcceptanceVerificationSummary.PassedWithNoUnmetCriteria;
+                },
                 getLandingFileScopes: _ => ["src/Mcg.AgentOrchestrator.App/Orchestration/LeaseEvents.cs"],
                 parallelAcceptanceAttemptCoordinator: new ConductorParallelAcceptanceAttemptCoordinator(
                     attemptRoot,
-                    runInline: true));
+                    runInline: true,
+                    timeProvider: clock));
 
             new ConductorBatchLoop(conductEventLogWriter: writer).Run(
                 kernel,
@@ -2199,14 +2205,36 @@ public sealed class ConductorBatchLoopTestsParallelAcceptance : ConductorBatchLo
                 .Select(line => JsonSerializer.Deserialize<ConductEventRecord>(line, new JsonSerializerOptions(JsonSerializerDefaults.Web))!)
                 .ToArray();
 
-            Assert.Contains(records, record =>
+            var acquire = Assert.Single(records, record =>
                 record.EventKind == "acceptance-lease" &&
                 record.GoalId == goal.Id.Value[..8] &&
                 record.Detail.Contains("ACCEPTANCE_LEASE_ACQUIRE", StringComparison.Ordinal));
-            Assert.Contains(records, record =>
+            var permitRelease = Assert.Single(records, record =>
                 record.EventKind == "acceptance-lease" &&
                 record.GoalId == goal.Id.Value[..8] &&
-                record.Detail.Contains("ACCEPTANCE_LEASE_RELEASE", StringComparison.Ordinal));
+                record.Detail.Contains("ACCEPTANCE_LEASE_PERMIT_RELEASE", StringComparison.Ordinal));
+            var terminalRelease = Assert.Single(records, record =>
+                record.EventKind == "acceptance-lease" &&
+                record.GoalId == goal.Id.Value[..8] &&
+                string.Equals(
+                    record.Detail.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault(),
+                    "ACCEPTANCE_LEASE_RELEASE",
+                    StringComparison.Ordinal));
+
+            static string ReadToken(ConductEventRecord record, string token) =>
+                Assert.Single(
+                    record.Detail.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+                    part => part.StartsWith($"{token}=", StringComparison.Ordinal))[(token.Length + 1)..];
+
+            Assert.Equal(ReadToken(acquire, "goal"), ReadToken(permitRelease, "goal"));
+            Assert.Equal(ReadToken(acquire, "attempt"), ReadToken(permitRelease, "attempt"));
+            Assert.Equal(ReadToken(acquire, "permit"), ReadToken(permitRelease, "permit"));
+            Assert.Equal(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), ReadToken(permitRelease, "holderPid"));
+            Assert.Equal("execution-lock", ReadToken(permitRelease, "releaseKind"));
+            Assert.Equal("1234", ReadToken(permitRelease, "heldMs"));
+            Assert.DoesNotContain("releaseKind=", terminalRelease.Detail, StringComparison.Ordinal);
+            Assert.DoesNotContain("heldMs=", terminalRelease.Detail, StringComparison.Ordinal);
+            Assert.True(Array.IndexOf(records, permitRelease) < Array.IndexOf(records, terminalRelease));
         }
         finally
         {

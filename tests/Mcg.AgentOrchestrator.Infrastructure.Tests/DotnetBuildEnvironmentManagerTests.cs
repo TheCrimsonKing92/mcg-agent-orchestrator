@@ -1721,6 +1721,63 @@ public sealed class DotnetBuildEnvironmentManagerTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_execution_lock_release_observer_runs_once_after_permit_release")]
+    public void DotnetBuildEnvironmentManagerExecutionLockReleaseObserverRunsOnceAfterPermitRelease()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        var notifications = 0;
+        bool? permitAvailableDuringNotification = null;
+        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => { };
+        try
+        {
+            var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero)).Lease;
+            lease.RegisterExecutionLockReleaseObserver(() =>
+            {
+                permitAvailableDuringNotification =
+                    DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0);
+                notifications++;
+            });
+
+            lease.ReleaseExecutionLock();
+            lease.ReleaseExecutionLock();
+            lease.Dispose();
+
+            Assert.True(permitAvailableDuringNotification);
+            Assert.Equal(1, notifications);
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+                AssemblyBuildServerShutdownIsolation.SafeDefault;
+        }
+    }
+
+    [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_execution_lock_release_observer_is_advisory")]
+    public void DotnetBuildEnvironmentManagerExecutionLockReleaseObserverIsAdvisory()
+    {
+        using var _ = EnvVarScope.ForIsolatedDotnetRoot();
+        var environment = DotnetBuildEnvironmentManager.CreateStableSlotAttempt(0);
+        DotnetBuildEnvironmentManager.ShutdownBuildServersForTests = () => { };
+        try
+        {
+            var lease = Assert.IsType<DotnetBuildLeaseAcquisition.Acquired>(
+                DotnetBuildEnvironmentManager.TryAcquireLeaseExecutionLock(environment, TimeSpan.Zero)).Lease;
+            lease.RegisterExecutionLockReleaseObserver(() => throw new InvalidOperationException("telemetry failed"));
+
+            var exception = Record.Exception(lease.ReleaseExecutionLock);
+
+            Assert.Null(exception);
+            Assert.True(DotnetBuildEnvironmentManager.IsStableSlotExecutionLeaseAvailable(0));
+        }
+        finally
+        {
+            DotnetBuildEnvironmentManager.ShutdownBuildServersForTests =
+                AssemblyBuildServerShutdownIsolation.SafeDefault;
+        }
+    }
+
     [Xunit.Fact(DisplayName = "DotnetBuildEnvironmentManager_dispose_shuts_down_build_servers_before_releasing_permit")]
     public void DotnetBuildEnvironmentManagerDisposeShutsDownBuildServersBeforeReleasingPermit()
     {
