@@ -1616,6 +1616,49 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
+    public async Task GoalPlan_slice_batch_enqueues_refinement_for_every_dormant_goal()
+    {
+        const string plannerOutput = """
+            ```json
+            [{"id":"g1","objective":"Implement feature A.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureA/A.cs","dependsOn":[]},{"id":"g2","objective":"Implement feature B.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureB/B.cs","dependsOn":[]},{"id":"g3","objective":"Implement feature C.\n\nTarget files/scopes:\nScope confidence: precise\nIncludes:\n- src/FeatureC/C.cs","dependsOn":[]}]
+            ```
+            """;
+        var root = CreateTempDirectory();
+        var workspace = OrchestratorWorkspace.ForDirectory(root);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        var plannerAgent = new AgentDefinition(
+            AgentId.New(),
+            "Test-Planner",
+            AgentRole.Planner,
+            new ModelProfile("Fake", "fake-plan-model", ModelCapability.Text, SubscriptionMode.ApiKey),
+            ExecutionPolicy: AgentExecutionPolicy.ApiOnly);
+        IReadOnlyList<AgentDefinition> agents = [plannerAgent];
+        var providers = new InMemoryModelProviderRegistry([
+            new FakeSmokeProvider(plannerOutput, providerName: "Fake")
+        ]);
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        _ = CaptureConsole(() => CliPersistentStateRunner.ExecuteCommand(
+            ["plan", "Implement three disjoint feature slices", "--slice-batch", "--confirm-plan"],
+            repository,
+            workspace,
+            ref agents,
+            providers,
+            ref profiles,
+            ref currentGoal));
+
+        var stored = await repository.LoadAsync();
+        Xunit.Assert.Equal(4, stored.Goals.Count);
+        Xunit.Assert.All(stored.Goals, goal =>
+            Xunit.Assert.True(GoalRefinementWorkCoordinator.HasPendingWork(goal)));
+        var refinementMessages = await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind);
+        Xunit.Assert.Equal(
+            stored.Goals.Select(goal => GoalRefinementWorkCoordinator.MessageId(goal.Id)).Order(),
+            refinementMessages.Select(message => message.Id).Order());
+    }
+
+    [Xunit.Fact]
     public async Task GoalIntake_keyed_backlog_replay_keeps_atomic_goal_binding()
     {
         var root = CreateTempDirectory();

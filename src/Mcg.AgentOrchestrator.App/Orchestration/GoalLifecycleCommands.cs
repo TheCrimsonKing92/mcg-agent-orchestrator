@@ -154,7 +154,9 @@ internal static class GoalLifecycleCommands
     {
         var plan = GoalObjectivePlanner.Build(objective, pipeline, kernel.BuildTaskDurationStats());
         GoalObjectivePlanner.ThrowIfBlocked(plan);
-        return CreateGoalFromPlan(kernel, plan, sliceBatchParentId);
+        var goal = CreateGoalFromPlan(kernel, plan, sliceBatchParentId);
+        GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
+        return goal;
     }
 
     public static Goal CreateActivateAndHandoffGoal(

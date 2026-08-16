@@ -188,6 +188,7 @@ public sealed class GoalDagPlanTests
             Assert.Equal(GoalStatus.Draft, goal.Status);
             Assert.Empty(goal.DependsOn);
             Assert.All(goal.Tasks, task => Assert.Null(task.AssignedAgentId));
+            Assert.True(GoalRefinementWorkCoordinator.HasPendingWork(goal));
         });
         Assert.All(children, child => Assert.Equal(AgentRole.Developer, Assert.Single(child.Tasks).RequiredRole));
 
