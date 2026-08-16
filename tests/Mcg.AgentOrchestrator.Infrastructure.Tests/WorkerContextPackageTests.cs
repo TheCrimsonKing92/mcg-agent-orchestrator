@@ -151,6 +151,86 @@ public sealed class WorkerContextPackageTests
     }
 
     [Xunit.Fact]
+    public async Task Utf8DiscoveryCapturePreservesUnicodeBytesThroughOwnedNamedPipes()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        const string expectedIdentity =
+            "WorkerContextPackageTests.InlineFullRecoversExactUtf8Bytes(content: \"non-ASCII café 漢字 e\u0301\\0delimiter\\r\\n\")";
+        var stdoutPipeName = $"mcg-utf8-discovery-{Guid.NewGuid():N}-out";
+        var stderrPipeName = $"mcg-utf8-discovery-{Guid.NewGuid():N}-err";
+        await using var stdoutPipe = new System.IO.Pipes.NamedPipeServerStream(
+            stdoutPipeName,
+            System.IO.Pipes.PipeDirection.In,
+            1,
+            System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous);
+        await using var stderrPipe = new System.IO.Pipes.NamedPipeServerStream(
+            stderrPipeName,
+            System.IO.Pipes.PipeDirection.In,
+            1,
+            System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous);
+        var stdoutConnection = stdoutPipe.WaitForConnectionAsync();
+        var stderrConnection = stderrPipe.WaitForConnectionAsync();
+        var stdoutDrain = ConnectAndReadAsync(stdoutPipe, stdoutConnection);
+        var stderrDrain = ConnectAndReadAsync(stderrPipe, stderrConnection);
+        var startInfo = GoalAcceptanceVerifier.BuildAcceptanceProcessStartInfo(
+            [
+                "dotnet",
+                typeof(WorkerContextPackageTests).Assembly.Location,
+                "--no-ansi",
+                "--progress",
+                "off",
+                "--list-tests",
+                "json",
+                "--filter-class",
+                "*WorkerContextPackageTests*"
+            ],
+            Path.GetDirectoryName(typeof(WorkerContextPackageTests).Assembly.Location)!,
+            $@"\\.\pipe\{stdoutPipeName}",
+            $@"\\.\pipe\{stderrPipeName}",
+            forceUtf8ConsoleOutput: true);
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start UTF-8 discovery capture process.");
+        try
+        {
+            await Task.WhenAll(stdoutConnection, stderrConnection)
+                .WaitAsync(TimeSpan.FromSeconds(30));
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(10));
+            var captures = await Task.WhenAll(stdoutDrain, stderrDrain)
+                .WaitAsync(TimeSpan.FromSeconds(30));
+
+            Xunit.Assert.True(
+                process.ExitCode == 0,
+                $"Discovery exited {process.ExitCode}: {Encoding.UTF8.GetString(captures[1])}");
+            var output = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(captures[0]);
+            var discovery = TestCoverageInvariant.ParseDiscovery(output, bareTestList: true);
+            Xunit.Assert.Contains(expectedIdentity, discovery.Tests);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+
+        static async Task<byte[]> ConnectAndReadAsync(Stream pipe, Task connection)
+        {
+            await connection;
+            using var capture = new MemoryStream();
+            await pipe.CopyToAsync(capture);
+            return capture.ToArray();
+        }
+    }
+
+    [Xunit.Fact]
     public void InlineFullUsesBase64ForInvalidUtf8WithoutChangingBytes()
     {
         byte[] bytes = [0xff, 0x00, 0xc3, 0x28, 0x0a];
