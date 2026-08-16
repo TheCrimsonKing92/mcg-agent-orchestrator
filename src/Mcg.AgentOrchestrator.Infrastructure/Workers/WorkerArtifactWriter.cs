@@ -700,8 +700,7 @@ internal sealed class WorkerArtifactWriter
                     lines.Add(resolution.Plan);
                     lines.Add(string.Empty);
                     lines.Add("### Planner WORKER_RESULT Receipt");
-                    lines.Add(verification.AuthoritativeStandardOutput ??
-                        $"[authoritative stdout unavailable: {verification.FullStandardOutputUnavailableReason ?? "unknown"}]");
+                    lines.Add(ResolveAuthoritativeStandardOutputOrUnavailable(verification));
                 }
                 else
                 {
@@ -712,8 +711,7 @@ internal sealed class WorkerArtifactWriter
             else
             {
                 lines.Add("### Stdout");
-                lines.Add(verification.AuthoritativeStandardOutput ??
-                    $"[authoritative stdout unavailable: {verification.FullStandardOutputUnavailableReason ?? "unknown"}]");
+                lines.Add(ResolveAuthoritativeStandardOutputOrUnavailable(verification));
             }
 
             if (!string.IsNullOrWhiteSpace(verification.AuthoritativeStandardError))
@@ -729,6 +727,12 @@ internal sealed class WorkerArtifactWriter
 
         return string.Join(Environment.NewLine, lines);
     }
+
+    private static string ResolveAuthoritativeStandardOutputOrUnavailable(TaskVerificationRecord verification) =>
+        verification.AuthoritativeStandardOutput ??
+        (WorkerVerificationEvidence.TryRecoverLegacySnapshotStandardOutput(verification, out var recoveredOutput)
+            ? recoveredOutput
+            : $"[authoritative stdout unavailable: {verification.FullStandardOutputUnavailableReason ?? "unknown"}]");
 
     private static IReadOnlyDictionary<TaskId, DurablePlannerPlanResolution> ResolveDurablePlannerPlans(
         IReadOnlyList<TaskSpec> goalTasks,

@@ -2821,11 +2821,8 @@ public static class WorkerProfileDispatcher
 
     private static string RequireAuthoritativeOutput(
         TaskVerificationRecord verification,
-        LogicalArtifactIdentity identity) => verification.AuthoritativeStandardOutput
-        ?? throw new WorkerContextPreparationException(
-            identity,
-            verification.FullStandardOutputUnavailableReason ?? "authoritative-evidence-unavailable",
-            "Complete stdout is unavailable; the bounded verification preview is not authoritative evidence.");
+        LogicalArtifactIdentity identity) =>
+        WorkerVerificationEvidence.RequireAuthoritativeStandardOutput(verification, identity);
 
     private static RegistryArtifactSource ClassifyRegistryArtifact(string path) =>
         RegistryArtifactSources.TryGetValue(path, out var source)

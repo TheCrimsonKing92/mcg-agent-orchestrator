@@ -35,11 +35,9 @@ public static partial class WorkerCommandTemplate
             lines.Add(string.Empty);
             lines.Add("### Authoritative Verification Evidence");
             var identity = new LogicalArtifactIdentity($"prior/{priorTask.Id.Value}/verification-output");
-            var authoritativeOutput = priorTask.LastVerification.AuthoritativeStandardOutput
-                ?? throw new WorkerContextPreparationException(
-                    identity,
-                    priorTask.LastVerification.FullStandardOutputUnavailableReason ?? "authoritative-evidence-unavailable",
-                    "Complete prior-task stdout is unavailable; a bounded preview cannot back a compatibility pointer.");
+            var authoritativeOutput = WorkerVerificationEvidence.RequireAuthoritativeStandardOutput(
+                priorTask.LastVerification,
+                identity);
             var authoritativeBytes = Encoding.UTF8.GetBytes(authoritativeOutput);
             var materializationPath = $".orchestrator-context/legacy-handoff/{priorTask.Id.Value}/verification-output.bin";
             var absoluteMaterializationPath = Path.Combine(
