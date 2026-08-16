@@ -129,6 +129,49 @@ Motivating incidents: goal `6987f4eb` stabilized the flaky ProgressiveReviewStee
 
 **Enforcement (the point of this section — prevention, not cleanup):** these rules only hold if they are checked mechanically. Add a lint/analyzer that fails the build on: `Process.Start`/`Process.Kill`/`Process.GetProcesses`/`Process.GetProcessById` used directly in test code, `Thread.Sleep`/`Task.Delay` used as synchronization, assertions over `Stopwatch`/`DateTime.Now`/`DateTimeOffset.UtcNow`, and test classes touching `GitCli` or a real DB without an explicit serial-collection marker or documented isolation. For (m), `WorkerProcessJobs_test_sources_reject_negative_wait_assertions` now fails on `Assert.False` wrapping any `WaitForExit`/`WaitForExitAsync`/`SpinUntil`/`Wait`, since a negative assertion over a wait bound is always the false-green shape. The other half needs a heuristic rather than a rule: flag any test method that both assigns a bound constant consumed by the code under test (`budgetSeconds`, `TimeoutSeconds`, a `Deadline`) and asserts on `File.Exists`/`Directory.Exists` for a path handed to a spawned process, and require the author to say which side of the race the artifact is on. For (k), the check is cheap enough to write first: a test that reflects over the test assemblies and fails on any method identifier longer than 80 characters, on a `DisplayName` that collapses to its own method name, and on a `DisplayName` that repeats its declaring class. Ratchet it with a frozen baseline of today's outliers that may only shrink, so the rule binds on new tests immediately instead of waiting for a full rename. Until the remaining analyzer coverage exists, the Reviewer checklist below is the enforcement.
 
+## A test wrapper that exists to avoid a deadlock is an API defect, not a test fix
+
+**(o) If a test needs a wrapper to keep the production API from deadlocking, the API has the
+wrong shape.** The wrapper is the test compensating for a design fault, and it costs fidelity at
+exactly the point the behaviour is most delicate.
+
+Worked example, goal `69f78bdd`, 2026-08-16. `GoalRefinementTests` produced `output_bytes=0` for
+571 seconds across 72 focused-evidence runs — a hang, not a failure, so `tests_executed` came back
+`unknown` and no round could surface it as red. Cause: `GoalRefinementGate.EnsureRefined` is
+synchronous over an asynchronous provider call
+(`GoalRefinementGate.cs:47`, `service.RefineAsync(...).GetAwaiter().GetResult()`). Under xUnit's
+`SynchronizationContext` the blocking call owns the context, so the continuation delivering the
+provider response can never run.
+
+The accepted fix wraps the call in `Task.Run` and bounds every wait. That is correct for the
+round and the hang is genuinely gone. But note what the test now exercises: *calling a blocking
+API from a threadpool thread* — a shape **no production caller uses**. The test can no longer
+catch a regression in the hold-then-release behaviour it nominally covers, because it is not
+driving the production sequence.
+
+Diagnostic questions, in order:
+
+1. Does any production caller invoke this the way the test must? If no, the test is measuring the
+   wrapper.
+2. Does the API do more than its name says? `EnsureRefined` is three operations — a cheap query
+   (is a spec attached), a mutation (sync operator answers into the spec), and a paid provider
+   call that can block for the full refinement timeout. A caller cannot tell from the call site
+   which it is getting.
+3. Is it safe only by accident? Console hosts and ASP.NET Core install no `SynchronizationContext`,
+   so this cannot deadlock in production today. That is a property of the current hosting model,
+   not of the design, and nothing in the code records the dependency.
+
+The structural fix is to split by intent so the gate cannot block: a pure predicate for "is the
+spec attached", answer-sync as its own deliberate step, and attachment owned by the durable
+coordinator. Callers then hold the task instead of waiting on a thread — which is the
+`consumers_held=true` semantic already recorded in the coordinator's receipt, currently implicit
+in a blocked thread and therefore unassertable. The test becomes enqueue, assert held, pump the
+coordinator, assert attached: no wrapper, and the same sequence the conductor drives.
+
+Corollary: **prefer bounding a wait to removing it, but treat a bound as a hang detector rather
+than a fix.** Bounded waits turn a hang into a red, which is necessary and not sufficient. A test
+that still needs a bound to be safe is still describing an API that can block indefinitely.
+
 ## Cross-Tick Conductor Tests
 
 Use the held-attempt cross-tick fixture only for invariants that are cross-tick by nature: counters, markers, live attempts, deferral bookkeeping, and requeue state that must survive a tick boundary. It is never for convenience and never a substitute for a narrower single-tick unit test. Every such test must carry the `CrossTick` category and a 30-second timeout as a hang detector; assert ordering and state, never elapsed time. `ParallelAcceptanceFairness_LiveOldest_AllowsDeclaredCapacityAcrossTicks` is the worked example. Follow-on coverage for post-loop-stop auto-requeue (`0b81147a`), recovery-marker clearing, stale-dispatch escalation recovery, and the max-duration handoff/rebuild race belongs with each corresponding fix rather than in this harness slice.

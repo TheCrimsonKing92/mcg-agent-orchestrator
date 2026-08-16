@@ -242,7 +242,13 @@ public enum FindingEvidenceNotHonouredReason
     ExecutorUnavailable,
     SelectionApparatusFailure,
     RunFailed,
-    SupersededByActionableRed
+    SupersededByActionableRed,
+
+    // Retired: no longer produced, but 598 persisted findings across 14 goals carry it. The
+    // repository's serializer options register JsonStringEnumConverter, which outranks the
+    // type-level converter below, so an unrecognised name throws instead of reading as Unknown.
+    // Appended last so existing ordinals are unchanged.
+    PerRoundCap
 }
 
 public sealed class FindingEvidenceNotHonouredReasonJsonConverter : JsonConverter<FindingEvidenceNotHonouredReason>
@@ -257,7 +263,8 @@ public sealed class FindingEvidenceNotHonouredReasonJsonConverter : JsonConverte
             ["executor-unavailable"] = FindingEvidenceNotHonouredReason.ExecutorUnavailable,
             ["selection-apparatus-failure"] = FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
             ["run-failed"] = FindingEvidenceNotHonouredReason.RunFailed,
-            ["superseded-by-actionable-red"] = FindingEvidenceNotHonouredReason.SupersededByActionableRed
+            ["superseded-by-actionable-red"] = FindingEvidenceNotHonouredReason.SupersededByActionableRed,
+            ["per-round-cap"] = FindingEvidenceNotHonouredReason.PerRoundCap
         };
 
     public override FindingEvidenceNotHonouredReason Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
@@ -277,6 +284,7 @@ public sealed class FindingEvidenceNotHonouredReasonJsonConverter : JsonConverte
         FindingEvidenceNotHonouredReason.SelectionApparatusFailure => "selection-apparatus-failure",
         FindingEvidenceNotHonouredReason.RunFailed => "run-failed",
         FindingEvidenceNotHonouredReason.SupersededByActionableRed => "superseded-by-actionable-red",
+        FindingEvidenceNotHonouredReason.PerRoundCap => "per-round-cap",
         _ => "unknown"
     };
 }

@@ -222,6 +222,106 @@ public sealed class AcceptanceGateEngineSettingsTests
         }
     }
 
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_checked_in_lanes_partition_every_runnable_class")]
+    public void AcceptanceGateEngineCheckedInLanesPartitionEveryRunnableClass()
+    {
+        var settings = AcceptanceGateEngineSettings.Load(InfrastructureTestSupport.FindRepositoryRoot());
+        var runnableClasses = typeof(AcceptanceGateEngineSettingsTests).Assembly
+            .GetTypes()
+            .Where(IsRunnableTestClass)
+            .OrderBy(type => type.FullName, StringComparer.Ordinal)
+            .ToArray();
+
+        AssertLanePartitionInvariants(settings, runnableClasses);
+    }
+
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_lane_partition_rejects_duplicate_assignment")]
+    public void AcceptanceGateEngineLanePartitionRejectsDuplicateAssignment()
+    {
+        var error = CaptureLanePartitionFailure(
+            """
+            {
+              "version": 1,
+              "engine": {
+                "infrastructureTestLanes": [
+                  { "name": "first", "filter": "FullyQualifiedName~AcceptanceGateEngineSettingsTests" },
+                  { "name": "second", "filter": "FullyQualifiedName~AcceptanceGateEngineSettingsTests" }
+                ]
+              }
+            }
+            """,
+            [typeof(AcceptanceGateEngineSettingsTests)]);
+
+        Xunit.Assert.Contains("assigned to multiple acceptance lanes", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("AcceptanceGateEngineSettingsTests", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("first, second", error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_lane_partition_rejects_unassigned_class")]
+    public void AcceptanceGateEngineLanePartitionRejectsUnassignedClass()
+    {
+        var error = CaptureLanePartitionFailure(
+            """
+            {
+              "version": 1,
+              "engine": {
+                "infrastructureTestLanes": [
+                  { "name": "other", "filter": "FullyQualifiedName~GoalAcceptanceVerifierTests" }
+                ]
+              }
+            }
+            """,
+            [typeof(AcceptanceGateEngineSettingsTests)]);
+
+        Xunit.Assert.Contains("is not assigned to any acceptance lane", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("AcceptanceGateEngineSettingsTests", error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_lane_partition_rejects_nonexclusive_class_in_exclusive_lane")]
+    public void AcceptanceGateEngineLanePartitionRejectsNonExclusiveClassInExclusiveLane()
+    {
+        var error = CaptureLanePartitionFailure(
+            """
+            {
+              "version": 1,
+              "engine": {
+                "infrastructureTestLanes": [{
+                  "name": "exclusive candidate",
+                  "filter": "FullyQualifiedName~AcceptanceGateEngineSettingsTests|FullyQualifiedName~WorkerDispatchJobAccountingTests",
+                  "exclusiveResourceKeys": ["xunit:JobAccounting"]
+                }]
+              }
+            }
+            """,
+            [typeof(AcceptanceGateEngineSettingsTests), typeof(WorkerDispatchJobAccountingTests)]);
+
+        Xunit.Assert.Contains("exclusive candidate", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("xunit:JobAccounting", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("matched classes do not belong to any declared exclusive xUnit collection", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("AcceptanceGateEngineSettingsTests", error.Message, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact(DisplayName = "AcceptanceGateEngine_lane_partition_rejects_empty_lane")]
+    public void AcceptanceGateEngineLanePartitionRejectsEmptyLane()
+    {
+        var error = CaptureLanePartitionFailure(
+            """
+            {
+              "version": 1,
+              "engine": {
+                "infrastructureTestLanes": [
+                  { "name": "assigned", "filter": "FullyQualifiedName~AcceptanceGateEngineSettingsTests" },
+                  { "name": "empty", "filter": "FullyQualifiedName~MissingTests" }
+                ]
+              }
+            }
+            """,
+            [typeof(AcceptanceGateEngineSettingsTests)]);
+
+        Xunit.Assert.Contains("Acceptance lane 'empty'", error.Message, StringComparison.Ordinal);
+        Xunit.Assert.Contains("does not match any runnable test class", error.Message, StringComparison.Ordinal);
+    }
+
     [Xunit.Fact(DisplayName = "AcceptanceGateEngine_disabled_collections_spanning_lanes_share_an_exclusive_resource")]
     public void AcceptanceGateEngineDisabledCollectionsSpanningLanesShareAnExclusiveResource()
     {
@@ -714,6 +814,7 @@ public sealed class AcceptanceGateEngineSettingsTests
         var previousPrefix = Environment.GetEnvironmentVariable(
             GoalAcceptanceVerifier.AcceptanceAttemptTrxPrefixVariable);
         var partitionExecutions = 0;
+        var partitionArguments = new List<string[]>();
         GoalAcceptanceVerifier.ResolveMainWorktreePathForTests = _ => root;
         GoalAcceptanceVerifier.ResolveDeletedTestFilesForTests = _ => [];
         GoalAcceptanceVerifier.ResolvePartitionVerdictCandidateTreeShaForTests = _ => "tree-mixed-trx";
@@ -736,6 +837,7 @@ public sealed class AcceptanceGateEngineSettingsTests
                     arguments[1] == "test")
                 {
                     partitionExecutions++;
+                    partitionArguments.Add(arguments);
                     var testName = arguments.Any(argument =>
                         argument.Contains("AlphaTests", StringComparison.Ordinal))
                             ? "AlphaTests.Runs"
@@ -752,6 +854,7 @@ public sealed class AcceptanceGateEngineSettingsTests
             var first = await verifier.RunAsync(root, goalId);
             Xunit.Assert.True(first.Passed);
             Xunit.Assert.Equal(2, partitionExecutions);
+            var firstRunPartitionCount = partitionArguments.Count;
 
             var manifestPath = Path.Combine(root, "config", "acceptance-manifest.json");
             var manifest = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
@@ -766,6 +869,12 @@ public sealed class AcceptanceGateEngineSettingsTests
 
             Xunit.Assert.True(second.Passed);
             Xunit.Assert.Equal(4, partitionExecutions);
+            var secondRunPartitionArguments = partitionArguments.Skip(firstRunPartitionCount).ToArray();
+            Xunit.Assert.Equal(2, secondRunPartitionArguments.Length);
+            Xunit.Assert.Contains(secondRunPartitionArguments, arguments =>
+                arguments.Contains("FullyQualifiedName~BetaTestsChanged"));
+            Xunit.Assert.DoesNotContain(secondRunPartitionArguments, arguments =>
+                arguments.Contains("FullyQualifiedName~BetaTests"));
             var cacheReceipt = Xunit.Assert.Single(
                 second.Checks!,
                 check => check.Name == "infrastructure partition verdict cache");
@@ -1013,6 +1122,112 @@ public sealed class AcceptanceGateEngineSettingsTests
                 }
             })
         });
+
+    private static InvalidDataException CaptureLanePartitionFailure(
+        string manifest,
+        IReadOnlyList<Type> runnableClasses)
+    {
+        var root = CreateWorkspace(manifest);
+        try
+        {
+            var settings = AcceptanceGateEngineSettings.Load(root);
+            return Xunit.Assert.Throws<InvalidDataException>(
+                () => AssertLanePartitionInvariants(
+                    settings,
+                    runnableClasses,
+                    requireExclusiveCollectionMembership: true));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void AssertLanePartitionInvariants(
+        AcceptanceGateEngineSettings settings,
+        IReadOnlyList<Type> runnableClasses,
+        bool requireExclusiveCollectionMembership = false)
+    {
+        if (runnableClasses.Count == 0)
+        {
+            throw new InvalidDataException("Lane partition validation received no runnable test classes.");
+        }
+
+        var classesByLane = settings.InfrastructureTestLanes.ToDictionary(
+            lane => lane.Name,
+            _ => new List<Type>(),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var type in runnableClasses.OrderBy(type => type.FullName, StringComparer.Ordinal))
+        {
+            var matchingLanes = settings.InfrastructureTestLanes
+                .Where(lane => LaneIncludesClass(lane, type))
+                .ToArray();
+            var className = type.FullName ?? type.Name;
+            if (matchingLanes.Length == 0)
+            {
+                throw new InvalidDataException(
+                    $"Runnable test class '{className}' is not assigned to any acceptance lane.");
+            }
+
+            if (matchingLanes.Length > 1)
+            {
+                throw new InvalidDataException(
+                    $"Runnable test class '{className}' is assigned to multiple acceptance lanes: " +
+                    $"[{string.Join(", ", matchingLanes.Select(lane => lane.Name))}].");
+            }
+
+            classesByLane[matchingLanes[0].Name].Add(type);
+        }
+
+        foreach (var lane in settings.InfrastructureTestLanes)
+        {
+            var matchedClasses = classesByLane[lane.Name];
+            if (matchedClasses.Count == 0)
+            {
+                throw new InvalidDataException(
+                    $"Acceptance lane '{lane.Name}' does not match any runnable test class.");
+            }
+
+            var declaredXunitCollections = lane.ExclusiveResourceKeys
+                .Select(resourceKey => resourceKey.Trim())
+                .Where(resourceKey => resourceKey.StartsWith("xunit:", StringComparison.OrdinalIgnoreCase))
+                .Select(resourceKey => resourceKey["xunit:".Length..])
+                .ToArray();
+            var matchedXunitCollections = matchedClasses
+                .Select(type => type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name)
+                .Where(collectionName => collectionName is not null)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var resourceKey in lane.ExclusiveResourceKeys)
+            {
+                const string xunitPrefix = "xunit:";
+                var normalizedKey = resourceKey.Trim();
+                if (!normalizedKey.StartsWith(xunitPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var collectionName = normalizedKey[xunitPrefix.Length..];
+                if (matchedXunitCollections.Contains(collectionName) &&
+                    (!requireExclusiveCollectionMembership || matchedClasses.All(type =>
+                        declaredXunitCollections.Contains(
+                            type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name,
+                            StringComparer.Ordinal))))
+                {
+                    continue;
+                }
+
+                var nonExclusiveClasses = matchedClasses
+                    .Where(type => !declaredXunitCollections.Contains(
+                        type.GetCustomAttribute<Xunit.CollectionAttribute>(inherit: true)?.Name,
+                        StringComparer.Ordinal))
+                    .Select(type => type.FullName ?? type.Name);
+                throw new InvalidDataException(
+                    $"Acceptance lane '{lane.Name}' declares exclusive resource key '{normalizedKey}', " +
+                    $"but matched classes do not belong to any declared exclusive xUnit collection: " +
+                    $"[{string.Join(", ", nonExclusiveClasses)}].");
+            }
+        }
+    }
 
     private static void AssertLanePairPreservesCoverage(
         AcceptanceGateEngineSettings settings,
