@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Xml.Linq;
 
 [Xunit.Collection(TestCollections.GoalAcceptanceVerifier)]
 public sealed class AcceptanceOutputCaptureTests
@@ -1821,6 +1822,39 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
             line.Contains("Passing MTP test is not surfaced", StringComparison.Ordinal));
     }
 
+    [Xunit.Fact(DisplayName = "AcceptanceTrxFailureReader_preserves_full_nonpassing_evidence")]
+    public void AcceptanceTrxFailureReaderPreservesFullNonpassingEvidence()
+    {
+        var fixturePath = MtpFailureFixturePath();
+
+        var receipt = AcceptanceTrxFailureReader.Read(fixturePath);
+
+        Assert.Equal(AcceptanceTrxReadStatus.Readable, receipt.Status);
+        Assert.Equal(fixturePath, receipt.Path);
+        Assert.Equal(3, receipt.Failures.Count);
+        var assertion = receipt.Failures[0];
+        Assert.Equal(
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures",
+            assertion.TestName);
+        Assert.Equal(
+            "Assert.Contains() Failure: Sub-string not found\n" +
+            "String:    \"infrastructure tests: Cli: failed: 1\"\n" +
+            "Not found: \"RetryEvidenceTests.IncludesFailures\"\n" +
+            "Expected: 2\n" +
+            "Actual:   0",
+            assertion.Message);
+        Assert.Equal(
+            "at Mcg.AgentOrchestrator.Infrastructure.Tests.RetryEvidenceTests.IncludesFailures() in D:\\a\\mcg-agent-orchestrator\\RetryEvidenceTests.cs:line 42",
+            assertion.StackTrace);
+        Assert.Equal(
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.MtpShardTests.PreservesTheoryDisplayName(value: 42)",
+            receipt.Failures[1].TestName);
+        Assert.Equal("Timeout", receipt.Failures[2].Outcome);
+        Assert.Contains("30 second partition timeout", receipt.Failures[2].Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(receipt.Failures, failure =>
+            failure.TestName?.Contains("Passing MTP test is not surfaced", StringComparison.Ordinal) == true);
+    }
+
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_failed_mtp_shard_surfaces_fixture_test_names_and_messages")]
     public async Task GoalAcceptanceVerifierFailedMtpShardSurfacesFixtureTestNamesAndMessages()
     {
@@ -2632,6 +2666,99 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
+    public async Task FocusedEvidence_CompatibleSameProjectItemsUseOneDeterministicInvocation()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: GateReadyCandidateProjectorTests; " +
+            "Infrastructure.Tests: ConductorDriverTests; " +
+            "Infrastructure.Tests: GateReadyCandidateProjectorTests",
+            executedTestCount: 2,
+            executedTestIdentities:
+            [
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.ConductorDriverTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.GateReadyCandidateProjectorTests.ExecutedMember"
+            ]);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        var check = Assert.Single(result.Checks);
+        Assert.Equal(
+            "reviewer focused evidence: Infrastructure.Tests " +
+            "FullyQualifiedName~ConductorDriverTests|FullyQualifiedName~GateReadyCandidateProjectorTests",
+            check.Name);
+        Assert.Contains("compatible-same-project-batch", result.Summary, StringComparison.Ordinal);
+        var testCall = Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+        Assert.Contains("--filter-class", testCall);
+        Assert.Contains("*ConductorDriverTests*", testCall);
+        Assert.Contains("*GateReadyCandidateProjectorTests*", testCall);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_CompatibleBatchReportsUncoveredSelectionAsApparatusFailure()
+    {
+        var (result, calls) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: ConductorDriverTests; " +
+            "Infrastructure.Tests: GateReadyCandidateProjectorTests",
+            executedTestCount: 1,
+            executedTestIdentities:
+            [
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.ConductorDriverTests.ExecutedMember"
+            ]);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, result.OutcomeReason);
+        var check = Assert.Single(result.Checks);
+        Assert.Equal(1, check.ExecutedTestCount);
+        Assert.Equal(
+            AcceptanceFailureClassifications.FocusedSelectionApparatusFailure,
+            check.FailureClassification);
+        Assert.Contains("GateReadyCandidateProjectorTests", check.OutputTail, StringComparison.Ordinal);
+        Assert.Contains("matching 0 tests", check.OutputTail, StringComparison.Ordinal);
+        Assert.Single(calls.Where(call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_MethodPrefixCoverageUsesRunnerSubstringSemantics()
+    {
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: GoalAcceptanceVerifierTests.FocusedEvidence_CompatibleBatchReports; " +
+            "Infrastructure.Tests: ConductorDriverTests",
+            executedTestCount: 2,
+            executedTestIdentities:
+            [
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.GoalAcceptanceVerifierTests." +
+                "FocusedEvidence_CompatibleBatchReportsUncoveredSelectionAsApparatusFailure",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.ConductorDriverTests.ExecutedMember"
+            ]);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Passed);
+        Assert.DoesNotContain(result.Checks, check =>
+            check.FailureClassification == AcceptanceFailureClassifications.FocusedSelectionApparatusFailure);
+    }
+
+    [Xunit.Fact]
+    public async Task FocusedEvidence_UnreadableSelectionReceiptReportsDistinctApparatusCause()
+    {
+        var (result, _) = await RunMappedEvidenceAsync(
+            "Infrastructure.Tests: ConductorDriverTests; " +
+            "Infrastructure.Tests: GateReadyCandidateProjectorTests",
+            executedTestCount: 2,
+            corruptTrx: true);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Passed);
+        Assert.Equal(FindingEvidenceOutcomeReason.ApparatusFailure, result.OutcomeReason);
+        var check = Assert.Single(result.Checks);
+        Assert.Equal(AcceptanceFailureClassifications.FocusedSelectionReceiptUnreadable, check.FailureClassification);
+        Assert.Contains("could not read test receipt", check.OutputTail, StringComparison.Ordinal);
+        Assert.DoesNotContain("matching 0 tests", check.OutputTail, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
     public async Task FocusedEvidence_NativeProjectRequest_ReportsProjectMode()
     {
         var (nativeProjectResult, _) = await RunMappedEvidenceAsync("Infrastructure.Tests: mapped-project");
@@ -2898,20 +3025,32 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
     }
 
     [Xunit.Fact]
-    public async Task FocusedEvidence_DuplicateProjectAliases_PreserveEachExplicitFilteredCheck()
+    public async Task FocusedEvidence_DuplicateProjectAliases_BatchCompatibleSelectionsInOneCheck()
     {
         var (result, calls) = await RunMappedEvidenceAsync(
-            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests; Mcg.AgentOrchestrator.Infrastructure.Tests: DeltaTests,EpsilonTests");
+            "Infrastructure.Tests: AlphaTests,BetaTests,GammaTests; Mcg.AgentOrchestrator.Infrastructure.Tests: DeltaTests,EpsilonTests",
+            executedTestCount: 5,
+            executedTestIdentities:
+            [
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.AlphaTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.BetaTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.GammaTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.DeltaTests.ExecutedMember",
+                "Mcg.AgentOrchestrator.Infrastructure.Tests.EpsilonTests.ExecutedMember"
+            ]);
 
         Assert.True(result.Accepted);
         Assert.True(result.Passed);
-        Assert.Equal(2, result.Checks.Count);
-        Assert.Equal(2, calls.Count(call =>
-            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests")));
-        Assert.All(result.Checks, check => Assert.StartsWith(
+        var check = Assert.Single(result.Checks);
+        Assert.Single(calls, call =>
+            IsMtpExecutableCall(call, "Mcg.AgentOrchestrator.Infrastructure.Tests"));
+        Assert.StartsWith(
             "reviewer focused evidence: Infrastructure.Tests ",
             check.Name,
-            StringComparison.Ordinal));
+            StringComparison.Ordinal);
+        Assert.Contains("AlphaTests", check.Name, StringComparison.Ordinal);
+        Assert.Contains("EpsilonTests", check.Name, StringComparison.Ordinal);
+        Assert.Contains("compatible-same-project-batch", result.Summary, StringComparison.Ordinal);
     }
 
     [Xunit.Fact]
@@ -3127,7 +3266,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Action<string>? configureWorkspace = null,
         int? executedTestCount = null,
         int testExitCode = 0,
-        Func<string, IDisposable?>? holdWorkspaceResource = null)
+        Func<string, IDisposable?>? holdWorkspaceResource = null,
+        IReadOnlyList<string>? executedTestIdentities = null,
+        bool corruptTrx = false)
     {
         var calls = new List<string[]>();
         var root = CreateManifestWorkspace("""
@@ -3163,7 +3304,15 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                             Elapsed: TimeSpan.FromMinutes(40)));
                     }
 
-                    WriteMtpTrx(args, executedTestCount);
+                    WriteMtpTrx(args, executedTestCount, executedTestIdentities);
+                    if (corruptTrx)
+                    {
+                        var resultsDirectoryIndex = Array.IndexOf(args, "--results-directory");
+                        var trxFileIndex = Array.IndexOf(args, "--report-trx-filename");
+                        File.WriteAllText(
+                            Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]),
+                            "<not-valid-trx");
+                    }
                     return Task.FromResult(new GoalAcceptanceVerifier.CommandResult(
                         testExitCode,
                         executedTestCount == 0
@@ -7757,7 +7906,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         WriteMtpTrx(args, sourcePath: null);
     }
 
-    private static void WriteMtpTrx(string[] args, int? executedTestCount)
+    private static void WriteMtpTrx(
+        string[] args,
+        int? executedTestCount,
+        IReadOnlyList<string>? executedTestIdentities = null)
     {
         if (executedTestCount is null)
         {
@@ -7773,9 +7925,39 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.True(trxFileIndex + 1 < args.Length);
         Directory.CreateDirectory(args[resultsDirectoryIndex + 1]);
         var destinationPath = Path.Combine(args[resultsDirectoryIndex + 1], args[trxFileIndex + 1]);
-        File.WriteAllText(
-            destinationPath,
-            $"<TestRun><ResultSummary><Counters total=\"{Math.Max(1, executedTestCount.Value)}\" executed=\"{executedTestCount}\" /></ResultSummary></TestRun>");
+        var identities = executedTestIdentities ?? [];
+        var definitions = identities.Select((identity, index) =>
+        {
+            var separator = identity.LastIndexOf('.');
+            var className = separator > 0 ? identity[..separator] : identity;
+            var methodName = separator > 0 ? identity[(separator + 1)..] : "Executed";
+            return new XElement(
+                "UnitTest",
+                new XAttribute("id", $"test-{index}"),
+                new XAttribute("name", identity),
+                new XElement(
+                    "TestMethod",
+                    new XAttribute("className", className),
+                    new XAttribute("name", methodName)));
+        });
+        var results = identities.Select((identity, index) =>
+            new XElement(
+                "UnitTestResult",
+                new XAttribute("testId", $"test-{index}"),
+                new XAttribute("testName", identity),
+                new XAttribute("outcome", "Passed")));
+        new XDocument(
+            new XElement(
+                "TestRun",
+                new XElement("TestDefinitions", definitions),
+                new XElement("Results", results),
+                new XElement(
+                    "ResultSummary",
+                    new XElement(
+                        "Counters",
+                        new XAttribute("total", Math.Max(1, executedTestCount.Value)),
+                        new XAttribute("executed", executedTestCount.Value)))))
+            .Save(destinationPath);
     }
 
     private static void WriteMtpTrx(string[] args, string? sourcePath)

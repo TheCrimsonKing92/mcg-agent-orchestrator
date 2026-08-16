@@ -1525,7 +1525,22 @@ internal sealed class ConductorDriver
                     _recordTaskNote(goal.Id, autoRetry.TargetTask!.Id, autoRetry.WarningMessage);
                 }
 
-                _retryTask(goal.Id, autoRetry.TargetTask!.Id, autoRetry.Message, autoRetry.RoundKind);
+                try
+                {
+                    _retryTask(goal.Id, autoRetry.TargetTask!.Id, autoRetry.Message, autoRetry.RoundKind);
+                }
+                catch (InvalidOperationException ex) when (
+                    autoRetry.Message.StartsWith("ACTIONABLE_CANDIDATE_RED", StringComparison.Ordinal) &&
+                    ex.Message.Contains("running process", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Escalate(
+                        goal,
+                        goalPrefix,
+                        policy,
+                        state,
+                        $"ACTIONABLE_CANDIDATE_RED_LIFECYCLE_CONFLICT: {autoRetry.Message} " +
+                        $"Developer retry was not applied because {ex.Message} No additional downstream dispatch was started.");
+                }
                 return ExecuteDispatchAndStart(goal, goalPrefix, policy, GoalLifecycleState.WorkspaceReady);
             }
         }
@@ -1953,23 +1968,23 @@ internal sealed class ConductorDriver
         }
 
         var mergedFindings = requestingTask.LastVerification?.MergedReviewFindings ?? [];
+        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
+        var candidateShaAvailable = ConductorGitRevisionReader.IsValid(candidateSha);
+        var telemetryCandidateSha = candidateShaAvailable ? candidateSha! : "unavailable";
         var requestingFindings = round.Findings
             .Where(finding =>
                 finding.State == ReviewFindingState.Open &&
                 finding.EvidenceRequest is not null)
-            .Where(finding => ReviewFindingConvergence.ResolveMergedFinding(
-                mergedFindings, round, finding.StableId)?.EvidenceOutcome is null)
             .ToArray();
         if (requestingFindings.Length == 0)
         {
             return false;
         }
 
-        var candidateSha = _getPreReviewEvidenceContext(goal).CandidateSha?.Trim();
-        var candidateShaAvailable = ConductorGitRevisionReader.IsValid(candidateSha);
-        var telemetryCandidateSha = candidateShaAvailable ? candidateSha! : "unavailable";
+        var findingRoundFingerprint = BuildFindingRoundFingerprint(requestingTask, round);
 
-        var groups = new List<(string Identity, string Request, FindingEvidenceRequest TypedRequest, List<ReviewFinding> Findings)>();
+        var groups = new List<FindingEvidenceRequestGroup>();
+        var normalizationRefused = false;
         foreach (var finding in requestingFindings)
         {
             if (!TryNormalizeFindingEvidenceRequest(
@@ -1977,16 +1992,31 @@ internal sealed class ConductorDriver
                     out var typedRequest, out var request,
                     out var refusalReason, out var refusalDetail))
             {
+                normalizationRefused = true;
                 RecordNotHonoured(
                     goal.Id, requestingTask, finding, refusalReason, refusalDetail, telemetryCandidateSha);
                 continue;
             }
 
             var identity = BuildFindingEvidenceIdentity(typedRequest);
+            var mergedFinding = ReviewFindingConvergence.ResolveMergedFinding(
+                mergedFindings, round, finding.StableId);
+            if (mergedFinding?.EvidenceOutcome is { } priorOutcome &&
+                (string.IsNullOrWhiteSpace(priorOutcome.ReceiptId) ||
+                    HasCurrentFindingEvidenceReceipt(
+                        requestingTask,
+                        mergedFinding,
+                        typedRequest,
+                        telemetryCandidateSha,
+                        findingRoundFingerprint)))
+            {
+                continue;
+            }
+
             var groupIndex = groups.FindIndex(group => string.Equals(group.Identity, identity, StringComparison.Ordinal));
             if (groupIndex < 0)
             {
-                groups.Add((identity, request, typedRequest, [finding]));
+                groups.Add(new FindingEvidenceRequestGroup(identity, request, typedRequest, [finding]));
             }
             else
             {
@@ -1994,25 +2024,24 @@ internal sealed class ConductorDriver
             }
         }
 
-        foreach (var cappedGroup in groups.Skip(policy.MaxFocusedEvidenceRunsPerRound))
-        foreach (var finding in cappedGroup.Findings)
+        if (groups.Count == 0 && normalizationRefused)
         {
-            RecordNotHonoured(
-                goal.Id, requestingTask, finding, FindingEvidenceNotHonouredReason.PerRoundCap,
-                $"Distinct evidence request exceeded the configured per-round cap of {policy.MaxFocusedEvidenceRunsPerRound}.",
-                telemetryCandidateSha);
+            decision = BuildFindingEvidenceDeliveryRetry(
+                requestingTask,
+                "Every current evidence request was refused during normalization; typed refusal details were attached.");
+            return true;
         }
 
-        var runnable = groups.Take(policy.MaxFocusedEvidenceRunsPerRound).FirstOrDefault();
-        if (runnable.Findings is null)
+        var batches = BuildFindingEvidenceBatches(groups);
+        var runnable = batches.FirstOrDefault();
+        if (runnable is null)
         {
-            decision = BuildFindingEvidenceDeliveryRetry(requestingTask, "All evidence requests were refused with typed outcomes.");
-            return true;
+            return false;
         }
 
         if (!candidateShaAvailable)
         {
-            foreach (var group in groups.Take(policy.MaxFocusedEvidenceRunsPerRound))
+            foreach (var group in batches)
             foreach (var finding in group.Findings)
             {
                 RecordNotHonoured(
@@ -2026,7 +2055,7 @@ internal sealed class ConductorDriver
 
         if (!_focusedEvidenceRunnerConfigured)
         {
-            foreach (var group in groups.Take(policy.MaxFocusedEvidenceRunsPerRound))
+            foreach (var group in batches)
             foreach (var finding in group.Findings)
             {
                 RecordNotHonoured(
@@ -2037,8 +2066,24 @@ internal sealed class ConductorDriver
             return true;
         }
 
+        var initialRequestDispositions = BuildInitialRequestDispositions(batches, runnable);
+        var executedRequestDispositions = initialRequestDispositions
+            .Where(disposition => disposition.Disposition.StartsWith("executed-", StringComparison.Ordinal))
+            .ToArray();
+        var requestContext = new ConductorFocusedEvidenceRequestContext(
+            findingRoundFingerprint,
+            CreateFindingEvidenceBatchId(candidateSha!, findingRoundFingerprint, policy.Name, runnable.Identity),
+            initialRequestDispositions);
         if (!TryReconcileFocusedEvidenceAttempt(
-                goal, policy, runnable.Request, candidateSha!, "finding-requested", out var evidence, out decision))
+                goal,
+                policy,
+                runnable.Request,
+                candidateSha!,
+                "finding-requested",
+                requestContext,
+                out var evidence,
+                out var evidenceAttempt,
+                out decision))
         {
             if (decision.ShouldEscalate)
             {
@@ -2076,7 +2121,8 @@ internal sealed class ConductorDriver
             return true;
         }
 
-        var receiptId = CreateFindingEvidenceReceiptId(candidateSha!, runnable.Identity);
+        var receiptId = CreateFindingEvidenceReceiptId(
+            candidateSha!, findingRoundFingerprint, runnable.Identity);
         var armReceipts = (evidence.Arms ?? [])
             .Select(arm => new FindingEvidenceArmReceipt(
                 arm.Arm,
@@ -2096,6 +2142,18 @@ internal sealed class ConductorDriver
                     .Distinct(StringComparer.Ordinal)
                     .ToArray()))
             .ToArray();
+        var actionableCandidateRed = TryAttributeActionableCandidateRed(
+            candidateSha!, evidence, armReceipts, runnable);
+        var requestDispositions = actionableCandidateRed is not null
+            ? executedRequestDispositions
+                .Concat(batches.Skip(1).SelectMany(batch => batch.Members).SelectMany(member =>
+                    member.Findings.Select(finding => new FindingEvidenceRequestDisposition(
+                        finding.StableId,
+                        member.Identity,
+                        "superseded",
+                        "superseded-by-actionable-red"))))
+                .ToArray()
+            : initialRequestDispositions;
         var receipt = new FindingEvidenceReceipt(
             receiptId,
             candidateSha!,
@@ -2103,7 +2161,9 @@ internal sealed class ConductorDriver
             evidence.Accepted,
             evidence.IsValidEvidence,
             evidence.Summary,
-            armReceipts);
+            armReceipts,
+            requestDispositions,
+            findingRoundFingerprint);
         if (evidence.OutcomeReason == FindingEvidenceOutcomeReason.ApparatusFailure)
         {
             foreach (var finding in runnable.Findings)
@@ -2134,6 +2194,18 @@ internal sealed class ConductorDriver
                     FormatFocusedEvidenceResult(evidence));
             }
 
+            if (evidenceAttempt is null ||
+                !_focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(
+                    evidenceAttempt,
+                    findingRoundFingerprint,
+                    receiptId,
+                    requestDispositions))
+            {
+                decision = VerifyingFindingAutoRetryDecision.Escalate(
+                    $"Focused evidence receipt {receiptId} was recorded, but its per-request apparatus dispositions could not be persisted; downstream routing stopped.");
+                return true;
+            }
+
             decision = BuildFindingEvidenceDeliveryRetry(
                 requestingTask,
                 "Focused evidence selected zero tests; its apparatus receipt was attached for correction and reissue.");
@@ -2160,7 +2232,70 @@ internal sealed class ConductorDriver
                 $"finding-evidence role={requestingTask.RequiredRole}; task_id={requestingTask.Id}; finding_id={finding.StableId}; " +
                 $"candidate_sha={candidateSha}; receipt_id={receiptId}; reason={resultReason}; {FormatFocusedEvidenceResult(evidence)}");
         }
-        decision = groups.Take(policy.MaxFocusedEvidenceRunsPerRound).Skip(1).Any()
+
+        if (actionableCandidateRed is not null)
+        {
+            foreach (var pending in batches.Skip(1))
+            foreach (var member in pending.Members)
+            foreach (var finding in member.Findings)
+            {
+                _recordFindingEvidenceOutcome(
+                    goal.Id,
+                    requestingTask.Id,
+                    finding.StableId,
+                    new FindingEvidenceOutcome(
+                        Honoured: false,
+                        ReceiptId: receiptId,
+                        Reason: FindingEvidenceNotHonouredReason.SupersededByActionableRed,
+                        Detail: $"Superseded by actionable candidate RED receipt {receiptId} at {candidateSha}.",
+                        ResultReason: FindingEvidenceOutcomeReason.CandidateRed),
+                    receipt);
+                _recordFindingEvidenceRequest(
+                    goal.Id,
+                    requestingTask.Id,
+                    $"finding-evidence disposition=superseded; role={requestingTask.RequiredRole}; " +
+                    $"task_id={requestingTask.Id}; finding_id={finding.StableId}; candidate_sha={candidateSha}; " +
+                    $"receipt_id={receiptId}; reason=superseded-by-actionable-red; request_identity={member.Identity}");
+            }
+
+        }
+
+        if (evidenceAttempt is null ||
+            !_focusedEvidenceAttemptCoordinator.RecordFocusedEvidenceRequestDispositions(
+                evidenceAttempt,
+                findingRoundFingerprint,
+                receiptId,
+                requestDispositions))
+        {
+            decision = VerifyingFindingAutoRetryDecision.Escalate(
+                $"Focused evidence receipt {receiptId} was recorded, but its per-request dispositions could not be persisted; downstream routing stopped.");
+            return true;
+        }
+
+        if (actionableCandidateRed is not null)
+        {
+            var developer = goal.Tasks
+                .TakeWhile(task => task.Id != requestingTask.Id)
+                .LastOrDefault(task => task.RequiredRole == AgentRole.Developer);
+            var failingTests = string.Join(",", actionableCandidateRed.FailingTestIdentities);
+            var findingIds = string.Join(",", actionableCandidateRed.Findings.Select(finding => finding.StableId));
+            if (developer is null)
+            {
+                decision = VerifyingFindingAutoRetryDecision.Escalate(
+                    $"Actionable candidate RED receipt {receiptId} at candidate {candidateSha} could not be routed because no upstream Developer task exists; " +
+                    $"finding_ids={findingIds}; failing_tests={failingTests}. No downstream Tester or Reviewer was started.");
+                return true;
+            }
+
+            decision = VerifyingFindingAutoRetryDecision.Retry(
+                developer,
+                $"ACTIONABLE_CANDIDATE_RED candidate_sha={candidateSha}; receipt_id={receiptId}; finding_ids={findingIds}; " +
+                $"failing_tests={failingTests}. Repair the Developer-owned source/test anchor before any remaining focused evidence or downstream verification runs.",
+                null);
+            return true;
+        }
+
+        decision = batches.Skip(1).Any()
             ? VerifyingFindingAutoRetryDecision.Hold(
                 "Focused evidence completed; another distinct request from the same finding round remains pending.")
             : BuildFindingEvidenceDeliveryRetry(
@@ -2315,10 +2450,269 @@ internal sealed class ConductorDriver
     private static string BuildFindingEvidenceIdentity(FindingEvidenceRequest request) =>
         string.Join("|", request.Selections.Select(selection => $"{selection.TestProject}:{selection.TestClass}"));
 
-    private static string CreateFindingEvidenceReceiptId(string candidateSha, string identity) =>
-        "finding-evidence-" + Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes($"{candidateSha}:{identity}")))
+    private static string BuildFindingRoundFingerprint(TaskSpec requestingTask, ReviewFindingRound round)
+    {
+        var verificationTicks = requestingTask.LastVerification?.CompletedAt.ToUniversalTime().Ticks ?? 0;
+        var findings = round.Findings
+            .OrderBy(finding => finding.StableId, StringComparer.Ordinal)
+            .Select(finding => string.Join(
+                "\u001f",
+                finding.StableId,
+                finding.State,
+                finding.Severity,
+                finding.Category,
+                finding.Location.File,
+                finding.Location.Region,
+                finding.Description,
+                string.Join(
+                    "\u001e",
+                    (finding.EvidenceRequest?.Selections ?? [])
+                        .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
+                        .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
+                        .Select(selection => $"{selection.TestProject}:{selection.TestClass}"))));
+        var payload = $"{requestingTask.Id.Value}\u001d{verificationTicks}\u001d{string.Join("\u001d", findings)}";
+        return "finding-round-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))
             .ToLowerInvariant()[..24];
+    }
+
+    private static IReadOnlyList<FindingEvidenceRequestDisposition> BuildInitialRequestDispositions(
+        IReadOnlyList<FindingEvidenceBatch> batches,
+        FindingEvidenceBatch executingBatch)
+    {
+        var dispositions = new List<FindingEvidenceRequestDisposition>();
+        foreach (var batch in batches)
+        {
+            var isExecuting = ReferenceEquals(batch, executingBatch);
+            var disposition = isExecuting
+                ? batch.Members.Count > 1 ? "executed-batched" : "executed-standalone"
+                : batch.Members.Count > 1 ? "pending-batched" : "pending-standalone";
+            var reason = batch.Members.Count > 1
+                ? "compatible-same-project"
+                : ResolveStandaloneEvidenceReason(batches, batch);
+            dispositions.AddRange(batch.Members.SelectMany(member =>
+                member.Findings.Select(finding => new FindingEvidenceRequestDisposition(
+                    finding.StableId,
+                    member.Identity,
+                    disposition,
+                    reason))));
+        }
+
+        return dispositions;
+    }
+
+    private static string ResolveStandaloneEvidenceReason(
+        IReadOnlyList<FindingEvidenceBatch> batches,
+        FindingEvidenceBatch standaloneBatch)
+    {
+        foreach (var other in batches.Where(batch => !ReferenceEquals(batch, standaloneBatch)))
+        {
+            var reason = GetFindingEvidenceUnbatchedReason(standaloneBatch.TypedRequest, other.TypedRequest);
+            if (reason is not null)
+            {
+                return reason;
+            }
+        }
+
+        return "single-request";
+    }
+
+    private static IReadOnlyList<FindingEvidenceBatch> BuildFindingEvidenceBatches(
+        IReadOnlyList<FindingEvidenceRequestGroup> groups)
+    {
+        var batches = new List<FindingEvidenceBatch>();
+        foreach (var group in groups)
+        {
+            var batchIndex = batches.FindIndex(batch =>
+                GetFindingEvidenceUnbatchedReason(batch.TypedRequest, group.TypedRequest) is null);
+            if (batchIndex < 0)
+            {
+                batches.Add(new FindingEvidenceBatch(
+                    group.Identity,
+                    group.Request,
+                    group.TypedRequest,
+                    [.. group.Findings],
+                    [group]));
+                continue;
+            }
+
+            var batch = batches[batchIndex];
+            var selections = batch.TypedRequest.Selections
+                .Concat(group.TypedRequest.Selections)
+                .Distinct()
+                .OrderBy(selection => selection.TestProject, StringComparer.Ordinal)
+                .ThenBy(selection => selection.TestClass, StringComparer.Ordinal)
+                .ToArray();
+            var request = new FindingEvidenceRequest(selections);
+            batches[batchIndex] = new FindingEvidenceBatch(
+                BuildFindingEvidenceIdentity(request),
+                string.Join("; ", selections.Select(FormatFindingEvidenceSelection)),
+                request,
+                [.. batch.Findings, .. group.Findings],
+                [.. batch.Members, group]);
+        }
+
+        return batches;
+    }
+
+    private static string? GetFindingEvidenceUnbatchedReason(
+        FindingEvidenceRequest left,
+        FindingEvidenceRequest right)
+    {
+        var leftProjects = left.Selections
+            .Select(selection => selection.TestProject)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var rightProjects = right.Selections
+            .Select(selection => selection.TestProject)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (leftProjects.Length != 1 || rightProjects.Length != 1)
+        {
+            return "mixed-test-projects";
+        }
+
+        if (!string.Equals(leftProjects[0], rightProjects[0], StringComparison.OrdinalIgnoreCase))
+        {
+            return "different-test-project";
+        }
+
+        return left.Selections.Concat(right.Selections).All(selection =>
+            EvidenceBareClassNamePattern.IsMatch(selection.TestClass.Trim()))
+                ? null
+                : "incompatible-filter-semantics";
+    }
+
+    private static bool HasCurrentFindingEvidenceReceipt(
+        TaskSpec requestingTask,
+        ReviewFinding finding,
+        FindingEvidenceRequest request,
+        string candidateSha,
+        string findingRoundFingerprint)
+    {
+        var receiptId = finding.EvidenceOutcome?.ReceiptId;
+        if (string.IsNullOrWhiteSpace(receiptId) || candidateSha == "unavailable")
+        {
+            return false;
+        }
+
+        var identity = BuildFindingEvidenceIdentity(request);
+        return requestingTask.VerificationHistory
+            .SelectMany(verification => verification.FindingEvidenceReceipts ?? [])
+            .Any(receipt =>
+                string.Equals(receipt.ReceiptId, receiptId, StringComparison.Ordinal) &&
+                string.Equals(receipt.CandidateSha, candidateSha, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(
+                    receipt.FindingRoundFingerprint,
+                    findingRoundFingerprint,
+                    StringComparison.Ordinal) &&
+                (string.Equals(BuildFindingEvidenceIdentity(receipt.Request), identity, StringComparison.Ordinal) ||
+                    (receipt.RequestDispositions ?? []).Any(disposition =>
+                        string.Equals(disposition.FindingStableId, finding.StableId, StringComparison.Ordinal) &&
+                        string.Equals(disposition.RequestIdentity, identity, StringComparison.Ordinal))));
+    }
+
+    private static ActionableCandidateRedAttribution? TryAttributeActionableCandidateRed(
+        string candidateSha,
+        FocusedEvidenceRunResult evidence,
+        IReadOnlyList<FindingEvidenceArmReceipt> arms,
+        FindingEvidenceBatch batch)
+    {
+        if (evidence.OutcomeReason != FindingEvidenceOutcomeReason.CandidateRed)
+        {
+            return null;
+        }
+
+        var candidate = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Candidate);
+        var baseline = arms.SingleOrDefault(arm => arm.Arm == FindingEvidenceArm.Baseline);
+        if (candidate is not
+                {
+                    Accepted: true,
+                    Disposition: FindingEvidenceArmDisposition.Red,
+                    FailingTestIdentities.Count: > 0
+                } ||
+            !string.Equals(candidate.Sha, candidateSha, StringComparison.OrdinalIgnoreCase) ||
+            baseline is null ||
+            baseline.Disposition == FindingEvidenceArmDisposition.ApparatusFailure)
+        {
+            return null;
+        }
+
+        var attributableFindings = new List<ReviewFinding>();
+        var attributableFailingTests = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var member in batch.Members)
+        {
+            var matchingFailures = batch.Members.Count == 1
+                ? candidate.FailingTestIdentities
+                : candidate.FailingTestIdentities!
+                    .Where(failingIdentity => member.TypedRequest.Selections.Any(selection =>
+                        IsTestIdentitySelectionMatch(failingIdentity, selection.TestClass.Trim())))
+                    .ToArray();
+            if (matchingFailures is not { Count: > 0 })
+            {
+                continue;
+            }
+
+            var developerFindings = member.Findings.Where(finding =>
+                finding.Category is not (FindingCategory.OperatorOwned or FindingCategory.SpecDefect) &&
+                IsDeveloperOwnedFindingAnchor(finding.Location.File));
+            foreach (var finding in developerFindings)
+            {
+                attributableFindings.Add(finding);
+                attributableFailingTests.UnionWith(matchingFailures);
+            }
+        }
+
+        return attributableFindings.Count == 0
+            ? null
+            : new ActionableCandidateRedAttribution(
+                attributableFindings.DistinctBy(finding => finding.StableId).ToArray(),
+                attributableFailingTests.ToArray());
+    }
+
+    private static bool IsDeveloperOwnedFindingAnchor(string path) =>
+        RepositoryOwnershipMap.Classify(path).Area is
+            RepositoryOwnershipArea.Source or
+            RepositoryOwnershipArea.Test or
+            RepositoryOwnershipArea.SharedInfrastructure or
+            RepositoryOwnershipArea.DashboardApi or
+            RepositoryOwnershipArea.DashboardUi;
+
+    private static bool IsTestIdentitySelectionMatch(string identity, string selection)
+    {
+        var start = 0;
+        while ((start = identity.IndexOf(selection, start, StringComparison.Ordinal)) >= 0)
+        {
+            var end = start + selection.Length;
+            var leftBoundary = start == 0 || identity[start - 1] is '.' or '+';
+            var rightBoundary = end == identity.Length || identity[end] is '.' or '+' or '(' or '[';
+            if (leftBoundary && rightBoundary)
+            {
+                return true;
+            }
+
+            start++;
+        }
+
+        return false;
+    }
+
+    private static string CreateFindingEvidenceReceiptId(
+        string candidateSha,
+        string findingRoundFingerprint,
+        string identity) =>
+        "finding-evidence-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes($"{candidateSha}:{findingRoundFingerprint}:{identity}")))
+            .ToLowerInvariant()[..24];
+
+    private static string CreateFindingEvidenceBatchId(
+        string candidateSha,
+        string findingRoundFingerprint,
+        string policyName,
+        string identity) =>
+        "evidence-batch-" + Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{candidateSha}:{findingRoundFingerprint}:{policyName}:{identity}")))
+            .ToLowerInvariant()[..16];
 
     private bool TryReconcileFocusedEvidenceAttempt(
         Goal goal,
@@ -2326,10 +2720,13 @@ internal sealed class ConductorDriver
         string request,
         string? candidateSha,
         string source,
+        ConductorFocusedEvidenceRequestContext? requestContext,
         out FocusedEvidenceRunResult evidence,
+        out ConductorParallelAcceptanceAttempt? evidenceAttempt,
         out VerifyingFindingAutoRetryDecision decision)
     {
         evidence = null!;
+        evidenceAttempt = null;
         decision = VerifyingFindingAutoRetryDecision.None;
         var candidate = ConductorParallelAcceptanceCandidate.Create(
             goal,
@@ -2341,7 +2738,9 @@ internal sealed class ConductorDriver
             candidate,
             policy,
             request,
-            _runDualArmFocusedEvidence);
+            _runDualArmFocusedEvidence,
+            requestContext);
+        evidenceAttempt = attemptDecision.Attempt;
         if (attemptDecision.Kind is
             ConductorParallelAcceptanceAttemptDecisionKind.Started or
             ConductorParallelAcceptanceAttemptDecisionKind.Running)
@@ -2479,6 +2878,23 @@ internal sealed class ConductorDriver
         string Finding,
         IReadOnlyList<string> SuppressedFindings,
         TaskSpec? TargetTask);
+
+    private sealed record FindingEvidenceRequestGroup(
+        string Identity,
+        string Request,
+        FindingEvidenceRequest TypedRequest,
+        List<ReviewFinding> Findings);
+
+    private sealed record FindingEvidenceBatch(
+        string Identity,
+        string Request,
+        FindingEvidenceRequest TypedRequest,
+        List<ReviewFinding> Findings,
+        IReadOnlyList<FindingEvidenceRequestGroup> Members);
+
+    private sealed record ActionableCandidateRedAttribution(
+        IReadOnlyList<ReviewFinding> Findings,
+        IReadOnlyList<string> FailingTestIdentities);
 
     private sealed record VerifyingFindingAutoRetryDecision(
         bool ShouldHold,
@@ -5084,17 +5500,11 @@ internal sealed class ConductorDriver
             return criteria.Select(FormatUnmetCriterion).ToArray();
         }
 
-        var cappedEvidence = concreteEvidence.Take(MaxCriterionRetryEvidenceLines).ToList();
-        if (concreteEvidence.Count > MaxCriterionRetryEvidenceLines)
-        {
-            cappedEvidence.Add($"... truncated {concreteEvidence.Count - MaxCriterionRetryEvidenceLines} acceptance evidence line(s)");
-        }
-
         var feedback = new List<string>
         {
             "Concrete acceptance failure evidence:",
         };
-        feedback.AddRange(cappedEvidence);
+        feedback.AddRange(concreteEvidence);
         feedback.Add("Acceptance criteria summary:");
         feedback.AddRange(criteria.Select(FormatUnmetCriterion));
         return feedback.ToArray();
@@ -5102,21 +5512,124 @@ internal sealed class ConductorDriver
 
     private static List<string> ExtractConcreteRetryEvidence(IReadOnlyList<AcceptanceCheckResult> criteria)
     {
-        var outputEvidence = criteria
-            .SelectMany(ExtractConcreteOutputEvidence)
-            .ToList();
-        if (outputEvidence.Count == 0)
+        var evidence = new List<string>();
+        var remainingEvidenceEntries = MaxCriterionRetryEvidenceLines;
+        foreach (var criterion in criteria.Where(criterion => !criterion.Passed))
         {
-            return [];
+            var outputEvidence = ExtractConcreteOutputEvidence(criterion).ToArray();
+            var testResultPaths = criterion.TestResultPaths?
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray() ?? [];
+
+            if (outputEvidence.Length == 0 && testResultPaths.Length == 0)
+            {
+                continue;
+            }
+
+            evidence.Add(FormatFailedCheckEvidence(criterion));
+
+            if (testResultPaths.Length == 0)
+            {
+                AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                evidence.Add($"detail unavailable: no TRX path was recorded for partition \"{criterion.Name}\"");
+                continue;
+            }
+
+            var fallbackAdded = false;
+            foreach (var testResultPath in testResultPaths)
+            {
+                var receipt = AcceptanceTrxFailureReader.Read(testResultPath);
+                if (receipt.Status != AcceptanceTrxReadStatus.Readable)
+                {
+                    if (!fallbackAdded)
+                    {
+                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        fallbackAdded = true;
+                    }
+
+                    var detail = string.IsNullOrWhiteSpace(receipt.Detail) ? string.Empty : $" ({receipt.Detail})";
+                    evidence.Add(
+                        $"detail unavailable: {DescribeTrxReadFailure(receipt.Status)} for partition \"{criterion.Name}\" at {receipt.Path}{detail}");
+                    continue;
+                }
+
+                evidence.Add($"TRX receipt for partition \"{criterion.Name}\": {receipt.Path}");
+                if (receipt.Failures.Count == 0)
+                {
+                    if (!fallbackAdded)
+                    {
+                        AddBoundedOutputEvidence(evidence, outputEvidence, ref remainingEvidenceEntries);
+                        fallbackAdded = true;
+                    }
+
+                    evidence.Add(
+                        $"detail unavailable: readable TRX for partition \"{criterion.Name}\" contained no non-passing results at {receipt.Path}");
+                    continue;
+                }
+
+                var omittedFailures = 0;
+                foreach (var failure in receipt.Failures)
+                {
+                    if (string.IsNullOrWhiteSpace(failure.TestName))
+                    {
+                        evidence.Add(
+                            $"detail unavailable: test identity unavailable for outcome \"{failure.Outcome}\" in partition \"{criterion.Name}\" at {receipt.Path}");
+                        continue;
+                    }
+
+                    if (remainingEvidenceEntries == 0)
+                    {
+                        omittedFailures++;
+                        continue;
+                    }
+
+                    evidence.Add(FormatTrxFailureEvidence(failure));
+                    remainingEvidenceEntries--;
+                }
+
+                if (omittedFailures > 0)
+                {
+                    evidence.Add($"{omittedFailures} more failures omitted — see {receipt.Path}.");
+                }
+            }
         }
 
-        var evidence = criteria
-            .Where(criterion => !criterion.Passed)
-            .Select(FormatFailedCheckEvidence)
-            .ToList();
-        evidence.AddRange(outputEvidence);
         return evidence;
     }
+
+    private static void AddBoundedOutputEvidence(
+        ICollection<string> evidence,
+        IReadOnlyList<string> outputEvidence,
+        ref int remainingEvidenceEntries)
+    {
+        var retainedCount = Math.Min(outputEvidence.Count, remainingEvidenceEntries);
+        for (var index = 0; index < retainedCount; index++)
+        {
+            evidence.Add(outputEvidence[index]);
+        }
+
+        remainingEvidenceEntries -= retainedCount;
+        if (retainedCount < outputEvidence.Count)
+        {
+            evidence.Add($"{outputEvidence.Count - retainedCount} more acceptance evidence entries omitted.");
+        }
+    }
+
+    private static string FormatTrxFailureEvidence(AcceptanceTrxFailure failure)
+    {
+        var message = string.IsNullOrEmpty(failure.Message) ? "failure message unavailable" : failure.Message;
+        var stackTrace = string.IsNullOrEmpty(failure.StackTrace) ? "stack trace unavailable" : failure.StackTrace;
+        return $"[FAIL] {failure.TestName} ({failure.Outcome}){Environment.NewLine}{message}{Environment.NewLine}{stackTrace}";
+    }
+
+    private static string DescribeTrxReadFailure(AcceptanceTrxReadStatus status) => status switch
+    {
+        AcceptanceTrxReadStatus.Missing => "no TRX exists",
+        AcceptanceTrxReadStatus.Unparseable => "TRX is unparseable",
+        AcceptanceTrxReadStatus.Unreadable => "TRX is unreadable",
+        _ => "no readable TRX"
+    };
 
     private static string FormatFailedCheckEvidence(AcceptanceCheckResult criterion) =>
         $"failed check: {criterion.Name} (exit code {criterion.ExitCode})";

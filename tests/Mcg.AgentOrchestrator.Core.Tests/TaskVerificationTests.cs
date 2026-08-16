@@ -655,7 +655,21 @@ public sealed class TaskVerificationTests
                             "baseline failed",
                             ["baseline.trx"],
                             ["TaskVerificationTests.NegativeControl"])
-                    ])
+                    ],
+                    RequestDispositions:
+                    [
+                        new FindingEvidenceRequestDisposition(
+                            "finding-a",
+                            "Core.Tests:TaskVerificationTests",
+                            "executed-batched",
+                            "compatible-same-project"),
+                        new FindingEvidenceRequestDisposition(
+                            "finding-b",
+                            "Infrastructure.Tests:ConductorDriverTests",
+                            "superseded",
+                            "superseded-by-actionable-red")
+                    ],
+                    FindingRoundFingerprint: "finding-round-contract-1")
             ]));
 
         var restored = AgentOrchestratorKernel.FromSnapshot(kernel.ExportSnapshot());
@@ -663,6 +677,7 @@ public sealed class TaskVerificationTests
             .LastVerification!.FindingEvidenceReceipts!);
 
         Assert.Equal("receipt-dual-arm", receipt.ReceiptId);
+        Assert.Equal("finding-round-contract-1", receipt.FindingRoundFingerprint);
         Assert.Collection(
             receipt.Arms!,
             arm =>
@@ -677,6 +692,18 @@ public sealed class TaskVerificationTests
                 Assert.Equal(FindingEvidenceArmDisposition.Red, arm.Disposition);
                 Assert.Equal(["TaskVerificationTests.NegativeControl"], arm.FailingTestIdentities);
             });
+        Assert.Collection(
+            receipt.RequestDispositions!,
+            disposition =>
+            {
+                Assert.Equal("finding-a", disposition.FindingStableId);
+                Assert.Equal("executed-batched", disposition.Disposition);
+            },
+            disposition =>
+            {
+                Assert.Equal("finding-b", disposition.FindingStableId);
+                Assert.Equal("superseded-by-actionable-red", disposition.Reason);
+            });
     }
 
     [Xunit.Fact]
@@ -685,10 +712,12 @@ public sealed class TaskVerificationTests
         var armJson = JsonSerializer.Serialize(FindingEvidenceArmDisposition.ApparatusFailure);
         var outcomeJson = JsonSerializer.Serialize(FindingEvidenceOutcomeReason.ApparatusFailure);
         var refusalJson = JsonSerializer.Serialize(FindingEvidenceNotHonouredReason.SelectionApparatusFailure);
+        var supersededJson = JsonSerializer.Serialize(FindingEvidenceNotHonouredReason.SupersededByActionableRed);
 
         Assert.Equal("\"apparatus-failure\"", armJson);
         Assert.Equal("\"apparatus-failure\"", outcomeJson);
         Assert.Equal("\"selection-apparatus-failure\"", refusalJson);
+        Assert.Equal("\"superseded-by-actionable-red\"", supersededJson);
         Assert.Equal(
             FindingEvidenceArmDisposition.ApparatusFailure,
             JsonSerializer.Deserialize<FindingEvidenceArmDisposition>(armJson));
@@ -698,6 +727,9 @@ public sealed class TaskVerificationTests
         Assert.Equal(
             FindingEvidenceNotHonouredReason.SelectionApparatusFailure,
             JsonSerializer.Deserialize<FindingEvidenceNotHonouredReason>(refusalJson));
+        Assert.Equal(
+            FindingEvidenceNotHonouredReason.SupersededByActionableRed,
+            JsonSerializer.Deserialize<FindingEvidenceNotHonouredReason>(supersededJson));
     }
 
     [Xunit.Fact(DisplayName = "RecordTaskVerification_completes_goal_only_when_all_gates_pass")]

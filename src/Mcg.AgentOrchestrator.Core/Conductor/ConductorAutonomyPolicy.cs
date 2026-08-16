@@ -38,8 +38,7 @@ public sealed record ConductorAutonomyPolicy(
     double EmptyOutputRetryBackoffMultiplier = 2,
     double EmptyOutputRetryMaxDelaySeconds = 30,
     int ReviewAutoRetryWarningRound = 4,
-    int ReviewAutoRetryStopRound = 7,
-    int MaxFocusedEvidenceRunsPerRound = 2)
+    int ReviewAutoRetryStopRound = 7)
 {
     private static readonly GoalLifecycleState[] AllStates =
         Enum.GetValues<GoalLifecycleState>();
@@ -158,9 +157,6 @@ public sealed record ConductorAutonomyPolicy(
         if (ReviewAutoRetryStopRound <= ReviewAutoRetryWarningRound)
             errors.Add($"reviewAutoRetryStopRound ({ReviewAutoRetryStopRound}) must be greater than reviewAutoRetryWarningRound ({ReviewAutoRetryWarningRound}).");
 
-        if (MaxFocusedEvidenceRunsPerRound <= 0)
-            errors.Add($"maxFocusedEvidenceRunsPerRound must be greater than zero (got {MaxFocusedEvidenceRunsPerRound}).");
-
         foreach (var state in AllStates)
         {
             if (!TransitionMap.ContainsKey(state))
@@ -185,7 +181,6 @@ public sealed record ConductorAutonomyPolicy(
         sb.AppendLine($"  \"emptyOutputRetryMaxDelaySeconds\": {EmptyOutputRetryMaxDelaySeconds},");
         sb.AppendLine($"  \"reviewAutoRetryWarningRound\": {ReviewAutoRetryWarningRound},");
         sb.AppendLine($"  \"reviewAutoRetryStopRound\": {ReviewAutoRetryStopRound},");
-        sb.AppendLine($"  \"maxFocusedEvidenceRunsPerRound\": {MaxFocusedEvidenceRunsPerRound},");
 
         sb.AppendLine(AutoPromoteRiskThreshold.HasValue
             ? $"  \"autoPromoteRiskThreshold\": {JsonStr(AutoPromoteRiskThreshold.Value.ToString())},"
@@ -253,10 +248,6 @@ public sealed record ConductorAutonomyPolicy(
             var reviewAutoRetryStopRound = root.TryGetProperty("reviewAutoRetryStopRound", out _)
                 ? RequireInt(root, "reviewAutoRetryStopRound", src)
                 : 7;
-            var maxFocusedEvidenceRunsPerRound = root.TryGetProperty("maxFocusedEvidenceRunsPerRound", out _)
-                ? RequireInt(root, "maxFocusedEvidenceRunsPerRound", src)
-                : 2;
-
             ChangeRiskTier? riskThreshold = null;
             if (root.TryGetProperty("autoPromoteRiskThreshold", out var thresholdEl)
                 && thresholdEl.ValueKind != JsonValueKind.Null)
@@ -303,8 +294,7 @@ public sealed record ConductorAutonomyPolicy(
                 emptyOutputRetryBackoffMultiplier,
                 emptyOutputRetryMaxDelaySeconds,
                 reviewAutoRetryWarningRound,
-                reviewAutoRetryStopRound,
-                maxFocusedEvidenceRunsPerRound);
+                reviewAutoRetryStopRound);
 
             var errors = policy.Validate();
             if (errors.Count > 0)
