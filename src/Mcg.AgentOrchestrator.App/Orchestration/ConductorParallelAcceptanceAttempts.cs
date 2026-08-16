@@ -1158,7 +1158,19 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
             sleep: _buildPermitSleep);
         if (acquisition is DotnetBuildLeaseAcquisition.Acquired acquired)
         {
+            var acquiredAt = _timeProvider.GetTimestamp();
             var permitName = PermitName(acquired.Lease.Environment);
+            acquired.Lease.RegisterExecutionLockReleaseObserver(() =>
+            {
+                var heldMs = Math.Max(
+                    0,
+                    (long)_timeProvider.GetElapsedTime(acquiredAt, _timeProvider.GetTimestamp()).TotalMilliseconds);
+                EmitAttemptPermitReleaseReceipt(
+                    attempt,
+                    Environment.ProcessId,
+                    permitName,
+                    heldMs);
+            });
             EmitAttemptLeaseReceipt("acquire", attempt, candidate, Environment.ProcessId, permitName);
             EmitAttemptLeaseReceipt("handoff", attempt, candidate, Environment.ProcessId, permitName);
             return acquired.Lease;
@@ -1246,6 +1258,20 @@ internal sealed class ConductorParallelAcceptanceAttemptCoordinator
         var line = $"ACCEPTANCE_LEASE_{action.ToUpperInvariant()} goal={attempt.GoalPrefix} attempt={attempt.AttemptId} permit={slot} holderPid={pid}{waitReasonField}";
         Console.WriteLine(line);
         PersistLeaseReceipt(attempt, line, waitReason);
+    }
+
+    private void EmitAttemptPermitReleaseReceipt(
+        ConductorParallelAcceptanceAttempt attempt,
+        int holderPid,
+        string permitName,
+        long heldMs)
+    {
+        var line =
+            $"ACCEPTANCE_LEASE_PERMIT_RELEASE goal={attempt.GoalPrefix} attempt={attempt.AttemptId} " +
+            $"permit={permitName} holderPid={holderPid.ToString(System.Globalization.CultureInfo.InvariantCulture)} " +
+            $"releaseKind=execution-lock heldMs={heldMs.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        Console.WriteLine(line);
+        PersistLeaseReceipt(attempt, line, waitReason: null);
     }
 
     private static string PermitName(DotnetBuildEnvironment environment) =>

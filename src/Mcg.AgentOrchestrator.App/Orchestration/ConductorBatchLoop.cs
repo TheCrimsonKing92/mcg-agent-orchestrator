@@ -1840,6 +1840,7 @@ internal sealed class ConductorBatchLoop
             "ACCEPTANCE" => "acceptance",
             "ACCEPTANCE_LEASE_ACQUIRE" => "acceptance-lease",
             "ACCEPTANCE_LEASE_HANDOFF" => "acceptance-lease",
+            "ACCEPTANCE_LEASE_PERMIT_RELEASE" => "acceptance-lease",
             "ACCEPTANCE_LEASE_RELEASE" => "acceptance-lease",
             "ACCEPTANCE_LEASE_YIELD" => "acceptance-lease",
             "BUILD_LOCK_BLOCKED" => "lock-blocker",
