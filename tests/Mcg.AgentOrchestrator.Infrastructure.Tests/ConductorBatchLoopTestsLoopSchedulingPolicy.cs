@@ -110,13 +110,18 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
             await intakeTask.WaitAsync(TimeSpan.FromSeconds(2));
             Xunit.Assert.NotNull(currentGoal);
             Xunit.Assert.False(refiner.Entered.IsSet);
-            var refinementTask = GoalRefinementWorkCoordinator.ProcessAsync(
+            var refinementMessage = Xunit.Assert.Single(
+                await repository.ListOutboxMessagesAsync(GoalRefinementWorkCoordinator.OutboxKind));
+            Xunit.Assert.Equal(GoalRefinementWorkCoordinator.MessageId(currentGoal!.Id), refinementMessage.Id);
+
+            using var refinementDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            var refinementTask = Task.Run(() => GoalRefinementWorkCoordinator.ProcessAsync(
                 repository,
                 workspace,
                 new InMemoryModelProviderRegistry([refiner]),
                 profiles,
-                currentGoal!.Id);
-            Xunit.Assert.True(refiner.Entered.Wait(TimeSpan.FromSeconds(15)), "Durable refinement work did not start.");
+                currentGoal.Id,
+                refinementDeadline.Token));
 
             var tickCount = 0;
             string loopOutput = string.Empty;
@@ -142,7 +147,15 @@ public sealed class ConductorBatchLoopTestsLoopSchedulingPolicy : ConductorBatch
 
             try
             {
+                Xunit.Assert.True(
+                    refiner.Entered.Wait(TimeSpan.FromSeconds(15)),
+                    "Durable refinement work did not start.");
                 await loopTask.WaitAsync(TimeSpan.FromSeconds(15));
+            }
+            catch
+            {
+                refinementDeadline.Cancel();
+                throw;
             }
             finally
             {
