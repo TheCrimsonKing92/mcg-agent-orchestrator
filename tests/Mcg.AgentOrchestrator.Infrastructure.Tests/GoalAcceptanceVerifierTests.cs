@@ -6625,7 +6625,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == $"covered by {laneCount} partitioned checks");
+            check.ResultSummary?.StartsWith(
+                $"covered by {laneCount} partitioned checks; changed file in dependency closure; ",
+                StringComparison.Ordinal) == true);
         DeleteDirectoryWithRetry(root);
     }
 
@@ -7315,7 +7317,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == $"covered by {laneCount} partitioned checks");
+            check.ResultSummary?.StartsWith(
+                $"covered by {laneCount} partitioned checks; changed file in dependency closure; ",
+                StringComparison.Ordinal) == true);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_substitutes_solution_check_with_partitioned_infrastructure_checks_for_infra_scope")]
@@ -7360,7 +7364,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == $"covered by {laneCount} partitioned checks");
+            check.ResultSummary?.StartsWith(
+                $"covered by {laneCount} partitioned checks; changed file in dependency closure; ",
+                StringComparison.Ordinal) == true);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_substitutes_solution_check_with_union_for_core_and_infra_scope")]
@@ -7423,7 +7429,9 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
         Assert.Contains(result.Checks!, check =>
             check.Name == "infrastructure tests" &&
             check.Passed &&
-            check.ResultSummary == $"covered by {laneCount} partitioned checks");
+            check.ResultSummary?.StartsWith(
+                $"covered by {laneCount} partitioned checks; changed file in dependency closure; ",
+                StringComparison.Ordinal) == true);
     }
 
     [Xunit.Fact(DisplayName = "GoalAcceptanceVerifier_keeps_solution_check_for_build_security_broad_or_disabled_scopes")]
@@ -9416,6 +9424,7 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
               "version": 1,
               "checks": [
                 { "name": "git diff whitespace", "type": "command", "command": "git", "arguments": ["diff", "--check"] },
+                { "name": "core tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Core.Tests/Mcg.AgentOrchestrator.Core.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
                 { "name": "infrastructure tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Mcg.AgentOrchestrator.Infrastructure.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
                 { "name": "provider environment tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/ProviderEnvironment/Mcg.AgentOrchestrator.Infrastructure.ProviderEnvironment.Tests.csproj", "arguments": ["--verbosity", "minimal"] },
                 { "name": "cli tests", "type": "dotnet-test", "runner": "mtp", "project": "tests/Mcg.AgentOrchestrator.Infrastructure.Tests/Cli/Mcg.AgentOrchestrator.Infrastructure.Cli.Tests.csproj", "arguments": ["--verbosity", "minimal"] }
