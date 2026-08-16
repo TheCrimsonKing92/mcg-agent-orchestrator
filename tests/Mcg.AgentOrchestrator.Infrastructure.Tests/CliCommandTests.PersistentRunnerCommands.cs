@@ -1513,6 +1513,106 @@ public sealed class CliCommandTestsPersistentRunnerCommands : CliCommandTestBase
     }
 
     [Xunit.Fact]
+    public async Task BacklogIntakeKeylessCreationMarksRecordGoalCreated()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var item = await new BacklogStore(workspace.BacklogStorePath).AddAsync(
+            "Create a keyless backlog goal");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        Xunit.Assert.True(CliPersistentStateRunner.ExecuteCommand(
+            ["backlog-intake", item.Id, "--create-simple-goal", "--backlog-coverage", "slice"],
+            repository,
+            workspace,
+            ref agents,
+            new InMemoryModelProviderRegistry([]),
+            ref profiles,
+            ref currentGoal));
+
+        var goal = Xunit.Assert.Single((await repository.LoadAsync()).Goals);
+        var record = new BacklogIntakeRecordStore(workspace.SqliteStatePath).Get(item.Id);
+        Xunit.Assert.NotNull(record);
+        Xunit.Assert.Equal("GoalCreated", record.Status);
+        Xunit.Assert.Equal(goal.Id.Value, record.GoalId);
+    }
+
+    [Xunit.Fact]
+    public async Task BacklogIntakeKeylessBatchCreatesEveryGoalWithoutReusingFinalizer()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var first = await store.AddAsync("Create first keyless batch goal");
+        var second = await store.AddAsync("Create second keyless batch goal");
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        Xunit.Assert.True(CliPersistentStateRunner.ExecuteCommand(
+            [
+                "backlog-intake", first.Id, second.Id,
+                "--create-simple-goal", "--backlog-coverage", "slice"
+            ],
+            repository,
+            workspace,
+            ref agents,
+            new InMemoryModelProviderRegistry([]),
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Equal(2, (await repository.LoadAsync()).Goals.Count);
+        Xunit.Assert.All(
+            new[] { first, second },
+            item =>
+            {
+                var record = new BacklogIntakeRecordStore(workspace.SqliteStatePath).Get(item.Id);
+                Xunit.Assert.NotNull(record);
+                Xunit.Assert.Equal("GoalCreated", record.Status);
+                Xunit.Assert.NotNull(record.GoalId);
+            });
+    }
+
+    [Xunit.Fact]
+    public async Task BacklogIntakeKeylessNoOpDoesNotRequireGoalCreationFinalizer()
+    {
+        var root = CreateTempDirectory();
+        var workspace = CreateRefinedWorkspace(root);
+        var store = new BacklogStore(workspace.BacklogStorePath);
+        var done = await store.AddAsync("Already completed backlog slice");
+        await store.CloseAsync(done.Id);
+        var busy = await store.AddAsync("Already reserved backlog slice");
+        _ = new BacklogIntakeRecordStore(workspace.SqliteStatePath).Reserve(busy.Id, busy.Title);
+        var repository = CreateMigratedStateRepository(workspace.SqliteStatePath);
+        IReadOnlyList<AgentDefinition> agents = AgentCatalog.Default().Agents;
+        var profiles = WorkerProfileCatalog.Default();
+        Goal? currentGoal = null;
+
+        Xunit.Assert.False(CliPersistentStateRunner.ExecuteCommand(
+            ["backlog-intake", done.Id, "--create-simple-goal", "--backlog-coverage", "slice"],
+            repository,
+            workspace,
+            ref agents,
+            new InMemoryModelProviderRegistry([]),
+            ref profiles,
+            ref currentGoal));
+        Xunit.Assert.False(CliPersistentStateRunner.ExecuteCommand(
+            ["backlog-intake", busy.Id, "--create-simple-goal", "--backlog-coverage", "slice"],
+            repository,
+            workspace,
+            ref agents,
+            new InMemoryModelProviderRegistry([]),
+            ref profiles,
+            ref currentGoal));
+
+        Xunit.Assert.Empty((await repository.LoadAsync()).Goals);
+    }
+
+    [Xunit.Fact]
     public async Task GoalIntake_same_key_replays_one_goal_and_task_graph()
     {
         var root = CreateTempDirectory();

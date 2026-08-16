@@ -198,7 +198,7 @@ internal static class CliPersistentStateRunner
             return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
-        if (IsBacklogIntakeGoalCreationCommand(args))
+        if (IsBacklogIntakeGoalCreationCommand(args) && HasRequestKey(args))
         {
             return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
@@ -679,6 +679,11 @@ internal static class CliPersistentStateRunner
 
     internal static bool IsGoalIntakeStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasRequestKey(IReadOnlyList<string> args) =>
+        args.Any(arg =>
+            arg.Equals("--request-key", StringComparison.OrdinalIgnoreCase) ||
+            arg.StartsWith("--request-key=", StringComparison.OrdinalIgnoreCase));
 
     internal static bool IsGoalReplacementCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("goal-replace", StringComparison.OrdinalIgnoreCase);
