@@ -122,6 +122,55 @@ public sealed class AssemblyTempRedirectTests
         Assert.Equal(["pdead1", "pbeef", "p7fffffff"], reapable);
     }
 
+    [Fact(DisplayName = "Age sweep removes a root whose PID is still live, since PID reuse cannot bound growth")]
+    public void AgeSweepRemovesStaleRootEvenWhenPidLooksAlive()
+    {
+        var cutoff = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+        var ages = new Dictionary<string, DateTime>(StringComparer.Ordinal)
+        {
+            ["pbeef"] = cutoff.AddHours(-1),
+            ["pdead1"] = cutoff.AddMinutes(1),
+        };
+
+        var abandoned = AssemblyTempRedirect.SelectRootsAbandonedByAge(
+            ["pbeef", "pdead1"],
+            currentProcessId: 0x30,
+            lastWriteUtc: name => ages[name],
+            cutoffUtc: cutoff);
+
+        // pbeef predates the cutoff and goes, whatever its PID now refers to. pdead1 is newer than
+        // the cutoff and stays. Liveness is deliberately not consulted here.
+        Assert.Equal(["pbeef"], abandoned);
+    }
+
+    [Fact(DisplayName = "Age sweep keeps every root when none predates the cutoff")]
+    public void AgeSweepKeepsRootsNewerThanCutoff()
+    {
+        var cutoff = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+
+        var abandoned = AssemblyTempRedirect.SelectRootsAbandonedByAge(
+            ["pbeef", "pdead1"],
+            currentProcessId: 0x30,
+            lastWriteUtc: _ => cutoff.AddMinutes(1),
+            cutoffUtc: cutoff);
+
+        Assert.Empty(abandoned);
+    }
+
+    [Fact(DisplayName = "Age sweep never removes the current process root however old it looks")]
+    public void AgeSweepNeverRemovesCurrentProcessRoot()
+    {
+        var cutoff = new DateTime(2026, 8, 16, 12, 0, 0, DateTimeKind.Utc);
+
+        var abandoned = AssemblyTempRedirect.SelectRootsAbandonedByAge(
+            ["p30"],
+            currentProcessId: 0x30,
+            lastWriteUtc: _ => cutoff.AddYears(-1),
+            cutoffUtc: cutoff);
+
+        Assert.Empty(abandoned);
+    }
+
     [Fact(DisplayName = "Reaper never removes the current process root even if reported dead")]
     public void NeverReapsCurrentProcessRoot()
     {

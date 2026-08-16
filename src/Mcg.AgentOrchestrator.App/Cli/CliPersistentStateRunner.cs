@@ -84,6 +84,17 @@ internal static class CliPersistentStateRunner
             $"cli:{(args.Count == 0 ? "repl" : args[0].Trim().ToLowerInvariant())}");
         DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
 
+        if (IsGoalRefinementWorkCommand(args))
+        {
+            return ExecuteGoalRefinementWork(
+                args,
+                stateRepository,
+                workspace,
+                providers,
+                workerProfiles,
+                ref currentGoal);
+        }
+
         if (IsOperatorIntentStatusCommand(args))
         {
             PrintOperatorIntentStatus(args, workspace);
@@ -184,7 +195,7 @@ internal static class CliPersistentStateRunner
             return ExecuteProcessRefreshOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal);
         }
 
-        if (IsBacklogIntakeCommand(args) && HasRequestKey(args))
+        if (IsBacklogIntakeGoalCreationCommand(args) && HasRequestKey(args))
         {
             return ExecuteGoalCreateOutsideTransaction(args, stateRepository, workspace, ref agents, providers, ref workerProfiles, ref currentGoal, channel);
         }
@@ -264,15 +275,18 @@ internal static class CliPersistentStateRunner
         var currentGoalId = currentGoal?.Id.Value;
         Goal? nextCurrentGoal = currentGoal;
         string? postCommitFailure = null;
+        IReadOnlyList<GoalId> pendingRefinementGoalIds = [];
         var isAcceptanceRetry = args.Count > 0 &&
             args[0].Equals("acceptance-retry", StringComparison.OrdinalIgnoreCase);
         bool changed;
-        if (isAcceptanceRetry &&
-            stateRepository is IOrchestratorStateOutboxRepository outboxRepository)
+        if (stateRepository is IOrchestratorStateOutboxRepository outboxRepository)
         {
             changed = outboxRepository.TransactWithOutboxAsync(
                     (kernel, _) =>
                     {
+                        var existingGoalIds = kernel.Goals
+                            .Select(goal => goal.Id)
+                            .ToHashSet();
                         var outboxMessages = new List<OrchestratorStateOutboxMessage>();
                         var commandAgents = nextAgents;
                         var commandProfiles = nextWorkerProfiles;
@@ -293,6 +307,17 @@ internal static class CliPersistentStateRunner
                         nextAgents = commandAgents;
                         nextWorkerProfiles = commandProfiles;
                         nextCurrentGoal = commandGoal;
+                        pendingRefinementGoalIds = kernel.Goals
+                            .Where(goal => !existingGoalIds.Contains(goal.Id))
+                            .Where(GoalRefinementWorkCoordinator.HasPendingWork)
+                            .Select(goal => goal.Id)
+                            .ToArray();
+                        foreach (var goalId in pendingRefinementGoalIds)
+                        {
+                            var messageId = GoalRefinementWorkCoordinator.MessageId(goalId);
+                            if (outboxMessages.All(message => !message.Id.Equals(messageId, StringComparison.Ordinal)))
+                                outboxMessages.Add(GoalRefinementWorkCoordinator.CreateMessage(goalId));
+                        }
                         var mustCommit = shouldSave || postCommitFailure is not null;
                         return Task.FromResult((
                             mustCommit,
@@ -301,7 +326,8 @@ internal static class CliPersistentStateRunner
                     })
                 .GetAwaiter()
                 .GetResult();
-            DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
+            if (isAcceptanceRetry)
+                DrainAcceptanceRetryAuditOutbox(stateRepository, workspace);
         }
         else
         {
@@ -346,6 +372,9 @@ internal static class CliPersistentStateRunner
         {
             throw new InvalidOperationException(postCommitFailure);
         }
+
+        foreach (var goalId in pendingRefinementGoalIds)
+            _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, goalId);
 
         return changed;
     }
@@ -628,14 +657,22 @@ internal static class CliPersistentStateRunner
         return args.Count > 0 &&
             (args[0].Equals("backlog-intake", StringComparison.OrdinalIgnoreCase) ||
              (args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
-              args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))));
+               args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))));
     }
+
+    internal static bool IsBacklogIntakeGoalCreationCommand(IReadOnlyList<string> args) =>
+        IsBacklogIntakeCommand(args) &&
+        ((args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
+          args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))) ||
+         args.Any(arg =>
+             arg.Equals("--create-goal", StringComparison.OrdinalIgnoreCase) ||
+             arg.Equals("--create-simple-goal", StringComparison.OrdinalIgnoreCase)));
 
     internal static bool IsGoalCreateCommand(IReadOnlyList<string> args) =>
         args.Count > 0 &&
         ((args[0].Equals("goal", StringComparison.OrdinalIgnoreCase) &&
-          !args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))) ||
-         (args[0].Equals("simple-goal", StringComparison.OrdinalIgnoreCase) && HasRequestKey(args)));
+           !args.Any(arg => arg.Equals("--from-backlog", StringComparison.OrdinalIgnoreCase))) ||
+          args[0].Equals("simple-goal", StringComparison.OrdinalIgnoreCase));
 
     internal static bool IsGoalIntakeStatusCommand(IReadOnlyList<string> args) =>
         args.Count > 0 && args[0].Equals("goal-intake-status", StringComparison.OrdinalIgnoreCase);
@@ -1924,6 +1961,7 @@ internal static class CliPersistentStateRunner
 
         void FinalizeGoalReplacement(Goal preparedGoal, GoalReplacementCommand command)
         {
+            GoalRefinementWorkCoordinator.RecordPending(kernel, preparedGoal.Id);
             var preparedSnapshot = kernel.ExportGoalSnapshot(preparedGoal.Id);
             var fingerprintInputs = BuildGoalReplacementFingerprint(command, preparedSnapshot);
             var fingerprint = fingerprintInputs.Fingerprint;
@@ -2081,6 +2119,7 @@ internal static class CliPersistentStateRunner
                 preparedGoal.Id,
                 deferredCollaborationWriter.SnapshotEffects(),
                 deferredEventWriter.SnapshotEffects());
+            var refinementMessage = GoalRefinementWorkCoordinator.CreateMessage(preparedGoal.Id);
 
             GoalReplacementReceipt receipt;
             try
@@ -2274,7 +2313,7 @@ internal static class CliPersistentStateRunner
                                     transferred.OwnerGoalId,
                                     transferred.Version,
                                     "replaced"),
-                                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage]));
+                                OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage, refinementMessage]));
                         })
                     .GetAwaiter()
                     .GetResult();
@@ -2387,6 +2426,7 @@ internal static class CliPersistentStateRunner
                 deferredCollaborationWriter.CompleteDelivery();
                 deferredEventWriter.CompleteDeliveryTo(
                     new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel));
+                _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, preparedGoal.Id);
             }
             var outcomeCode = RenderGoalReplacementOutcomeCode(receipt.Outcome);
             var receiptOwner = receipt.OwnerGoalId ?? "unknown";
@@ -3312,12 +3352,14 @@ internal static class CliPersistentStateRunner
 
         void FinalizeGoalCreation(Goal goal)
         {
+            GoalRefinementWorkCoordinator.RecordPending(kernel, goal.Id);
             var preparedSnapshot = kernel.ExportGoalSnapshot(goal.Id);
             GoalCreationSideEffectDelivery.BeforeStateCommit?.Invoke(goal.Id);
             var deliveryMessage = GoalCreationSideEffectDelivery.CreateMessage(
                 goal.Id,
                 deferredCollaborationWriter.SnapshotEffects(),
                 deferredEventWriter.SnapshotEffects());
+            var refinementMessage = GoalRefinementWorkCoordinator.CreateMessage(goal.Id);
             outboxRepository.TransactWithOutboxAsync(
                     (currentKernel, _) =>
                     {
@@ -3339,7 +3381,7 @@ internal static class CliPersistentStateRunner
                         return Task.FromResult((
                             ShouldSave: true,
                             Result: true,
-                            OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage]));
+                            OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)[deliveryMessage, refinementMessage]));
                     })
                 .GetAwaiter()
                 .GetResult();
@@ -3352,6 +3394,7 @@ internal static class CliPersistentStateRunner
                 deferredCollaborationWriter.CompleteDelivery();
                 deferredEventWriter.CompleteDeliveryTo(
                     new GoalLifecycleEventWriter(workspace.GoalLifecycleEventsDirectory, kernel: kernel));
+                _ = GoalRefinementWorkCoordinator.TryLaunch(workspace, goal.Id);
             }
             catch (Exception ex)
             {
@@ -3385,6 +3428,12 @@ internal static class CliPersistentStateRunner
                 throw new InvalidOperationException("GOAL_CREATE_COMMIT_MISSING reason=finalizer-not-invoked");
             }
         }
+        catch (InvalidOperationException ex)
+            when (request is null &&
+                  ex.Message.StartsWith("GOAL_INTAKE_BACKLOG_ALREADY_HAS_GOAL", StringComparison.Ordinal))
+        {
+            return false;
+        }
         catch (Exception ex) when (request is not null && committedSnapshot is null)
         {
             _ = requestStore!.MarkFailed(
@@ -3408,6 +3457,38 @@ internal static class CliPersistentStateRunner
         }
 
         return shouldSave;
+    }
+
+    private static bool IsGoalRefinementWorkCommand(IReadOnlyList<string> args) =>
+        args.Count > 0 && args[0].Equals(GoalRefinementWorkCoordinator.CommandName, StringComparison.OrdinalIgnoreCase);
+
+    private static bool ExecuteGoalRefinementWork(
+        IReadOnlyList<string> args,
+        ITransactionalOrchestratorStateRepository stateRepository,
+        OrchestratorWorkspace workspace,
+        IModelProviderRegistry providers,
+        WorkerProfileCatalog workerProfiles,
+        ref Goal? currentGoal)
+    {
+        if (args.Count != 2 || string.IsNullOrWhiteSpace(args[1]))
+            throw new InvalidOperationException($"Usage: {GoalRefinementWorkCoordinator.CommandName} <goal-id>");
+        if (stateRepository is not IOrchestratorStateOutboxRepository outboxRepository)
+            throw new InvalidOperationException("Goal refinement requires durable outbox support.");
+
+        var result = GoalRefinementWorkCoordinator.ProcessAsync(
+                outboxRepository,
+                workspace,
+                providers,
+                workerProfiles,
+                new GoalId(args[1]))
+            .GetAwaiter()
+            .GetResult();
+        var kernel = stateRepository.LoadAsync().GetAwaiter().GetResult();
+        currentGoal = kernel.Goals.FirstOrDefault(goal => goal.Id.Value.Equals(args[1], StringComparison.Ordinal));
+        Console.WriteLine(
+            $"SPEC_REFINEMENT_WORK_COMPLETE goal={result.GoalId} " +
+            $"claimed={result.Claimed.ToString().ToLowerInvariant()} attached={result.Attached.ToString().ToLowerInvariant()}");
+        return false;
     }
 
     private static string ResolveGoalIntakeFailureCode(Exception exception)

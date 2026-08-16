@@ -1318,7 +1318,6 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
 
         case "delegate":
             context.CurrentGoal = OrchestratorEntityResolver.ResolveGoal(context.Kernel, context.CurrentGoal, parts.Count > 1 ? parts[1] : null);
-            GoalRefinementGate.EnsureRefined(context.Kernel, context.Workspace, context.Providers, context.CurrentGoal, eventWriter: context.EventWriter);
             var delegation = context.Kernel.ActivateGoal(context.CurrentGoal.Id, context.Agents);
             ConsoleViews.PrintDelegationPlan(context.CurrentGoal, delegation);
             return delegation.Assignments.Count > 0;
@@ -1628,6 +1627,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                     ConsoleViews.PrintTerminalGoalSweep(terminalSweep, includeBlockers: false);
                     TerminalGoalSweepAttention.Surface(loopKernel, terminalSweep, context.Workspace.OrchestratorDirectory);
                     GoalWorktreeOrphanSweepScheduler.SweepIfDue(context.Workspace.ExecutionDirectory, loopKernel);
+                    GoalRefinementWorkCoordinator.TryLaunchFirstPending(
+                        new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
+                        context.Workspace);
                     RunEventMaintenanceCadence.TryRunIfDue(
                         context.Workspace.RunEventStorePath,
                         context.Workspace.ConductEventsLogPath);
@@ -1745,6 +1747,9 @@ private static bool? TryExecuteGoalCommand(string command, IReadOnlyList<string>
                 var watchReaper = new BackgroundDispatchRunner();
                 Action<AgentOrchestratorKernel> watchSweep = wk =>
                 {
+                    GoalRefinementWorkCoordinator.TryLaunchFirstPending(
+                        new SqliteOrchestratorStateRepository(context.Workspace.SqliteStatePath),
+                        context.Workspace);
                     watchReaper.BeginRefreshCycle();
                     foreach (var resolved in wk.SweepStaleHumanWaits(TimeSpan.FromHours(24)))
                     {

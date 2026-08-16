@@ -19,7 +19,12 @@ internal sealed record TestCoverageInvariantResult(
     IReadOnlyList<string> MissingTests,
     IReadOnlyList<string> EmptyPartitions,
     string? FailureClassification,
-    IReadOnlyList<string> ExecutedTests);
+    IReadOnlyList<string> ExecutedTests,
+    IReadOnlyList<TestCoverageIdentityMismatch>? IdentityMismatches = null);
+
+internal sealed record TestCoverageIdentityMismatch(
+    string Discovered,
+    string? Executed);
 
 internal sealed record TestDiscoverySnapshot(
     IReadOnlySet<string> Tests,
@@ -306,10 +311,19 @@ internal static class TestCoverageInvariant
             .Where(discovered => completedTests.Any(completed => IdentitiesMatch(discovered, completed)))
             .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        var recordedTests = candidateDiscoveredTests
+            .Where(discovered => accountedTests.Any(accounted => IdentitiesMatch(discovered, accounted)))
+            .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var missing = candidateDiscoveredTests
             .Where(discovered => !accountedTests.Any(accounted => IdentitiesMatch(discovered, accounted)))
             .OrderBy(identity => identity, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var identityMismatches = missing
+            .Select(discovered => new TestCoverageIdentityMismatch(
+                discovered,
+                FindClosestExecutedForm(discovered, completedTests)))
+            .ToArray();
         var attributionReceipts = new List<string>();
         string? crossGenerationCountReceipt = null;
 
@@ -417,8 +431,8 @@ internal static class TestCoverageInvariant
 
         var passed = emptyPartitions.Count == 0 && missing.Count == 0;
         var summary = passed
-            ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, partitions={partitions.Count}"
-            : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
+            ? $"structural coverage complete: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, recorded={recordedTests.Length}, partitions={partitions.Count}"
+            : $"structural coverage failed: discovered={candidateDiscoveredTests.Count}, executed={executedTests.Length}, recorded={recordedTests.Length}, missing={missing.Count}, emptyPartitions={emptyPartitions.Count}";
         if (crossGenerationCountReceipt is not null)
         {
             summary += $"; {crossGenerationCountReceipt}";
@@ -440,7 +454,50 @@ internal static class TestCoverageInvariant
             missing,
             emptyPartitions,
             failureClassification,
-            executedTests);
+            executedTests,
+            identityMismatches);
+    }
+
+    private static string? FindClosestExecutedForm(string discovered, IReadOnlySet<string> completedTests)
+    {
+        var discoveredMethod = NormalizeMethodName(GetIdentityMethodName(discovered));
+        var discoveredClass = GetIdentityClassQualifier(discovered);
+        if (string.IsNullOrWhiteSpace(discoveredMethod))
+        {
+            return null;
+        }
+
+        return completedTests
+            .Where(executed =>
+                IdentityClassQualifiersMatch(discoveredClass, GetIdentityClassQualifier(executed)) &&
+                NormalizeMethodName(GetIdentityMethodName(executed)).Equals(
+                    discoveredMethod,
+                    StringComparison.OrdinalIgnoreCase))
+            .OrderBy(executed => EditDistance(discovered, executed))
+            .ThenBy(executed => executed, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+    }
+
+    private static int EditDistance(string left, string right)
+    {
+        var previous = Enumerable.Range(0, right.Length + 1).ToArray();
+        var current = new int[right.Length + 1];
+        for (var leftIndex = 1; leftIndex <= left.Length; leftIndex++)
+        {
+            current[0] = leftIndex;
+            for (var rightIndex = 1; rightIndex <= right.Length; rightIndex++)
+            {
+                var substitutionCost = char.ToUpperInvariant(left[leftIndex - 1]) ==
+                    char.ToUpperInvariant(right[rightIndex - 1]) ? 0 : 1;
+                current[rightIndex] = Math.Min(
+                    Math.Min(current[rightIndex - 1] + 1, previous[rightIndex] + 1),
+                    previous[rightIndex - 1] + substitutionCost);
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[right.Length];
     }
 
     private static bool IdentitiesMatch(string left, string right)
@@ -480,6 +537,26 @@ internal static class TestCoverageInvariant
         var separatorIndex = Math.Max(normalized.LastIndexOf('.'), normalized.LastIndexOf(':'));
         return (separatorIndex >= 0 ? normalized[(separatorIndex + 1)..] : normalized).Trim();
     }
+
+    private static string GetIdentityClassQualifier(string identity)
+    {
+        var normalized = NormalizeIdentity(identity);
+        var argumentsIndex = normalized.IndexOf('(');
+        if (argumentsIndex >= 0)
+        {
+            normalized = normalized[..argumentsIndex];
+        }
+
+        var separatorIndex = Math.Max(normalized.LastIndexOf('.'), normalized.LastIndexOf(':'));
+        return separatorIndex > 0 ? normalized[..separatorIndex].Trim() : string.Empty;
+    }
+
+    private static bool IdentityClassQualifiersMatch(string left, string right) =>
+        !string.IsNullOrWhiteSpace(left) &&
+        !string.IsNullOrWhiteSpace(right) &&
+        (left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+         left.EndsWith($".{right}", StringComparison.OrdinalIgnoreCase) ||
+         right.EndsWith($".{left}", StringComparison.OrdinalIgnoreCase));
 
     private static string NormalizeMethodName(string methodName)
     {

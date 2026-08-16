@@ -15,39 +15,57 @@ internal static partial class DashboardEndpoints
             var agents = services.LoadAgentCatalog().Agents;
             var profiles = WorkerProfileStore.Load(services.WorkerProfilePath);
             var submission = DashboardRequestParser.ParseCreateGoalSubmission(await ReadRequestBodyAsync(context.Request));
-            return await MutateAsync(
-                services,
-                async (current, saveCheckpoint) =>
+            GoalId? createdGoalId = null;
+            var creationResult = await services.State.MutateWithOutboxAsync(
+                (current, enqueue) =>
                 {
                     var isSimple = submission.Workflow?.Equals("simple", StringComparison.OrdinalIgnoreCase) is true;
                     var goal = isSimple
                         ? GoalLifecycleCommands.CreateAndActivateSimpleGoal(current, agents, submission.Objective, services.Workspace, services.Providers)
                         : GoalLifecycleCommands.CreateAndActivateGoal(current, agents, submission.Objective, services.Workspace, services.Providers);
+                    createdGoalId = goal.Id;
+                    GoalRefinementWorkCoordinator.RecordPending(current, goal.Id);
+                    enqueue(GoalRefinementWorkCoordinator.CreateMessage(goal.Id));
+                    return Task.FromResult<IResult>(Json(
+                        BuildCreatedGoalResponse(current, goal, services.Workspace.ExecutionDirectory),
+                        StatusCodes.Status201Created));
+                },
+                context.RequestAborted);
+
+            var goalId = createdGoalId
+                ?? throw new InvalidOperationException("Dashboard goal creation did not return a goal identity.");
+
+            _ = GoalRefinementWorkCoordinator.TryLaunch(services.Workspace, goalId);
+            if (!submission.AutoHandoff)
+                return creationResult;
+
+            return await MutateAsync(
+                services,
+                async (current, saveCheckpoint) =>
+                {
+                    var goal = current.GetGoal(goalId);
                     AdvanceLoopResultDto? autoHandoff = null;
 
-                    if (submission.AutoHandoff)
+                    try
                     {
-                        try
+                        await saveCheckpoint();
+                        autoHandoff = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
+                            current,
+                            agents,
+                            profiles,
+                            services.Workspace,
+                            goal,
+                            providers: services.Providers);
+                        if (DashboardContinuationService.ShouldContinueWatching(autoHandoff))
                         {
-                            await saveCheckpoint();
-                            autoHandoff = GoalManagementCommandService.AdvanceGoalWithSubscriptionsUntilBlocked(
-                                current,
-                                agents,
-                                profiles,
-                                services.Workspace,
-                                goal,
-                                providers: services.Providers);
-                            if (DashboardContinuationService.ShouldContinueWatching(autoHandoff))
-                            {
-                                services.Continuations.StartSubscriptionWatch(services, autoHandoff.GoalId);
-                            }
+                            services.Continuations.StartSubscriptionWatch(services, autoHandoff.GoalId);
+                        }
 
-                            await saveCheckpoint();
-                        }
-                        catch (Exception ex) when (ex is not OperationCanceledException)
-                        {
-                            Console.WriteLine($"Automatic subscription handoff did not start for goal {goal.Id.Value}: {ex.Message}");
-                        }
+                        await saveCheckpoint();
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        Console.WriteLine($"Automatic subscription handoff did not start for goal {goal.Id.Value}: {ex.Message}");
                     }
 
                     var responseGoal = current.Goals.Single(currentGoal => currentGoal.Id == goal.Id);
@@ -392,7 +410,6 @@ internal static partial class DashboardEndpoints
             current =>
             {
                 var goal = ResolveGoal(current, goalId);
-                GoalRefinementGate.EnsureRefined(current, services.Workspace, services.Providers, goal);
                 var plan = current.ActivateGoal(goal.Id, agents);
                 return Task.FromResult(Json(DashboardResponseMapper.ToDelegationPlanDto(plan)));
             });

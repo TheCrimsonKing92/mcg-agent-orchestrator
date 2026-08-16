@@ -51,8 +51,18 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
             context.CurrentGoal = OrchestratorEntityResolver.RequireGoal(context.CurrentGoal);
             var workerTask = OrchestratorEntityResolver.GetTaskByDisplayNumber(context.CurrentGoal, parts[1]);
             var workerExecutionDirectory = context.Workspace.ResolveExecutionDirectory(context.CurrentGoal.Id);
-            GoalRefinementGate.EnsureRefined(context.Kernel, context.Workspace, context.Providers, context.CurrentGoal, eventWriter: context.EventWriter);
-            GoalRefinementGate.ThrowIfAwaitingClarification(context.Workspace, context.CurrentGoal, context.EventWriter);
+            if (context.CurrentGoal.RefinedSpec is null && workerTask.RequiredRole != AgentRole.Researcher)
+            {
+                GoalManagementCommandService.EnsureRefinedForSpecConsumer(
+                    context.Kernel,
+                    context.Workspace,
+                    context.Providers,
+                    context.CurrentGoal);
+            }
+            else if (context.CurrentGoal.RefinedSpec is not null)
+            {
+                GoalRefinementGate.ThrowIfAwaitingClarification(context.Workspace, context.CurrentGoal, context.EventWriter);
+            }
             var brief = context.Kernel.BuildTaskBrief(context.CurrentGoal.Id, workerTask.Id, workingDirectory: workerExecutionDirectory);
             var preparation = WorkerCommandTemplate.Prepare(
                 brief,
@@ -106,6 +116,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                     if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
                         LaunchLatestDispatch(context, context.CurrentGoal, profileTask, parts, "profile-dispatch", refreshBeforeStart: false);
                     return true;
+                }
+                catch (InvalidOperationException profileEx)
+                    when (profileEx.Message.StartsWith("SPEC_REFINEMENT_PENDING", StringComparison.Ordinal))
+                {
+                    throw;
                 }
                 catch (InvalidOperationException profileEx)
                 {
@@ -169,6 +184,11 @@ private static bool? TryExecuteWorkerCommand(string command, IReadOnlyList<strin
                 if (HasCliConfirmation(parts, "--confirm-dispatch-start"))
                     LaunchLatestDispatch(context, context.CurrentGoal!, subscriptionTask, parts, "subscription-dispatch", refreshBeforeStart: false);
                 return true;
+            }
+            catch (InvalidOperationException subscriptionEx)
+                when (subscriptionEx.Message.StartsWith("SPEC_REFINEMENT_PENDING", StringComparison.Ordinal))
+            {
+                throw;
             }
             catch (InvalidOperationException subscriptionEx)
             {

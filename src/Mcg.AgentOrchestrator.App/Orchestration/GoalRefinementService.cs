@@ -8,14 +8,42 @@ namespace Mcg.AgentOrchestrator.App.Orchestration;
 
 internal enum RefinementOutcome { AutoRefined, AwaitingClarification }
 
-internal sealed record RefinementResult(RefinementOutcome Outcome, RefinedSpec Spec)
-{
-    public static RefinementResult AutoRefined(RefinedSpec spec) =>
-        new(RefinementOutcome.AutoRefined, spec);
+internal enum RefinementDisposition { Completed, Fallback }
 
-    public static RefinementResult AwaitingClarification(RefinedSpec spec) =>
-        new(RefinementOutcome.AwaitingClarification, spec);
+internal sealed record RefinementInvocationMetadata(
+    int PromptCharacterCount,
+    int PromptUtf8ByteCount,
+    string ProviderKind,
+    string WorkerProfile,
+    string Model,
+    string ReasoningEffort);
+
+internal sealed record RefinementFailure(string ReasonCode, string Detail);
+
+internal sealed record RefinementResult(
+    RefinementOutcome Outcome,
+    RefinedSpec Spec,
+    RefinementDisposition Disposition,
+    RefinementInvocationMetadata Invocation,
+    RefinementFailure? Failure)
+{
+    public static RefinementResult Completed(
+        RefinementOutcome outcome,
+        RefinedSpec spec,
+        RefinementInvocationMetadata invocation) =>
+        new(outcome, spec, RefinementDisposition.Completed, invocation, null);
+
+    public static RefinementResult Fallback(
+        RefinedSpec spec,
+        RefinementInvocationMetadata invocation,
+        RefinementFailure failure) =>
+        new(RefinementOutcome.AutoRefined, spec, RefinementDisposition.Fallback, invocation, failure);
 }
+
+internal sealed record RefinerAttempt(
+    SpecRefinementOutput Output,
+    RefinementInvocationMetadata Invocation,
+    RefinementFailure? Failure = null);
 
 internal delegate Task<CollaborationItem> CollaborationItemRaise(
     CollaborationItemType type,
@@ -41,6 +69,7 @@ internal sealed class GoalRefinementService
     private readonly SpecRefinerPrecedentStore _precedents;
     private readonly WorkerProfileCatalog? _workerProfiles;
     private readonly Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? _subscriptionCompleterFactory;
+    private readonly TimeSpan _subscriptionTimeout;
     private static readonly HashSet<string> QuestionStopWords = new(StringComparer.Ordinal)
     {
         "a", "an", "and", "are", "as", "be", "by", "for", "from", "how", "in", "is", "it", "of", "on",
@@ -54,7 +83,8 @@ internal sealed class GoalRefinementService
         SpecRefinerPrecedentStore precedents,
         WorkerProfileCatalog? workerProfiles = null,
         Func<SubscriptionLaunchProfile, SubscriptionCliCompleter>? subscriptionCompleterFactory = null,
-        CollaborationItemRaise? raiseCollaborationItem = null)
+        CollaborationItemRaise? raiseCollaborationItem = null,
+        TimeSpan? subscriptionTimeout = null)
     {
         _providers = providers;
         _catalog = catalog;
@@ -63,6 +93,7 @@ internal sealed class GoalRefinementService
         _precedents = precedents;
         _workerProfiles = workerProfiles;
         _subscriptionCompleterFactory = subscriptionCompleterFactory;
+        _subscriptionTimeout = subscriptionTimeout ?? SubscriptionCliCompleter.DefaultTimeout;
     }
 
     public async Task<RefinementResult> RefineAsync(
@@ -82,7 +113,8 @@ internal sealed class GoalRefinementService
             .Where(question => string.Equals(question.Status, "Open", StringComparison.OrdinalIgnoreCase))
             .ToList() ?? [];
         var clarificationAnswerHistory = goal.RefinedSpec?.ClarificationAnswerHistory ?? [];
-        var output = await RunRefinerAsync(goal.Objective, resolvedClarifications, cancellationToken);
+        var attempt = await RunRefinerAsync(goal.Objective, resolvedClarifications, cancellationToken);
+        var output = attempt.Output;
 
         if (!output.IsValid)
         {
@@ -91,7 +123,12 @@ internal sealed class GoalRefinementService
                 ClarificationAnswerHistory = clarificationAnswerHistory
             };
             kernel.RecordGoalRefinement(goalId, fallback);
-            return RefinementResult.AutoRefined(fallback);
+            return RefinementResult.Fallback(
+                fallback,
+                attempt.Invocation,
+                attempt.Failure ?? new RefinementFailure(
+                    "invalid-output",
+                    output.ValidationErrors.FirstOrDefault() ?? "Spec refiner output was invalid."));
         }
 
         var decisions = new List<RefinedSpecDecision>(output.Decisions);
@@ -295,9 +332,10 @@ internal sealed class GoalRefinementService
         if (raisedClarificationRound)
             kernel.RecordGoalClarificationRound(goalId);
 
-        return spec.HasOpenQuestions
-            ? RefinementResult.AwaitingClarification(spec)
-            : RefinementResult.AutoRefined(spec);
+        return RefinementResult.Completed(
+            spec.HasOpenQuestions ? RefinementOutcome.AwaitingClarification : RefinementOutcome.AutoRefined,
+            spec,
+            attempt.Invocation);
     }
 
     // Resolves an open clarification by correlationKey and records the answer as a precedent.
@@ -579,17 +617,36 @@ internal sealed class GoalRefinementService
             !CollaborationItemLifecycle.IsTerminal(item.Status) &&
             item.CorrelationKey?.StartsWith(CorrelationKeyPrefix, StringComparison.Ordinal) == true);
 
-    private async Task<SpecRefinementOutput> RunRefinerAsync(
+    private async Task<RefinerAttempt> RunRefinerAsync(
         string objective,
         IReadOnlyList<ResolvedSpecClarification> resolvedClarifications,
         CancellationToken cancellationToken)
     {
         var binding = ResolveSpecRefinerBinding(_catalog.Bindings);
         var prompt = SpecRefinerPlanner.BuildPrompt(objective, resolvedClarifications);
+        var promptCharacters = prompt.Length;
+        var promptBytes = Encoding.UTF8.GetByteCount(prompt);
         if (binding.Subscription is { } subscription && _workerProfiles is not null)
         {
-            return await RunSubscriptionRefinerAsync(subscription, prompt, cancellationToken).ConfigureAwait(false);
+            var invocation = new RefinementInvocationMetadata(
+                promptCharacters,
+                promptBytes,
+                WorkerProviderCatalog.Default().ResolveProfile(subscription.WorkerProfileName).Identity.Kind.ToString(),
+                subscription.WorkerProfileName,
+                subscription.ModelAlias ?? string.Empty,
+                string.IsNullOrWhiteSpace(subscription.ReasoningEffort)
+                    ? AgentCatalog.ComplexReasoningEffort
+                    : subscription.ReasoningEffort);
+            return await RunSubscriptionRefinerAsync(subscription, prompt, invocation, cancellationToken).ConfigureAwait(false);
         }
+
+        var apiInvocation = new RefinementInvocationMetadata(
+            promptCharacters,
+            promptBytes,
+            SubscriptionMode.ApiKey.ToString(),
+            "none",
+            binding.Model.ModelName,
+            "provider-default");
 
         IModelProvider provider;
         try
@@ -598,7 +655,11 @@ internal sealed class GoalRefinementService
         }
         catch (Exception ex)
         {
-            return SpecRefinementOutput.Invalid($"Spec-refiner provider '{binding.Model.ProviderName}' not found: {ex.Message}");
+            var detail = $"Spec-refiner provider '{binding.Model.ProviderName}' not found: {ex.Message}";
+            return new RefinerAttempt(
+                SpecRefinementOutput.Invalid(detail),
+                apiInvocation,
+                new RefinementFailure("provider-unavailable", detail));
         }
 
         var request = new ModelRequest(
@@ -609,11 +670,27 @@ internal sealed class GoalRefinementService
         try
         {
             var response = await provider.CompleteAsync(request, cancellationToken).ConfigureAwait(false);
-            return SpecRefinerPlanner.Parse(response.Text);
+            var output = SpecRefinerPlanner.Parse(response.Text);
+            return output.IsValid
+                ? new RefinerAttempt(output, apiInvocation)
+                : new RefinerAttempt(
+                    output,
+                    apiInvocation,
+                    new RefinementFailure(
+                        "invalid-output",
+                        output.ValidationErrors.FirstOrDefault() ?? "Spec refiner output was invalid."));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            return SpecRefinementOutput.Invalid($"Spec refiner model call failed: {ex.Message}");
+            var detail = $"Spec refiner model call failed: {ex.Message}";
+            return new RefinerAttempt(
+                SpecRefinementOutput.Invalid(detail),
+                apiInvocation,
+                new RefinementFailure("provider-failed", detail));
         }
     }
 
@@ -644,9 +721,10 @@ internal sealed class GoalRefinementService
     private static string BindingIdentifier(ModelFunctionBinding binding) =>
         string.IsNullOrWhiteSpace(binding.Name) ? binding.Purpose : binding.Name;
 
-    private async Task<SpecRefinementOutput> RunSubscriptionRefinerAsync(
+    private async Task<RefinerAttempt> RunSubscriptionRefinerAsync(
         SubscriptionLaunchProfile subscription,
         string prompt,
+        RefinementInvocationMetadata invocation,
         CancellationToken cancellationToken)
     {
         try
@@ -658,17 +736,37 @@ internal sealed class GoalRefinementService
                     subscription.ModelAlias ?? string.Empty,
                     subscription.ReasoningEffort);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(SubscriptionCliCompleter.DefaultTimeout);
+            cts.CancelAfter(_subscriptionTimeout);
             var stdout = await completer.CompleteAsync(prompt, "spec-refiner-prompt.md", cts.Token).ConfigureAwait(false);
-            return SpecRefinerPlanner.Parse(stdout);
+            var output = SpecRefinerPlanner.Parse(stdout);
+            return output.IsValid
+                ? new RefinerAttempt(output, invocation)
+                : new RefinerAttempt(
+                    output,
+                    invocation,
+                    new RefinementFailure(
+                        "invalid-output",
+                        output.ValidationErrors.FirstOrDefault() ?? "Subscription spec refiner output was invalid."));
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return SpecRefinementOutput.Invalid($"Subscription spec refiner '{subscription.WorkerProfileName}' timed out.");
+            var detail = $"Subscription spec refiner '{subscription.WorkerProfileName}' timed out after {_subscriptionTimeout.TotalSeconds:0.###} seconds.";
+            return new RefinerAttempt(
+                SpecRefinementOutput.Invalid(detail),
+                invocation,
+                new RefinementFailure("subscription-timeout", detail));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            return SpecRefinementOutput.Invalid($"Subscription spec refiner '{subscription.WorkerProfileName}' failed: {ex.Message}");
+            var detail = $"Subscription spec refiner '{subscription.WorkerProfileName}' failed: {ex.Message}";
+            return new RefinerAttempt(
+                SpecRefinementOutput.Invalid(detail),
+                invocation,
+                new RefinementFailure("subscription-failed", detail));
         }
     }
 

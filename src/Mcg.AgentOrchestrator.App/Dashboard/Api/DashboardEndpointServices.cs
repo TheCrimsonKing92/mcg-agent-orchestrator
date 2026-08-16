@@ -83,6 +83,37 @@ internal sealed class DashboardStateService(IOrchestratorStateRepository reposit
         }
     }
 
+    public async Task<T> MutateWithOutboxAsync<T>(
+        Func<AgentOrchestratorKernel, Action<OrchestratorStateOutboxMessage>, Task<T>> mutation,
+        CancellationToken cancellationToken = default)
+    {
+        await _mutationGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (repository is not IOrchestratorStateOutboxRepository outboxRepository)
+            {
+                throw new InvalidOperationException(
+                    "Dashboard goal creation requires a state repository with durable outbox support.");
+            }
+
+            return await outboxRepository.TransactWithOutboxAsync(
+                async (kernel, _) =>
+                {
+                    var messages = new List<OrchestratorStateOutboxMessage>();
+                    var result = await mutation(kernel, messages.Add);
+                    return (
+                        ShouldSave: true,
+                        Result: result,
+                        OutboxMessages: (IReadOnlyList<OrchestratorStateOutboxMessage>)messages);
+                },
+                cancellationToken);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
+
     public async Task<IResult> MutateIfChangedAsync(
         Func<AgentOrchestratorKernel, Task<(bool Changed, IResult Result)>> mutation,
         CancellationToken cancellationToken = default)

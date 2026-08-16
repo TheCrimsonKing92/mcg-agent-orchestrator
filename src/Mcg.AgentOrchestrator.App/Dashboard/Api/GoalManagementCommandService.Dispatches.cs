@@ -17,14 +17,16 @@ public static IReadOnlyList<WorkerProfileDispatchResult> ProfileDispatchReadyTas
     IReadOnlyList<AgentDefinition>? agents = null,
     IModelProviderRegistry? providers = null)
 {
-    GoalRefinementGate.EnsureRefined(
-        kernel,
-        workspace,
-        providers ?? new InMemoryModelProviderRegistry([]),
-        goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     var results = new List<WorkerProfileDispatchResult>();
-    foreach (var task in goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList())
+    var assigned = goal.Tasks.Where(task => task.Status == WorkTaskStatus.Assigned).ToList();
+    if (assigned.Count > 0 &&
+        GoalRefinementWorkCoordinator.HasPendingWork(goal) &&
+        assigned.All(task => task.RequiredRole != AgentRole.Researcher))
+    {
+        EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+    }
+
+    foreach (var task in assigned.Where(task => IsRefinementEligible(goal, task)))
     {
         results.Add(ProfileDispatchTask(kernel, workspace, goal, task, profile, agents));
     }
@@ -44,12 +46,7 @@ public static WorkerProfileDispatchResult ProfileDispatchTask(
     int? reviewAutoRetryStopRound = null,
     WorkerSandboxOptions? sandboxOptions = null)
 {
-    GoalRefinementGate.EnsureRefined(
-        kernel,
-        workspace,
-        providers ?? new InMemoryModelProviderRegistry([]),
-        goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
+    EnsureRefinedForTask(kernel, workspace, providers, goal, task);
     var subscriptionMetadata = TryBuildProfileSubscriptionMetadata(goal, task, profile, agents);
     return WorkerProfileDispatcher.PrepareTask(
         kernel,
@@ -244,15 +241,11 @@ public static WorkerProfileReadyBatchResult SubscriptionDispatchReadyBatch(
     int? reviewAutoRetryStopRound = null,
     WorkerSandboxOptions? sandboxOptions = null)
 {
-    GoalRefinementGate.EnsureRefined(
-        kernel,
-        workspace,
-        providers ?? new InMemoryModelProviderRegistry([]),
-        goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     ReconcileExitedAssignedProcessRecords(kernel, goal);
     goal = kernel.GetGoal(goal.Id);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents);
+    EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
+    goal = kernel.GetGoal(goal.Id);
     return WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
@@ -279,12 +272,7 @@ public static WorkerProfileDispatchResult SubscriptionDispatchTask(
     IModelProviderRegistry? providers = null,
     int? reviewAutoRetryStopRound = null)
 {
-    GoalRefinementGate.EnsureRefined(
-        kernel,
-        workspace,
-        providers ?? new InMemoryModelProviderRegistry([]),
-        goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
+    EnsureRefinedForTask(kernel, workspace, providers, goal, task);
     return WorkerProfileDispatcher.PrepareSubscriptionTask(
         kernel,
         goal,
@@ -314,15 +302,11 @@ public static SubscriptionStartResult StartSubscriptionReadyTasks(
     BackgroundDispatchRunner? runner = null,
     WorkerSandboxOptions? sandboxOptions = null)
 {
-    GoalRefinementGate.EnsureRefined(
-        kernel,
-        workspace,
-        providers ?? new InMemoryModelProviderRegistry([]),
-        goal);
-    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, goal);
     ReconcileExitedAssignedProcessRecords(kernel, goal);
     goal = kernel.GetGoal(goal.Id);
     var safeBatch = SelectFirstParallelSafeAssignedBatch(goal, agents, approveHighRiskOwnership);
+    EnsureRefinedForSelectedTasks(kernel, workspace, providers, goal, safeBatch.TaskIds);
+    goal = kernel.GetGoal(goal.Id);
     var batch = WorkerProfileDispatcher.PrepareSubscriptionReadyBatch(
         kernel,
         goal,
@@ -378,6 +362,69 @@ private static int ResolveReviewAutoRetryStopRound(
     ConductorAutonomyPolicy.LoadFromOrchestratorDirectory(
         new DirectoryInfo(workspace.OrchestratorDirectory)).ReviewAutoRetryStopRound;
 
+private static void EnsureRefinedForSelectedTasks(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    IModelProviderRegistry? providers,
+    Goal goal,
+    IReadOnlySet<TaskId> taskIds)
+{
+    var selected = goal.Tasks.Where(task => taskIds.Contains(task.Id)).ToArray();
+    if (selected.Length == 0)
+    {
+        var assignedCandidates = goal.Tasks.Where(IsSubscriptionStartCandidate).ToArray();
+        if (GoalRefinementWorkCoordinator.HasPendingWork(goal) &&
+            assignedCandidates.Length > 0 &&
+            assignedCandidates.All(task => task.RequiredRole != AgentRole.Researcher))
+        {
+            EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+        }
+
+        return;
+    }
+
+    if (goal.RefinedSpec is null && selected.All(task => task.RequiredRole == AgentRole.Researcher))
+        return;
+
+    EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+}
+
+private static void EnsureRefinedForTask(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    IModelProviderRegistry? providers,
+    Goal goal,
+    TaskSpec task)
+{
+    if (goal.RefinedSpec is null && task.RequiredRole == AgentRole.Researcher)
+        return;
+
+    EnsureRefinedForSpecConsumer(kernel, workspace, providers, goal);
+}
+
+internal static void EnsureRefinedForSpecConsumer(
+    AgentOrchestratorKernel kernel,
+    OrchestratorWorkspace workspace,
+    IModelProviderRegistry? providers,
+    Goal goal)
+{
+    var current = kernel.GetGoal(goal.Id);
+    if (GoalRefinementWorkCoordinator.HasPendingWork(current))
+    {
+        var launch = GoalRefinementWorkCoordinator.TryLaunch(workspace, goal.Id);
+        throw new InvalidOperationException(
+            $"SPEC_REFINEMENT_PENDING goal={goal.Id.Value} owner=durable-outbox " +
+            $"executor_started={launch.Started.ToString().ToLowerInvariant()} detail={launch.Detail}");
+    }
+
+    _ = GoalRefinementGate.EnsureRefined(
+        kernel,
+        workspace,
+        providers ?? new InMemoryModelProviderRegistry([]),
+        current);
+    GoalRefinementGate.ThrowIfAwaitingClarification(workspace, kernel.GetGoal(goal.Id));
+}
+
 private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(
     Goal goal,
     IReadOnlyList<AgentDefinition> agents,
@@ -385,6 +432,7 @@ private static ParallelSafeBatchSelection SelectFirstParallelSafeAssignedBatch(
 {
     var assigned = goal.Tasks
         .Where(IsSubscriptionStartCandidate)
+        .Where(task => IsRefinementEligible(goal, task))
         .ToList();
     var plan = BuildReadyTaskParallelPlan(goal, agents, approveHighRiskOwnership);
     var firstBatch = plan.Batches.FirstOrDefault();
@@ -407,6 +455,7 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
 {
     var assigned = goal.Tasks
         .Where(IsSubscriptionStartCandidate)
+        .Where(task => IsRefinementEligible(goal, task))
         .ToList();
     var intents = assigned
         .Select(task =>
@@ -429,6 +478,10 @@ public static ParallelExecutionPlan BuildReadyTaskParallelPlan(
         .ToList();
     return ParallelExecutionPlanner.Build(intents, providerQuotas, approveHighRiskOwnership);
 }
+
+private static bool IsRefinementEligible(Goal goal, TaskSpec task) =>
+    !GoalRefinementWorkCoordinator.HasPendingWork(goal) ||
+    task.RequiredRole == AgentRole.Researcher;
 
 private sealed record ParallelSafeBatchSelection(
     HashSet<TaskId> TaskIds,
