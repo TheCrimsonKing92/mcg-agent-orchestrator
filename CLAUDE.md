@@ -26,6 +26,7 @@ Claude Code auto-reads this file. Shared repository discipline stays in [AGENTS.
 > **Operating the orchestrator - driving, observing, or recovering goals? Start with [`docs/operator-runbook.md`](docs/operator-runbook.md).** It is the harness-neutral canonical conductor guide, including the stuck-goal playbook and state/store map.
 > **Test-design discipline?** Use the shared [`test-design-discipline`](docs/test-design-discipline.md) guidance and Reviewer checklist requirement.
 > **Writing acceptance criteria?** Assign each criterion to a capable evidence owner using the shared [`role-capability-matrix`](docs/role-capability-matrix.md) before creating the goal.
+> **Writing a brief, retry feedback, or a clarification answer — especially a second correction to the same worker?** Use [`worker-guidance-discipline`](docs/worker-guidance-discipline.md). A prohibition invites variants and an adjective invites interpretation; give a decision procedure the worker can run on its own output, or point at an exemplar already in the repo.
 > **Assigning a verdict, terminal state, circuit trip, escalation, or retry-vs-fail choice?** Use [`dispositive-decision-discipline`](docs/dispositive-decision-discipline.md). One check: *could I write the justification for this outcome from what is in scope right here?* If not, the discriminating evidence was discarded upstream and the decision is a guess. Five instances of this shipped in a single day.
 
 ## Claude Harness Guidance
