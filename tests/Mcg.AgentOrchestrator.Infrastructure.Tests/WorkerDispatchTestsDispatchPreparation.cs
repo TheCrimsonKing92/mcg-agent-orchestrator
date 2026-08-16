@@ -1660,6 +1660,51 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
 
     [Xunit.Fact]
+    public void WorkerVerificationEvidence_DeliversMarkedPreviewForCapturedUnavailabilityReason()
+    {
+        const string unavailableReason = "stdout-capture-failed";
+        const string preview = "captured head and tail only";
+        var verification = new TaskVerificationRecord(
+            "worker command",
+            CreateTempDirectory(),
+            0,
+            preview,
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
+            FullStandardOutputUnavailableReason: unavailableReason,
+            StandardOutputIsAuthoritative: false);
+
+        var contextOutput = WorkerVerificationEvidence.ResolveStandardOutputForContext(
+            verification,
+            new LogicalArtifactIdentity("prior/captured/verification-output"));
+
+        Assert.False(contextOutput.IsAuthoritative);
+        Assert.Equal(unavailableReason, contextOutput.UnavailableReason);
+        Assert.Contains($"unavailable-reason: {unavailableReason}", contextOutput.Content, StringComparison.Ordinal);
+        Assert.Contains(preview, contextOutput.Content, StringComparison.Ordinal);
+    }
+
+    [Xunit.Fact]
+    public void WorkerVerificationEvidence_MissingAuthoritativeOutputWithoutReasonFailsClosed()
+    {
+        var verification = new TaskVerificationRecord(
+            "worker command",
+            CreateTempDirectory(),
+            0,
+            "bounded preview",
+            string.Empty,
+            DateTimeOffset.Parse("2026-08-16T12:00:00Z"),
+            StandardOutputIsAuthoritative: false);
+        var identity = new LogicalArtifactIdentity("prior/invariant-break/verification-output");
+
+        var failure = Assert.Throws<WorkerContextPreparationException>(() =>
+            WorkerVerificationEvidence.ResolveStandardOutputForContext(verification, identity));
+
+        Assert.Equal(identity, failure.Identity);
+        Assert.Equal("authoritative-evidence-unavailable", failure.Reason);
+    }
+
+    [Xunit.Fact]
     public void PrepareTask_RestoredLongLegacyVerification_DeliversMarkedPreviewWithoutTrustingOutputFile()
     {
         var root = CreateSeededDispatchRepository();

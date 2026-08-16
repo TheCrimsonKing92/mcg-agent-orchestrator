@@ -45,11 +45,11 @@ internal static class WorkerVerificationEvidence
             return new ContextOutput(recoveredOutput, true, null);
         }
 
-        if (!string.Equals(
-                verification.FullStandardOutputUnavailableReason,
-                LegacySnapshotUnavailableReason,
-                StringComparison.Ordinal))
+        var unavailableReason = verification.FullStandardOutputUnavailableReason;
+        if (unavailableReason is null)
         {
+            // A post-contract record that claims no capture failure should have persisted authoritative
+            // bytes. Keep that invariant loud; only explained capture failures may degrade to a preview.
             return new ContextOutput(
                 RequireAuthoritativeStandardOutput(verification, identity),
                 true,
@@ -60,12 +60,12 @@ internal static class WorkerVerificationEvidence
             Environment.NewLine,
             "[legacy verification context]",
             "authoritative: false",
-            $"unavailable-reason: {LegacySnapshotUnavailableReason}",
+            $"unavailable-reason: {unavailableReason}",
             "The complete historical stdout was never retained with an integrity digest. " +
             "The bounded preview below is context only and must not be treated as authoritative evidence.",
             string.Empty,
             verification.StandardOutput);
-        return new ContextOutput(content, false, LegacySnapshotUnavailableReason);
+        return new ContextOutput(content, false, unavailableReason);
     }
 
     public static bool TryRecoverLegacySnapshotStandardOutput(
