@@ -3294,9 +3294,9 @@ public sealed class CliCommandTestsGoalLifecycleCleanupHooksAcceptance : CliComm
         var isolatedRoot = Environment.GetEnvironmentVariable(DotnetBuildEnvironmentManager.IsolatedRootOverrideVariable);
 
         Xunit.Assert.False(string.IsNullOrWhiteSpace(isolatedRoot));
-        Xunit.Assert.Contains(
-            $"{DotnetBuildEnvironmentManager.RootDirectoryName}-slot-run-",
-            isolatedRoot,
+        Xunit.Assert.StartsWith(
+            "mdi-",
+            Path.GetFileName(isolatedRoot),
             StringComparison.Ordinal);
         Xunit.Assert.NotEqual(
             Path.Combine(Path.GetTempPath(), DotnetBuildEnvironmentManager.RootDirectoryName),
