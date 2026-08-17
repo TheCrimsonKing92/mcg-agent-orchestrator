@@ -28,6 +28,17 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
     private static string CreateShortWindowsRoot(string localAppData)
     {
         var basePath = Path.GetFullPath(Path.Combine(localAppData, "..", "LocalLow"));
+        try
+        {
+            Directory.CreateDirectory(basePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException(
+                $"Could not create the short isolated dotnet test root base '{basePath}'.",
+                ex);
+        }
+
         for (var attempt = 0; attempt < 10; attempt++)
         {
             var candidate = Path.Combine(basePath, $"mdi-{Guid.NewGuid():N}"[..20]);
@@ -37,9 +48,15 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
             {
                 claim = new FileStream(claimPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             }
-            catch (IOException)
+            catch (IOException ex) when (IsClaimCollision(ex))
             {
                 continue;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                throw new IOException(
+                    $"Could not atomically claim short isolated dotnet test root '{candidate}'.",
+                    ex);
             }
 
             try
@@ -61,6 +78,9 @@ public sealed class IsolatedDotnetRootFixture : IDisposable
 
         throw new IOException("Could not claim a short isolated dotnet test root.");
     }
+
+    private static bool IsClaimCollision(IOException exception) =>
+        (exception.HResult & 0xffff) is 80 or 183;
 
     public void Dispose()
     {
