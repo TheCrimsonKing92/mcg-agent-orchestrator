@@ -22,13 +22,26 @@ public sealed class LegacyHandoffCompatibilityResolver
     private const string PointerPrefix = "Compatibility pointer (v1, hash-bound; resolve from authoritative task evidence): ";
     private readonly Func<string, byte[]?> _loadAuthoritativeBytes;
     private readonly string? _materializationRoot;
+    private readonly string? _materializationFallbackIdentity;
+    private readonly Func<string, byte[]> _readMaterializedBytes;
 
     public LegacyHandoffCompatibilityResolver(
         Func<string, byte[]?> loadAuthoritativeBytes,
         string? materializationRoot = null)
+        : this(loadAuthoritativeBytes, materializationRoot, null, File.ReadAllBytes)
+    {
+    }
+
+    internal LegacyHandoffCompatibilityResolver(
+        Func<string, byte[]?> loadAuthoritativeBytes,
+        string? materializationRoot,
+        string? materializationFallbackIdentity,
+        Func<string, byte[]> readMaterializedBytes)
     {
         _loadAuthoritativeBytes = loadAuthoritativeBytes ?? throw new ArgumentNullException(nameof(loadAuthoritativeBytes));
         _materializationRoot = materializationRoot is null ? null : Path.GetFullPath(materializationRoot);
+        _materializationFallbackIdentity = materializationFallbackIdentity;
+        _readMaterializedBytes = readMaterializedBytes ?? throw new ArgumentNullException(nameof(readMaterializedBytes));
     }
 
     public byte[] Resolve(string compatibilityRepresentation)
@@ -72,7 +85,10 @@ public sealed class LegacyHandoffCompatibilityResolver
             return retained;
         }
 
-        if (_materializationRoot is null || string.IsNullOrWhiteSpace(pointer.MaterializationPath))
+        if (_materializationRoot is null ||
+            string.IsNullOrWhiteSpace(pointer.MaterializationPath) ||
+            (_materializationFallbackIdentity is not null &&
+             !pointer.AuthoritativeEvidenceIdentity.Equals(_materializationFallbackIdentity, StringComparison.Ordinal)))
         {
             throw MissingEvidence(pointer.AuthoritativeEvidenceIdentity);
         }
@@ -92,8 +108,7 @@ public sealed class LegacyHandoffCompatibilityResolver
             relativePath.Replace('/', Path.DirectorySeparatorChar)));
         var relativeToRoot = Path.GetRelativePath(_materializationRoot, fullPath);
         if (Path.IsPathRooted(relativeToRoot) || relativeToRoot == ".." ||
-            relativeToRoot.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
-            !File.Exists(fullPath))
+            relativeToRoot.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
         {
             throw MissingEvidence(pointer.AuthoritativeEvidenceIdentity);
         }
@@ -107,7 +122,7 @@ public sealed class LegacyHandoffCompatibilityResolver
                     _ => null
                 })
             {
-                if ((current.Attributes & FileAttributes.ReparsePoint) != 0)
+                if ((File.GetAttributes(current.FullName) & FileAttributes.ReparsePoint) != 0)
                 {
                     throw MissingEvidence(pointer.AuthoritativeEvidenceIdentity);
                 }
@@ -121,15 +136,37 @@ public sealed class LegacyHandoffCompatibilityResolver
                 }
             }
 
-            return File.ReadAllBytes(fullPath);
+            var materialized = _readMaterializedBytes(fullPath);
+            if (!WorkerContextArtifact.Hash(materialized).Equals(pointer.Sha256, StringComparison.Ordinal))
+            {
+                throw MissingEvidence(pointer.AuthoritativeEvidenceIdentity);
+            }
+
+            return materialized;
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException error)
         {
-            throw MissingEvidence(pointer.AuthoritativeEvidenceIdentity);
+            throw MaterializationFailure(
+                pointer.AuthoritativeEvidenceIdentity,
+                "authoritative-evidence-permission-denied",
+                fullPath,
+                error);
         }
-        catch (IOException)
+        catch (IOException error) when (error is FileNotFoundException or DirectoryNotFoundException)
         {
-            throw MissingEvidence(pointer.AuthoritativeEvidenceIdentity);
+            throw MaterializationFailure(
+                pointer.AuthoritativeEvidenceIdentity,
+                "authoritative-evidence-missing",
+                fullPath,
+                error);
+        }
+        catch (IOException error)
+        {
+            throw MaterializationFailure(
+                pointer.AuthoritativeEvidenceIdentity,
+                "authoritative-evidence-unreadable",
+                fullPath,
+                error);
         }
     }
 
@@ -137,6 +174,15 @@ public sealed class LegacyHandoffCompatibilityResolver
         new LogicalArtifactIdentity(identity),
         "authoritative-evidence-missing",
         "The v1 compatibility pointer did not resolve to retained or materialized evidence.");
+
+    private static WorkerContextPreparationException MaterializationFailure(
+        string identity,
+        string reason,
+        string fullPath,
+        Exception error) => new(
+            new LogicalArtifactIdentity(identity),
+            reason,
+            $"{error.GetType().Name} while reading materialized evidence at '{fullPath}': {error.Message}");
 
     public IReadOnlyList<byte[]> ResolveAllFromMarkdown(string handoffMarkdown)
         => ResolveArtifactsFromMarkdown(handoffMarkdown).Select(artifact => artifact.Bytes).ToArray();
