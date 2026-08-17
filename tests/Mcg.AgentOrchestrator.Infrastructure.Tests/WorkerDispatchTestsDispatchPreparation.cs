@@ -1546,6 +1546,51 @@ public sealed class WorkerDispatchTestsDispatchPreparation : WorkerDispatchTestS
     }
 
     [Xunit.Fact]
+    public void PrepareTask_SelfPointerWithMatchingFile_UsesMaterialization()
+    {
+        var root = CreateTempDirectory();
+        var workingDirectory = Path.Combine(root, "repo");
+        Directory.CreateDirectory(workingDirectory);
+        var kernel = new AgentOrchestratorKernel();
+        var task = new TaskSpec(TaskId.New(), "Resume the current task.", AgentRole.Developer);
+        var goal = kernel.CreateGoal("Recover self-referential handoff evidence", [task]);
+        kernel.ActivateGoal(goal.Id, AgentCatalog.Default().Agents);
+        var bytes = Encoding.UTF8.GetBytes("current task verification evidence");
+        var identity = new LogicalArtifactIdentity($"prior/{task.Id.Value}/verification-output");
+        var relativePath = $".orchestrator-context/legacy-handoff/{task.Id.Value}/verification-output.bin";
+        var materializationPath = Path.Combine(
+            workingDirectory,
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(materializationPath)!);
+        File.WriteAllBytes(materializationPath, bytes);
+        var pointer = LegacyHandoffCompatibilityResolver.CreateV1Pointer(identity, bytes, relativePath);
+        File.WriteAllText(
+            Path.Combine(workingDirectory, ".orchestrator-handoff.md"),
+            "Compatibility pointer (v1, hash-bound; resolve from authoritative task evidence): " + pointer);
+
+        var result = WorkerProfileDispatcher.PrepareTask(
+            kernel,
+            goal,
+            task,
+            new WorkerProfile("codex-cli", "codex exec --sandbox {sandboxMode} --cd {workingDirectory}"),
+            Path.Combine(root, "prompts"),
+            workingDirectory,
+            DateTimeOffset.UtcNow,
+            providerName: "OpenAI",
+            modelName: AgentCatalog.OpenAiSolSubscriptionModelAlias);
+
+        var section = Assert.Single(
+            result.Task.LastDispatch!.ContextPackageReceipt!.Sections,
+            item => item.LogicalIdentity == identity.Value);
+        Assert.Equal(WorkerContextArtifact.Hash(bytes), section.ContentHash);
+        Assert.Equal(
+            bytes,
+            File.ReadAllBytes(Path.Combine(
+                workingDirectory,
+                section.MandatoryRelativePath!.Replace('/', Path.DirectorySeparatorChar))));
+    }
+
+    [Xunit.Fact]
     public void PrepareTask_RestoredLegacyVerification_RecoversValidatedOutputFileBeforeDispatch()
     {
         var root = CreateSeededDispatchRepository();
