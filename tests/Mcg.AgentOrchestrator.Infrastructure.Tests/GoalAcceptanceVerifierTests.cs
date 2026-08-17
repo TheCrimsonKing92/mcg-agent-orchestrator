@@ -5019,6 +5019,10 @@ public sealed class GoalAcceptanceVerifierDotnetBuildSlotTests : GoalAcceptanceV
                 resultsDirectories,
                 path => Assert.Equal(attemptResultsDirectory, path, ignoreCase: true));
             Assert.Single(result.TestResultPaths!);
+            var completedProbeTests = TestCoverageInvariant.ReadCompletedTests(result.TestResultPaths!);
+            Assert.Contains(
+                "ShardProbeAlphaTests.SynchronizesWithBetaShard",
+                completedProbeTests);
             Assert.All(
                 result.TestResultPaths!,
                 path => Assert.StartsWith(
