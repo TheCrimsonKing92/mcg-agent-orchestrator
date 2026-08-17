@@ -6,6 +6,84 @@ using Mcg.AgentOrchestrator.Infrastructure;
 [Xunit.Collection(TestCollections.ProcessSpawning)]
 public sealed class AssemblyTempRedirectTests
 {
+    [Fact]
+    public void ProcessRootDerivation_DistinctPidsProduceDistinctPaths()
+    {
+        var sharedRoot = Path.Combine("shared", "mcg-tests");
+
+        var first = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x1a2b);
+        var second = AssemblyTempRedirect.BuildProcessTempRoot(sharedRoot, 0x1a2c);
+
+        Assert.False(string.Equals(first, second, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(Path.Combine(sharedRoot, "p1a2b"), first, ignoreCase: true);
+        Assert.Equal(Path.Combine(sharedRoot, "p1a2c"), second, ignoreCase: true);
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task SingleTestHostUsesDerivedRootAndWritesOwnershipReceipt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), $"mtp-temp-host-{Guid.NewGuid():N}");
+        var executable = Path.Combine(
+            AppContext.BaseDirectory,
+            "Mcg.AgentOrchestrator.Infrastructure.Tests.exe");
+        Directory.CreateDirectory(root);
+        Assert.True(File.Exists(executable), $"Missing independently launchable MTP apphost '{executable}'.");
+
+        var releaseName = $"Local\\mcg-mtp-temp-release-{Guid.NewGuid():N}";
+        var readyName = $"Local\\mcg-mtp-temp-ready-{Guid.NewGuid():N}";
+        using var release = new EventWaitHandle(false, EventResetMode.ManualReset, releaseName);
+        using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, readyName);
+        MtpProbeProcess? process = null;
+        try
+        {
+            process = StartMtpProbe(
+                executable,
+                root,
+                Path.Combine(root, "receipt.json"),
+                readyName,
+                releaseName);
+
+            var receipt = await WaitForProbeReceiptAsync(
+                "single",
+                process,
+                ready,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(process.Process.Id, receipt.ProcessId);
+            Assert.Equal(executable, receipt.ProcessPath, ignoreCase: true);
+            var expectedRoot = AssemblyTempRedirect.BuildProcessTempRoot(
+                Path.GetDirectoryName(receipt.TempRoot)!,
+                receipt.ProcessId);
+            Assert.Equal(expectedRoot, receipt.TempRoot, ignoreCase: true);
+            Assert.Equal(
+                Path.Combine(receipt.TempRoot, "assembly-temp-redirect-fixture", "repository"),
+                receipt.FixtureRepositoryPath,
+                ignoreCase: true);
+            Assert.Equal(receipt.ProcessId.ToString(), receipt.OwnerContents);
+
+            release.Set();
+            var result = await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+            Assert.True(result.ExitCode == 0, FormatProcessFailure("single", result));
+            Assert.Contains(
+                $"assembly-temp-redirect selected={receipt.TempRoot}",
+                result.Stderr,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            release.Set();
+            if (process is not null)
+            {
+                await process.DisposeAsync();
+            }
+            DeleteDirectory(root);
+        }
+    }
+
     [Fact(Timeout = 60_000)]
     public async Task ConcurrentTestHostsReceiveDistinctTempRoots()
     {
@@ -37,24 +115,25 @@ public sealed class AssemblyTempRedirectTests
                 Path.Combine(root, "first-receipt.json"),
                 firstReadyName,
                 releaseName);
+            var firstReceipt = await WaitForProbeReceiptAsync(
+                "first",
+                firstProcess,
+                firstReady,
+                TestContext.Current.CancellationToken);
+
             secondProcess = StartMtpProbe(
                 executable,
                 root,
                 Path.Combine(root, "second-receipt.json"),
                 secondReadyName,
                 releaseName);
-
-            Assert.NotEqual(firstProcess.Process.Id, secondProcess.Process.Id);
-            Assert.True(
-                WaitHandle.WaitAll([firstReady, secondReady], TimeSpan.FromSeconds(30)),
-                "Two independently launched MTP apphosts did not both reach the mutable-fixture gate.");
-
-            var firstReceipt = ReadProbeReceipt(firstProcess.ReceiptPath);
-            var secondReceipt = ReadProbeReceipt(secondProcess.ReceiptPath);
+            var secondReceipt = await WaitForProbeReceiptAsync(
+                "second",
+                secondProcess,
+                secondReady,
+                TestContext.Current.CancellationToken);
             Assert.Equal(firstProcess.Process.Id, firstReceipt.ProcessId);
             Assert.Equal(secondProcess.Process.Id, secondReceipt.ProcessId);
-            Assert.Equal(executable, firstReceipt.ProcessPath, ignoreCase: true);
-            Assert.Equal(executable, secondReceipt.ProcessPath, ignoreCase: true);
             Assert.False(string.Equals(
                 firstReceipt.TempRoot,
                 secondReceipt.TempRoot,
@@ -63,36 +142,19 @@ public sealed class AssemblyTempRedirectTests
                 firstReceipt.FixtureRepositoryPath,
                 secondReceipt.FixtureRepositoryPath,
                 StringComparison.OrdinalIgnoreCase));
-            var firstRelativeRepository = Path.GetRelativePath(
-                firstReceipt.TempRoot,
-                firstReceipt.FixtureRepositoryPath);
-            var secondRelativeRepository = Path.GetRelativePath(
-                secondReceipt.TempRoot,
-                secondReceipt.FixtureRepositoryPath);
-            Assert.Equal(firstRelativeRepository, secondRelativeRepository, ignoreCase: true);
-            Assert.EndsWith(
-                $"p{firstReceipt.ProcessId:x}",
-                firstReceipt.TempRoot,
-                StringComparison.OrdinalIgnoreCase);
-            Assert.EndsWith(
-                $"p{secondReceipt.ProcessId:x}",
-                secondReceipt.TempRoot,
-                StringComparison.OrdinalIgnoreCase);
-            Assert.Equal(firstReceipt.ProcessId.ToString(), firstReceipt.OwnerContents);
-            Assert.Equal(secondReceipt.ProcessId.ToString(), secondReceipt.OwnerContents);
+            Assert.True(
+                Directory.Exists(firstReceipt.TempRoot),
+                $"The second host's startup sweep removed the first host's live root '{firstReceipt.TempRoot}'.");
+            Assert.True(
+                Directory.Exists(secondReceipt.TempRoot),
+                $"The second host did not retain its selected root '{secondReceipt.TempRoot}'.");
 
             release.Set();
-            var results = await Task.WhenAll(firstProcess.WaitForExitAsync(), secondProcess.WaitForExitAsync());
+            var results = await Task.WhenAll(
+                firstProcess.WaitForExitAsync(TestContext.Current.CancellationToken),
+                secondProcess.WaitForExitAsync(TestContext.Current.CancellationToken));
             Assert.True(results[0].ExitCode == 0, FormatProcessFailure("first", results[0]));
             Assert.True(results[1].ExitCode == 0, FormatProcessFailure("second", results[1]));
-            Assert.Contains(
-                $"assembly-temp-redirect selected={firstReceipt.TempRoot}",
-                results[0].Stderr,
-                StringComparison.OrdinalIgnoreCase);
-            Assert.Contains(
-                $"assembly-temp-redirect selected={secondReceipt.TempRoot}",
-                results[1].Stderr,
-                StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -467,6 +529,74 @@ public sealed class AssemblyTempRedirectTests
         startInfo.Environment["TMP"] = Path.Combine(root, "inherited-temp");
     }
 
+    private static async Task<TempRootProbeReceipt> WaitForProbeReceiptAsync(
+        string label,
+        MtpProbeProcess process,
+        WaitHandle ready,
+        CancellationToken cancellationToken)
+    {
+        using var signalCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var signalTask = WaitForSignalAsync(ready, signalCancellation.Token);
+        var exitTask = process.Process.WaitForExitAsync(CancellationToken.None);
+        var completed = await Task.WhenAny(signalTask, exitTask);
+
+        if (completed == exitTask)
+        {
+            signalCancellation.Cancel();
+            try
+            {
+                await signalTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // The process exit is the diagnostic; cancellation just releases the registered wait.
+            }
+
+            var result = await process.WaitForExitAsync(CancellationToken.None);
+            throw new Xunit.Sdk.XunitException(
+                $"The {label} MTP apphost exited before publishing its temp-root receipt." +
+                Environment.NewLine +
+                FormatProcessFailure(label, result));
+        }
+
+        try
+        {
+            await signalTask;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"The {label} MTP apphost {process.Process.Id} did not publish its temp-root receipt " +
+                $"before the test hang detector fired; receipt_exists={File.Exists(process.ReceiptPath)}.");
+        }
+
+        return ReadProbeReceipt(process.ReceiptPath);
+    }
+
+    private static async Task WaitForSignalAsync(
+        WaitHandle waitHandle,
+        CancellationToken cancellationToken)
+    {
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellationRegistration = cancellationToken.Register(
+            static state => ((TaskCompletionSource<bool>)state!).TrySetCanceled(),
+            completion);
+        var waitRegistration = ThreadPool.RegisterWaitForSingleObject(
+            waitHandle,
+            static (state, _) => ((TaskCompletionSource<bool>)state!).TrySetResult(true),
+            completion,
+            Timeout.InfiniteTimeSpan,
+            executeOnlyOnce: true);
+        try
+        {
+            await completion.Task;
+        }
+        finally
+        {
+            waitRegistration.Unregister(null);
+        }
+    }
+
     private static TempRootProbeReceipt ReadProbeReceipt(string path)
     {
         Assert.True(File.Exists(path), $"MTP temp-root probe did not write receipt '{path}'.");
@@ -718,14 +848,13 @@ internal sealed class MtpProbeProcess(
 
     internal string ReceiptPath { get; } = receiptPath;
 
-    internal async Task<MtpProbeProcessResult> WaitForExitAsync()
+    internal async Task<MtpProbeProcessResult> WaitForExitAsync(CancellationToken cancellationToken)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         try
         {
-            await Process.WaitForExitAsync(timeout.Token);
+            await Process.WaitForExitAsync(cancellationToken);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             if (!Process.HasExited)
             {
