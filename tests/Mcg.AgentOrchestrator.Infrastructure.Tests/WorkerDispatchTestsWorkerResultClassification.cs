@@ -2345,6 +2345,44 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     AssertExitCode(process.ExitCodePath, 0);
 }
 
+    [Xunit.Fact]
+    public void BackgroundDispatchRunnerTesterDeferredNoChangeCompletes()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
+        var standardOutput = WorkerResultBlock(
+            "none",
+            "none",
+            "deferred - build passed with 0 errors",
+            commit: "none",
+            blockers: "none");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Tester,
+            standardOutput,
+            string.Empty,
+            clock,
+            taskDescription: "Verify behavior with available checks",
+            verificationPlan: "Report the verification result or an explicit structured deferral.");
+        kernel.RecordDispatchBaseCommit(
+            goal.Id,
+            task.Id,
+            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Completed, task.Status);
+        Assert.Equal(0, task.LastVerification!.ExitCode);
+        Assert.DoesNotContain(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            goal.Timeline,
+            evt => evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed);
+        AssertExitCode(process.ExitCodePath, 0);
+    }
+
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_native_exit_zero_noisy_stderr_passing_result_completes")]
     public void BackgroundDispatchRunnerTesterNativeExitZero_NoisyStderr_PassingResultCompletes()
     {
@@ -2518,14 +2556,76 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         clock,
         taskDescription: "Verify behavior with automated and manual checks",
         verificationPlan: "Run or attempt exact automated tests or manual smoke checks and record pass/fail evidence.");
+    kernel.RecordDispatchBaseCommit(
+        goal.Id,
+        task.Id,
+        ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
 
     new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(WorkTaskStatus.Failed, task.Status);
     Assert.Equal(1, task.LastVerification!.ExitCode);
     Assert.Contains("did not produce required relevant file-change evidence", task.LastVerification.StandardError, StringComparison.Ordinal);
+    var failure = Assert.Single(goal.Timeline.Where(evt =>
+        evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
+    Assert.Contains("DISPATCH_REJECTED role=Tester", failure.Message, StringComparison.Ordinal);
+    Assert.Contains($"task={task.Id.Value}", failure.Message, StringComparison.Ordinal);
+    Assert.Contains("worktree=\"", failure.Message, StringComparison.Ordinal);
+    Assert.Contains("dispatched_at=2026-06-02T12:00:00.0000000+00:00", failure.Message, StringComparison.Ordinal);
+    Assert.Contains($"baseline_head={task.LastDispatch!.BaseCommit}", failure.Message, StringComparison.Ordinal);
+    Assert.Contains("post_dispatch_commits=0", failure.Message, StringComparison.Ordinal);
+    Assert.Contains("changed_paths=none", failure.Message, StringComparison.Ordinal);
+    Assert.Contains("tests_status=Unknown blockers=Unknown", failure.Message, StringComparison.Ordinal);
+    Assert.Contains("verification_recognized=false", failure.Message, StringComparison.Ordinal);
+    Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
+    Assert.Contains(
+        "detail=\"no structured tests value or accepted verification pattern was present\"",
+        failure.Message,
+        StringComparison.Ordinal);
+    Assert.DoesNotContain(task.LastDispatch.Command, failure.Message, StringComparison.Ordinal);
     AssertExitCode(process.ExitCodePath, 0);
 }
+
+    [Xunit.Fact]
+    public void BackgroundDispatchRunnerDeveloperDeferredNoChangeStillFails()
+    {
+        var root = CreateSeededDispatchRepository();
+        var clock = new TestClock(DateTimeOffset.Parse("2026-08-17T02:54:12Z"));
+        var standardOutput = WorkerResultBlock(
+            "none",
+            "none",
+            "deferred - build passed with 0 errors",
+            commit: "none",
+            blockers: "none");
+        var (kernel, goal, task, process) = CreateCompletedGoalWorktreeDispatch(
+            root,
+            AgentRole.Developer,
+            standardOutput,
+            string.Empty,
+            clock,
+            taskDescription: "Implement the required source change",
+            verificationPlan: "Report focused verification evidence.");
+        kernel.RecordDispatchBaseCommit(
+            goal.Id,
+            task.Id,
+            ReadGit(process.WorkingDirectory, ["rev-parse", "--short", "HEAD"]));
+
+        new BackgroundDispatchRunner(clock).RefreshLatestProcess(kernel, goal.Id, task.Id);
+
+        Assert.Equal(WorkTaskStatus.Failed, task.Status);
+        Assert.Equal(1, task.LastVerification!.ExitCode);
+        Assert.Contains(
+            DispatchFailureDiagnosticMarker.Format(DispatchFailureDiagnosticMarker.RequiredFileChangeEvidenceMissing),
+            task.LastVerification.StandardError,
+            StringComparison.Ordinal);
+        var failure = Assert.Single(goal.Timeline.Where(evt =>
+            evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
+        Assert.Contains("DISPATCH_REJECTED role=Developer", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("tests_status=Deferred blockers=None", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("verification_recognized=true", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("reason=no-change-evidence", failure.Message, StringComparison.Ordinal);
+        AssertExitCode(process.ExitCodePath, 0);
+    }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_tester_expected_file_change_with_green_tests_completes")]
     public void BackgroundDispatchRunnerTesterExpectedFileChangeWithGreenTestsCompletes()

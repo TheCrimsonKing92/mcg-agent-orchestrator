@@ -244,6 +244,9 @@ public static class DispatchFailureClassifier
     public static bool HasVerificationEvidenceInOutput(string standardOutput, string standardError) =>
         HasVerificationEvidence(standardOutput, standardError);
 
+    public static bool HasWorkerResultDeferralInOutput(string standardOutput, string standardError) =>
+        HasWorkerResultDeferral(SplitEvidenceLines($"{standardOutput}\n{standardError}"));
+
     public static bool IsTransientEmptyOutputDispatchFlake(TaskVerificationRecord verification)
     {
         if (IsPreflightFailure(verification))
@@ -994,13 +997,17 @@ public static class DispatchFailureClassifier
         return TryGetWorkerResultFieldValue(verification, "blockers", out blockers);
     }
 
-    private static bool TryGetWorkerResultDeferralsValue(TaskVerificationRecord verification, out string deferrals)
-    {
-        return TryGetWorkerResultFieldValue(verification, "deferrals", out deferrals);
-    }
-
     private static bool TryGetWorkerResultFieldValue(
         TaskVerificationRecord verification,
+        string fieldName,
+        out string value) =>
+        TryGetWorkerResultFieldValue(
+            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true),
+            fieldName,
+            out value);
+
+    private static bool TryGetWorkerResultFieldValue(
+        IEnumerable<string> evidenceLines,
         string fieldName,
         out string value)
     {
@@ -1008,7 +1015,7 @@ public static class DispatchFailureClassifier
         var inBlock = false;
         string? latestValue = null;
 
-        foreach (var rawLine in EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true))
+        foreach (var rawLine in evidenceLines)
         {
             var line = rawLine.Trim();
             if (IsWorkerResultOpener(line))
@@ -1566,10 +1573,17 @@ public static class DispatchFailureClassifier
     }
 
     private static bool HasWorkerResultDeferral(TaskVerificationRecord verification) =>
-        (WorkerResultBlockers.TryGetTestsStatus(verification, out var testsStatus) &&
-         testsStatus == WorkerResultBlockers.TestsStatus.Deferred) ||
-        (TryGetWorkerResultDeferralsValue(verification, out var deferrals) &&
-         !IsNoWorkerResultBlockersValue(deferrals));
+        HasWorkerResultDeferral(
+            EnumerateEvidenceLines(verification, includeStandardOutput: true, includeStandardError: true));
+
+    private static bool HasWorkerResultDeferral(IEnumerable<string> evidenceLines)
+    {
+        var retainedLines = evidenceLines.ToArray();
+        return (WorkerResultBlockers.TryGetTestsStatus(string.Join('\n', retainedLines), out var testsStatus) &&
+                testsStatus == WorkerResultBlockers.TestsStatus.Deferred) ||
+            (TryGetWorkerResultFieldValue(retainedLines, "deferrals", out var deferrals) &&
+             !IsNoWorkerResultBlockersValue(deferrals));
+    }
 
     private static bool HasGreenCommittedWorkerResultEvidence(
         TaskVerificationRecord verification,

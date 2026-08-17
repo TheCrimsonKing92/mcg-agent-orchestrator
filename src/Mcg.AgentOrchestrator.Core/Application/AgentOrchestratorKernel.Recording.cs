@@ -303,23 +303,111 @@ public sealed partial class AgentOrchestratorKernel
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess ? WorkTaskStatus.Completed : WorkTaskStatus.Failed,
             outcome.Kind == DispatchOutcomeKind.VerifiedSuccess
                  ? BuildCompletionMessageWithAdvisoryBlocker(
-                     $"Dispatch completed successfully: {task.LastDispatch.Command}",
-                     task,
-                     verification)
-                : BuildDispatchFailureMessage(outcome, task.LastDispatch.Command));
+                      $"Dispatch completed successfully: {task.LastDispatch.Command}",
+                      task,
+                      verification)
+                : BuildDispatchFailureMessage(outcome, task, verification));
     }
 
-    private static string BuildDispatchFailureMessage(DispatchOutcome outcome, string command)
+    private static string BuildDispatchFailureMessage(
+        DispatchOutcome outcome,
+        TaskSpec task,
+        TaskVerificationRecord verification)
     {
         var rule = TaskOutcomeClassifier.TryExtractRule(outcome.ClassifierReceipt) ??
             TaskOutcomeRules.UnknownFailure.Token;
-        var exitCode = outcome.ExitCode != 0 &&
-            (string.Equals(rule, TaskOutcomeRules.SilentLaunchFailure.Token, StringComparison.Ordinal) ||
-             string.Equals(rule, TaskOutcomeRules.UnknownFailure.Token, StringComparison.Ordinal))
-                ? $"; exit code {outcome.ExitCode}"
-                : string.Empty;
-        return $"Dispatch failed: rule={rule}{exitCode}: {command}";
+        var dispatch = task.LastDispatch;
+        var testsStatus = WorkerResultBlockers.TryGetTestsStatus(verification, out var parsedTestsStatus)
+            ? parsedTestsStatus.ToString()
+            : WorkerResultBlockers.TestsStatus.Unknown.ToString();
+        var blockersStatus = WorkerResultBlockers.TryGetBlockersStatus(verification, out var parsedBlockersStatus)
+            ? parsedBlockersStatus.ToString()
+            : WorkerResultBlockers.BlockersStatus.Unknown.ToString();
+        var verificationRecognized =
+            DispatchFailureClassifier.HasVerificationEvidenceInOutput(
+                verification.StandardOutput,
+                verification.StandardError) ||
+            DispatchFailureClassifier.HasWorkerResultDeferralInOutput(
+                verification.StandardOutput,
+                verification.StandardError);
+        var missingChangeEvidence = string.Equals(
+            rule,
+            TaskOutcomeRules.RequiredFileChangeEvidenceMissing.Token,
+            StringComparison.Ordinal);
+        var reason = missingChangeEvidence
+            ? verificationRecognized ? "no-change-evidence" : "verification-pattern-unmatched"
+            : rule;
+        var detail = BuildDispatchRejectionDetail(outcome, verification, missingChangeEvidence, verificationRecognized);
+        var postDispatchCommits = TryGetDispatchDiagnosticValue(
+            verification.StandardError,
+            "commits_after_dispatch",
+            out var commits)
+                ? commits
+                : "unknown";
+        var changedPaths = TryGetDispatchDiagnosticValue(
+            verification.StandardError,
+            "changed_paths",
+            out var paths)
+                ? paths
+                : "unknown";
+
+        return $"DISPATCH_REJECTED role={task.RequiredRole} task={task.Id.Value} " +
+            $"worktree={QuoteDispatchDiagnosticValue(verification.WorkingDirectory)} " +
+            $"dispatched_at={(dispatch?.DispatchedAt ?? verification.DispatchStartedAt ?? verification.CompletedAt):O} " +
+            $"baseline_head={FormatDispatchDiagnosticAtom(dispatch?.BaseCommit ?? "unknown")} " +
+            $"post_dispatch_commits={FormatDispatchDiagnosticAtom(postDispatchCommits)} " +
+            $"changed_paths={FormatDispatchDiagnosticAtom(changedPaths)} " +
+            $"tests_status={testsStatus} blockers={blockersStatus} " +
+            $"verification_recognized={verificationRecognized.ToString().ToLowerInvariant()} " +
+            $"reason={reason} detail={QuoteDispatchDiagnosticValue(detail)}";
     }
+
+    private static string BuildDispatchRejectionDetail(
+        DispatchOutcome outcome,
+        TaskVerificationRecord verification,
+        bool missingChangeEvidence,
+        bool verificationRecognized)
+    {
+        if (!missingChangeEvidence)
+        {
+            return string.IsNullOrWhiteSpace(outcome.EvidenceSummary)
+                ? "dispatch outcome was rejected"
+                : outcome.EvidenceSummary;
+        }
+
+        if (verificationRecognized)
+        {
+            return "recognized verification evidence but no relevant post-dispatch file change was recorded";
+        }
+
+        return WorkerResultBlockers.TryFindTests(verification, out var tests)
+            ? $"{tests} matched no accepted verification pattern"
+            : "no structured tests value or accepted verification pattern was present";
+    }
+
+    private static bool TryGetDispatchDiagnosticValue(string text, string key, out string value)
+    {
+        value = string.Empty;
+        var marker = key + "=";
+        var start = text.LastIndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+        {
+            return false;
+        }
+
+        start += marker.Length;
+        var end = text.IndexOfAny([';', '\r', '\n'], start);
+        value = (end < 0 ? text[start..] : text[start..end]).Trim().TrimEnd('.');
+        return value.Length > 0;
+    }
+
+    private static string FormatDispatchDiagnosticAtom(string value) =>
+        value.All(character => char.IsLetterOrDigit(character) || character is '-' or '_' or '.' or '/' or ',')
+            ? value
+            : QuoteDispatchDiagnosticValue(value);
+
+    private static string QuoteDispatchDiagnosticValue(string value) =>
+        $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal).Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal)}\"";
 
     private static TimeSpan BuildProviderConnectivityBackoff(int attempt)
     {

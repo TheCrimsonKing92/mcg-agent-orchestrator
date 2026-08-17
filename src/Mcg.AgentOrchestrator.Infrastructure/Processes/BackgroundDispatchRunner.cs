@@ -2039,7 +2039,8 @@ public sealed class BackgroundDispatchRunner
     {
         return task.RequiredRole == AgentRole.Tester &&
             !TesterTaskRequestsFileChanges(task) &&
-            HasCompletedVerification(standardOutput, standardError);
+            (HasCompletedVerification(standardOutput, standardError) ||
+             DispatchFailureClassifier.HasWorkerResultDeferralInOutput(standardOutput, standardError));
     }
 
     // A verification-role worker proves it did its job with recognised verification evidence.
