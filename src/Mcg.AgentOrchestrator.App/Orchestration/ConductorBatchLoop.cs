@@ -2646,6 +2646,148 @@ internal sealed class ConductorBatchLoop
                 GetDependencyHoldReason(goal, completedGoals, escalatedGoals, kernel) is null &&
                 TryHasUnresolvedPersistedVerifiedAcceptanceEscalation(goal, driver) == false)
             .ToArray());
+        foreach (var goal in orderedEligible)
+        {
+            try
+            {
+            var sameGoalAttempts = driver.ParallelAcceptanceAttemptCoordinator.GetUnreconciledAttempts(
+                [goal.Id.Value]);
+            if (sameGoalAttempts.Count == 0)
+            {
+                continue;
+            }
+
+            var verificationGate = kernel.BuildVerificationGate(goal.Id);
+            if (!verificationGate.IsSatisfied)
+            {
+                var blockingReasons = string.Join(
+                    ',',
+                    verificationGate.Tasks
+                        .Where(task => task.GateStatus != VerificationGateStatus.Passed)
+                        .Select(task => $"{task.Role}:{task.Reason}"));
+                var reason = BoundSingleLine(
+                    $"inconsistent {goal.Status} state: authoritative task verification gate unsatisfied ({blockingReasons}); " +
+                    "apply verify-manual or retry before acceptance");
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    EscalateParallelAcceptanceSafely(driver, goal, policy, reason),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=escalated reason=authoritative-verification-gate-unsatisfied goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
+                    changedGoalLines);
+                continue;
+            }
+
+            var engineHealth = _acceptanceEngineCircuit?.Read();
+            if (IsAcceptanceEngineCircuitHoldRequired(goal.Status, engineHealth))
+            {
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    ParallelAcceptanceHeld(
+                        goal,
+                        policy,
+                        BuildAcceptanceEngineHoldReason(engineHealth!)),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=held reason=acceptance-engine-circuit goal={goal.Id.Value[..8]} health={engineHealth.Health}",
+                    changedGoalLines);
+                continue;
+            }
+
+            var observed = sameGoalAttempts
+                .Select(attempt =>
+                {
+                    var persistedCandidate = ConductorParallelAcceptanceCandidate.Create(
+                        goal,
+                        attempt.SlotIndex,
+                        attempt.ScopePaths ?? [],
+                        attempt.BranchHeadSha,
+                        attempt.MainHeadSha);
+                    return driver.ParallelAcceptanceAttemptCoordinator.ObserveExistingAttempt(
+                        attempt,
+                        persistedCandidate);
+                })
+                .OrderByDescending(decision => decision.Attempt.StartedAt)
+                .ThenByDescending(decision => decision.Attempt.AttemptId, StringComparer.Ordinal)
+                .ToArray();
+            var running = observed
+                .Where(decision => decision.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Running)
+                .ToArray();
+            var terminal = observed
+                .Where(decision => decision.Kind is ConductorParallelAcceptanceAttemptDecisionKind.Completed or
+                    ConductorParallelAcceptanceAttemptDecisionKind.TerminalWithoutRun)
+                .ToArray();
+
+            // Terminal siblings release only their own durable claims. A single newest terminal
+            // owns the goal-level transition when every same-goal producer is terminal; otherwise
+            // every terminal drains and the remaining live producer keeps the goal held.
+            var retainedTerminal = running.Length == 0 ? terminal.FirstOrDefault() : null;
+            foreach (var terminalSibling in terminal.Where(decision =>
+                         retainedTerminal is null ||
+                         !string.Equals(
+                             decision.Attempt.AttemptId,
+                             retainedTerminal.Attempt.AttemptId,
+                             StringComparison.Ordinal)))
+            {
+                driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(terminalSibling.Attempt);
+            }
+
+            if (retainedTerminal is null)
+            {
+                continue;
+            }
+
+            ReplayParallelAcceptanceLeaseReceipts(driver, retainedTerminal.Attempt, changedGoalLines);
+            if (retainedTerminal.Kind == ConductorParallelAcceptanceAttemptDecisionKind.Completed)
+            {
+                var run = retainedTerminal.Run ?? ConductorParallelAcceptanceRunResult.Fault(
+                    ConductorParallelAcceptanceCandidate.Create(
+                        goal,
+                        retainedTerminal.Attempt.SlotIndex,
+                        retainedTerminal.Attempt.ScopePaths ?? [],
+                        retainedTerminal.Attempt.BranchHeadSha,
+                        retainedTerminal.Attempt.MainHeadSha),
+                    new InvalidOperationException("Completed acceptance attempt had no run result."));
+                ReconcileParallelAcceptanceTerminalState(kernel, goal, run, retainedTerminal.Attempt);
+                var result = CompleteParallelAcceptanceRun(driver, policy, run, retainedTerminal.Attempt);
+                driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(retainedTerminal.Attempt);
+                changedGoalIds.Add(goal.Id);
+                results[goal.Id.Value] = new ParallelLandingOutcome(result, retainedTerminal.Attempt.SlotIndex);
+                RecordParallelAcceptanceProgress(
+                    $"ACCEPTANCE goal={goal.Id.Value[..8]} slot=slot-{retainedTerminal.Attempt.SlotIndex} result={AcceptanceRunDisposition(run)} attempt={retainedTerminal.Attempt.AttemptId} tick={tick}",
+                    changedGoalLines);
+                continue;
+            }
+
+            ReconcileParallelAcceptanceTerminalState(kernel, goal, retainedTerminal.Attempt);
+            results[goal.Id.Value] = new ParallelLandingOutcome(
+                ParallelAcceptanceTerminal(
+                    driver,
+                    ConductorParallelAcceptanceCandidate.Create(
+                        goal,
+                        retainedTerminal.Attempt.SlotIndex,
+                        retainedTerminal.Attempt.ScopePaths ?? [],
+                        retainedTerminal.Attempt.BranchHeadSha,
+                        retainedTerminal.Attempt.MainHeadSha),
+                    policy,
+                    retainedTerminal.Attempt),
+                retainedTerminal.Attempt.SlotIndex);
+            driver.ParallelAcceptanceAttemptCoordinator.MarkReconciled(retainedTerminal.Attempt);
+            changedGoalIds.Add(goal.Id);
+            RecordParallelAcceptanceProgress(
+                $"ACCEPTANCE goal={goal.Id.Value[..8]} slot=slot-{retainedTerminal.Attempt.SlotIndex} result={AcceptanceAttemptOutcomeToken(retainedTerminal.Attempt.Outcome)} attempt={retainedTerminal.Attempt.AttemptId} tick={tick}",
+                changedGoalLines);
+            }
+            catch (Exception ex)
+            {
+                var reason = BoundSingleLine(
+                    $"persisted parallel acceptance reconciliation fault isolated: {ex.GetType().Name}: {ex.Message}");
+                results[goal.Id.Value] = new ParallelLandingOutcome(
+                    EscalateParallelAcceptanceSafely(driver, goal, policy, reason),
+                    null);
+                RecordParallelAcceptanceProgress(
+                    $"ADMISSION tick={tick} result=escalated reason=persisted-acceptance-reconciliation-fault goal={goal.Id.Value[..8]} detail={SanitizeReason(reason)}",
+                    changedGoalLines);
+            }
+        }
         var speculativeCandidates = orderedEligible
             .Select(goal => new ConductorSpeculativeAcceptanceCandidate(
                 goal.Id,
