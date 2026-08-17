@@ -894,8 +894,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", root, now.AddMinutes(-5)));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null));
 
-    var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
-        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+    var (runner, processLifecycle) = CreateSignalBackedReapingRunner(
+        clock,
+        postOutputIdleTimeout: TimeSpan.FromMinutes(2));
+    var completed = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(1, completed.ExitCode);
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
@@ -904,6 +906,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Contains("Implemented the change.", task.LastVerification!.StandardOutput, StringComparison.Ordinal);
     Assert.Contains("Tokens used", task.LastVerification.StandardError, StringComparison.Ordinal);
     Assert.Contains("wrapper appears hung after codex final output", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.True(processLifecycle.WasKillRequested(999999));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_codex_hung_detection_ignores_final_output_beyond_decision_limit")]
@@ -1040,10 +1043,9 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         task.Id,
         new TaskProcessRecord(999999, "codex exec prompt", root, stdout, stderr, exit, now.AddMinutes(-5), null, null));
     var stdoutAttempts = 0;
-    var runner = new BackgroundDispatchRunner(
+    var (runner, processLifecycle) = CreateSignalBackedReapingRunner(
         new TestClock(now),
-        TimeSpan.FromMinutes(2),
-        _ => true,
+        postOutputIdleTimeout: TimeSpan.FromMinutes(2),
         openLogReadStream: path =>
         {
             if (path == stdout && ++stdoutAttempts == 1)
@@ -1060,6 +1062,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.Equal(2, stdoutAttempts);
     Assert.Equal(1, completed.ProcessRecord.ExitCode);
     Assert.Contains("wrapper appears hung after codex final output", completed.Verification!.StandardError, StringComparison.Ordinal);
+    Assert.True(processLifecycle.WasKillRequested(999999));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_bare_carriage_returns_preserve_worker_result_markers")]
@@ -1155,10 +1158,13 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord(workerProfileName, command, root, now.AddMinutes(-5)));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, command, root, stdout, stderr, exit, now.AddMinutes(-5), null, null));
 
-    var refreshed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
-        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+    var (runner, processLifecycle) = CreateSignalBackedReapingRunner(
+        clock,
+        postOutputIdleTimeout: TimeSpan.FromMinutes(2));
+    var refreshed = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(expectedExitFile, File.Exists(exit));
+    Assert.Equal(expectedExitFile, processLifecycle.WasKillRequested(999999));
     if (expectedExitFile)
     {
         Assert.Equal(1, refreshed.ExitCode);
@@ -1193,11 +1199,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0);
 
-    var completed = new BackgroundDispatchRunner(
-            clock,
-            isStillRunning: _ => true,
-            progressStallTimeout: TimeSpan.FromMinutes(10))
-        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+    var (runner, processLifecycle) = CreateSignalBackedReapingRunner(
+        clock,
+        progressStallTimeout: TimeSpan.FromMinutes(10));
+    var completed = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(1, completed.ExitCode);
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
@@ -1205,6 +1210,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.True(File.Exists(exit));
     Assert.Contains("no observable progress", task.LastVerification!.StandardError, StringComparison.Ordinal);
     Assert.Contains("heartbeat state=running", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.True(processLifecycle.WasKillRequested(999999));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_progress_stall_idle_guard_skips_worktree_inspection")]
@@ -1416,11 +1422,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, process);
     WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, ownedCpuMs: 0L, childPid: null);
 
-    var completed = new BackgroundDispatchRunner(
-            clock,
-            isStillRunning: _ => true,
-            startupHangTimeout: TimeSpan.FromMinutes(4))
-        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+    var (runner, processLifecycle) = CreateSignalBackedReapingRunner(
+        clock,
+        startupHangTimeout: TimeSpan.FromMinutes(4));
+    var completed = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(1, completed.ExitCode);
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
@@ -1428,6 +1433,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.True(File.Exists(exit));
     Assert.Contains("never launched", task.LastVerification!.StandardError, StringComparison.Ordinal);
     Assert.Contains("ownedCpuMs=0", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.True(processLifecycle.WasKillRequested(999999));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_startup_hang_completes_read_only_role_with_valid_worker_result")]
@@ -2015,8 +2021,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, now.AddMinutes(-5)));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null));
 
-    var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
-        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+    var (runner, processLifecycle) = CreateSignalBackedReapingRunner(
+        clock,
+        postOutputIdleTimeout: TimeSpan.FromMinutes(2));
+    var completed = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(0, completed.ExitCode);
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
@@ -2025,6 +2033,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     AssertExitCode(exit, 0);
     Assert.Contains("Wrapper process reaped", task.LastVerification!.StandardError, StringComparison.Ordinal);
     Assert.Contains("commits_after_dispatch=1", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.True(processLifecycle.WasKillRequested(999999));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_hung_claude_cli_wrapper_completes_when_worktree_evidence_passes")]
@@ -2064,8 +2073,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     // beyond postOutputIdleTimeout of 2 minutes triggers the hung-wrapper detector.
     WriteHeartbeat(process, now.AddMinutes(-31), now.AddMinutes(-31), "running", 0, 0, childPid: null);
 
-    var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
-        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+    var (runner, processLifecycle) = CreateSignalBackedReapingRunner(
+        clock,
+        postOutputIdleTimeout: TimeSpan.FromMinutes(2));
+    var completed = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(0, completed.ExitCode);
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
@@ -2074,6 +2085,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     AssertExitCode(exit, 0);
     Assert.Contains("Wrapper process reaped", task.LastVerification!.StandardError, StringComparison.Ordinal);
     Assert.Contains("commits_after_dispatch=1", task.LastVerification.StandardError, StringComparison.Ordinal);
+    Assert.True(processLifecycle.WasKillRequested(999999));
 }
 
     [Xunit.Theory(DisplayName = "BackgroundDispatchRunner_hung_wrapper_fails_when_file_role_worktree_evidence_missing")]
@@ -2113,8 +2125,10 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     kernel.RecordTaskDispatch(goal.Id, task.Id, new TaskDispatchRecord("codex-cli", "codex exec prompt", worktree, now.AddMinutes(-5)));
     kernel.RecordTaskProcessStarted(goal.Id, task.Id, new TaskProcessRecord(999999, "codex exec prompt", worktree, stdout, stderr, exit, now.AddMinutes(-5), null, null));
 
-    var completed = new BackgroundDispatchRunner(clock, TimeSpan.FromMinutes(2), _ => true)
-        .RefreshLatestProcess(kernel, goal.Id, task.Id);
+    var (runner, processLifecycle) = CreateSignalBackedReapingRunner(
+        clock,
+        postOutputIdleTimeout: TimeSpan.FromMinutes(2));
+    var completed = runner.RefreshLatestProcess(kernel, goal.Id, task.Id);
 
     Assert.Equal(1, completed.ExitCode);
     Assert.Equal(clock.UtcNow, completed.CompletedAt);
@@ -2122,6 +2136,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
     Assert.True(File.Exists(exit));
     AssertExitCode(exit, 1);
     Assert.Contains("wrapper appears hung after codex final output", task.LastVerification!.StandardError, StringComparison.Ordinal);
+    Assert.True(processLifecycle.WasKillRequested(999999));
 }
 
     [Xunit.Fact(DisplayName = "BackgroundDispatchRunner_developer_unchanged_dispatch_fails")]
@@ -4104,6 +4119,27 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
 }
 
 private static (
+    BackgroundDispatchRunner Runner,
+    SignalBackedProcessLifecycle ProcessLifecycle) CreateSignalBackedReapingRunner(
+        IClock clock,
+        TimeSpan? postOutputIdleTimeout = null,
+        TimeSpan? progressStallTimeout = null,
+        TimeSpan? startupHangTimeout = null,
+        Func<string, Stream>? openLogReadStream = null)
+{
+    var processLifecycle = new SignalBackedProcessLifecycle();
+    var runner = new BackgroundDispatchRunner(
+        clock,
+        postOutputIdleTimeout,
+        isStillRunning: processLifecycle.IsStillRunning,
+        tryKillOwnedProcess: processLifecycle.TryKill,
+        progressStallTimeout: progressStallTimeout,
+        startupHangTimeout: startupHangTimeout,
+        openLogReadStream: openLogReadStream);
+    return (runner, processLifecycle);
+}
+
+private static (
     TaskSpec Task,
     TaskProcessRecord Process,
     DispatchRefreshOutcome Outcome) RunHungReadOnlyRoleScenario(
@@ -4177,10 +4213,28 @@ private static (
             childPid: null);
     }
 
-    var runner = new BackgroundDispatchRunner(new TestClock(now), TimeSpan.FromMinutes(2), _ => true);
+    var (runner, processLifecycle) = CreateSignalBackedReapingRunner(
+        new TestClock(now),
+        postOutputIdleTimeout: TimeSpan.FromMinutes(2));
     var outcome = runner.ReconcileLatestProcess(kernel, goal.Id, task.Id);
     runner.ApplyRefreshOutcomeAndWriteDiagnostics(kernel, goal.Id, task.Id, outcome);
+    Assert.True(processLifecycle.WasKillRequested(process.ProcessId));
     return (task, process, outcome);
+}
+
+private sealed class SignalBackedProcessLifecycle
+{
+    private readonly HashSet<int> _killRequests = [];
+
+    public bool IsStillRunning(int processId) => !_killRequests.Contains(processId);
+
+    public bool TryKill(int processId)
+    {
+        _killRequests.Add(processId);
+        return true;
+    }
+
+    public bool WasKillRequested(int processId) => _killRequests.Contains(processId);
 }
 
 private static string BuildSuccessfulReadOnlyOutput(AgentRole role)

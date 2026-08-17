@@ -15,6 +15,9 @@ using System.Text.Json;
 
 public abstract class WorkerDispatchTestSupport
 {
+    private static readonly Lazy<string> SeededDispatchRepositoryTemplate =
+        new(CreateSeededDispatchRepositoryTemplate);
+
     protected static string CreateTempDirectory()
     {
         var path = InfrastructureTestSupport.CreateTempDirectory();
@@ -494,8 +497,14 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
 
     protected static string CreateSeededDispatchRepository()
 {
-    var root = CreateTempDirectory();
-    Directory.Delete(Path.Combine(root, "repo"), recursive: true);
+    var root = InfrastructureTestSupport.CreateTempDirectory();
+    CopyDirectoryContents(SeededDispatchRepositoryTemplate.Value, root);
+    return root;
+}
+
+private static string CreateSeededDispatchRepositoryTemplate()
+{
+    var root = InfrastructureTestSupport.CreateTempDirectory();
     RunGit(root, ["init", "-b", "main"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["config", "user.email", "tests@example.com"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     RunGit(root, ["config", "user.name", "Dispatch Tests"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
@@ -515,6 +524,21 @@ protected static void CompleteResearcherAndPlannerArtifacts(AgentOrchestratorKer
     // valid when an earlier attempt has already reached that state, as recorded by the shared-gate failure.
     RunGit(root, ["commit", "--allow-empty", "-m", "Seed"], DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
     return root;
+}
+
+private static void CopyDirectoryContents(string source, string destination)
+{
+    foreach (var directory in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+    {
+        Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+    }
+
+    foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+    {
+        var target = Path.Combine(destination, Path.GetRelativePath(source, file));
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.Copy(file, target);
+    }
 }
 
     protected static void RunGit(string workingDirectory, string[] arguments, DateTimeOffset commitTime)
