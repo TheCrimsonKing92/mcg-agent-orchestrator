@@ -22,6 +22,7 @@ $exclusionOrder = @(
     'nonZeroExitCode',
     'unparseableTimestamps',
     'incompleteResultCount',
+    'trxCommandMismatch',
     'nonTimingCheck',
     'notInManifest'
 )
@@ -402,12 +403,20 @@ try {
         }
         $trxPath = Join-Path $heartbeatFile.DirectoryName "$attemptId.$artifactStem.trx"
         $trx = Get-TrxMeasurement $trxPath
+        $commandLineProperty = $heartbeat.PSObject.Properties['commandLine']
+        $commandLine = if ($null -ne $commandLineProperty) { [string]$commandLineProperty.Value } else { '' }
+        $trxFileName = [IO.Path]::GetFileName($trxPath)
+        $commandNamesTrx = -not [string]::IsNullOrWhiteSpace($commandLine) -and
+            $commandLine.IndexOf('--report-trx-filename', [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+            $commandLine.IndexOf($trxFileName, [StringComparison]::OrdinalIgnoreCase) -ge 0
         if ($null -eq $reason -and $nonTimingCheck) {
             $reason = 'nonTimingCheck'
         } elseif ($null -eq $reason -and -not $manifestLanes.ContainsKey($laneName)) {
             $reason = 'notInManifest'
         } elseif ($null -eq $reason -and $null -eq $trx) {
             $reason = 'incompleteResultCount'
+        } elseif ($null -eq $reason -and -not $commandNamesTrx) {
+            $reason = 'trxCommandMismatch'
         }
 
         if ($null -ne $reason) { Add-Exclusion $exclusions $reason }

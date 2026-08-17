@@ -74,6 +74,40 @@ public sealed class LaneTimingMeasurementScriptTests
     }
 
     [Xunit.Fact]
+    public void CheckReceipt_CommandMustNameItsTrx()
+    {
+        using var fixture = LaneTimingFixture.Create();
+        fixture.WriteManifestWithChecks(
+            ["Alpha", "Beta"],
+            ("core tests", "dotnet-test"),
+            ("infrastructure tests", "dotnet-test"));
+        fixture.AddCheckReceipt(
+            "core-build",
+            "core tests",
+            99,
+            9,
+            startOffsetMinutes: 4,
+            commandLine: "dotnet build Mcg.AgentOrchestrator.Core.Tests.csproj");
+        fixture.AddCheckReceipt("core-test", "core tests", 12, 3, startOffsetMinutes: 5);
+        var jsonPath = Path.Combine(fixture.Root, "command-association.json");
+
+        var result = fixture.Run("-Json", jsonPath);
+
+        Xunit.Assert.True(result.ExitCode == 0, result.Stdout + result.Stderr);
+        using var document = JsonDocument.Parse(File.ReadAllText(jsonPath));
+        var core = document.RootElement.GetProperty("lanes").GetProperty("core tests");
+        Xunit.Assert.Equal(1, core.GetProperty("runs").GetInt32());
+        Xunit.Assert.Equal(12, core.GetProperty("processSeconds").GetProperty("min").GetDouble());
+        Xunit.Assert.Equal(
+            1,
+            document.RootElement
+                .GetProperty("qualification")
+                .GetProperty("exclusionReasons")
+                .GetProperty("trxCommandMismatch")
+                .GetInt32());
+    }
+
+    [Xunit.Fact]
     public void ProcessAndTestStatistics_AreDistinctAndRanged()
     {
         using var fixture = LaneTimingFixture.Create();
@@ -192,7 +226,7 @@ public sealed class LaneTimingMeasurementScriptTests
             var fixture = new LaneTimingFixture(
                 root,
                 repositoryRoot,
-                Path.Combine(FindRepositoryRoot(), "scripts", "Measure-LaneTimings.ps1"));
+                Path.Combine(InfrastructureTestSupport.FindRepositoryRoot(), "scripts", "Measure-LaneTimings.ps1"));
             fixture.InitializeRepository();
             fixture.WriteManifest("Alpha", "Beta");
             fixture.AddStandardReceipts();
@@ -224,7 +258,8 @@ public sealed class LaneTimingMeasurementScriptTests
             double processSeconds,
             double testSeconds,
             int startOffsetMinutes = 0,
-            bool writeTrx = true)
+            bool writeTrx = true,
+            string? commandLine = null)
             => AddReceipt(
                 attemptId,
                 checkName,
@@ -233,7 +268,8 @@ public sealed class LaneTimingMeasurementScriptTests
                 startOffsetMinutes: startOffsetMinutes,
                 currentTarget: checkName,
                 artifactStem: Slug(checkName),
-                writeTrx: writeTrx);
+                writeTrx: writeTrx,
+                commandLine: commandLine);
 
         public void AddExclusionReceipts()
         {
@@ -338,7 +374,8 @@ public sealed class LaneTimingMeasurementScriptTests
             int startOffsetMinutes = 0,
             string? currentTarget = null,
             string? artifactStem = null,
-            bool writeTrx = true)
+            bool writeTrx = true,
+            string? commandLine = null)
         {
             var startedAt = BaseTime.AddMinutes(startOffsetMinutes);
             var prefix = Path.Combine(_goalDirectory, attemptId);
@@ -349,16 +386,19 @@ public sealed class LaneTimingMeasurementScriptTests
                     JsonSerializer.Serialize(new { attemptId, startedAt = startedAt.ToString("O") }));
             }
 
+            var slug = Slug(lane);
+            artifactStem ??= $"infrastructure-tests-{slug}";
+            var trxFileName = $"{attemptId}.{artifactStem}.trx";
+            commandLine ??= $"fixture-host --report-trx-filename {trxFileName}";
             var heartbeat = new
             {
                 currentTarget = currentTarget ?? $"infrastructure tests: {lane}",
+                commandLine,
                 state,
                 exitCode,
                 startedAt = invalidHeartbeatTime ? "not-a-time" : startedAt.ToString("O"),
                 lastObservedAt = invalidHeartbeatTime ? "not-a-time" : startedAt.AddSeconds(processSeconds).ToString("O")
             };
-            var slug = Slug(lane);
-            artifactStem ??= $"infrastructure-tests-{slug}";
             File.WriteAllText(
                 $"{prefix}.{artifactStem}-fixture.gate-heartbeat.json",
                 JsonSerializer.Serialize(heartbeat));
@@ -422,17 +462,6 @@ public sealed class LaneTimingMeasurementScriptTests
             Directory.Delete(Root, recursive: true);
         }
 
-        private static string FindRepositoryRoot()
-        {
-            var directory = new DirectoryInfo(AppContext.BaseDirectory);
-            while (directory is not null)
-            {
-                if (File.Exists(Path.Combine(directory.FullName, "scripts", "Measure-LaneTimings.ps1")))
-                    return directory.FullName;
-                directory = directory.Parent;
-            }
-            throw new DirectoryNotFoundException("Could not locate the repository root.");
-        }
     }
 
     private static ProcessResult RunChecked(
