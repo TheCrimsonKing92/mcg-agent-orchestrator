@@ -191,13 +191,13 @@ public sealed class DispatchOutcomeClassifyTests
     }
 
     [Xunit.Fact]
-    public void ClassifyIgnoresStderrDeferralWhenStdoutIsInconclusive()
+    public void ClassifyIgnoresStderrDeferralWhenStdoutIsUnrecognized()
     {
         var outcome = DispatchFailureClassifier.Classify(
             SimpleTask(AgentRole.Tester),
             WorkerResultVerification(
                 0,
-                WorkerResultStdout("inconclusive - no test host was available"),
+                WorkerResultStdout("unknown - no test host was available"),
                 standardError: WorkerResultStdout("deferred - stale launcher prompt")));
 
         Xunit.Assert.Equal(DispatchOutcomeKind.UnknownFailure, outcome.Kind);

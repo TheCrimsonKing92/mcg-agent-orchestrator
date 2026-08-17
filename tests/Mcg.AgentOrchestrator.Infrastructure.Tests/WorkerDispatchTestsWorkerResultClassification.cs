@@ -2391,7 +2391,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         var standardOutput = WorkerResultBlock(
             "none",
             "none",
-            "inconclusive - no test host was available",
+            "unknown - no test host was available",
             commit: "none",
             blockers: "none");
         var staleStandardError = WorkerResultBlock(
@@ -2418,7 +2418,7 @@ public sealed class WorkerDispatchTestsWorkerResultClassification : WorkerDispat
         Assert.Equal(WorkTaskStatus.Failed, task.Status);
         var failure = Assert.Single(goal.Timeline.Where(evt =>
             evt.TaskId == task.Id && evt.Kind == ProgressKind.TaskFailed));
-        Assert.Contains("tests_status=Inconclusive", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("tests_status=Unknown", failure.Message, StringComparison.Ordinal);
         Assert.Contains("verification_recognized=false", failure.Message, StringComparison.Ordinal);
         Assert.Contains("reason=verification-pattern-unmatched", failure.Message, StringComparison.Ordinal);
     }
